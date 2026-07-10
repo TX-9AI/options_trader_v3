@@ -1,5 +1,5 @@
 """
-main.py — options_trader v3.0
+main.py — options_trader v3.1
 v1.0 — original release
 v2.2 — 2026-07-01 — iron condor legged entry, BB-anchored strikes,
         regime-flip exits, ORB range via get_orb_range.py/orb_range.json,
@@ -59,6 +59,13 @@ v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         mapping optimization (all market data now flows from the single
         shared TastyTrade candle feed — see data/candle_feed.py). No logic
         change in this file.
+v3.1 — 2026-07-10 — condor leg ENTRY alert now names the instrument. The leg-
+        filled Telegram alert was built with a raw _send() that omitted the
+        symbol (every other entry alert routes through the structured methods
+        that already include it), so condor entries read "[PAPER] Condor Leg 2
+        …" with no way to tell which box fired. Added {INSTRUMENT} after the
+        mode, matching the "[MODE] SYMBOL | …" form of the other alerts. DB
+        logging already recorded the symbol; this was display-only.
 0DTE options bot: ORB, Sweep Reversal, Butterfly
 RTH only (9:30–16:00 ET), hard close 15:45 ET.
 
@@ -408,7 +415,7 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState):
     )
 
     get_alert_manager()._send(
-        f"\U0001F985 [{mode}] {signal.setup_type} | "
+        f"\U0001F985 [{mode}] {INSTRUMENT} | {signal.setup_type} | "
         f"sell={short_contract.strike:.0f} buy={long_contract.strike:.0f} "
         f"x{contracts} credit=${fill_credit:.2f} | "
         f"stop=${fill_credit * (1 + CONDOR_STOP_LOSS_PCT):.2f} | "
