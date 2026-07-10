@@ -1,5 +1,14 @@
 """
-options_trader_v3/data/candle_feed.py — THE single candle-feed producer. v3.1
+options_trader_v3/data/candle_feed.py — THE single candle-feed producer. v3.2
+v3.2 — 2026-07-10 — FIX empty store despite live data. DXFeed echoes candle
+        event-symbols WITH attributes and normalizes single-unit periods, e.g.
+        'IWM{=5m,tho=true}' and 'IWM{=m,tho=true}'/'{=h}'/'{=d}'. _interval_of
+        only did rstrip('}'), yielding '5m,tho=true' (and 'm'/'h'/'d'), none of
+        which matched symbol_map — so EVERY received candle was dropped and the
+        store stayed empty while candle-feed logged data arriving. Bots then
+        looped on "feed store has no bars". _interval_of now strips attributes
+        (splits on the first comma) and normalizes m/h/d -> 1m/1h/1d via
+        _DX_PERIOD_TO_INTERVAL, matching the store keys the bot reads.
 v3.1 — 2026-07-10 — FIX crash-loop: FeedStore opened its SQLite connection in
         the startup thread but heartbeat()/commit()/upsert_candles() are called
         from the DXLink streamer thread, raising sqlite3.ProgrammingError
@@ -111,6 +120,12 @@ PRUNE_EVERY_S     = 300
 RECONNECT_MIN_S   = 3
 RECONNECT_MAX_S   = 60
 VIX_SYMBOL        = os.environ.get("OT_DXFEED_VIX", "VIX")
+
+# DXFeed echoes single-unit candle periods without the leading 1 (1-minute as
+# 'm', 1-hour as 'h', 1-day as 'd'); multi-unit periods keep the number
+# ('5m','15m'). Map the echoed token back to the canonical store interval that
+# TIMEFRAMES/symbol_map and the bot's reader (data/market_data.py) both use.
+_DX_PERIOD_TO_INTERVAL = {"m": "1m", "h": "1h", "d": "1d"}
 VIX_INTERVALS     = ("1m", "1d")
 
 # Backfill depth per interval: calendar days back from now that comfortably
@@ -250,10 +265,24 @@ class CandleFeed:
         self.backfill_logged: Dict[Tuple[str, str], bool] = {}
 
     def _interval_of(self, event_symbol: str) -> Optional[str]:
-        """'QQQ{=5m}' -> '5m' (whatever token DXFeed echoes back)."""
-        if "{=" in (event_symbol or ""):
-            return event_symbol.split("{=", 1)[1].rstrip("}")
-        return None
+        """Map a DXFeed candle event-symbol back to the canonical store
+        interval the bot queries. DXFeed echoes candle symbols with attributes
+        and normalizes single-unit periods:
+            'IWM{=5m,tho=true}'  -> '5m'
+            'IWM{=15m,tho=true}' -> '15m'
+            'IWM{=m,tho=true}'   -> '1m'   (1-minute echoed as 'm')
+            'IWM{=h,tho=true}'   -> '1h'   (1-hour   echoed as 'h')
+            'IWM{=d,tho=true}'   -> '1d'   (1-day    echoed as 'd')
+            'QQQ{=5m}'           -> '5m'   (attribute-less form still works)
+        The old parser only did rstrip('}'), so '5m,tho=true}' became
+        '5m,tho=true' (and 'm}'/'h}'/'d}' stayed 'm'/'h'/'d') — none matched
+        symbol_map, so every candle was dropped and the store never filled.
+        """
+        if "{=" not in (event_symbol or ""):
+            return None
+        tail = event_symbol.split("{=", 1)[1].rstrip("}")   # '5m,tho=true' | 'm,tho=true'
+        token = tail.split(",", 1)[0].strip()                # '5m' | 'm'
+        return _DX_PERIOD_TO_INTERVAL.get(token, token)      # 'm'->'1m', else as-is
 
     def _on_candle(self, c: Candle):
         base = _base_symbol(getattr(c, "event_symbol", ""))
