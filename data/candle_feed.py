@@ -1,5 +1,14 @@
 """
-options_trader_v3/data/candle_feed.py — THE single candle-feed producer. v3.0
+options_trader_v3/data/candle_feed.py — THE single candle-feed producer. v3.1
+v3.1 — 2026-07-10 — FIX crash-loop: FeedStore opened its SQLite connection in
+        the startup thread but heartbeat()/commit()/upsert_candles() are called
+        from the DXLink streamer thread, raising sqlite3.ProgrammingError
+        ("SQLite objects created in a thread can only be used in that same
+        thread") on the first heartbeat write. The service died on startup and
+        systemd restart-looped it, so the shared store never populated and every
+        bot on the box starved for prices and self-exited. Connection now opens
+        with check_same_thread=False and all store access is serialized by a
+        threading.Lock (verified safe under concurrent writers).
 v3.0 — 2026-07-10 — initial release (Yahoo-Finance purge; single shared TastyTrade
         candle feed / data stream mapping optimization). This service owns the
         ONLY DXLinkStreamer subscription on the box. Every other process (the
@@ -66,6 +75,7 @@ import asyncio
 import logging
 import os
 import sqlite3
+import threading
 import time as _time
 from datetime import datetime, time as dtime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -142,7 +152,13 @@ class FeedStore:
     def __init__(self, path: str):
         self.path = path
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        self.conn = sqlite3.connect(path)
+        # The DXLink streamer delivers candles on a DIFFERENT thread than the one
+        # that constructs FeedStore, so the connection must allow cross-thread
+        # use (check_same_thread=False) and every access must be serialized by
+        # self._lock — otherwise the first write from the stream thread raises
+        # sqlite3.ProgrammingError and the feed crash-loops (starving the fleet).
+        self._lock = threading.Lock()
+        self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL;")
         self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.conn.execute("""
@@ -166,43 +182,49 @@ class FeedStore:
         """rows: (symbol, interval, ts_ms, o, h, l, c, v). Last write wins."""
         if not rows:
             return
-        self.conn.executemany(
-            "INSERT OR REPLACE INTO candles "
-            "(symbol, interval, ts_epoch_ms, open, high, low, close, volume) "
-            "VALUES (?,?,?,?,?,?,?,?)", rows)
         now = _time.time()
         touched = {(r[0], r[1]) for r in rows}
-        self.conn.executemany(
-            "INSERT OR REPLACE INTO feed_meta (symbol, interval, last_write_epoch) "
-            "VALUES (?,?,?)", [(s, i, now) for (s, i) in touched])
+        with self._lock:
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO candles "
+                "(symbol, interval, ts_epoch_ms, open, high, low, close, volume) "
+                "VALUES (?,?,?,?,?,?,?,?)", rows)
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO feed_meta (symbol, interval, last_write_epoch) "
+                "VALUES (?,?,?)", [(s, i, now) for (s, i) in touched])
 
     def heartbeat(self):
-        self.conn.execute(
-            "INSERT OR REPLACE INTO feed_meta (symbol, interval, last_write_epoch) "
-            "VALUES ('__feed__','heartbeat',?)", (_time.time(),))
+        with self._lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO feed_meta (symbol, interval, last_write_epoch) "
+                "VALUES ('__feed__','heartbeat',?)", (_time.time(),))
 
     def commit(self):
-        self.conn.commit()
+        with self._lock:
+            self.conn.commit()
 
     def prune(self, symbol: str, interval: str, keep: int):
-        self.conn.execute("""
-            DELETE FROM candles WHERE symbol=? AND interval=? AND ts_epoch_ms NOT IN
-            (SELECT ts_epoch_ms FROM candles WHERE symbol=? AND interval=?
-             ORDER BY ts_epoch_ms DESC LIMIT ?)""",
-            (symbol, interval, symbol, interval, keep))
+        with self._lock:
+            self.conn.execute("""
+                DELETE FROM candles WHERE symbol=? AND interval=? AND ts_epoch_ms NOT IN
+                (SELECT ts_epoch_ms FROM candles WHERE symbol=? AND interval=?
+                 ORDER BY ts_epoch_ms DESC LIMIT ?)""",
+                (symbol, interval, symbol, interval, keep))
 
     def bar_count(self, symbol: str, interval: str) -> int:
-        cur = self.conn.execute(
-            "SELECT COUNT(*) FROM candles WHERE symbol=? AND interval=?",
-            (symbol, interval))
-        return int(cur.fetchone()[0])
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT COUNT(*) FROM candles WHERE symbol=? AND interval=?",
+                (symbol, interval))
+            return int(cur.fetchone()[0])
 
     def close(self):
-        try:
-            self.conn.commit()
-            self.conn.close()
-        except Exception:
-            pass
+        with self._lock:
+            try:
+                self.conn.commit()
+                self.conn.close()
+            except Exception:
+                pass
 
 
 # ─── The producer ──────────────────────────────────────────────────────────────
