@@ -15,6 +15,11 @@
 #         Unattended-safe: per-bot config is in the systemd env; runtime state
 #         (trades.db, bot.log, orb_state.json, orb_range.json) is untracked and
 #         is NOT touched by `git reset --hard`.
+# v3.1 — 2026-07-10 — derive REPO from the remote URL instead of hardcoding
+#         options_trader_v2. The v3.0 header bump left the detection pinned to
+#         v2, so a box repointed to v3 would get dragged back to v2 on the next
+#         deploy/push. REPO is now parsed from origin (token- and .git-safe),
+#         so v2/v3/future all resolve correctly. SERVICE still keyed by family.
 # v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
 #         mapping optimization (single shared TastyTrade candle feed). No
 #         logic change in this file.
@@ -89,13 +94,21 @@ fi
 CURRENT_REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
 if echo "$CURRENT_REMOTE" | grep -q "crypto_trader"; then
     SERVICE="cryptobot"
-    REPO="crypto_trader_v6"
 elif echo "$CURRENT_REMOTE" | grep -q "options_trader"; then
     SERVICE="optionsbot"
-    REPO="options_trader_v2"
 else
     echo -e "${YELLOW}  ⚠  Could not detect repo from git remote. Is git initialized?${RESET}"
     echo "  Current remote: $CURRENT_REMOTE"
+    exit 1
+fi
+
+# Derive the repo name from the actual remote (token-safe, .git-safe) so this
+# script tracks whatever repo the box points at — v2, v3, or beyond — with no
+# per-version edits. This is the fix for the old hardcoded REPO="options_trader_v2"
+# that would silently drag a repointed box back to v2 on the next deploy.
+REPO=$(echo "$CURRENT_REMOTE" | sed -E 's#.*github\.com[:/]+[^/]+/([^/.]+).*#\1#')
+if [ -z "$REPO" ] || [ "$REPO" = "$CURRENT_REMOTE" ]; then
+    echo -e "${YELLOW}  ⚠  Could not parse repo name from remote: $CURRENT_REMOTE${RESET}"
     exit 1
 fi
 
