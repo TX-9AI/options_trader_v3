@@ -1,5 +1,19 @@
 """
 main.py — options_trader v3.1
+v3.2 — 2026-07-11 — REGIME UN-GATE for the flagship ORB (config-switched,
+        ORB_FIRES_REGARDLESS_OF_REGIME, default on). A confirmed ORB break+retest
+        now fires regardless of the regime label — including UNKNOWN and
+        SWEEP_REVERSAL — because the ORB engine's break+retest is self-validating
+        and the classifier does not test for it. Two changes in run_entry_logic:
+        (1) the hard UNKNOWN gate is bypassed when the engine is in a confirmed
+            OPEN state (the label no longer vetoes a proven setup);
+        (2) the ORB dispatch admits UNKNOWN and SWEEP_REVERSAL (ORB beats sweep;
+            engine no longer defers OPEN under a sweep — see orb_engine v3.2).
+        Nothing else loosens: sweep/butterfly/condor still self-gate on their own
+        regime values, and the setup scorer's B-threshold still governs (under
+        UNKNOWN the regime_conviction dimension just contributes 0). Set the flag
+        False to restore strict v2 gating. Every ORB fired under UNKNOWN is logged
+        regime=UNKNOWN — labeled tape for the shadow observer.
 v1.0 — original release
 v2.2 — 2026-07-01 — iron condor legged entry, BB-anchored strikes,
         regime-flip exits, ORB range via get_orb_range.py/orb_range.json,
@@ -89,7 +103,7 @@ from config import (
     POLL_INTERVAL_SECONDS, LOG_LEVEL, LOG_FILE, LOG_ROTATION_MB,
     PAPER_TRADING, RISK_PER_TRADE_USD, SESSION_LOSS_LIMIT,
     REGIME_REASSESS_MINUTES, INSTRUMENT, SessionConfig, DIRECTIONAL_ONLY,
-    NO_ENTRY_AFTER_ET, BROKER_RECONCILE_ENABLED
+    NO_ENTRY_AFTER_ET, BROKER_RECONCILE_ENABLED, ORB_FIRES_REGARDLESS_OF_REGIME
 )
 
 
@@ -466,21 +480,36 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     # UNKNOWN→BREAKOUT transition fires the entry immediately (no late entries).
     # It only blocks when the tape is genuinely unclassified. Leaving UNKNOWN is
     # gated solely by the regime definitions becoming true, never by this gate.
-    if regime is None or getattr(regime, "primary_regime", None) in (Regime.UNKNOWN, None, ""):
+    #
+    # EXCEPTION (v3.2, ORB_FIRES_REGARDLESS_OF_REGIME): a confirmed ORB break+
+    # retest is self-validating — the engine has already proven the setup
+    # independent of the regime label, which the classifier does not even test
+    # for. When the switch is on and the engine is in a confirmed OPEN state, an
+    # UNKNOWN/undefined label does not veto: it flows through to the ORB dispatch
+    # below and the setup scorer decides (regime_conviction just contributes 0).
+    orb = ctx["orb"]
+    orb_confirmed = orb.state in (ORBState.OPEN_LONG, ORBState.OPEN_SHORT)
+    orb_regime_bypass = (ORB_FIRES_REGARDLESS_OF_REGIME and orb_confirmed
+                         and regime is not None)
+    if (regime is None or getattr(regime, "primary_regime", None)
+            in (Regime.UNKNOWN, None, "")) and not orb_regime_bypass:
         logger.info("STRATEGY: NO TRADE — regime UNKNOWN/undefined (hard gate)")
         return
 
     # ── Strategy dispatch: regime → strategy ──────────────────────────────────
     # Priority 1: ORB — only when the engine has a CONFIRMED break+retest.
-    # Note: the engine defers OPEN when regime==SWEEP_REVERSAL (sweeps take
-    # priority), so an OPEN state here already implies a non-sweep regime and a
-    # real ORB setup. Sweep reversal is handled at Priority 2.
-    orb = ctx["orb"]
-    if (orb.state in (ORBState.OPEN_LONG, ORBState.OPEN_SHORT) and
-            regime.primary_regime in (
-                Regime.TRENDING_BULL, Regime.TRENDING_BEAR,
-                Regime.BREAKOUT_VOLATILE, Regime.RANGING, Regime.COMPRESSION
-            )):
+    # With ORB_FIRES_REGARDLESS_OF_REGIME on, a confirmed ORB also fires under
+    # UNKNOWN and SWEEP_REVERSAL (ORB beats sweep — the engine no longer defers
+    # its OPEN under a sweep label; see orb_engine v3.2). The break+retest is the
+    # edge; the label is not consulted for go/no-go, only for scoring.
+    _orb_ok_regimes = (
+        Regime.TRENDING_BULL, Regime.TRENDING_BEAR,
+        Regime.BREAKOUT_VOLATILE, Regime.RANGING, Regime.COMPRESSION
+    )
+    if orb_confirmed and (
+            regime.primary_regime in _orb_ok_regimes
+            or (ORB_FIRES_REGARDLESS_OF_REGIME and
+                regime.primary_regime in (Regime.UNKNOWN, Regime.SWEEP_REVERSAL))):
         orb_sig = _orb_strategy.generate_signal(
             orb           = orb,
             regime        = regime,

@@ -152,6 +152,18 @@ ORB_MAX_RETEST_BARS         = 12
 ORB_TP_MULTIPLIER           = 1.0
 ORB_TRAIL_ACTIVATION        = 0.50
 FED_DAY_ORB_BOOST           = 0.20
+
+# ─── ORB REGIME GATE SWITCH (v3.2) ────────────────────────────────────────────
+# When True, a CONFIRMED ORB break+retest fires regardless of the regime label —
+# including UNKNOWN and SWEEP_REVERSAL. The ORB engine's break+retest is self-
+# validating (the classifier does not even test for it), so the label is not
+# consulted for the go/no-go; only the setup scorer's B-threshold and the ORB
+# engine's own structure gate it. Under UNKNOWN the regime_conviction dimension
+# simply contributes 0 to the score. Under SWEEP_REVERSAL, ORB wins (the engine
+# no longer defers its OPEN to the sweep). Set False to restore strict v2 gating
+# (UNKNOWN/sweep block ORB). Every ORB that fires under UNKNOWN is logged with
+# regime=UNKNOWN — labeled tape for the shadow observer.
+ORB_FIRES_REGARDLESS_OF_REGIME = True
 # When snapping an ORB strike target to the nearest available strike, break
 # toward the "higher" (more ITM / participation) or "lower" (further OTM) delta.
 ORB_STRIKE_DELTA_BIAS       = "lower"
