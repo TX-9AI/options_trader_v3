@@ -1,20 +1,52 @@
-# options_trader v2.4 — Vertigo Capital
+# options_trader v3 — Vertigo Capital
 
-**Options Day Trading Suite · 29-Symbol Fleet | TastyTrade | Regime-Aware | GEX-Live | Tracked Legged Condor | Broken-Wing Roll | Net Daily Loss Halt**
+**Options Day Trading Suite · 29-Symbol Fleet | TastyTrade | Single Shared Candle Feed | Regime-Aware → Conviction-Gated | GEX-Live | Tracked Legged Condor | Broken-Wing Roll | Net Daily Loss Halt**
 
 Institutional-grade intraday options day-trading suite across a 29-symbol fleet (single-name + index). Classifies intraday market regime every 15 seconds and deploys the appropriate strategy. GEX (Gamma Exposure) is computed in real time from the live options chain — no external API required. Position sizing is automatic. Supports paper and live trading via TastyTrade SDK.
 
-> **Version note:** v2.4 (2026-07-07) is a hardening + observability increment on the v2.3 architecture — a reworked theta-bleed exit, a pre-9:35 ORB-formation entry lockout, an ORB break-latch fix, and an end-of-day DXFeed candle logger. The v2.3 base (tracked multi-leg condor, broken-wing roll, net daily-loss halt, rebuilt ORB invalidation model) is still proving out across paper sessions before promotion to **3.0** as the validated milestone. Treat the condor tracking, the broken-wing roll, and the v2.4 exit change as new until they have real fills behind them.
+> **Version note:** v3 (2026-07-10) forked from options_trader_v2 @ `a181dd2`. Two things define this repo: **(1) shipped** — the Yahoo-Finance purge: every process (bot, engines, ORB range, shadow observer, candle logger, VIX) now derives from ONE shared TastyTrade/DXFeed store per box (`data/candle_feed.py` + `candle-feed.service`), so every decision and every calibration measures the exact tape the bot trades; **(2) in build** — the conviction/consensus reasoning architecture described below, which replaces v2's boolean regime gates. The trading logic currently running is the proven v2 lineage (regime_classifier v1.3, tracked condor, BWB roll, net daily-loss halt) while the v3 reasoning layer is developed against real tape — see `ROADMAP.md` for exactly what is built, what is running shadow, and what remains.
 
 ---
 
 ## Architecture
 
-### Regime Classification
+### The v3 Reasoning Model (direction — see ROADMAP.md for build status)
+
+v2 reasoned tick-by-tick: each classification was memoryless, regimes were boolean
+verdicts from a priority cascade, UNKNOWN was a hard dead spot, and trades were
+gated by regime *identity*. v3 replaces that with a **consensus model**: every
+arriving piece of data is weighed by its agreement or conflict with the larger
+frame already established, and the frame yields only to accumulated evidence —
+never to a single tick.
+
+- **Per-regime conviction, integrated over time.** Each regime carries a running
+  conviction that rises on agreement, decays on disagreement, and resists
+  teardown in proportion to how much conviction is already banked.
+- **Always labeled, never blended, never UNKNOWN.** The emitted regime is the
+  single best-fit frame (argmax) with its conviction attached. Tape that turns
+  less characteristic stays in-regime at lower conviction (`BREAKOUT_VOLATILE
+  0.89 → 0.37`) until a competing regime accumulates enough of its own
+  conviction to displace it. There is no 25%-ranging/75%-trending blend and no
+  dead spot — indecision is expressed as low conviction, not as a refusal to
+  answer. (Data *faults* — stale feed, restart gap — are still a hard no-trade
+  block, but that is a data-integrity state, not a regime.)
+- **Regimes defined by truths.** Each regime is being reduced to a set of common
+  truths — hard, definitional vetoes (e.g. *a trend cannot have a flat value
+  center*) plus graded confluence evidence. Truths make regimes mutually
+  exclusive by definition rather than by cascade priority.
+- **Trades gated by conviction bars, not regime identity.** Each trade type
+  fires only in its permissive regimes AND only above a per-trade conviction
+  bar. Trades whose confluence factors are binary (ORB break, sweep reclaim)
+  clear a LOW bar; trades whose factors are nuanced (premium structures needing
+  pin quality and range character) clear a HIGH bar. Bars are calibrated
+  empirically: paper-trade the gates wide open, bucket fee-adjusted ROI by
+  conviction, and place each gate where marginal ROI crosses zero.
+
+### Regime Classification (running today — v2 lineage)
 
 ADX is computed from the **5-minute timeframe**, matching the bot's actual trading horizon. Using a slower timeframe (e.g. 1H) causes trend days to misclassify as RANGING for hours after a breakout has already happened.
 
-The classifier is a **priority hierarchy** — sweep → breakout → compression → trending → ranging. The first condition that matches wins, so a genuine liquidity sweep is preferred over an ORB even inside the ORB window.
+The classifier currently running is v2's **priority hierarchy** — sweep → breakout → compression → trending → ranging; first match wins, so a genuine liquidity sweep is preferred over an ORB even inside the ORB window. UNKNOWN remains its hard no-trade fallback until the conviction integrator replaces this path (ROADMAP Phase 0–1).
 
 | Regime | Strategy |
 |--------|----------|
@@ -209,7 +241,7 @@ Risk per trade configurable via `OT_RISK_USD` (`config.py`).
 ### Web install (mobile / Termius / any SSH client)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TX-9AI/options_trader_v2/main/install.sh -o install.sh && bash install.sh
+curl -fsSL https://raw.githubusercontent.com/TX-9AI/options_trader_v3/main/install.sh -o install.sh && bash install.sh
 ```
 
 Have ready:
@@ -287,8 +319,8 @@ Core events: bot started, bot stopped, trade entered, trade closed (P&L), plus b
 ## File Structure
 
 ```
-options_trader_v2/
-├── main.py                    # Main loop, regime dispatch, GEX, entry/exit, roll check, daily-loss gate (v2.9)
+options_trader_v3/
+├── main.py                    # Main loop, regime dispatch, GEX, entry/exit, roll check, daily-loss gate (v3.1)
 ├── config.py                  # All tunable parameters incl. DAILY_LOSS_LIMIT_USD (v1.4)
 ├── status.py                  # Live status: ORB state, regime, GEX, strategy, daily-loss banner (v1.12)
 ├── query.py                   # Performance dashboard
@@ -325,11 +357,12 @@ options_trader_v2/
 ├── data/
 │   ├── gex_data.py
 │   ├── options_chain.py
-│   ├── market_data.py         # Shared candle/quote feed (source of the ORB range)
+│   ├── candle_feed.py         # NEW v3.0 — THE single DXFeed producer per box → SQLite store (v3.2)
+│   ├── market_data.py         # Pure reader of the shared store — signatures unchanged (v3.0)
 │   ├── data_cache.py
 │   ├── macro_data.py
 │   ├── tasty_client.py
-│   └── candle_logger.py       # NEW v2.4 — EOD 1-min DXFeed OHLC → CSV (v1.0)
+│   └── candle_logger.py       # EOD 1-min OHLC → CSV, now a store consumer (v3.0)
 ├── database/trade_logger.py   # Spread columns, get_open_trades(), realized_pnl_today(), update_fields() (v1.4)
 ├── notifications/
 │   ├── alert_manager.py
@@ -338,9 +371,12 @@ options_trader_v2/
 │   ├── candle-logger.service
 │   ├── candle-logger.timer
 │   └── README_candle_logger.md
-├── tests/                      # NEW v2.4 — offline test artifacts (dev-only, never deployed)
+├── tests/                      # Offline test artifacts (dev-only, never deployed)
 │   ├── test_candle_logger.py
-│   └── stress_theta_bleed.py
+│   ├── stress_theta_bleed.py
+│   ├── replay_classifier.py    # Replay corrected sweep logic over logged tape
+│   ├── test_regime_gate.py     # Gate/reassessment state-transition pressure test
+│   └── test_market_data_contract.py  # NEW v3.0 — reader return-contract lock
 └── utils/
     ├── math_utils.py
     └── time_utils.py
