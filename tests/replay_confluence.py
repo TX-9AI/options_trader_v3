@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # tests/replay_confluence.py — options_trader_v3
-# v1.0 — 2026-07-11 — NEW FILE (not at HEAD 49d7af8).
+# v1.1 — 2026-07-11 — skip non-OHLC siblings in harvest folders (fleet_trades_*.csv,
+#         *_trades_*.db, daily_trades_*.json) that share data/harvest/<date>/ with the
+#         tape; load_ohlc returns None on a missing timestamp column. v1.0 crashed at
+#         the report step on the consolidated fleet_trades CSV. No scoring-logic change.
 #   Layer-1 VALIDATION + CALIBRATION harness. Replays analysis/regime_confluence.py
 #   over the candle logger's DXFeed 1-min OHLC (data/OHLC/<date>/<SYMBOL>.csv) — the
 #   traded tape, store-consistent per ROADMAP (NOT the live yfinance observer feed).
@@ -48,9 +51,13 @@ except Exception:
 
 
 # ── CSV load (candle-logger tape: footer junk, zero-range pads, CRLF, ISO8601 tz) ──
-def load_ohlc(path: str) -> pd.DataFrame:
+def load_ohlc(path: str) -> Optional[pd.DataFrame]:
     raw = pd.read_csv(path, header=0, dtype=str)
     raw.columns = [c.strip().lower() for c in raw.columns]
+    # Not an OHLC tape file (e.g. harvest's fleet_trades_<date>.csv sits in the same
+    # folder): no timestamp column → skip gracefully rather than crash the run.
+    if "timestamp" not in raw.columns:
+        return None
     ts = pd.to_datetime(raw["timestamp"], format="ISO8601", errors="coerce")
     ok = ts.notna()
     df = raw[ok].copy()
@@ -89,7 +96,7 @@ def dist(xs: List[float]) -> dict:
 def replay_symbol(path: str, warmup: int, use_v13: bool) -> Tuple[List[dict], str]:
     sym = sym_of(path)
     df1m = load_ohlc(path)
-    if len(df1m) < warmup + 5:
+    if df1m is None or len(df1m) < warmup + 5:
         return [], sym
     d5, d15, d1h = resample(df1m, "5min"), resample(df1m, "15min"), resample(df1m, "1h")
 
@@ -235,8 +242,13 @@ def gather_paths(args_paths: List[str]) -> List[str]:
     out = []
     for p in args_paths:
         if os.path.isdir(p):
-            out += sorted(os.path.join(p, f) for f in os.listdir(p)
-                          if f.lower().endswith((".csv", ".csv.gz")))
+            # only OHLC tape files — harvest folders also hold fleet_trades_<date>.csv,
+            # daily_trades_<date>.json, and per-box *_trades_<date>.db siblings.
+            names = sorted(os.listdir(p))
+            ohlc = [f for f in names if "_ohlc_" in f.lower() and f.lower().endswith((".csv", ".csv.gz"))]
+            # fall back to any .csv only if no OHLC-named files exist (e.g. a bare dir)
+            picked = ohlc if ohlc else [f for f in names if f.lower().endswith((".csv", ".csv.gz"))]
+            out += [os.path.join(p, f) for f in picked]
         else:
             out.append(p)
     return out
