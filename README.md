@@ -46,7 +46,7 @@ never to a single tick.
 
 ADX is computed from the **5-minute timeframe**, matching the bot's actual trading horizon. Using a slower timeframe (e.g. 1H) causes trend days to misclassify as RANGING for hours after a breakout has already happened.
 
-The classifier currently running is v2's **priority hierarchy** — sweep → breakout → compression → trending → ranging; first match wins, so a genuine liquidity sweep is preferred over an ORB even inside the ORB window. UNKNOWN remains its hard no-trade fallback until the conviction integrator replaces this path (ROADMAP Phase 0–1).
+The classifier currently running is v2's **priority hierarchy** — sweep → breakout → compression → trending → ranging; first match wins. **One deliberate exception (v3.2):** a confirmed ORB break+retest is self-validating, so it fires regardless of the regime label — including UNKNOWN and SWEEP_REVERSAL — under the `ORB_FIRES_REGARDLESS_OF_REGIME` switch (default on). The flagship setup is no longer gated by a label that says nothing about whether the setup is present, and **ORB now wins over sweep** inside the ORB window. For every other strategy, UNKNOWN remains a hard no-trade fallback until the conviction integrator replaces this path (ROADMAP Phase 0–1).
 
 | Regime | Strategy |
 |--------|----------|
@@ -69,11 +69,12 @@ Not every regime guarantees a fill (a trending regime with no confirmed ORB, or 
   - `EXPIRED` — pre-open, or today's candle isn't on the feed yet; carries the last RTH range (e.g. Friday's on a Monday pre-open).
   - The engine only arms on `ESTABLISHED`/today — a carried prior-day range can never be traded.
 - Entry requires a retest (wick into the range, body stays outside) — no chasing a breakout that never pulls back.
+- **Stop = the impulsive (break) candle's origin (v3.1)** — its wick *low* for a long, wick *high* for a short. The break candle must itself originate inside the range, so the stop always sits inside the range, below (long) / above (short) the entry. A close back inside the range does **not** stop the trade; only a 1-minute **close beyond the impulsive origin** does. It runs beside the unconditional **−25% premium floor** (theta and/or retracement) — the two are an AND, whichever fires first.
 - **Two invalidation rules:**
   - **(a) Runaway breakout** — price runs to the 50%-TP level with no retest → INVALIDATED. This is the setup that most favors a sweep reversal; the ORB stands aside for it.
   - **(b) Retrace** — a 1-minute candle closes back inside the ORB range → INVALIDATED.
 - **Regime-gated re-arm:** after a (b) retrace invalidation the engine re-arms and watches for another break **only while the regime is still ORB-friendly (RANGING/COMPRESSION)**. It does **not** re-arm after an (a) runaway (hand-off to sweep) or once the regime has shifted to sweep/trend/breakout. It re-checks each tick, so ORB can come back if the regime returns to friendly before 11:00.
-- **ORB-window sweep override:** when an ORB signal fires but a sweep reversal is setting up with higher conviction, the bot takes the sweep. A breakout-without-retest is exactly when sweep odds spike.
+- **ORB beats sweep (v3.2):** with `ORB_FIRES_REGARDLESS_OF_REGIME` on, a confirmed ORB break+retest fires even when the regime is SWEEP_REVERSAL — the engine no longer defers its OPEN to the sweep. (A breakout-*without*-retest still hands off to sweep via the runaway invalidation.) Set the flag `False` to restore the old sweep-takes-priority behavior.
 - Single-leg long call or long put — strike near the ORB-projected 100% target.
 - At 50% TP: trailing stop arms. Past 100% TP: trail tracks the nearest unfilled 1-minute FVG — no hard exit, the position can keep running.
 - **ORB entries valid until 11:00 AM ET — HARD cutoff.** At 11:00 the ORB expires regardless of state (including awaiting-retest), and the bot works the other regimes.
@@ -186,6 +187,12 @@ Risk per trade configurable via `OT_RISK_USD` (`config.py`).
 ---
 
 ## Changelog
+
+### v3.2 / v3.1 — 2026-07-11 (ORB stop rework + regime un-gate)
+- **ORB stop placement corrected** (`orb_engine.py` v3.1). The protective stop now anchors to the impulsive (break) candle's **wick** — its low for a long, its high for a short — not the body (`min/max(open,close)`). When the impulsive candle opened outside the range, the body edge sat outside the level, so the retest entry (which returns to the level) printed a stop on the *wrong side* of entry — inverted/degenerate risk. Additionally, a valid impulsive candle must now **originate inside the range** (low inside for a long, high inside for a short); a candle sitting entirely beyond the range is late continuation, not a break. Smoke test over 44 symbol-sessions (07-09/07-10): inverted-risk entries **28% → 0%**, median entry risk 0.089% → 0.201%, setup count unchanged (92 → 96). The MU 07-10 09:49/09:50 reference reproduces exactly (stop = impulsive low 971.14; 09:54 holds, 09:55 exits).
+- **ORB structure exit corrected** (`exit_engine.py` v3.1). The exit's structure stop now fires on a 1-minute **close beyond the impulsive origin** (`underlying_stop`), not the range boundary. Closing back inside the range no longer stops the trade — it breathes inside the range as long as it holds the impulsive origin. The unconditional **−25% premium floor is unchanged** and runs beside it: the two are an **AND** — thesis-death (structure) vs total-premium-loss (theta, retracement, or the mix), whichever fires first.
+- **Regime un-gate for the flagship ORB** (`main.py` v3.2, `orb_engine.py` v3.2, `config.py`). New switch **`ORB_FIRES_REGARDLESS_OF_REGIME`** (default **on**): a confirmed ORB break+retest fires regardless of the regime label — including **UNKNOWN** and **SWEEP_REVERSAL**. The break+retest is self-validating and the classifier does not even test for it, so the label is a scoring input, not a veto; under UNKNOWN the setup scorer's B-threshold still governs (`regime_conviction` just contributes 0). **ORB now beats sweep** inside the ORB window (the engine no longer defers its OPEN under a sweep label). Sweep/butterfly/condor are untouched — they self-gate and do not fire under UNKNOWN. Set the flag `False` to restore strict v2 gating. Every ORB fired under UNKNOWN is logged `regime=UNKNOWN` — labeled tape for the shadow observer.
+- **Not P&L-validated.** These changes correct stop geometry/placement and open the entry gate; option-premium P&L can't be reconstructed from underlying OHLC and is a paper-forward question. No schema or dependency changes.
 
 ### v3.0 — 2026-07-10 (YAHOO-FINANCE PURGE — single shared TastyTrade candle feed / data stream mapping optimization)
 - **Why:** the bot trades and logs on TastyTrade (DXLink/DXFeed) candles, but market data was pulled from the legacy Yahoo-Finance client — a *different* series that provably diverges from the traded tape (caught on the 5-minute opening range). Any analysis or calibration built on it was measuring a board the bot never plays on. The purge is total: zero Yahoo residue in code, config, shell, docs, or requirements.
@@ -320,8 +327,8 @@ Core events: bot started, bot stopped, trade entered, trade closed (P&L), plus b
 
 ```
 options_trader_v3/
-├── main.py                    # Main loop, regime dispatch, GEX, entry/exit, roll check, daily-loss gate (v3.1)
-├── config.py                  # All tunable parameters incl. DAILY_LOSS_LIMIT_USD (v1.4)
+├── main.py                    # Main loop, regime dispatch, GEX, entry/exit, roll check, daily-loss gate (v3.2 — ORB regime un-gate)
+├── config.py                  # All tunable parameters incl. DAILY_LOSS_LIMIT_USD, ORB_FIRES_REGARDLESS_OF_REGIME (v1.4)
 ├── status.py                  # Live status: ORB state, regime, GEX, strategy, daily-loss banner (v1.12)
 ├── query.py                   # Performance dashboard
 ├── check_versions.sh          # Recursive version/fix verification
@@ -333,7 +340,7 @@ options_trader_v3/
 ├── snapshot.sh                # Bot state backup
 ├── analysis/
 │   ├── get_orb_range.py       # ORB range fetch — three-state, via bot's own feed (v1.3)
-│   ├── orb_engine.py          # ORB state machine — invalidation, regime-gated re-arm, unconditional break latches (v1.9)
+│   ├── orb_engine.py          # ORB state machine — impulsive-origin stop, origin gate, ORB-beats-sweep, break latches (v3.2)
 │   ├── trend_engine.py        # ADX from 5m
 │   ├── structure_analyzer.py  # FVGs, S/R, swings
 │   ├── regime_classifier.py
@@ -347,7 +354,7 @@ options_trader_v3/
 │   ├── sweep_reversal_strategy.py
 │   └── base_strategy.py
 ├── execution/
-│   ├── exit_engine.py         # Strategy-aware exits, direction-aware condor legs, gated theta-bleed (v1.4)
+│   ├── exit_engine.py         # Strategy-aware exits, ORB structure stop at impulsive origin + −25% floor, gated theta-bleed (v3.1)
 │   ├── entry_engine.py
 │   └── position_manager.py    # Multi-position condor tracking, credit-spread P&L (v1.7)
 ├── risk/
