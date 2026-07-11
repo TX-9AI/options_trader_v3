@@ -1,5 +1,18 @@
 """
 execution/exit_engine.py — Strategy-aware exit logic for all options positions.
+v3.1 — 2026-07-11 — ORB STRUCTURE STOP now keys off the IMPULSIVE candle's
+        origin, not the range boundary. The old rule (v1.1) exited on a 1-min
+        close back inside the ORB range (close < orb_high for a long). That is
+        "just entering the range," which by the strategy's definition is NOT an
+        invalidation — the trade is allowed to breathe inside the range as long
+        as it holds the impulsive (break) candle's origin. The stop now fires
+        only on a 1-min CLOSE beyond that origin: below the impulsive candle's
+        low for a long, above its high for a short, read from record
+        `underlying_stop` (set correctly by orb_engine v3.1). Companion to the
+        engine fix; the two ship together. The unconditional -25% premium floor
+        (v1.6) is UNCHANGED and still evaluated first every tick — structure
+        stop and dollar floor are an AND (either exits), catching thesis-death
+        and total-premium-loss independently. Contained to _evaluate_orb.
 v3.0 — original release
 v1.1 — 2026-06-27 — strategy-aware exit routing:
         ORB:     stop on 1-min close back inside range, trail at 50% TP, no BOS
@@ -56,8 +69,10 @@ Exit triggers by strategy:
 
   ORB
     1. HARD CLOSE: 15:45 ET
-    2. RANGE VIOLATION: 1-min candle closes back inside ORB range
-       (close < orb_high for longs, close > orb_low for shorts)
+    2. STRUCTURE STOP: 1-min close beyond the impulsive candle's origin
+       (close < impulsive low for longs, close > impulsive high for shorts).
+       Closing back inside the range alone does NOT stop — only a close past
+       the impulsive origin does. Runs beside the unconditional -25% floor.
     3. TRAIL (below 100% TP): activates at 50% TP, trails at 75% of current premium
     4. TRAIL (at/past 100% TP): tightens to track the nearest unfilled 1m FVG
        in the trade\'s favor — no hard exit at target, position can keep running
@@ -345,32 +360,42 @@ class ExitEngine:
             )
             return decision
 
-        # 2. RANGE VIOLATION \u2014 1-min candle closes back inside ORB range
+        # 2. STRUCTURE STOP \u2014 1-min CLOSE beyond the IMPULSIVE candle's origin
+        #    (v3.1). The invalidation level is the impulsive (break) candle's wick
+        #    \u2014 its low for a long, its high for a short \u2014 carried on the record as
+        #    `underlying_stop`, NOT the ORB range boundary. Merely closing back
+        #    inside the range does NOT stop the trade: price is allowed to breathe
+        #    inside the range as long as it holds the impulsive origin. Only a
+        #    close PAST that origin invalidates the thesis. This is close-based on
+        #    the last CLOSED candle (iloc[-2]) so an intrabar wick into the range
+        #    survives; only a confirmed close beyond the origin exits. The \u201325%
+        #    premium floor above is independent and still fires first if the
+        #    dollars are gone (theta, retracement, or the two combined) even when
+        #    this structure level is still intact \u2014 the two are an AND, not an OR.
         if df_1m is not None and len(df_1m) >= 2:
-            orb_high = record.get("orb_range_high", 0.0)
-            orb_low  = record.get("orb_range_low", 0.0)
-            if orb_high > 0 and orb_low > 0:
+            stop_level = record.get("underlying_stop", 0.0)
+            if stop_level > 0:
                 last_close = float(df_1m.iloc[-2]["close"])
-                if direction == "long" and last_close < orb_high:
+                if direction == "long" and last_close < stop_level:
                     decision.should_exit = True
                     decision.exit_reason = (
-                        f"orb_range_violation: 1m close {last_close:.2f} "
-                        f"back inside range (below {orb_high:.2f})"
+                        f"orb_structure_stop: 1m close {last_close:.2f} "
+                        f"below impulsive-candle low {stop_level:.2f}"
                     )
                     logger.info(
                         f"ORB STOP: {trade_id[:8]} 1m close={last_close:.2f} "
-                        f"< orb_high={orb_high:.2f} \u2014 breakout failed"
+                        f"< impulsive_low={stop_level:.2f} \u2014 origin violated"
                     )
                     return decision
-                elif direction == "short" and last_close > orb_low:
+                elif direction == "short" and last_close > stop_level:
                     decision.should_exit = True
                     decision.exit_reason = (
-                        f"orb_range_violation: 1m close {last_close:.2f} "
-                        f"back inside range (above {orb_low:.2f})"
+                        f"orb_structure_stop: 1m close {last_close:.2f} "
+                        f"above impulsive-candle high {stop_level:.2f}"
                     )
                     logger.info(
                         f"ORB STOP: {trade_id[:8]} 1m close={last_close:.2f} "
-                        f"> orb_low={orb_low:.2f} \u2014 breakout failed"
+                        f"> impulsive_high={stop_level:.2f} \u2014 origin violated"
                     )
                     return decision
 
