@@ -1,5 +1,32 @@
 """
 analysis/orb_engine.py — Opening Range Breakout state machine.
+v3.2 — 2026-07-11 — ORB beats sweep under the regime switch. The retest confirm
+        used to DEFER (leave the setup awaiting retest) whenever the regime was
+        SWEEP_REVERSAL, so a sweep label suppressed a valid ORB. Guarded by
+        config.ORB_FIRES_REGARDLESS_OF_REGIME: when on, the engine confirms OPEN
+        under a sweep label and the dispatch fires ORB (ORB wins). When off,
+        behaviour is unchanged (defers to sweep). Pairs with main.py v3.2, which
+        admits UNKNOWN/SWEEP_REVERSAL to the ORB dispatch. No change to the v3.1
+        stop logic.
+v3.1 — 2026-07-11 — STOP PLACEMENT FIX + impulsive-candle origin gate.
+        (1) The protective stop now anchors to the impulsive (break) candle's
+            actual WICK — its LOW for a long, its HIGH for a short — not the
+            body (min/max of open,close) it used before. When the impulsive
+            candle opened outside the range, the body edge sat OUTSIDE the
+            level, so the retest entry (which returns to the level) printed a
+            stop on the wrong side of entry — inverted/degenerate risk. The
+            wick is the true origin of the breakout move and sits inside the
+            range where invalidation actually lives.
+        (2) A valid impulsive candle must ORIGINATE INSIDE the range: its low
+            must reach into the range for a long (low < orb_high), its high for
+            a short (high > orb_low). A candle sitting entirely beyond the range
+            is late continuation, not an ORB break; taking its "retest" was the
+            source of the remaining inverted stops (fast/gap breaks and re-arms
+            while price was extended). Gating on origin removes them.
+        Verified on candle-logger tape (2026-07-09/10, 44 symbol-sessions):
+        inverted-risk entries fell to 0 and the MU 2026-07-10 09:49/09:50
+        reference setup reproduces exactly (stop 971.14 = impulsive low).
+        Stop-LEVEL fix only; the exit TRIGGER is unchanged (see note below).
 v3.0 — 2026-07-07 — FIX (grave): break latches broke_high/broke_low are now
         maintained UNCONDITIONALLY every tick by _update_break_latches(),
         decoupled from the RANGING-only _check_for_break() path. Previously the
@@ -67,7 +94,7 @@ from utils.time_utils import now_et, is_past_entry_cutoff
 from utils.math_utils import orb_strike_selection
 from config import (
     ORB_BREAK_BUFFER, ORB_MAX_RETEST_BARS, STRIKE_INCREMENT, INSTRUMENT,
-    NO_ENTRY_AFTER_ET
+    NO_ENTRY_AFTER_ET, ORB_FIRES_REGARDLESS_OF_REGIME
 )
 
 logger = logging.getLogger(__name__)
@@ -310,13 +337,24 @@ class ORBEngine:
         candle = df_1m.iloc[-2]
         close  = float(candle["close"])
         open_  = float(candle["open"])
+        high_  = float(candle["high"])
+        low_   = float(candle["low"])
         buffer = d.orb_high * ORB_BREAK_BUFFER / 100
 
-        if close > d.orb_high + buffer:
+        # A valid impulsive candle must ORIGINATE INSIDE the range and pierce out
+        # (v3.1): its wick must reach into the range (low < orb_high for a long).
+        # A candle sitting entirely above the range is not an ORB break — it is
+        # late continuation, and taking its "retest" produced the inverted stop
+        # (stop above entry). Gating on origin removes those degenerate setups.
+        if close > d.orb_high + buffer and low_ < d.orb_high:
             d.break_direction    = "long"
             d.break_candle_close = close
-            d.break_candle_high  = max(open_, close)
-            d.break_candle_low   = min(open_, close)
+            # Stop anchors to the IMPULSIVE candle's WICK, not its body: the low of
+            # the candle that caused the breakout (v3.1). Using min(open,close)
+            # (the body low) placed the stop ABOVE the level whenever the impulsive
+            # candle opened outside the range, inverting risk on the retest entry.
+            d.break_candle_high  = high_
+            d.break_candle_low   = low_
             d.bars_since_break   = 0
             d.target_100pct      = d.orb_high + d.orb_width
             d.target_50pct       = d.orb_high + d.orb_width * 0.5
@@ -330,11 +368,13 @@ class ORBEngine:
                 f"ORB BREAK HIGH (attempt #{d.attempt_number}): close={close:.2f} "
                 f"above {d.orb_high:.2f} target={d.target_100pct:.2f} strike={d.target_strike}"
             )
-        elif close < d.orb_low - buffer:
+        elif close < d.orb_low - buffer and high_ > d.orb_low:
             d.break_direction    = "short"
             d.break_candle_close = close
-            d.break_candle_high  = max(open_, close)
-            d.break_candle_low   = min(open_, close)
+            # Stop anchors to the IMPULSIVE candle's WICK (its HIGH for a short) —
+            # the high of the candle that caused the breakout (v3.1).
+            d.break_candle_high  = high_
+            d.break_candle_low   = low_
             d.bars_since_break   = 0
             d.target_100pct      = d.orb_low - d.orb_width
             d.target_50pct       = d.orb_low - d.orb_width * 0.5
@@ -383,7 +423,9 @@ class ORBEngine:
                 # Sweeps take priority when regime is sweep: don't confirm a
                 # phantom OPEN the dispatch will override — leave it awaiting
                 # retest so the engine can't get stuck OPEN with no position.
-                if regime == "SWEEP_REVERSAL":
+                # (v3.2) UNLESS ORB_FIRES_REGARDLESS_OF_REGIME — then ORB beats
+                # sweep: confirm OPEN and let the dispatch fire it.
+                if regime == "SWEEP_REVERSAL" and not ORB_FIRES_REGARDLESS_OF_REGIME:
                     logger.debug("ORB retest met but regime=SWEEP_REVERSAL — deferring to sweep")
                     return
                 d.state        = ORBState.OPEN_LONG
@@ -405,7 +447,7 @@ class ORBEngine:
                 )
                 return
             if high > d.orb_low and body_high <= d.orb_low * 1.001:
-                if regime == "SWEEP_REVERSAL":
+                if regime == "SWEEP_REVERSAL" and not ORB_FIRES_REGARDLESS_OF_REGIME:
                     logger.debug("ORB retest met but regime=SWEEP_REVERSAL — deferring to sweep")
                     return
                 d.state        = ORBState.OPEN_SHORT
