@@ -1,5 +1,9 @@
 """
 risk/risk_manager.py — Position sizing and session circuit breaker.
+v3.1 — 2026-07-12 — SESSION_LOSS_LIMIT import removed (constant deleted in config
+        v3.2). It gated nothing: record_loss() has requested a reassessment on
+        EVERY loss since v1.4. The session_losses COUNTER is kept as a statistic.
+        The only halt is, and always was, the NET DOLLAR cap DAILY_LOSS_LIMIT_USD.
 v3.0 — 2026-07-06 — DAILY CAP MADE DEFINITIVE & RESTART-PROOF:
         (a) is_halted() now reads the day's realized net P&L straight from the
             DB (trade_logger.realized_pnl_today()) on EVERY entry attempt — the
@@ -43,9 +47,12 @@ Sizing model:
   - cost_per_contract = mark × 100 (single leg) or net_debit × 100 (butterfly)
   - Always whole contracts; minimum 1 if affordable
 
-Session loss limit (NOT a halt):
-  - Reaching SESSION_LOSS_LIMIT losses in an RTH session sets a one-shot
-    reassessment request. main_loop consumes it and forces a fresh regime
+Regime reassessment (NOT a halt):
+  - EVERY losing trade sets a one-shot reassessment request (v1.4). A loss is
+    fresh information about whether the regime read still holds. There is no
+    count threshold — the old SESSION_LOSS_LIMIT count was deleted in config
+    v3.2 (it had gated nothing since v1.4). `session_losses` is retained purely
+    as a session statistic. main_loop consumes the request and forces a fresh regime
     classification. Trading continues; the bot re-reads the market.
   - NOTE (live): this intentionally removes the hard stop. For live capital a
     separate $-based session backstop is advisable — not implemented here.
@@ -58,7 +65,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from config import (
-    RISK_PER_TRADE_USD, SESSION_LOSS_LIMIT, GRADE_SIZE_MULTIPLIER,
+    RISK_PER_TRADE_USD, GRADE_SIZE_MULTIPLIER,
     CONTRACT_MULTIPLIER, PAPER_TRADING, INSTRUMENT, DAILY_LOSS_LIMIT_USD
 )
 from utils.time_utils import fmt_et_short

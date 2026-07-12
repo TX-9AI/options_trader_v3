@@ -1,5 +1,9 @@
 """
 risk/session_guard.py — Session boundary enforcement.
+v3.1 — 2026-07-12 — DOC SYNC (no logic change). The header claimed a 3:00 PM ET
+        butterfly cutoff. That was never reachable (main.py never passes
+        is_butterfly=True) and 14:00 is the intended rule; config v3.1 sets
+        BUTTERFLY_ENTRY_CUTOFF_ET = (14, 0) to match live behaviour.
 v3.0 — 2026-07-07 — ORB-formation lockout: no entries until the 9:30–9:35 ET
         opening-range candle has CLOSED (is_orb_complete → time >= 9:35:00).
         Universal floor across ALL strategies that guarantees nothing fires
@@ -23,7 +27,10 @@ Entry gates (evaluated in order; first failing gate blocks):
   - RTH — 9:30–16:00 ET, weekdays
   - ORB-formation lockout — no entries before 9:35 ET (opening range must close)
   - Hard close — no new entries at/after 15:45 ET
-  - Entry cutoff — Standard (ORB, SweepReversal) 2:00 PM ET; Butterfly 3:00 PM ET
+  - Entry cutoff — 2:00 PM ET for ALL strategies (butterfly included, v3.1:
+    BUTTERFLY_ENTRY_CUTOFF_ET is now 14:00). Post-14:00 tape turns erratic on
+    dealer hedging. NOTE: main.py calls can_enter() without is_butterfly=True,
+    so that branch is inert; it is retained only as a future hook.
   - Macro — VIX-crisis lockout
 """
 
