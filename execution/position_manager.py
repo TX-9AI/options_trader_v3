@@ -1,5 +1,9 @@
 """
 execution/position_manager.py — Manages the single open options position.
+v3.1 — 2026-07-12 — F5 FIX: trail updates now write to the trail_stop column
+        via update_trail_stop() instead of overwriting stop_premium/update_stop.
+        stop_premium stays the immutable entry-time -25% floor, so the exit
+        engine's floor checks and exit_reason labels are truthful again.
 v3.0 — original release
 v1.1 — 2026-06-27 — pass df_1m to exit_engine.evaluate() for strategy-aware
         ORB range violation and BOS exits
@@ -180,8 +184,12 @@ class PositionManager:
         decision = exit_eng.evaluate(record, current_premium, df_1m=df_1m, regime=regime)
 
         if decision.new_trail_stop is not None:
-            self._trade_logger.update_stop(trade_id, decision.new_trail_stop)
-            record["stop_premium"] = decision.new_trail_stop
+            # v3.1: trail persists in its OWN column. stop_premium is the
+            # immutable -25% floor — overwriting it with the trail made the
+            # exit engine's floor checks fire at the trail level and mislabel
+            # every trail exit as a hard stop (F5).
+            self._trade_logger.update_trail_stop(trade_id, decision.new_trail_stop)
+            record["trail_stop"] = decision.new_trail_stop
 
         if decision.should_exit:
             closed = self._execute_exit(record, decision, current_premium)
