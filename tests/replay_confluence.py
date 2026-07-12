@@ -1,5 +1,21 @@
 #!/usr/bin/env python3
 # tests/replay_confluence.py — options_trader_v3
+# v2.0 — 2026-07-12 — LAYER-2 TRACKS + drift merge.
+#   (a) MERGE: absorbs the control-box local mod (--report-only: rebuild + reprint
+#       the full report from a saved tick-log JSONL; no engines, no re-scoring)
+#       that never reached GitHub — ends the two-way drift where the repo had
+#       v1.1's sibling-skip and control had report-only, neither had both.
+#   (b) LAYER-2: each symbol-session's per-tick evidence vector is now ALSO fed,
+#       in time order, through a fresh ConvictionIntegrator (v2.0, always-argmax).
+#       Every JSONL record gains an "l2" object {regime, c, stale, cv[, trigger]}
+#       and the report gains a LAYER-2 section: emitted-label distribution,
+#       label SWITCHES per symbol-session vs L1-argmax flips (the churn metric
+#       the integrator exists to crush), and stale%. Purely additive: CLI args,
+#       exit codes (0 pass / 2 acceptance-fail), and every existing JSONL field
+#       are unchanged — regime_diary/regime_backfill/validate_regime.sh work
+#       as-is; L2 report prints only when l2 fields are present (old logs
+#       reprint cleanly under --report-only). Layer-1 acceptance checks remain
+#       the sole exit-code authority; L2 is observational until L2 targets land.
 # v1.1 — 2026-07-11 — skip non-OHLC siblings in harvest folders (fleet_trades_*.csv,
 #         *_trades_*.db, daily_trades_*.json) that share data/harvest/<date>/ with the
 #         tape; load_ohlc returns None on a missing timestamp column. v1.0 crashed at
@@ -48,6 +64,14 @@ try:
     _HAVE_V13 = True
 except Exception:
     _HAVE_V13 = False
+
+# Layer 2 (v2.0): optional so a mid-sync checkout without the ported integrator
+# still replays Layer 1 — the L2 fields/report simply don't appear.
+try:
+    from analysis.conviction_integrator import ConvictionIntegrator
+    _HAVE_L2 = True
+except Exception:
+    _HAVE_L2 = False
 
 
 # ── CSV load (candle-logger tape: footer junk, zero-range pads, CRLF, ISO8601 tz) ──
@@ -104,6 +128,7 @@ def replay_symbol(path: str, warmup: int, use_v13: bool) -> Tuple[List[dict], st
                            get_structure_analyzer(), get_liquidity_mapper())
     scorer = RegimeConfluenceScorer()
     clf = get_regime_classifier() if (use_v13 and _HAVE_V13) else None
+    integ = ConvictionIntegrator() if _HAVE_L2 else None   # fresh book per symbol-session
 
     recs: List[dict] = []
     idx1m = df1m.index
@@ -132,6 +157,14 @@ def replay_symbol(path: str, warmup: int, use_v13: bool) -> Tuple[List[dict], st
 
         rec = {"ts": t.strftime("%H:%M"), "sym": sym, "price": price,
                "scores": res.scores, "breakdown": res.breakdown}
+        if integ is not None:
+            st = integ.update(t.timestamp(), res.evidence())
+            l2 = {"regime": st.regime, "c": round(st.conviction, 3),
+                  "stale": bool(st.stale),
+                  "cv": {k: round(v, 3) for k, v in st.convictions.items()}}
+            if st.trigger:
+                l2["trigger"] = st.trigger
+            rec["l2"] = l2
         if clf is not None:
             try:
                 rc = clf.classify(vol, trend, structure, liq, macro=None, trigger="replay")
@@ -228,6 +261,38 @@ def report(all_recs: List[dict], jsonl: Optional[str]):
         print(f"\n── L1-argmax vs v1.3 label agreement: {100*agree/n:.0f}%  "
               f"(context only; L1 argmax ≠ L2 committed label)")
 
+    # 3b) LAYER-2 tracks (v2.0) — printed only when the log carries l2 fields
+    l2recs = [r for r in all_recs if r.get("l2")]
+    if l2recs:
+        print("\n── LAYER-2 (conviction integrator, always-argmax) ──")
+        m = len(l2recs)
+        emitted = {}
+        for r in l2recs:
+            emitted[r["l2"]["regime"]] = emitted.get(r["l2"]["regime"], 0) + 1
+        dist_line = "  ".join(f"{k.split('_')[0][:5]} {100*v/m:.0f}%"
+                              for k, v in sorted(emitted.items(), key=lambda kv: -kv[1]))
+        stale_n = sum(1 for r in l2recs if r["l2"].get("stale"))
+        print(f"  emitted: {dist_line}")
+        # churn: L2 label switches vs L1 argmax flips, per symbol-session
+        def _top1(r):
+            return max(REGIMES, key=lambda k: (r["scores"].get(k) or 0))
+        sw_tot = fl_tot = 0
+        per_sym = []
+        by_sym: Dict[str, List[dict]] = {}
+        for r in l2recs:
+            by_sym.setdefault(r["sym"], []).append(r)
+        for s, rs in sorted(by_sym.items()):
+            sw = sum(1 for a, b in zip(rs, rs[1:]) if a["l2"]["regime"] != b["l2"]["regime"])
+            fl = sum(1 for a, b in zip(rs, rs[1:]) if _top1(a) != _top1(b))
+            sw_tot += sw; fl_tot += fl
+            per_sym.append((s, sw, fl))
+        ratio = f"{fl_tot/max(sw_tot,1):.1f}x" if sw_tot else "∞"
+        print(f"  label switches: {sw_tot} vs L1-argmax flips: {fl_tot}  "
+              f"(churn crushed {ratio})   stale ticks: {100*stale_n/m:.0f}%")
+        worst = sorted(per_sym, key=lambda x: -x[1])[:5]
+        if worst and worst[0][1] > 0:
+            print("  switchiest: " + "  ".join(f"{s}:{sw}" for s, sw, _ in worst if sw > 0))
+
     # 4) acceptance checks
     print("\n── LAYER-1 ACCEPTANCE ──")
     checks = acceptance(all_recs)
@@ -256,11 +321,33 @@ def gather_paths(args_paths: List[str]) -> List[str]:
 
 def main():
     ap = argparse.ArgumentParser(description="Layer-1 confluence replay over DXFeed OHLC")
-    ap.add_argument("paths", nargs="+", help="CSV files or a data/OHLC/<date>/ directory")
+    ap.add_argument("paths", nargs="*", help="CSV files or a data/OHLC/<date>/ directory")
     ap.add_argument("--warmup", type=int, default=20, help="skip first N 1-min bars")
     ap.add_argument("--jsonl", default=None, help="dump per-tick records to this JSONL")
     ap.add_argument("--no-v13", action="store_true", help="skip the v1.3 comparison label")
+    ap.add_argument("--report-only", default=None, metavar="JSONL",
+                    help="rebuild + reprint the full report from a saved tick-log JSONL "
+                         "(no engines, no re-scoring — the report is deterministic from the log)")
     args = ap.parse_args()
+
+    # --report-only: reload a saved per-tick log and reprint the identical report.
+    if args.report_only:
+        if not os.path.isfile(args.report_only):
+            print(f"no tick log at {args.report_only}"); sys.exit(1)
+        all_recs = []
+        with open(args.report_only) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    all_recs.append(json.loads(line))
+        if not all_recs:
+            print(f"tick log is empty: {args.report_only}"); sys.exit(1)
+        print(f"[report-only] rebuilt from {len(all_recs)} saved ticks — {args.report_only}")
+        ok = report(all_recs, jsonl=None)   # jsonl=None: don't re-dump, just print
+        sys.exit(0 if ok else 2)
+
+    if not args.paths:
+        ap.error("provide OHLC paths to replay, or --report-only <jsonl> to reprint a saved run")
 
     paths = gather_paths(args.paths)
     all_recs: List[dict] = []
