@@ -1,6 +1,9 @@
 """
 strategy/butterfly_strategy.py — Debit butterfly for RANGING/COMPRESSION regimes.
 v3.0 — original release
+v3.1 — 2026-07-12 — DOC SYNC (no logic change): the header described
+        BUTTERFLY_ENTRY_CUTOFF_ET as a "hard exit at 2:00 PM". It is an ENTRY
+        cutoff only and is not consulted by exit_engine at all. Corrected.
 v1.1 — 2026-06-29 — GEX pin center strike, fixed wings by instrument,
         noon-2PM entry window, one-per-session limit, TP at 20%
 v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
@@ -20,7 +23,10 @@ Entry logic:
 Exit logic:
   - TP: 20% of max profit
   - SL: 25% of net debit
-  - Hard exit: 2:00 PM ET (BUTTERFLY_ENTRY_CUTOFF_ET used as hard close)
+  - Entry cutoff: 2:00 PM ET (BUTTERFLY_ENTRY_CUTOFF_ET). This is an ENTRY
+    gate only — it is NOT a hard exit. An open butterfly exits on: regime
+    flip to trending, 2.5h max hold, 25% stop, 20% target, or the 15:45
+    hard close. Whichever fires first.
   - Max hold: 2.5 hours
 """
 
