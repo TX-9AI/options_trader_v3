@@ -1,5 +1,36 @@
 """
 analysis/orb_engine.py — Opening Range Breakout state machine.
+v3.3 — 2026-07-12 — RETEST GRACE BAND REMOVED (correctness fix, both sides).
+        The retest confirm carried a percentage tolerance on the BODY test:
+        long  `body_low  >= orb_high * 0.999`
+        short `body_high <= orb_low  * 1.001`
+        Intent was to admit a "near-miss" retest (wick approaches the range but
+        does not enter) as a lower-grade setup. The code did the OPPOSITE. The
+        first clause of the same condition (`low < orb_high`) ALREADY requires
+        the wick to enter the range, so a true near-miss was never admitted and
+        never fired. What the 0.999 actually admitted was a candle whose BODY
+        CLOSED BACK INSIDE THE RANGE — by up to 0.1% — as a CONFIRMED retest.
+        That is the DISARM condition, bought as an entry. And because the confirm
+        branch is evaluated before the (b) close-inside branch, it won.
+        Scale of the hole (percentage of price, so it grows with the instrument):
+          MU  @ 971.50 range high → admitted closes down to 970.53 (~$0.97 inside)
+          SPX @ 6000.00           → admitted closes ~6.0 POINTS inside the range
+        The retest is the FALSIFICATION step of the break hypothesis ("this level
+        is now support"). A level that was not actually tested produced no
+        evidence, and a level whose retest closed back inside was tested and
+        FAILED. Neither is a graded setup; both are no-trade. The test is now
+        exact: wick INTO the range, body OUTSIDE it. No tolerance.
+        Behavioural effect: strictly FEWER entries. Every entry removed was one
+        taken on a candle that had already invalidated the setup. Verified against
+        the MU 2026-07-10 reference (09:49 break / 09:50 retest / 09:55 stop):
+        sequence reproduces unchanged — the reference retest's body sits fully
+        outside the range and never depended on the grace.
+        NOTE (future, NOT in this change): if the near-miss is to be evaluated as
+        a genuine B-grade variant, it must be MEASURED, not gated — log an
+        ATR-relative `retest_depth = (orb_high - candle_low) / ATR` on every setup
+        (negative = near-miss) and let the Phase-3 ROI buckets decide. It belongs
+        in orb_quality inside setup_scorer, never as a tolerance in the state
+        machine. See ROADMAP Phase 3.
 v3.2 — 2026-07-11 — ORB beats sweep under the regime switch. The retest confirm
         used to DEFER (leave the setup awaiting retest) whenever the regime was
         SWEEP_REVERSAL, so a sweep label suppressed a valid ORB. Guarded by
@@ -419,7 +450,12 @@ class ORBEngine:
                     f"without retest — runaway breakout (favors sweep reversal)"
                 )
                 return
-            if low < d.orb_high and body_low >= d.orb_high * 0.999:
+            # RETEST (v3.3): the wick must ENTER the range (low < orb_high) and the
+            # BODY must stay OUTSIDE it (body_low >= orb_high). No grace band. The
+            # retest is the falsification step — the level either held or it did
+            # not. A body that closes back inside the range is a DISARM, not a
+            # near-miss, and falls through to the (b) branch below.
+            if low < d.orb_high and body_low >= d.orb_high:
                 # Sweeps take priority when regime is sweep: don't confirm a
                 # phantom OPEN the dispatch will override — leave it awaiting
                 # retest so the engine can't get stuck OPEN with no position.
@@ -446,7 +482,9 @@ class ORBEngine:
                     f"without retest — runaway breakout (favors sweep reversal)"
                 )
                 return
-            if high > d.orb_low and body_high <= d.orb_low * 1.001:
+            # RETEST (v3.3) — mirror of the long side. Wick enters the range
+            # (high > orb_low), body stays outside (body_high <= orb_low). No grace.
+            if high > d.orb_low and body_high <= d.orb_low:
                 if regime == "SWEEP_REVERSAL" and not ORB_FIRES_REGARDLESS_OF_REGIME:
                     logger.debug("ORB retest met but regime=SWEEP_REVERSAL — deferring to sweep")
                     return
