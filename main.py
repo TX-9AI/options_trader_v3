@@ -1,5 +1,5 @@
 """
-main.py — options_trader v3.1
+main.py — options_trader v3.2
 v3.2 — 2026-07-11 — REGIME UN-GATE for the flagship ORB (config-switched,
         ORB_FIRES_REGARDLESS_OF_REGIME, default on). A confirmed ORB break+retest
         now fires regardless of the regime label — including UNKNOWN and
@@ -101,7 +101,7 @@ from zoneinfo import ZoneInfo
 
 from config import (
     POLL_INTERVAL_SECONDS, LOG_LEVEL, LOG_FILE, LOG_ROTATION_MB,
-    PAPER_TRADING, RISK_PER_TRADE_USD, SESSION_LOSS_LIMIT,
+    PAPER_TRADING, RISK_PER_TRADE_USD, DAILY_LOSS_LIMIT_USD,
     REGIME_REASSESS_MINUTES, INSTRUMENT, SessionConfig, DIRECTIONAL_ONLY,
     NO_ENTRY_AFTER_ET, BROKER_RECONCILE_ENABLED, ORB_FIRES_REGARDLESS_OF_REGIME
 )
@@ -1183,7 +1183,7 @@ def main():
             f"Service mode: {'PAPER' if PAPER_TRADING else 'LIVE'} | "
             f"{INSTRUMENT} | "
             f"risk=${RISK_PER_TRADE_USD:.0f}/trade | "
-            f"session_CB={SESSION_LOSS_LIMIT} losses"
+            f"daily_loss_cap=${DAILY_LOSS_LIMIT_USD:.0f} net"
         )
     else:
         session_config = _interactive_startup()
@@ -1212,7 +1212,6 @@ def main():
         paper      = session_config.paper_trading,
         instrument = session_config.instrument,
         risk_usd   = session_config.risk_per_trade_usd,
-        session_limit = SESSION_LOSS_LIMIT,
         restart_type = restart_type,
     )
 
@@ -1291,7 +1290,7 @@ def _interactive_startup() -> SessionConfig:
     print(f"  Instrument:    {instrument}")
     print(f"  Risk/trade:    ${risk_usd:.0f}")
     print(f"  Mode:          {'PAPER' if paper else '⚠️  LIVE'}")
-    print(f"  Session CB:    {SESSION_LOSS_LIMIT} losses → halt")
+    print(f"  Daily cap:     ${DAILY_LOSS_LIMIT_USD:.0f} NET loss → halt new entries")
     print(f"{'─'*50}")
 
     if not paper:

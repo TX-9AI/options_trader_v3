@@ -25,11 +25,10 @@ INSTALL_DIR = os.path.expanduser("~/options-trader")
 sys.path.insert(0, INSTALL_DIR)
 
 try:
-    from config import DB_PATH, SESSION_LOSS_LIMIT
+    from config import DB_PATH
     SERVICE_NAME = "optionsbot"
 except Exception:
     DB_PATH            = os.path.join(INSTALL_DIR, "trades.db")
-    SESSION_LOSS_LIMIT = 2
     SERVICE_NAME       = "optionsbot"
 
 ET  = ZoneInfo("US/Eastern")
@@ -504,7 +503,7 @@ def show_circuit_breakers(conn):
     for r in rows:
         print(
             f"  {to_et(r['event_time'])}  "
-            f"losses={r['session_losses']}/{SESSION_LOSS_LIMIT}  "
+            f"losses={r['session_losses']}  "
             f"{r['reason'] or ''}"
         )
     print()

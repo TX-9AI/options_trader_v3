@@ -72,10 +72,9 @@ def get_runtime_env(key: str, default: str = "") -> str:
 
 
 try:
-    from config import DB_PATH, SESSION_LOSS_LIMIT, BOT_NAME
+    from config import DB_PATH, BOT_NAME
 except Exception:
     DB_PATH            = os.path.join(INSTALL_DIR, "trades.db")
-    SESSION_LOSS_LIMIT = 2
     BOT_NAME           = "OptionsTrader"
 
 INSTRUMENT    = get_runtime_env("OT_INSTRUMENT", "QQQ")
@@ -124,10 +123,10 @@ def check_service():
 
 
 ORB_STATE_LABELS = {
-    "WAITING":                     "Waiting for 9:35 ET range",
-    "RANGING":                     "Inside range, watching for break",
-    "BREAK_HIGH_AWAITING_RETEST":  "Broke HIGH, awaiting retest",
-    "BREAK_LOW_AWAITING_RETEST":   "Broke LOW, awaiting retest",
+    "NO_RANGE":                    "Waiting for 9:35 ET range",
+    "WAITING_FOR_BREAK":           "Inside range, watching for break",
+    "ARMED_LONG":                  "ARMED LONG — broke HIGH, awaiting retest",
+    "ARMED_SHORT":                 "ARMED SHORT — broke LOW, awaiting retest",
     "INVALIDATED":                 "Invalidated, re-arming",
     "OPEN_LONG":                   "OPEN LONG (confirmed)",
     "OPEN_SHORT":                  "OPEN SHORT (confirmed)",
@@ -194,9 +193,9 @@ def get_regime_and_orb():
                     if not (9 <= now.hour < 16) or hm >= (11, 0):
                         orb["state"] = "EXPIRED"; orb["past_cutoff"] = hm >= (11, 0)
                     elif hm >= (9, 35):
-                        orb["state"] = "RANGING"
+                        orb["state"] = "WAITING_FOR_BREAK"
                     else:
-                        orb["state"] = "WAITING"
+                        orb["state"] = "NO_RANGE"
                 elif orb["range_status"] == "IN_PROGRESS":
                     orb["state"] = "IN_PROGRESS"
                 elif orb["range_status"] == "EXPIRED":
@@ -363,9 +362,9 @@ def main():
             state_label = "Invalidated (retest timeout) — dormant"
         elif st in ("OPEN_LONG", "OPEN_SHORT"):
             state_label = ORB_STATE_LABELS.get(st, st)
-        elif st in ("BREAK_HIGH_AWAITING_RETEST", "BREAK_LOW_AWAITING_RETEST"):
+        elif st in ("ARMED_LONG", "ARMED_SHORT"):
             state_label = ORB_STATE_LABELS.get(st, st)
-        elif st == "RANGING":
+        elif st == "WAITING_FOR_BREAK":
             # show where price sits vs the range so "inside/broke out" is honest
             if _price is not None and _price > orb["high"]:
                 state_label = "Broke ABOVE range — awaiting retest/close"

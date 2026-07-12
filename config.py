@@ -26,6 +26,46 @@ v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         mapping optimization (all market data now flows from the single
         shared TastyTrade candle feed — see data/candle_feed.py). No logic
         change in this file.
+v3.2 — 2026-07-12 — TOLERANCES REMOVED + SESSION_LOSS_LIMIT deleted.
+        (a) ORB_BREAK_BUFFER (0.05% of price) REMOVED. It gated the break on the
+            close clearing the range by a PERCENTAGE — $0.49 on MU, ~$3.00 on SPX.
+            The retest is already the noise filter (a meaningless break fails it),
+            so the buffer only cost real setups while scaling into a hole on
+            high-priced instruments. See orb_engine v3.5.
+        (b) SESSION_LOSS_LIMIT (the integer 2) DELETED. It was a COUNT of losing
+            trades from the v1.x count-based circuit breaker, and it is NOT the
+            daily loss halt. It has been vestigial since risk_manager v1.4, which
+            requests a regime reassessment after EVERY losing trade — the count
+            gates nothing. It survived only in dashboards, which printed
+            "Session CB: 2 losses -> halt" for a halt that could never occur.
+            The REAL halt is DAILY_LOSS_LIMIT_USD (below): dollars, net for the
+            day, so a green day keeps trading no matter how many losses stack up.
+v3.1 — 2026-07-12 — DEAD-CONSTANT PURGE + honest comments.
+        (a) BUTTERFLY_ENTRY_CUTOFF_ET 15:00 -> 14:00. The 15:00 value was
+            UNREACHABLE: main.py calls session_guard.can_enter() WITHOUT
+            is_butterfly=True, so the generic 14:00 cutoff always fired first.
+            14:00 is also the intended rule (post-14:00 tape gets erratic on
+            dealer hedging). This makes config agree with live behaviour; it is
+            NOT a behaviour change.
+        (b) REMOVED, never imported by any module (verified by grep across the
+            tree and by git log -S back to the initial commit):
+              ORB_TRAIL_ACTIVATION   — duplicate of TRAIL_ACTIVATION_PCT
+              CONDOR_SHORT_DELTA     — from iron_condor v1.0 (delta selection),
+              CONDOR_DELTA_TOLERANCE   dead since v1.1 made strikes BB-anchored
+              MIN_TF_CONFLUENCE      — concept lives in regime_classifier v1.3 as
+                                       a HARDCODED `aligned_timeframes < 2`; the
+                                       config value (1) was LOOSER and unwired
+              ENTRY_COOLDOWN_MINUTES — ORB's state machine IS the cooldown
+                                       (waiting / armed / open are exclusive)
+        (c) The Iron Condor comment claiming "Delta-based strike selection is
+            primary" was false since v1.1 — strikes are Bollinger-Band anchored
+            with NO delta anywhere. Corrected.
+        (d) MIN_RRR and VWAP_FILTER_ACTIVE are RETAINED but explicitly marked
+            UNWIRED. Both are genesis constants (present at the initial commit,
+            never referenced, never mentioned in any changelog). They are kept
+            because each names an intended feature that was never built — see
+            the notes at their definitions. Deleting them would erase the only
+            evidence the intent existed.
 
 All secrets come from environment variables — never from hardcoded values
 or editable files. The setup_ec2.sh script writes them into the systemd
@@ -107,7 +147,6 @@ RISK_PER_TRADE_USD  = float(os.environ.get("OT_RISK_USD", "200"))
 # this much. Defaults to one trade's risk; override via OT_DAILY_LOSS_LIMIT.
 DAILY_LOSS_LIMIT_USD = float(os.environ.get("OT_DAILY_LOSS_LIMIT", str(RISK_PER_TRADE_USD)))
 MAX_LOSS_PCT        = 0.25
-SESSION_LOSS_LIMIT  = 2
 # Max-loss stop applied to an ADOPTED position (one discovered open at the
 # broker on a LIVE restart with no DB plan). Defaults to the same threshold
 # every strategy already respects, so an adopted position exits at the same
@@ -141,16 +180,14 @@ RTH_OPEN_ET                 = (9, 30)
 RTH_CLOSE_ET                = (16, 0)
 HARD_CLOSE_ET               = (15, 45)
 NO_ENTRY_AFTER_ET           = (11, 0)   # ORB entries only valid until 11:00 AM ET
-BUTTERFLY_ENTRY_CUTOFF_ET   = (15, 0)
+BUTTERFLY_ENTRY_CUTOFF_ET   = (14, 0)   # was 15:00 and unreachable (see v3.1 header)
 BUTTERFLY_ENTRY_START_ET    = (12, 0)   # No butterfly entries before noon
 ORB_WINDOW_MINUTES          = 5
 
 # ─── ORB STRATEGY ─────────────────────────────────────────────────────────────
 
-ORB_BREAK_BUFFER            = 0.05
 ORB_MAX_RETEST_BARS         = 12
 ORB_TP_MULTIPLIER           = 1.0
-ORB_TRAIL_ACTIVATION        = 0.50
 FED_DAY_ORB_BOOST           = 0.20
 
 # ─── ORB REGIME GATE SWITCH (v3.2) ────────────────────────────────────────────
@@ -203,11 +240,12 @@ BUTTERFLY_GEX_PIN_PROXIMITY_MULT = 1.0  # Multiplier on expected move
 
 # ─── IRON CONDOR STRATEGY ─────────────────────────────────────────────────────
 # Fallback for RANGING regime when no GEX pin is available for a butterfly.
-# Delta-based strike selection is primary; expected-move guardrail is a
-# sanity check only, not a parallel sizing method.
+# Strike selection is BOLLINGER-BAND ANCHORED — there is NO delta anywhere in the
+# condor path (short call = lowest liquid strike at/above the BB upper band; short
+# put = highest liquid strike at/below the BB lower band). Delta is deliberately
+# excluded: it is relative to where price sits, not to the actual range boundary.
+# The expected-move guardrail is a sanity check only, not a parallel sizing method.
 
-CONDOR_SHORT_DELTA          = 0.22   # Target delta for short strikes
-CONDOR_DELTA_TOLERANCE      = 0.05   # Acceptable deviation from target delta
 CONDOR_WING_WIDTH_SPX       = 5      # Narrow wings — affordable verticals (was 25)
 CONDOR_WING_WIDTH_QQQ       = 5      # Fixed wing width in points on QQQ/SPY
 CONDOR_EXPECTED_MOVE_GUARDRAIL_MULT = 1.2  # Short strikes must be within this x EM
@@ -272,10 +310,20 @@ LIQUIDITY_BUFFER_PCT        = 0.003
 
 # ─── SIGNAL VALIDATION ────────────────────────────────────────────────────────
 
-MIN_RRR                     = 1.3
-VWAP_FILTER_ACTIVE          = True
-MIN_TF_CONFLUENCE           = 1
-ENTRY_COOLDOWN_MINUTES      = 5
+# ⚠️ UNWIRED — neither constant is imported anywhere. Both date to the initial
+# commit and appear in no changelog. Retained deliberately as a record of intent:
+#   MIN_RRR            — no risk/reward floor exists in the codebase. ORB's RRR is
+#                        structural (stop = impulsive origin, target = 100% of range
+#                        width), so it varies per setup and is currently ungated.
+#   VWAP_FILTER_ACTIVE — implies a HARD VWAP gate. None exists. What is live is a
+#                        SOFT score in setup_scorer (vwap_alignment, weight 0.15;
+#                        a misaligned trade scores 0.25 on that dimension and can
+#                        still clear the 0.55 B-threshold). NOTE: crypto_trader
+#                        learned the opposite lesson the hard way — shorts above
+#                        VWAP / longs below VWAP had to become HARD blocks. That
+#                        lesson is NOT ported here. Open decision.
+MIN_RRR                     = 1.3    # UNWIRED
+VWAP_FILTER_ACTIVE          = True   # UNWIRED
 
 # ─── STRUCTURE ANALYSIS ───────────────────────────────────────────────────────
 
