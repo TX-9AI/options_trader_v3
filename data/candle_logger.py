@@ -1,5 +1,11 @@
 """
-options_trader_v3/data/candle_logger.py — end-of-day 1-minute candle logger. v3.0
+options_trader_v3/data/candle_logger.py — end-of-day 1-minute candle logger. v3.1
+v3.1 — 2026-07-12 — DOC SYNC (no logic change): removed the dangling reference to
+        `timing_analysis.py`, a file that does not exist anywhere in the repo or
+        the fleet (docstring-only; never imported, zero runtime dependency). It
+        was the original consumer that defined this module's CSV contract and has
+        since been superseded by the replay harnesses. The CSV contract itself is
+        unchanged and is now cited directly.
 v3.0 — 2026-07-10 — YAHOO-FINANCE PURGE / data stream mapping optimization.
         Converted from a one-shot DXFeed subscribe/drain into a CONSUMER of
         the shared feed store (data/candle_feed.py owns the box's ONLY
@@ -21,7 +27,9 @@ Design (v3.0):
   - Opens the shared SQLite store read-only; no session, no streamer, no
     second subscription — the feed service already holds today's bars.
   - Selects 1m bars for the requested ET date (09:30 onward), drops the
-    still-forming minute, writes the CSVs timing_analysis.py expects.
+    still-forming minute, and writes the tape CSVs the replay harnesses
+    consume (tests/replay_confluence.py, tests/replay_classifier.py — see
+    docs/REPLAY_VALIDATION.md §1 for the calibration contract).
   - If the store has no bars for a symbol/date, logs a WARNING (0 bars) —
     check candle-feed.service health and symbology (OT_DXFEED_SYMBOL).
 
