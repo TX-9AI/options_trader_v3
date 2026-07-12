@@ -1,5 +1,51 @@
 """
 analysis/orb_engine.py — Opening Range Breakout state machine.
+v3.5 — 2026-07-12 — THE BREAK IS NOW DEFINITIONAL. Two changes, one principle:
+        the setup is mechanical, so every tolerance is removed and the rule is
+        stated exactly.
+        (1) ORIGIN GATE now keys on the OPEN, not the wick. The impulsive candle
+            must OPEN INSIDE the opening range (orb_low <= open <= orb_high) and
+            CLOSE OUTSIDE it. v3.1 approximated "originates inside" as
+            `low_ < orb_high` — the wick merely reaching back into the range —
+            which still admitted a candle that OPENED ABOVE the range, dipped a
+            wick in, and closed higher. That candle never broke out of the range;
+            it was already outside it. It is late continuation, and it is not an
+            OPENING-RANGE break by definition.
+        (2) ORB_BREAK_BUFFER REMOVED (both the break test and the session latch).
+            The buffer required the close to clear the range by 0.05% OF PRICE
+            before a break registered. It filtered nothing the retest does not
+            already filter — a marginal break that means nothing simply FAILS its
+            retest — and, being a percentage, it scaled into a hole: $0.49 on MU,
+            ~$3.00 on SPX. Price could close three full points beyond the opening
+            range and the engine would not call it a break. A break is a close
+            beyond the level. Full stop.
+        The latch (_update_break_latches, which arms the SWEEP gate) drops the
+        buffer as well, preserving its documented invariant that it uses the SAME
+        threshold as _check_for_break(). The latch remains CLOSE-ONLY by design and
+        does NOT take the origin gate — it records a session fact, not a setup.
+        Net effect on the ORB: FEWER breaks (origin gate is strictly tighter) and
+        EARLIER breaks (no buffer to clear). On the sweep gate: marginally MORE
+        breaks latch, since the buffer no longer suppresses a small close-out.
+        Together with v3.3 the whole setup is now free of tolerances:
+            BREAK  = opens inside the range, closes outside it.
+            RETEST = wick into the range, body outside it.
+            STOP   = a close beyond the impulsive candle's wick.
+v3.4 — 2026-07-12 — STATE VOCABULARY CORRECTED. The state names described the
+        mechanism, not the trade, and one of them collided with an unrelated
+        concept. `ORBState.RANGING` and `Regime.RANGING` shared a string while
+        meaning completely different things ("the ORB has no break yet" vs "the
+        tape is oscillating") — a latent trap for any reader, human or model,
+        holding both in view. Renamed to the operator's own vocabulary:
+            WAITING                    -> NO_RANGE           (range not established)
+            RANGING                    -> WAITING_FOR_BREAK  (range set, no break)
+            BREAK_HIGH_AWAITING_RETEST -> ARMED_LONG         (break done, awaiting retest)
+            BREAK_LOW_AWAITING_RETEST  -> ARMED_SHORT
+            OPEN_LONG / OPEN_SHORT     -> unchanged (a position is live)
+        ARMED means a break has occurred and the next event is FIRE or INVALIDATE.
+        Before a break there is nothing armed — the engine is merely WAITING.
+        Rename only: no state transition, threshold, or condition changed. The
+        strings surface in orb_state.json, which main.py rewrites every tick, so
+        a stale file self-heals within one poll interval (15s) — no migration.
 v3.3 — 2026-07-12 — RETEST GRACE BAND REMOVED (correctness fix, both sides).
         The retest confirm carried a percentage tolerance on the BODY test:
         long  `body_low  >= orb_high * 0.999`
@@ -124,7 +170,7 @@ import pandas as pd
 from utils.time_utils import now_et, is_past_entry_cutoff
 from utils.math_utils import orb_strike_selection
 from config import (
-    ORB_BREAK_BUFFER, ORB_MAX_RETEST_BARS, STRIKE_INCREMENT, INSTRUMENT,
+    ORB_MAX_RETEST_BARS, STRIKE_INCREMENT, INSTRUMENT,
     NO_ENTRY_AFTER_ET, ORB_FIRES_REGARDLESS_OF_REGIME
 )
 
@@ -134,10 +180,10 @@ ORB_RANGE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__
 
 
 class ORBState:
-    WAITING                    = "WAITING"
-    RANGING                    = "RANGING"
-    BREAK_HIGH_AWAITING_RETEST = "BREAK_HIGH_AWAITING_RETEST"
-    BREAK_LOW_AWAITING_RETEST  = "BREAK_LOW_AWAITING_RETEST"
+    NO_RANGE                   = "NO_RANGE"          # opening range not established yet
+    WAITING_FOR_BREAK          = "WAITING_FOR_BREAK" # range set; no break yet
+    ARMED_LONG                 = "ARMED_LONG"        # broke HIGH; awaiting retest
+    ARMED_SHORT                = "ARMED_SHORT"       # broke LOW; awaiting retest
     INVALIDATED                = "INVALIDATED"
     OPEN_LONG                  = "OPEN_LONG"
     OPEN_SHORT                 = "OPEN_SHORT"
@@ -146,7 +192,7 @@ class ORBState:
 
 @dataclass
 class ORBData:
-    state:              str   = ORBState.WAITING
+    state:              str   = ORBState.NO_RANGE
     orb_high:           float = 0.0
     orb_low:            float = 0.0
     orb_width:          float = 0.0
@@ -206,7 +252,7 @@ class ORBEngine:
         self._data.orb_high       = orb_high
         self._data.orb_low        = orb_low
         self._data.orb_width      = orb_width_val
-        self._data.state          = ORBState.RANGING
+        self._data.state          = ORBState.WAITING_FOR_BREAK
         self._data.attempt_number = attempt
         logger.info(
             f"ORB re-armed for next attempt (#{attempt + 1}): "
@@ -243,8 +289,8 @@ class ORBEngine:
                 d.orb_low   = low
                 d.orb_width = width
                 self._range_date = today
-                if d.state == ORBState.WAITING:
-                    d.state = ORBState.RANGING
+                if d.state == ORBState.NO_RANGE:
+                    d.state = ORBState.WAITING_FOR_BREAK
                 logger.info(
                     f"ORB range ESTABLISHED: high={high:.2f} low={low:.2f} "
                     f"width={width:.2f} date={date}"
@@ -293,10 +339,10 @@ class ORBEngine:
         if d.state in (ORBState.OPEN_LONG, ORBState.OPEN_SHORT):
             return d
 
-        if d.state == ORBState.RANGING:
+        if d.state == ORBState.WAITING_FOR_BREAK:
             self._check_for_break(df_1m)
 
-        if d.state in (ORBState.BREAK_HIGH_AWAITING_RETEST, ORBState.BREAK_LOW_AWAITING_RETEST):
+        if d.state in (ORBState.ARMED_LONG, ORBState.ARMED_SHORT):
             self._check_for_retest(df_1m, regime)
 
         if d.state == ORBState.INVALIDATED:
@@ -345,15 +391,19 @@ class ORBEngine:
         if df_1m is None or len(df_1m) < 2:
             return
         close  = float(df_1m.iloc[-2]["close"])
-        buffer = d.orb_high * ORB_BREAK_BUFFER / 100   # same buffer as _check_for_break
-        if close > d.orb_high + buffer:
+        # (v3.5) Buffer removed here too, to preserve this method's stated invariant:
+        # the latch must use the SAME break threshold as _check_for_break(). The latch
+        # is deliberately CLOSE-ONLY and does NOT apply the opens_inside origin gate —
+        # it records a session FACT ("a 1m candle closed beyond this boundary"), which
+        # is what the sweep gate needs, not an ORB entry setup.
+        if close > d.orb_high:
             if not self._broke_high:
                 self._broke_high = True
                 logger.info(
                     f"ORB latch: 1-min CLOSE {close:.2f} above high "
                     f"{d.orb_high:.2f} — broke_high armed (session-level)"
                 )
-        elif close < d.orb_low - buffer:
+        elif close < d.orb_low:
             if not self._broke_low:
                 self._broke_low = True
                 logger.info(
@@ -370,14 +420,22 @@ class ORBEngine:
         open_  = float(candle["open"])
         high_  = float(candle["high"])
         low_   = float(candle["low"])
-        buffer = d.orb_high * ORB_BREAK_BUFFER / 100
 
-        # A valid impulsive candle must ORIGINATE INSIDE the range and pierce out
-        # (v3.1): its wick must reach into the range (low < orb_high for a long).
-        # A candle sitting entirely above the range is not an ORB break — it is
-        # late continuation, and taking its "retest" produced the inverted stop
-        # (stop above entry). Gating on origin removes those degenerate setups.
-        if close > d.orb_high + buffer and low_ < d.orb_high:
+        # THE BREAK (v3.5). Definitional, no tolerances:
+        #   the impulsive candle OPENS INSIDE the opening range and CLOSES OUTSIDE it.
+        # `opens_inside` is the whole premise of the setup — it is an OPENING-RANGE
+        # break; a candle that began life outside the range never broke out of it,
+        # it was already out. (v3.1 approximated this with `low_ < orb_high`, i.e.
+        # the wick merely reaching back in, which admitted candles that opened above
+        # the range, dipped, and closed higher — late continuation, not a break.)
+        # The percentage break buffer is GONE (v3.5): the retest IS the noise filter
+        # — a marginal break that means nothing simply fails its retest. The buffer
+        # only cost real setups, and being a % of price it scaled into a hole
+        # (0.05% = $0.49 on MU, ~$3.00 on SPX: price could close three points clear
+        # of the range and not register).
+        opens_inside = d.orb_low <= open_ <= d.orb_high
+
+        if opens_inside and close > d.orb_high:
             d.break_direction    = "long"
             d.break_candle_close = close
             # Stop anchors to the IMPULSIVE candle's WICK, not its body: the low of
@@ -392,14 +450,14 @@ class ORBEngine:
             d.stop_level         = d.break_candle_low
             d.target_strike      = orb_strike_selection(d.orb_high, d.orb_low, "long", STRIKE_INCREMENT)
             d.attempt_number    += 1
-            d.state              = ORBState.BREAK_HIGH_AWAITING_RETEST
+            d.state              = ORBState.ARMED_LONG
             # (v1.9) broke_high is now latched by _update_break_latches() every
             # tick, independent of state — not set here.
             logger.info(
                 f"ORB BREAK HIGH (attempt #{d.attempt_number}): close={close:.2f} "
                 f"above {d.orb_high:.2f} target={d.target_100pct:.2f} strike={d.target_strike}"
             )
-        elif close < d.orb_low - buffer and high_ > d.orb_low:
+        elif opens_inside and close < d.orb_low:
             d.break_direction    = "short"
             d.break_candle_close = close
             # Stop anchors to the IMPULSIVE candle's WICK (its HIGH for a short) —
@@ -412,7 +470,7 @@ class ORBEngine:
             d.stop_level         = d.break_candle_high
             d.target_strike      = orb_strike_selection(d.orb_high, d.orb_low, "short", STRIKE_INCREMENT)
             d.attempt_number    += 1
-            d.state              = ORBState.BREAK_LOW_AWAITING_RETEST
+            d.state              = ORBState.ARMED_SHORT
             # (v1.9) broke_low is now latched by _update_break_latches() every
             # tick, independent of state — not set here.
             logger.info(
