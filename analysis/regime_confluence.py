@@ -1,4 +1,13 @@
 # analysis/regime_confluence.py — options_trader_v3
+# v1.1 — 2026-07-12 — FIX silent config-import failure. The guarded import
+#         requested SWEEP_ACCEPT_CLOSES from config, but it lives in
+#         analysis/regime_classifier.py; the whole block threw, the except
+#         swallowed it, and every constant ran on standalone fallbacks
+#         (_HAVE_CONFIG=False on every box — verified at runtime). Split into
+#         two independent guards: config constants from config,
+#         SWEEP_ACCEPT_CLOSES from its real home. Zero behavioral delta today
+#         (fallbacks equal live config values); future config tunes now reach
+#         the scorer. No scoring-logic change.
 # v1.0 — 2026-07-11 — NEW FILE (not present at HEAD 49d7af8).
 #         Layer 1 — Regime Confluence Scorer. Instantaneous, graded, per-regime
 #         evidence in [0,1] (or None = unobservable) computed every tick from the
@@ -32,21 +41,31 @@ from typing import Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
-# ── Guarded repo import (module runs standalone if config is absent) ──────────
+# ── Guarded repo imports (module runs standalone if the repo is absent) ───────
+# v1.1: split into TWO independent guards. The v1.0 block requested
+# SWEEP_ACCEPT_CLOSES from config, but that constant lives in
+# analysis/regime_classifier.py — the whole import threw, the except swallowed
+# it, and ALL FOUR constants silently ran on the standalone fallbacks
+# (_HAVE_CONFIG was False on every box). Harmless only while the fallback
+# values equal config's; any future config tune would never have reached this
+# scorer. Now each import fails independently.
 try:
     from config import (                       # type: ignore
         ADX_TREND_THRESHOLD,
         ADX_RANGE_THRESHOLD,
         BB_WIDTH_COMPRESSION_PCT,
-        SWEEP_ACCEPT_CLOSES,
     )
     _HAVE_CONFIG = True
 except Exception:                              # pragma: no cover - isolation path
     ADX_TREND_THRESHOLD      = 25.0
     ADX_RANGE_THRESHOLD      = 20.0
     BB_WIDTH_COMPRESSION_PCT = 0.20
-    SWEEP_ACCEPT_CLOSES      = 2
     _HAVE_CONFIG = False
+
+try:
+    from analysis.regime_classifier import SWEEP_ACCEPT_CLOSES  # type: ignore
+except Exception:                              # pragma: no cover - isolation path
+    SWEEP_ACCEPT_CLOSES      = 2
 
 # ── Regime labels (MUST match conviction_integrator.py string constants) ──────
 TRENDING_BULL     = "TRENDING_BULL"
