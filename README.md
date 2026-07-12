@@ -223,6 +223,14 @@ Derived: call wall, put wall, pin strike, flip strike, environment. The condor i
 **#2 and #3 are an AND, not an OR.** They catch different deaths: premium death (theta,
 retracement, or the mix) and thesis death (structure). Whichever fires first.
 
+**Exit-reason integrity (v3.3, 2026-07-12):** `stop_premium` is **immutable** — set once at
+entry, forever the true −25% floor. Trails persist in their own `trail_stop` column (schema
+migration is automatic), and the exit engine re-arms its in-memory trail from it on restart.
+Before this, every trail update overwrote `stop_premium`, so every trail-armed exit — including
+post-target exits at +100%+ — was logged `hard_stop_25pct`/`stop_hit`, poisoning the
+`exit_reason` distributions Phase-3 calibration reads. Same exit ticks, same prices; the labels
+now tell the truth.
+
 **The trail and the structure stop are both necessary and serve opposite jobs** — one protects
 gains, one minimizes losses. Neither supersedes the other.
 
@@ -275,23 +283,28 @@ P&L came from the few trades that reached the trail. Decay is projected per **ca
 
 # 🔧 OPEN DEFECTS AND UNRESOLVED DECISIONS
 
-**This section is the scrub list. Everything here is known; none of it is fixed.**
+**This section is the scrub list. Everything here is known. Items marked ✅ RESOLVED
+carry the resolution date and the fixing file versions; everything else remains open.**
 
-### A. The v3 stack has two Layer-1 implementations
-`analysis/regime_confluence.py` v1.0 (in-tree; implements `docs/REGIME_TRUTHS.md` v0.2's
-three-tier grammar) and `conviction_integrator.EvidenceAdapter` (off-repo) **both** produce a
-regime evidence vector, and **both define `ramp()`, `flat_angle_deg()`, and
-`midline_crossings()` — with different math.** Landing the integrator as-is gives you two
-divergent Layer-1s feeding one Layer-2. That is exactly the circularity failure `ROADMAP.md`
-§Risks names.
-**Decision needed:** `RegimeConfluenceScorer` is canonical; `EvidenceAdapter` is retired, or
-demoted to an explicitly-labeled no-repo fallback.
+### A. ✅ RESOLVED 2026-07-12 — Two Layer-1 implementations
+There WERE two: `analysis/regime_confluence.py` and `conviction_integrator.EvidenceAdapter`,
+both producing an evidence vector with divergent per-regime math — the circularity failure
+`ROADMAP.md` §Risks names. **Resolved by `conviction_integrator.py` v2.0:** `EvidenceAdapter`
+and its duplicated `ramp()`/`flat_angle_deg()`/`midline_crossings()` are **deleted**.
+`RegimeConfluenceScorer` is the sole Layer 1; the integrator consumes its
+`.evidence()` vector and imports the regime labels from it (guarded, with string fallbacks
+for isolation).
 
-### B. `regime_confluence.py` is built but **wired to nothing**
-It is imported only by `tests/replay_confluence.py`. No runtime path touches it. The conviction
-integrator (Layer 2) is **not in this repo at all**, and as it stands it still emits `UNKNOWN`
-— ROADMAP Phase 0.1 requires deleting that from the emission law. **The port is a semantic
-change, not a copy.**
+### B. ✅ RESOLVED 2026-07-12 — Layer 2 ported in-repo (Phase 0.1 done)
+`analysis/conviction_integrator.py` **v2.0** is in-tree with the v3 emission law: **always
+argmax** — the `UNKNOWN` fallback is deleted from emission; indecision is a low conviction
+number on a best-fit label, never a seventh label. The θ_hold/θ_commit/δ hysteresis band is
+kept for label stability, and the **STALE/gap state survives** (data faults still block;
+indecision does not). Priors untouched — they await tape calibration.
+`regime_confluence.py` (v1.1: fixed a silent config-import failure that ran every constant
+on fallbacks) now feeds both the Layer-1 replay AND the integrator's Layer-2 tracks in
+`tests/replay_confluence.py` v2.0. **Still shadow-only:** no live-loop path touches either —
+that is ROADMAP Phase 0.2, deliberately not yet wired.
 
 ### C. `docs/REPLAY_VALIDATION.md` justifies its method on a **false premise**
 It says to calibrate on the DXFeed CSVs *"not the live **yfinance** shadow observer — the
@@ -421,7 +434,8 @@ dedicated Telegram bot for options-trader notifications.
 | `orb_engine.py` ✅ | **v3.5.** The ORB state machine. Break → armed → retest → open, plus the three invalidations, the re-arm rule, the session break latches, and the impulsive-candle stop level. **No tolerances anywhere.** |
 | `get_orb_range.py` ✅ | Resolves the 9:30–9:35 range through `market_data.fetch_candles` (same feed the bot trades) → `orb_range.json` with `ESTABLISHED`/`IN_PROGRESS`/`EXPIRED`. |
 | `regime_classifier.py` ✅ | **v1.3 — the LIVE classifier.** Memoryless boolean cascade, first-match-wins. Emits one label + a post-hoc conviction number that currently gates nothing. |
-| `regime_confluence.py` ⚠️ | **v1.0 — LAYER 1 of v3. BUILT, WIRED TO NOTHING.** Instantaneous graded per-regime evidence (`hard_veto × soft_necessary × Σ corroborators`), implementing `REGIME_TRUTHS.md` v0.2. Imported only by `tests/replay_confluence.py`. |
+| `regime_confluence.py` ✅ | **v1.1 — LAYER 1 of v3 (canonical, sole).** Instantaneous graded per-regime evidence (`hard_veto × soft_necessary × Σ corroborators`), implementing `REGIME_TRUTHS.md` v0.2. v1.1 fixed a silent config-import failure (a wrong-home constant threw the whole guarded block; every constant ran on fallbacks). Feeds the L1 replay and the L2 integrator via `tests/replay_confluence.py` v2.0. **No live-loop path yet — Phase 0.2.** |
+| `conviction_integrator.py` ✅ | **v2.0 — LAYER 2 (shadow-only; drives nothing).** Leaky per-regime conviction: rises on agreement, decays on disagreement with decay resistance scaled by banked conviction; **always-argmax emission** with θ_hold/displacement hysteresis — no `UNKNOWN`; `stale` (data gap/unwarmed) is the only hard no-trade marker. dt-aware, snapshot/replay warm start, embedded validation suite. **All thresholds are PRIORS pending tape calibration.** |
 | `trend_engine.py` ✅ | EMA stacks, **ADX from the 5m timeframe**, momentum, timeframe alignment count. |
 | `volatility_engine.py` ✅ | Bollinger Bands, VWAP, ATR, expansion/contraction state. Feeds condor strikes and regime evidence. |
 | `structure_analyzer.py` ✅ | Swings, HH/HL/LH/LL sequence, S/R zones, **FVGs** (which the trail parks against). |
@@ -434,7 +448,7 @@ dedicated Telegram bot for options-trader notifications.
 | `base_strategy.py` ✅ | `OptionsSignal` + the premium-level math every strategy inherits (`stop_premium`, `target_premium`, `trail_activation_premium`). |
 | `orb_strategy.py` ✅ | Turns a confirmed ORB engine state into a signal: strike selection, liquidity-path check (**blocks on a named pool in the path with no extra confluence**), target adjustment, confluence notes. |
 | `sweep_reversal_strategy.py` ✅ | Post-sweep reversal. Delta-band strike selection scaled inversely to reversal strength. ATR-aware recovery window. |
-| `iron_condor_strategy.py` ✅ | Legged condor, **BB-anchored strikes, zero delta**. Plan state machine + per-leg price triggers. |
+| `iron_condor_strategy.py` ✅ | **v3.1.** Legged condor, **BB-anchored strikes, zero delta**. Plan state machine + per-leg price triggers. **v3.1 restored an import missing since the file's first commit** — masked on the fleet by Python 3.14's lazy annotations (PEP 649); on any ≤3.13 interpreter the module raised `NameError` at import and killed `main.py`. Verified 3.12 vs 3.14 A/B. |
 | `condor_roll.py` ✅ | Broken-wing roll solver: smallest roll toward price that makes the tested side risk-free. One-time, final. |
 | `butterfly_strategy.py` ✅ | **v3.1.** Debit butterfly centered on the **GEX pin**. Gated on PINNING + proximity + noon–14:00 + one-per-session. |
 
@@ -443,8 +457,8 @@ dedicated Telegram bot for options-trader notifications.
 | File | Purpose |
 |---|---|
 | `entry_engine.py` ✅ | Places the opening order (paper fills at the mark). Writes the `TradeRecord`, including `underlying_stop` — **the impulsive candle's wick, which the exit engine reads back.** |
-| `exit_engine.py` ✅ | **v3.2.** All exits, routed per strategy. ORB: hard close · unconditional −25% floor · impulsive-origin structure stop · gated theta bleed · FVG/% trails. Sweep: BOS. Butterfly/condor: premium + regime-flip. Adopted: generic. |
-| `position_manager.py` ✅ | Owns the single open position (the condor's two verticals are the sole exception). Live chain marks for P&L in paper. |
+| `exit_engine.py` ✅ | **v3.3.** All exits, routed per strategy. ORB: hard close · unconditional −25% floor · impulsive-origin structure stop · gated theta bleed · FVG/% trails. Sweep: BOS. Butterfly/condor: premium + regime-flip. Adopted: generic. **v3.3: floor checks read the immutable `stop_premium` only; trails seed from the persisted `trail_stop` on restart — exit_reason labels are truthful.** |
+| `position_manager.py` ✅ | **v3.1.** Owns the single open position (the condor's two verticals are the sole exception). Live chain marks for P&L in paper. **Trail updates write `trail_stop`, never `stop_premium`.** |
 | `broker_reconcile.py` ⚙️ | **LIVE-only, default OFF.** Adopt / keep / phantom-close reconciliation against the broker on restart. Paper never reconciles. |
 
 ### `risk/` — sizing and gates
@@ -472,7 +486,7 @@ dedicated Telegram bot for options-trader notifications.
 
 | File | Purpose |
 |---|---|
-| `database/trade_logger.py` ✅ | SQLite trade log. Spread columns for condor legs, `get_open_trades()`, `realized_pnl_today()` (which seeds the daily halt), `update_fields()`. |
+| `database/trade_logger.py` ✅ | **v3.1.** SQLite trade log. Spread columns for condor legs, `get_open_trades()`, `realized_pnl_today()` (which seeds the daily halt), `update_fields()`. **New `trail_stop` column (auto-migrated) + `update_trail_stop()`; `update_stop()` removed — its only caller was the floor-overwrite bug.** |
 | `notifications/alert_manager.py` ✅ | The 4 core Telegram events (start, stop, entry, exit) + BWB roll + daily-loss-limit. |
 | `notifications/telegram_sender.py` ✅ | Bot API transport. |
 | `notifications/test_telegram.py` 🧪 | Connectivity check. |
@@ -511,7 +525,10 @@ dedicated Telegram bot for options-trader notifications.
 
 | File | Purpose |
 |---|---|
-| `replay_confluence.py` 🧪 | **The v3 workhorse.** Replays `regime_confluence` over harvested DXFeed 1-min tape to accumulate paired scores vs outcomes — the data that will eventually place the conviction bars. |
+| `replay_confluence.py` 🧪 | **v2.0 — the v3 workhorse.** Replays `regime_confluence` over harvested DXFeed 1-min tape — AND feeds each symbol-session's evidence through a fresh `ConvictionIntegrator`: every JSONL tick carries an `l2` object, the report gains a LAYER-2 section (emitted distribution, **label switches vs L1-argmax flips** — the churn metric — stale%). `--report-only <jsonl>` reprints a saved run without re-scoring (merged from the control-box local mod that never reached GitHub). CLI/exit codes unchanged; L1 acceptance remains the sole exit-code authority. |
+| `regime_diary.py` 🧪 | **v1.1.** Rolling one-entry-per-date diary (upsert by date, JSONL + md). v1.1 adds an L2 line — emitted dominance, switches vs L1 flips, stale% — when the day's log carries `l2`; pre-v2.0 logs digest unchanged. Tape-only, never reads trades. |
+| `regime_backfill.py` 🧪 | **v1.0.** Disk-driven catch-up: replays + diaries every harvest date that has `*_OHLC_*.csv` tape but no diary row. `--rebuild` re-scores all dated tape (retro-fills L2 after a threshold change). |
+| `validate_regime.sh` ⚙️ | **v2.0 — the single entrypoint** for the manual regime workflow on 1-REPORTER (devtools 40–44 are thin wrappers): run today / a date / `--report` / `--diary` / `--backfill [--rebuild]`. Auto-bootstraps checkout + venv; `git pull --ff-only` per run. The executing copy lives at `~/validate_regime.sh` on control — sync it manually when this file changes. |
 | `replay_classifier.py` 🧪 | Replays the live v1.3 classifier over logged tape (built for the sweep-definition correction). |
 | `test_orb_retest_v33.py` 🧪 | **NEW.** Locks the MU 2026-07-10 reference: 09:48 is not a break · 09:49 is · stop = impulsive wick low · 09:50 retest fires · a body closing inside disarms · runaway doesn't re-arm. 10/10. |
 | `test_regime_gate.py` 🧪 | State-transition pressure test on the `UNKNOWN` gate + reassessment throttle. |
@@ -522,7 +539,7 @@ dedicated Telegram bot for options-trader notifications.
 `trades.db` · `bot.log` · `orb_range.json` · `orb_state.json` · `pnl_today.json` · `credentials.py` · `bootstrap.sh` · `*.pem` · `data/OHLC/` · `data/shadow/`
 
 **Referenced but not in this repo — by design:** `fleet.py` (control plane, lives in `day_trader_pro`).
-**Referenced but genuinely missing:** `docs/persistence_integrator_design.md` (cited by `conviction_integrator.py`).
+**Formerly referenced, genuinely missing:** `docs/persistence_integrator_design.md` — the citation was removed in `conviction_integrator.py` v2.0; the design contract now lives in that file's own header.
 **Gone, and it was never a runtime dependency:** `timing_analysis.py`.
 
 ---
@@ -552,6 +569,31 @@ cap override).
 ---
 
 ## Changelog
+
+### 2026-07-12 (late) — audit remediation batch
+- **`iron_condor_strategy` v3.1** — restored the `OptionContract`/`OptionsChain` import missing
+  since the file's first commit (v2, 06-30). Masked fleet-wide by Python 3.14's lazy annotation
+  evaluation; fatal `NameError` at import on ≤3.13. Repo-wide AST sweep: sole instance.
+- **Exit-reason integrity (F5)** — `trade_logger` v3.1 (new `trail_stop` column + migration,
+  `update_trail_stop()`, `update_stop()` removed) · `position_manager` v3.1 (trail writes go to
+  `trail_stop`) · `exit_engine` v3.3 (floor checks read the now-immutable `stop_premium`; trails
+  seed from `trail_stop` on restart). Behaviorally neutral — same exit ticks and prices — but
+  `exit_reason` stops labeling trail exits as hard stops. Deploy the three files together.
+- **`regime_confluence` v1.1** — the guarded config import silently failed (one wrong-home
+  constant threw the whole block; `_HAVE_CONFIG=False` on every box). Split into independent
+  guards; config tunes now reach the Layer-1 scorer.
+- **`conviction_integrator` v2.0** — ROADMAP Phase 0.1 port: always-argmax emission (`UNKNOWN`
+  deleted), hysteresis/displacement kept, STALE kept, `EvidenceAdapter` + duplicated helpers
+  deleted. **Defects A and B resolved.** Shadow-only; priors uncalibrated.
+- **Installer repo pointers (v3.1)** — `install.sh` cloned `options_trader_v2.git`, so every
+  fresh install deployed v2 (caught on the QQQ-TEST rebuild: v2.5 banner, 542-object clone).
+  `install.sh`/`bootstrap.example.sh`/`setup_ec2.sh` prompts fixed; verified end-to-end on a
+  fresh EC2 (231 objects, dual candle-feed + bot services, v3 banners).
+- **`replay_confluence` v2.0 / `regime_diary` v1.1 / `regime_backfill` v1.0 /
+  `validate_regime.sh` v2.0** — Layer-2 tracks in the daily manual replay (zero live-loop
+  changes), `--report-only` drift-merged, diary/backfill/entrypoint landed in the repo for the
+  first time (they lived only on the control box). Control's silent `git pull --ff-only`
+  failure (dirty local `replay_confluence.py`) diagnosed and healed.
 
 ### v3.5 / v3.4 / v3.3 — 2026-07-12 (the ORB made definitional + doc scrub)
 - **`orb_engine` v3.5** — the origin gate now keys on the **open** (`orb_low ≤ open ≤ orb_high`),
