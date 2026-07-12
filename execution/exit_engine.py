@@ -1,5 +1,20 @@
 """
 execution/exit_engine.py — Strategy-aware exit logic for all options positions.
+v3.2 — 2026-07-12 — DOC SYNC (no logic change). Three docstrings in this file
+        contradicted the code beneath them and were actively dangerous: an agent
+        or engineer reading them would "correct" working code back into a fixed
+        bug.
+        (a) `_evaluate_orb`'s docstring still described the PRE-v3.1 stop ("1-min
+            candle closes back inside ORB range") — precisely the behaviour v3.1
+            replaced. Rewritten to the actual, ordered trigger list, and it now
+            states explicitly that the -25% floor and the structure stop are an
+            AND, that there is NO BOS on ORB, NO max-hold, and that the 11:00 ET
+            cutoff expires the ENGINE and not an open position.
+        (b) The v1.1 changelog line describing that same old stop is now marked
+            [HISTORICAL — do not restore].
+        (c) `_evaluate_butterfly`'s docstring claimed a 25% profit target; the
+            live value is BUTTERFLY_TP_PCT = 20%.
+        Zero executable lines changed — verified by diff.
 v3.1 — 2026-07-11 — ORB STRUCTURE STOP now keys off the IMPULSIVE candle's
         origin, not the range boundary. The old rule (v1.1) exited on a 1-min
         close back inside the ORB range (close < orb_high for a long). That is
@@ -16,6 +31,8 @@ v3.1 — 2026-07-11 — ORB STRUCTURE STOP now keys off the IMPULSIVE candle's
 v3.0 — original release
 v1.1 — 2026-06-27 — strategy-aware exit routing:
         ORB:     stop on 1-min close back inside range, trail at 50% TP, no BOS
+                 [HISTORICAL — the range-boundary stop was REPLACED in v3.1 by
+                  the impulsive-origin stop. Do not restore. See v3.1 above.]
         Sweep:   BOS on 1-min structure, hard stop 25%
         Butterfly: time/premium exits only, no BOS, no trail
 v1.2 — 2026-06-30 — ORB no longer hard-exits at 100% TP. Past 100%, the trail
@@ -316,13 +333,27 @@ class ExitEngine:
                        current_premium: float,
                        df_1m: Optional[pd.DataFrame]) -> ExitDecision:
         """
-        ORB exit logic:
-        - Stop: 1-min candle closes back inside ORB range
-        - TP:   100% of premium \u2014 past this, trail tightens to track the
-                nearest unfilled 1m FVG instead of hard-exiting
-        - Trail: activates at 50% TP, trails at 75% of current premium below
-                 100%; 85% of current premium (tighter) above 100%
-        - No BOS
+        ORB exit logic (v3.2 doc sync \u2014 this now matches the code below).
+        Evaluated every tick, FIRST MATCH WINS:
+          1. HARD CLOSE      \u2014 15:45 ET.
+          2. HARD STOP       \u2014 premium <= entry * 0.75 (\u221225% floor).
+                               UNCONDITIONAL, every tick, independent of trail state.
+          3. STRUCTURE STOP  \u2014 last CLOSED 1m candle closes BEYOND the impulsive
+                               (break) candle's wick: close < impulsive low (long) /
+                               close > impulsive high (short), read from record
+                               `underlying_stop`. NOT the ORB range boundary:
+                               closing back INSIDE the range does NOT stop the trade.
+                               (2) and (3) are an AND \u2014 premium death and thesis
+                               death are caught independently, whichever fires first.
+          4. THETA BLEED     \u2014 gated: held >= 20 min AND gain in [10%, 20%) AND
+                               projected decay over the lookahead erases the gain.
+          5. PAST 100% TP    \u2014 no hard exit. Trail tightens to the nearest unfilled
+                               in-favor 1m FVG, floored at 85% of current premium.
+          6. BELOW 100% TP   \u2014 FVG trail arms at +20%; % trail arms at +50% and
+                               ratchets to 75% of current premium. Higher governs.
+        NO break-of-structure exit (BOS is sweep-only). NO max-hold. The 11:00 ET
+        cutoff expires the ENGINE, not an open position \u2014 a filled ORB runs to its
+        own exits, up to the 15:45 hard close.
         """
         decision   = ExitDecision()
         trade_id   = record["trade_id"]
@@ -661,8 +692,8 @@ class ExitEngine:
         Butterfly exit logic:
         - Regime flip: exit immediately if regime flips to TRENDING
         - Max hold: 2.5 hours
-        - Hard stop: net value <= 25% loss
-        - Target: 25% of max profit
+        - Hard stop: net value <= 25% loss   (SL: 25% of net debit)
+        - Target: BUTTERFLY_TP_PCT = 20% of max profit  (was documented as 25%)
         - No BOS, no trail
         """
         decision     = ExitDecision()
