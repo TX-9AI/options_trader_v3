@@ -65,7 +65,7 @@ class AlertManager:
     # ── 1. Bot started ──────────────────────────────────────────────────────
 
     def send_startup_alert(self, paper: bool, instrument: str,
-                            risk_usd: float, session_limit: int,
+                            risk_usd: float,
                             restart_type: str = ""):
         mode = "PAPER" if paper else "LIVE"
         rt   = f" | {restart_type}" if restart_type else ""
