@@ -1,414 +1,609 @@
 # options_trader v3 — Vertigo Capital
 
-**Options Day Trading Suite · 29-Symbol Fleet | TastyTrade | Single Shared Candle Feed | Regime-Aware → Conviction-Gated | GEX-Live | Tracked Legged Condor | Broken-Wing Roll | Net Daily Loss Halt**
+**Intraday options day-trading suite · 29-box fleet · TastyTrade/DXFeed · single shared candle store per box · paper-first**
 
-Institutional-grade intraday options day-trading suite across a 29-symbol fleet (single-name + index). Classifies intraday market regime every 15 seconds and deploys the appropriate strategy. GEX (Gamma Exposure) is computed in real time from the live options chain — no external API required. Position sizing is automatic. Supports paper and live trading via TastyTrade SDK.
+---
 
-> **Version note:** v3 (2026-07-10) forked from options_trader_v2 @ `a181dd2`. Two things define this repo: **(1) shipped** — the Yahoo-Finance purge: every process (bot, engines, ORB range, shadow observer, candle logger, VIX) now derives from ONE shared TastyTrade/DXFeed store per box (`data/candle_feed.py` + `candle-feed.service`), so every decision and every calibration measures the exact tape the bot trades; **(2) in build** — the conviction/consensus reasoning architecture described below, which replaces v2's boolean regime gates. The trading logic currently running is the proven v2 lineage (regime_classifier v1.3, tracked condor, BWB roll, net daily-loss halt) while the v3 reasoning layer is developed against real tape — see `ROADMAP.md` for exactly what is built, what is running shadow, and what remains.
+## ⚠️ READ THIS FIRST — the entry logic is v2.5, and that is deliberate
+
+The regime architecture is mid-migration. Three eras coexist in this tree, and the honest
+label for what is *running today* is neither v2 nor v3:
+
+| | Gating model | Result |
+|---|---|---|
+| **v1** | Boolean gates, permissive | Fired into hostile tape. Sold into uptrends. Got faked out. |
+| **v2** | Boolean gates + an `UNKNOWN` regime with **hard veto** | Over-corrected. Most of RTH classified `UNKNOWN`; the veto skipped clean trending setups; **the trade sample starved the very analysis loop meant to fix it.** |
+| **v2.5 — RUNNING NOW** | v2's cascade, but `UNKNOWN`'s **veto power removed for the ORB** | Sample restored. **The safety was removed before the replacement was built.** |
+| **v3 — TARGET** | Weighted confluence → per-regime conviction → `fires iff regime ∈ permissive AND C ≥ bar(trade_type)` | Bars placed empirically at the marginal fee-adjusted-ROI zero crossing. |
+
+**State it plainly:** v3.2 shipped ROADMAP **Phase 2's permissive set** for the ORB
+(`_orb_ok_regimes` in `main.py` is the ROADMAP Phase-2 table verbatim, plus `UNKNOWN` and
+`SWEEP_REVERSAL` under the switch) **without Phase 2's conviction bar.** The gate opened; the
+thing meant to replace it has not landed.
+
+Consequently, **a confirmed ORB break+retest fires in every regime the classifier can emit,
+including `UNKNOWN`.** The only thing between a confirmed setup and an order is
+`setup_scorer`'s B-threshold (0.55), inside which `regime_conviction` is a 20%-weighted
+dimension that contributes **exactly 0.0 under `UNKNOWN`**.
+
+This is intentional — it is how labeled tape gets generated for the Phase-3 calibration.
+**It is also why the fleet stays in paper.** `PAPER_TRADING` defaults to `True` and must not
+be flipped on any box until the conviction bars exist. See `ROADMAP.md` §Risks.
+
+Sweep, butterfly, and condor are **untouched**: they still self-gate and still do not fire
+under `UNKNOWN`. Set `ORB_FIRES_REGARDLESS_OF_REGIME = False` to restore strict v2 gating.
 
 ---
 
 ## Architecture
 
-### The v3 Reasoning Model (direction — see ROADMAP.md for build status)
+### Fleet topology — and the parity invariant
 
-v2 reasoned tick-by-tick: each classification was memoryless, regimes were boolean
-verdicts from a priority cascade, UNKNOWN was a hard dead spot, and trades were
-gated by regime *identity*. v3 replaces that with a **consensus model**: every
-arriving piece of data is weighed by its agreement or conflict with the larger
-frame already established, and the frame yields only to accumulated evidence —
-never to a single tick.
+**This repo is one artifact deployed into two different roles.**
 
-- **Per-regime conviction, integrated over time.** Each regime carries a running
-  conviction that rises on agreement, decays on disagreement, and resists
-  teardown in proportion to how much conviction is already banked.
-- **Always labeled, never blended, never UNKNOWN.** The emitted regime is the
-  single best-fit frame (argmax) with its conviction attached. Tape that turns
-  less characteristic stays in-regime at lower conviction (`BREAKOUT_VOLATILE
-  0.89 → 0.37`) until a competing regime accumulates enough of its own
-  conviction to displace it. There is no 25%-ranging/75%-trending blend and no
-  dead spot — indecision is expressed as low conviction, not as a refusal to
-  answer. (Data *faults* — stale feed, restart gap — are still a hard no-trade
-  block, but that is a data-integrity state, not a regime.)
-- **Regimes defined by truths.** Each regime is being reduced to a set of common
-  truths — hard, definitional vetoes (e.g. *a trend cannot have a flat value
-  center*) plus graded confluence evidence. Truths make regimes mutually
-  exclusive by definition rather than by cascade priority.
-- **Trades gated by conviction bars, not regime identity.** Each trade type
-  fires only in its permissive regimes AND only above a per-trade conviction
-  bar. Trades whose confluence factors are binary (ORB break, sweep reclaim)
-  clear a LOW bar; trades whose factors are nuanced (premium structures needing
-  pin quality and range character) clear a HIGH bar. Bars are calibrated
-  empirically: paper-trade the gates wide open, bucket fee-adjusted ROI by
-  conviction, and place each gate where marginal ROI crosses zero.
+- **29 trading boxes** (EC2, one symbol each) run `main.py` under `optionsbot.service`, plus
+  `candle-feed.service`. 29, not 30: `STRIKE_INCREMENTS` is a strike-increment *lookup table*
+  (a superset, 30 entries); SPY is defined but not deployed, because SPX covers it.
+- **1 control server** runs `fleet.py`. **`fleet.py` lives in `day_trader_pro`, not here** —
+  which is why `harden_hosts.sh` and `pull_today_ohlc.sh` reference a file that isn't in this
+  tree: they are *invoked by* control, they do not invoke it.
 
-### Regime Classification (running today — v2 lineage)
+`tests/` ships to all 29 boxes but is *exercised* on control, against harvested,
+fleet-aggregated tape. That is deliberate: the harnesses **import the live engines**
+(`orb_engine`, `regime_classifier`, `regime_confluence`, `exit_engine`) rather than
+re-implementing them, so a backtest always runs the *same execution model the fleet is
+running*.
 
-ADX is computed from the **5-minute timeframe**, matching the bot's actual trading horizon. Using a slower timeframe (e.g. 1H) causes trend days to misclassify as RANGING for hours after a breakout has already happened.
+> **INVARIANT — any engine patch deployed to the fleet must also be deployed to control.**
+> Otherwise the backtest silently stops being apples-to-apples. It will still run, still
+> produce numbers, and those numbers will be measuring a bot that no longer exists.
+> **Nothing currently enforces this.** It belongs in `check_versions.sh`.
 
-The classifier currently running is v2's **priority hierarchy** — sweep → breakout → compression → trending → ranging; first match wins. **One deliberate exception (v3.2):** a confirmed ORB break+retest is self-validating, so it fires regardless of the regime label — including UNKNOWN and SWEEP_REVERSAL — under the `ORB_FIRES_REGARDLESS_OF_REGIME` switch (default on). The flagship setup is no longer gated by a label that says nothing about whether the setup is present, and **ORB now wins over sweep** inside the ORB window. For every other strategy, UNKNOWN remains a hard no-trade fallback until the conviction integrator replaces this path (ROADMAP Phase 0–1).
+### Data — one producer, many readers (shipped, v3.0)
 
-| Regime | Strategy |
-|--------|----------|
-| TRENDING_BULL / TRENDING_BEAR | ORB long call/put (9:30–11:00 AM) |
-| BREAKOUT_VOLATILE | ORB long call/put (9:30–11:00 AM) |
-| SWEEP_REVERSAL | SweepReversal (OTM gamma play) |
-| RANGING | Iron Condor (11:00 AM–2:00 PM), Butterfly fallback (12:00–2:00 PM if GEX PINNING) |
-| COMPRESSION | Butterfly (GEX pin-centered, 12:00–2:00 PM) |
+Every process on a box — bot, engines, ORB range, candle logger, shadow observer, VIX —
+reads **one** SQLite (WAL) store, written by **one** DXFeed subscription held exclusively by
+`data/candle_feed.py` (`candle-feed.service`). No consumer may open its own stream.
 
-Not every regime guarantees a fill (a trending regime with no confirmed ORB, or a compression regime with no GEX pin, may stand aside), but the bot is designed to find at least one valid trade on nearly all trading days.
+`data/market_data.py` is a pure store *reader* preserving the exact v2 contract
+(`fetch_candles` / `fetch_quote` / `fetch_all_candles`), which is why every downstream engine
+required zero changes. Readers **fail loud**: `None` + `WARNING` when the store is missing or
+the heartbeat exceeds `OT_FEED_STALE_S` (120s). A dead feed surfaces as "no data," never as
+stale numbers driving a decision.
 
-### Strategies
-
-**ORB (Opening Range Breakout)**
-- 5-minute opening range = the 9:30–9:35 ET candle.
-- **Range is sourced through the bot's own data layer** (`market_data.fetch_candles`) — the identical feed and symbol mapping the rest of the bot trades on (`^SPX` for SPX). It is no longer fetched from a separate symbol, so the opening range always agrees with the bot's price feed.
-- **Three-state range model** written to `orb_range.json`; the file always carries the last valid range and declares its state:
-  - `ESTABLISHED` — today's 9:30–9:35 candle has closed. The only tradeable state.
-  - `IN_PROGRESS` — the clock is inside 9:30:00–9:34:59; today's range is still forming; the file carries the last valid range meanwhile.
-  - `EXPIRED` — pre-open, or today's candle isn't on the feed yet; carries the last RTH range (e.g. Friday's on a Monday pre-open).
-  - The engine only arms on `ESTABLISHED`/today — a carried prior-day range can never be traded.
-- Entry requires a retest (wick into the range, body stays outside) — no chasing a breakout that never pulls back.
-- **Stop = the impulsive (break) candle's origin (v3.1)** — its wick *low* for a long, wick *high* for a short. The break candle must itself originate inside the range, so the stop always sits inside the range, below (long) / above (short) the entry. A close back inside the range does **not** stop the trade; only a 1-minute **close beyond the impulsive origin** does. It runs beside the unconditional **−25% premium floor** (theta and/or retracement) — the two are an AND, whichever fires first.
-- **Two invalidation rules:**
-  - **(a) Runaway breakout** — price runs to the 50%-TP level with no retest → INVALIDATED. This is the setup that most favors a sweep reversal; the ORB stands aside for it.
-  - **(b) Retrace** — a 1-minute candle closes back inside the ORB range → INVALIDATED.
-- **Regime-gated re-arm:** after a (b) retrace invalidation the engine re-arms and watches for another break **only while the regime is still ORB-friendly (RANGING/COMPRESSION)**. It does **not** re-arm after an (a) runaway (hand-off to sweep) or once the regime has shifted to sweep/trend/breakout. It re-checks each tick, so ORB can come back if the regime returns to friendly before 11:00.
-- **ORB beats sweep (v3.2):** with `ORB_FIRES_REGARDLESS_OF_REGIME` on, a confirmed ORB break+retest fires even when the regime is SWEEP_REVERSAL — the engine no longer defers its OPEN to the sweep. (A breakout-*without*-retest still hands off to sweep via the runaway invalidation.) Set the flag `False` to restore the old sweep-takes-priority behavior.
-- Single-leg long call or long put — strike near the ORB-projected 100% target.
-- At 50% TP: trailing stop arms. Past 100% TP: trail tracks the nearest unfilled 1-minute FVG — no hard exit, the position can keep running.
-- **ORB entries valid until 11:00 AM ET — HARD cutoff.** At 11:00 the ORB expires regardless of state (including awaiting-retest), and the bot works the other regimes.
-
-**Sweep Reversal**
-- Detects liquidity sweeps at key levels (PDH/PDL, equal highs/lows, session H/L).
-- OTM options selected by delta targeting (pure gamma play).
-- BOS (Break of Structure) exit on the 1-minute chart — candle closes only, no wicks.
-- Directional entries cut off at 2:00 PM ET.
-
-**Iron Condor (Legged Entry — Tracked)**
-- RANGING regime fallback — fires when no GEX pin is available for a butterfly.
-- **Each vertical is a fully tracked position.** The condor is the **only** strategy allowed to hold two positions at once (its two verticals); every other strategy is single-position. Each leg is managed, exited, and P&L'd independently, using credit-spread math (profit as the spread value falls).
-- **Half-budget-per-side sizing:** each vertical is sized to half the grade budget. A B-grade $1,000 trade → two ~$500 verticals.
-- Strike selection: **Bollinger Band anchored only, no delta.**
-  - Short call = lowest liquid strike at/above the BB upper band.
-  - Short put = highest liquid strike at/below the BB lower band.
-  - Delta deliberately excluded — it is relative to where price sits, not the actual range boundaries.
-- Sanity guardrail: short-strike distance must be within 1.2× the ATM straddle expected move.
-- **Wing widths: narrow — 5 points on SPX, $5 on QQQ** (max loss ~$235/contract on a 5-wide SPX vertical, which is what makes half-budget sizing affordable).
-- **Legged entry** (`DECIDED → LEG1_FILLED → COMPLETE`): the bot fixes both vertical locations at decision time, fires Leg 1 when price approaches the first short strike, then queues Leg 2 for the opposite side.
-  - If the regime flips away from RANGING before a pending leg fires, that leg is cancelled.
-  - Already-filled legs are never cancelled — they manage independently.
-  - If Leg 2 never fires, Leg 1 runs as a standalone vertical.
-- Exit per leg: 25% stop (spread value at 125% of credit) OR $0.05 nickel close.
-- Regime-flip exit is **direction-aware**: a call spread only exits on TRENDING_BULL/BREAKOUT_VOLATILE (a bearish flip is favorable — hold); a put spread only exits on TRENDING_BEAR/BREAKOUT_VOLATILE.
-- **Entry window: 11:00 AM – 2:00 PM ET.**
-
-**Broken-Wing Roll (Condor Adjustment)** — *new in v2.3*
-- When **both** condor verticals are open and price **tests one side**, the bot can roll the **untested** side toward price into a broken-wing butterfly.
-- The roll fires **only if it makes the tested side risk-free** — i.e. cumulative credit collected covers the tested side's width:
-  ```
-  banked_condor_credit + roll_credit - close_cost  >=  tested_side_width
-  ```
-- The solver pulls live chain marks and takes the **smallest** roll toward price that clears risk-free (least new risk on the rolled side). If no roll achieves risk-free, it doesn't roll — the condor is managed normally.
-- **Final form — the roll is a one-time transformation.** Once rolled, every leg is flagged `is_broken_wing` and the bot never adjusts it again: it locks the untested side's gains, removes loss risk on the tested side, and is managed to exit only (stop / nickel). Roll once, stand it, defend it.
-
-**Debit Butterfly (GEX Pin-Centered)**
-- Fires only in RANGING or COMPRESSION with a PINNING GEX environment.
-- Center strike = GEX pin strike (not ATM).
-- Entry gated by proximity: price within 1× the session expected move of the pin.
-- Fixed wings: 25 points on SPX, $5 on QQQ.
-- One butterfly per RTH session.
-- Regime-flip exit: exits immediately on a flip to TRENDING.
-- TP: 20% of max profit | SL: 25% of net debit | 2.5 hr max hold.
-- **Entry window: 12:00 PM – 2:00 PM ET.**
-
-### GEX Integration
-
-Computed live from the TastyTrade options chain every 15 seconds. No external scraping.
-
-```
-call_gex = gamma x open_interest x 100 x spot_price
-put_gex  = gamma x open_interest x 100 x spot_price x -1
-net_gex  = call_gex + put_gex (summed across all strikes)
-```
-
-Derived levels: call wall, put wall, pin strike, flip strike, GEX environment. GEX centers the butterfly (requires PINNING + proximity), boosts sweep-reversal conviction at walls, and dampens/amplifies ORB conviction. The condor is intentionally not GEX-dependent — it fires specifically when GEX is *not* pinning.
-
-### Regime-Flip Exits
-
-| Position | Exits on |
-|----------|----------|
-| Butterfly | TRENDING_BULL, TRENDING_BEAR, BREAKOUT_VOLATILE |
-| Iron Condor leg | Adverse trend into that side's short strikes (direction-aware) |
-| ORB | Range violation (1m close back inside range) — not regime-based |
-| Sweep Reversal | BOS on 1m structure — not regime-based |
-
-### Long-Option Theta Protection (gated — v1.4)
-
-Both long-option strategies (ORB, Sweep) carry a theta-bleed exit: a profitable long is closed when projected time decay is set to erase the current gain. As of **exit_engine v1.4** this is deliberately narrow, so it protects a genuinely stalled winner without cutting a developing move. It fires only when **all** hold:
-
-- **Min-hold blackout** — no theta exit in the first `THETA_MIN_HOLD_MIN` (20 min) after entry; the move gets room to develop.
-- **Gain floor** — the gain must be at least `THETA_MIN_GAIN_PCT` (10%); a trivial green is never scratched.
-- **Trail ceiling** — once the trade is up past the trail-arm (`FVG_TRAIL_ARM_PCT`, 20%) the trail owns it and theta stays silent, so trends run.
-- **Decay vs gain** — only then, if projected decay over the lookahead erases the gain, exit. Decay is projected per **calendar** day (1440 min), not the RTH day.
-
-Hard stop, target, BOS (sweep), range-violation (ORB), and the trail all take precedence — theta is the last, narrowest check.
-
-### Position Sizing (Auto)
-
-Risk per trade configurable via `OT_RISK_USD` (`config.py`).
-
-- Grade A = 1.5× base risk | Grade B = 1.0× base risk.
-- **There is no Grade C.** Below-threshold setups return `None` and never fire, regardless of capital.
-- **Condor verticals are sized at half the grade budget per side** (two ~$500 verticals on a B-grade $1,000 trade).
-- Butterfly sizing halved when VIX is in the 15–20 zone.
-
-### Risk Management — Regime Reassessment & Net Daily Loss Halt
-
-- **Regime reassessment after every losing trade.** A loss is fresh information about whether the current regime read still holds, so each losing exit forces a regime reclassification on the next tick (replaces the old count-based circuit breaker).
-- **Net daily loss halt.** New entries are halted once the **day's NET realized P&L** is down by `DAILY_LOSS_LIMIT_USD` (default = one trade's risk). Wins offset losses — a green day keeps trading no matter how many individual losses stack up; only a genuinely red day (net down by the limit) halts.
-  - The tally is **seeded from the DB on startup**, so the halt survives restarts within the session.
-  - It halts **new entries only** — open positions keep being managed to their exits.
-  - **Override:** raise the cap via `configure.sh` → *Daily loss cap* (option 6), or `r` to reset to the risk default. The bot restarts and re-evaluates against the new cap.
-
-### Session Windows
-
-| Strategy | Entry Window | Notes |
-|----------|-------------|-------|
-| **Opening-range lockout** | before 9:35 AM ET | **No entries for any strategy** during the 9:30–9:35 opening candle — universal floor at `can_enter` (session_guard v1.2). Guarantees nothing (esp. a sweep) fires while the ORB range is still forming. Opens at 9:35:00 sharp. |
-| ORB | 9:30 AM – 11:00 AM ET | HARD cutoff at 11:00 — ORB expires, other regimes take over |
-| Iron Condor | 11:00 AM – 2:00 PM ET | Takes over when the ORB window closes |
-| Butterfly | 12:00 PM – 2:00 PM ET | Narrower window, requires GEX PINNING |
-| Sweep Reversal | RTH – 2:00 PM ET | Fires anytime a sweep is detected |
-| Hard close | 3:45 PM ET | All positions |
-| VIX > 20 | Block butterflies | — |
-| Fed day | **Bot trades Fed days** | `is_fed_day` only boosts ORB conviction — entries are not blocked |
+The purge is real and verified: **zero `yfinance` imports repo-wide.** It is the load-bearing
+prerequisite for everything else — calibrating conviction against ROI on a feed the bot
+doesn't trade is calibrating a board it never plays on.
 
 ---
 
-## Changelog
+## Regime classification (running: `regime_classifier.py` v1.3)
 
-### v3.2 / v3.1 — 2026-07-11 (ORB stop rework + regime un-gate)
-- **ORB stop placement corrected** (`orb_engine.py` v3.1). The protective stop now anchors to the impulsive (break) candle's **wick** — its low for a long, its high for a short — not the body (`min/max(open,close)`). When the impulsive candle opened outside the range, the body edge sat outside the level, so the retest entry (which returns to the level) printed a stop on the *wrong side* of entry — inverted/degenerate risk. Additionally, a valid impulsive candle must now **originate inside the range** (low inside for a long, high inside for a short); a candle sitting entirely beyond the range is late continuation, not a break. Smoke test over 44 symbol-sessions (07-09/07-10): inverted-risk entries **28% → 0%**, median entry risk 0.089% → 0.201%, setup count unchanged (92 → 96). The MU 07-10 09:49/09:50 reference reproduces exactly (stop = impulsive low 971.14; 09:54 holds, 09:55 exits).
-- **ORB structure exit corrected** (`exit_engine.py` v3.1). The exit's structure stop now fires on a 1-minute **close beyond the impulsive origin** (`underlying_stop`), not the range boundary. Closing back inside the range no longer stops the trade — it breathes inside the range as long as it holds the impulsive origin. The unconditional **−25% premium floor is unchanged** and runs beside it: the two are an **AND** — thesis-death (structure) vs total-premium-loss (theta, retracement, or the mix), whichever fires first.
-- **Regime un-gate for the flagship ORB** (`main.py` v3.2, `orb_engine.py` v3.2, `config.py`). New switch **`ORB_FIRES_REGARDLESS_OF_REGIME`** (default **on**): a confirmed ORB break+retest fires regardless of the regime label — including **UNKNOWN** and **SWEEP_REVERSAL**. The break+retest is self-validating and the classifier does not even test for it, so the label is a scoring input, not a veto; under UNKNOWN the setup scorer's B-threshold still governs (`regime_conviction` just contributes 0). **ORB now beats sweep** inside the ORB window (the engine no longer defers its OPEN under a sweep label). Sweep/butterfly/condor are untouched — they self-gate and do not fire under UNKNOWN. Set the flag `False` to restore strict v2 gating. Every ORB fired under UNKNOWN is logged `regime=UNKNOWN` — labeled tape for the shadow observer.
-- **Not P&L-validated.** These changes correct stop geometry/placement and open the entry gate; option-premium P&L can't be reconstructed from underlying OHLC and is a paper-forward question. No schema or dependency changes.
+Memoryless boolean cascade, re-run from scratch every 15s. First match wins:
 
-### v3.0 — 2026-07-10 (YAHOO-FINANCE PURGE — single shared TastyTrade candle feed / data stream mapping optimization)
-- **Why:** the bot trades and logs on TastyTrade (DXLink/DXFeed) candles, but market data was pulled from the legacy Yahoo-Finance client — a *different* series that provably diverges from the traded tape (caught on the 5-minute opening range). Any analysis or calibration built on it was measuring a board the bot never plays on. The purge is total: zero Yahoo residue in code, config, shell, docs, or requirements.
-- **One feed, one producer, many readers (per box).** New `data/candle_feed.py` (+ `candle-feed.service`) owns the box's **only** `DXLinkStreamer` subscription — this box's symbol across `1m/5m/15m/1h/1d` plus `VIX` — with per-interval backfill, last-write-wins bar correction, reconnect-with-backoff, and a bounded rolling history. It persists to an on-box **SQLite (WAL)** store: `candles(symbol, interval, ts_epoch_ms, o,h,l,c,v)` + `feed_meta` (per-interval `last_write_epoch` and a global heartbeat). It is **forbidden** for any consumer to open its own DXFeed stream.
-- **The seam preserved exactly.** `data/market_data.py` rewritten as a pure store **reader**: `fetch_candles` / `fetch_quote` / `fetch_all_candles` keep byte-identical signatures and return contracts (lowercase OHLCV columns, tz-aware ET index, ascending, ≤count). Consequently `data_cache.py`, all four engines, `main.py`, `get_orb_range.py`, `query.py`, and the off-repo regime shadow observer (via `get_cache()`) required **zero changes**.
-- **Fail loud, never silently short.** Readers return `None` + WARNING when the store is missing/empty or the feed heartbeat exceeds `OT_FEED_STALE_S` (default 120s) — a crashed feed surfaces as "no data," never as stale numbers driving decisions. A young session with few bars is real data and is returned as-is; intraday windows (1m/5m/15m) are never padded across the overnight gap (`OT_FEED_INTRADAY_SCOPE=continuous` restores multi-session windows if ever needed).
-- **VIX through the same feed.** `macro_data._fetch_vix` now reads `fetch_quote("VIX")` (store-first, TastyTrade REST market-data secondary); stale→default-20 fallback chain preserved, each step now logs at WARNING.
-- **Candle logger converted to a consumer** (`data/candle_logger.py` v3.0): exports the store's 1m bars to the same per-day CSVs — its old subscribe/drain mechanics moved into the feed service as a persistent subscription.
-- **Ops:** `setup_ec2.sh` v3.2 installs/enables `candle-feed.service`, orders `optionsbot` `After=`/`Wants=` it, starts feed before bot; Yahoo dep dropped from pip and `requirements.txt`.
-- **No trading logic touched.** Risk, execution, strategies, `PAPER_TRADING` default — all unchanged.
+**SWEEP_REVERSAL → BREAKOUT_VOLATILE → COMPRESSION → TRENDING_BULL/BEAR → RANGING → UNKNOWN**
 
-### v2.4 — 2026-07-07 (hardening + observability)
-- **Theta-bleed exit reworked** (`exit_engine.py` v1.4). A paper session surfaced the v1.3 check firing on the first green tick — 58 of 77 exits were theta-bleed at a median 60-second hold, capping trends while the day's P&L came from the few trades that reached the trail. Now gated by a 20-min min-hold blackout, a 10% gain floor, a trail ceiling (a running trade belongs to the trail), and a corrected **per-calendar-day** decay projection (v1.3 divided by the 390-min RTH day, overstating decay ~3.7×). Replaying the session's 58 theta exits through the new gates, all 58 would have been held instead of scratched.
-- **ORB-formation entry lockout** (`session_guard.py` v1.2). `can_enter` now blocks **all** strategies until the 9:30–9:35 opening-range candle closes (`is_orb_complete`, ≥ 9:35:00). Closes a hole where a sweep could fire pre-9:35 (its ORB-break gate is disabled while the range is unestablished). It's a floor, not a delay — opens at 9:35:00 sharp so a break at the opening-candle close is unaffected.
-- **ORB break-latch fix** (`orb_engine.py` v1.9). The session break latches (`broke_high`/`broke_low`) are now maintained unconditionally every tick, decoupled from the RANGING-only break path. Previously, once the engine left RANGING without re-arming (runaway/timeout/OPEN), the **opposite** latch could never be set, so a genuine opposite-side reversal after a one-sided runaway was invisible to the sweep gate. Latch stays CLOSE-based (wick-poke/AVGO-trap protection intact).
-- **End-of-day candle logger added** (`data/candle_logger.py` v1.0 + `deploy/` units). Pulls 1-minute OHLC from the same DXLink/DXFeed session the bot trades on and writes one CSV per symbol per day (`<out>/<date>/<SYMBOL>.csv`) via a 16:05 ET systemd timer — so trades can be evaluated against the exact feed they executed on, not Yahoo-Finance. First-run check: history depth (entitlement) and SPX streamer symbology.
-- **`tests/` added** for offline test artifacts (`test_candle_logger.py`, `stress_theta_bleed.py`) — dev-only, never deployed to the fleet.
-- **Host hardening** (`harden_hosts.sh`) and `setup_ec2.sh` updates land from the control-side workstream.
+ADX comes from the **5-minute** timeframe, matching the trading horizon. `UNKNOWN` is a
+genuine abstention (v1.2), not a catch-all — and it remains a **hard no-trade gate for every
+strategy except the ORB**.
 
-### v2.3 — 2026-07-02 (→ planned 3.0 once paper-validated)
-- **Iron Condor legs are now tracked positions**: each vertical is written to the trade log, registered with the position manager, sized at half the grade budget, and managed/exited/P&L'd independently. The condor is the only strategy allowed two concurrent positions. (Previously legs were logged but never tracked — no exits, no P&L.)
-- **Broken-wing roll added**: rolls the untested condor side into a BWB when the premium math makes the tested side risk-free (cumulative credit ≥ tested-side width); smallest-roll solver over live chain marks; one-time final adjustment flagged `is_broken_wing` — no further rolls.
-- **Narrow SPX condor wings** 25 → 5 points (max loss ~$235/contract), enabling affordable half-budget-per-side sizing.
-- **ORB range rebuilt as a three-state model** (ESTABLISHED / IN_PROGRESS / EXPIRED); always carries the last valid range; engine arms only on ESTABLISHED/today.
-- **ORB range source unified**: fetched through `market_data.fetch_candles` (same feed/symbol as the bot, `^SPX` not `^GSPC`) — fixes the opening-range mismatch with the bot's price feed and the chart.
-- **ORB 11:00 AM HARD cutoff** — expires even awaiting-retest states so the bot moves to other regimes.
-- **Two ORB invalidation rules**: (a) runaway to the 50% TP without a retest (favors sweep), (b) 1m close back inside the range.
-- **Regime-gated ORB re-arm**: re-arm after a (b) retrace only while the regime is ORB-friendly; stand down after (a) runaway or once the regime flips.
-- **ORB-window sweep override**: take a higher-conviction sweep over the ORB inside the window.
-- **Regime reassessment after every losing trade** (replaces count-based circuit breaker).
-- **Net daily loss halt**: halts new entries when the day's net P&L is down by the daily loss limit (default = per-trade risk, `OT_DAILY_LOSS_LIMIT`); seeded from the DB (survives restarts); override menu in `configure.sh`.
-- **`setup_ec2.sh`**: cleanup of the deploy dir and `install.sh` before dropping to the shell in the install dir with venv active.
+| Regime | Strategies permitted to fire |
+|---|---|
+| TRENDING_BULL / TRENDING_BEAR | **ORB** |
+| BREAKOUT_VOLATILE | **ORB** |
+| SWEEP_REVERSAL | Sweep Reversal · **ORB (v3.2 — ORB wins)** |
+| RANGING | Iron Condor · Butterfly (if GEX PINNING) · **ORB** |
+| COMPRESSION | Butterfly (if GEX PINNING) · **ORB** |
+| UNKNOWN | **ORB only** (v3.2 un-gate). Everything else: no trade. |
 
-### v2.2 — 2026-06-30 (evening session)
-- Iron Condor added: legged entry via price-triggered vertical spreads, RANGING fallback.
-- BB-anchored strike selection (no delta); legged state machine; regime-flip exits.
-- ORB cutoff moved to 11:00 AM; condor exit logic (25% stop, $0.05 nickel).
-- `structure_analyzer.py` None-format crash fixed; `orb_engine.py` range persistence fixed; `check_versions.sh` added.
+The ORB appears in every row because the break+retest is **self-validating** — the classifier
+does not even test for it, so the label is a scoring input, not a veto.
 
-### v2.1 — 2026-06-30
-- ADX from 5m; ORB engine rewritten with full state model; ORB range persistence and FVG trail; butterfly overhaul; Grade C eliminated; `status.py` rewritten; Telegram to 4 events; graceful shutdown; `push.sh` hardened.
+---
 
-### v2.0 — 2026-06-27
-- GEX live from TastyTrade; strategy-aware exit routing; Telegram replaces Twilio; `configure.sh`, `snapshot.sh` added.
+## The ORB — the flagship, and it is now definitional
 
-### v1.0 — 2026-06-25
-- Initial release.
+The setup is mechanical. As of **v3.5 there are no tolerances anywhere in it.**
+
+```
+BREAK  = a 1m candle that OPENS INSIDE the opening range and CLOSES OUTSIDE it.
+RETEST = the next 1m candle WICKS INTO the range and CLOSES OUTSIDE it.
+STOP   = a 1m CLOSE beyond the impulsive (break) candle's WICK.
+```
+
+**Opening range** = the 9:30–9:35 ET 5-minute candle, sourced through the bot's own data
+layer (`market_data.fetch_candles`) so it always agrees with the tape the bot trades. Written
+to `orb_range.json` as a three-state model — `ESTABLISHED` / `IN_PROGRESS` / `EXPIRED` — and
+the engine **arms only on `ESTABLISHED`/today**, so a carried prior-day range can never be
+traded.
+
+**State machine** (`ORBState`, renamed in v3.4 to the operator's vocabulary):
+
+```
+NO_RANGE → WAITING_FOR_BREAK → ARMED_LONG / ARMED_SHORT → OPEN_LONG / OPEN_SHORT
+                  ↑                       ↓
+                  └───── INVALIDATED ─────┘        (re-arm rules below)
+```
+
+**ARMED means a break has occurred and the next event is FIRE or INVALIDATE.** Before a break
+there is nothing armed — the engine is merely waiting.
+
+**Why "opens inside" is definitional (v3.5).** It is an *opening-range* break. A candle that
+began life outside the range never broke out of it — it was already out. That is late
+continuation. (v3.1 approximated origin as `low < orb_high` — the wick merely reaching back in
+— which still admitted candles that opened *above* the range, dipped, and closed higher.)
+
+**Why there is no buffer (v3.5).** The retest **is** the noise filter — a marginal break that
+means nothing simply fails its retest. The old `ORB_BREAK_BUFFER` (0.05% *of price*) required
+the close to clear the range by **$0.49 on MU, ~$3.00 on SPX**, so price could close three
+full points beyond the opening range and not register a break.
+
+**Why there is no grace band (v3.3).** The retest is the **falsification step** of the break
+hypothesis ("this level is now support"). A level that was not tested produced *no evidence*;
+a level whose retest closed back inside was tested and **failed**. Neither is a graded setup.
+The old `body_low >= orb_high * 0.999` admitted a candle whose body **closed back inside the
+range** — the disarm condition — as a *confirmed retest*, and bought it. On SPX that window
+was ~6 points deep.
+
+**Three invalidations:**
+
+| Reason | Trigger | Re-arms? |
+|---|---|---|
+| `close_inside` | 1m close back inside the range — the hypothesis failed | ✅ **Yes**, if before 11:00. The second attempt is often the cleaner one; the first is often the fake-out. |
+| `runaway` | Ran to the 50% TP with **no retest** | ❌ No. Hands off to Sweep Reversal — the setup a failed runaway most favors. |
+| `timeout` | 12 bars without a retest (`ORB_MAX_RETEST_BARS`) | ❌ No. The setup has gone stale. |
+
+**Break latches** (`broke_high`/`broke_low`) are maintained **unconditionally every tick, in
+every state**. They are a session-level fact ("a 1m candle closed beyond this boundary"),
+independent of the ORB entry state machine, because the sweep gate needs them even while the
+ORB is dormant. They are **close-based** (a wick that pokes and closes back inside does not
+arm a sweep) and take **no origin gate** — they record a fact, not a setup.
+
+**Entry:** single-leg long call/put, strike near the ORB-projected 100% target.
+**Hard cutoff 11:00 ET** — the engine EXPIRES from any state. This expires the *engine*, not
+an open position: a fill at 10:58 runs to its own exits.
+
+---
+
+## Strategies
+
+### Sweep Reversal
+Detects liquidity sweeps at **mapped** zones (PDH/PDL, equal highs/lows, session H/L). A sweep
+requires all three: **location** (at a named pool), **penetration**, and **rejection**
+(reclaimed and held). Acceptance *through* a level is a breakout, not a sweep. OTM strikes by
+delta targeting, scaled inversely to reversal strength (strong snap → far-OTM; weak →
+near-ATM). **BOS exit** on the 1m chart — closes only, no wicks.
+
+### Iron Condor (legged, tracked)
+RANGING fallback when no GEX pin is available. **Strikes are Bollinger-Band anchored — there
+is no delta anywhere in the condor path.** Short call = lowest liquid strike at/above the BB
+upper band; short put = highest at/below the BB lower band. Delta is deliberately excluded: it
+is relative to where price *sits*, not to the actual range boundary.
+
+The condor is **the only strategy allowed two concurrent positions** (its two verticals). Each
+vertical is a fully tracked position — managed, exited, and P&L'd independently with
+credit-spread math — and each is sized at **half the grade budget**. Wings are narrow (5 points
+SPX / $5 QQQ), which is what makes half-budget sizing affordable. Legged entry:
+`DECIDED → LEG1_FILLED → COMPLETE`; a pending leg is cancelled if the regime flips away from
+RANGING, but a filled leg is never cancelled. Exit per leg: 25% stop (spread value at 125% of
+credit) or a $0.05 nickel close. Regime-flip exit is **direction-aware** — a call spread only
+exits on a bullish flip; a bearish flip is favorable, so it holds.
+
+### Broken-Wing Roll
+When both verticals are open and price tests one side, rolls the **untested** side toward
+price — **only if the math makes the tested side risk-free**
+(`banked_credit + roll_credit − close_cost ≥ tested_side_width`). Smallest qualifying roll
+wins. **One-time and final**: once rolled, every leg is flagged `is_broken_wing` and never
+adjusted again. Roll once, stand it, defend it.
+
+### Debit Butterfly
+RANGING or COMPRESSION **with a PINNING GEX environment**. Center strike = the **GEX pin**, not
+ATM. Gated on proximity (price within 1× the session expected move of the pin). Fixed wings
+(25pt SPX / $5 QQQ). One per session. Exits immediately on a flip to trending.
+
+**GEX is computed live from the TastyTrade chain every 15s. No scraping, no external API.**
+Derived: call wall, put wall, pin strike, flip strike, environment. The condor is intentionally
+*not* GEX-dependent — it fires precisely when GEX is **not** pinning.
+
+---
+
+## Exits
+
+### ORB — evaluated every tick, first match wins
+
+| # | Trigger | Condition | Purpose |
+|---|---|---|---|
+| 1 | Hard close | 15:45 ET | Time |
+| 2 | **−25% premium floor** | `premium ≤ entry × 0.75` — **unconditional, every tick**, independent of trail state | **Minimize loss** |
+| 3 | **Structure stop** | Last *closed* 1m candle closes **beyond the impulsive candle's wick** (`underlying_stop`). **NOT** the range boundary — closing back inside the range does **not** stop the trade | **Thesis death** |
+| 4 | Theta bleed | **All four:** held ≥ 20 min · gain ≥ 10% · gain **< 20%** · projected decay (`theta × 20/1440`) ≥ current gain | **Protect profit** |
+| 5 | Past 100% TP | **No hard exit.** Trail tightens to the nearest unfilled in-favor 1m FVG, floored at 85% of current premium | **Let it run** |
+| 6 | Below 100% TP | FVG trail arms at **+20%**; % trail arms at **+50%** and ratchets to 75% of current. Higher governs | **Protect profit** |
+
+**#2 and #3 are an AND, not an OR.** They catch different deaths: premium death (theta,
+retracement, or the mix) and thesis death (structure). Whichever fires first.
+
+**The trail and the structure stop are both necessary and serve opposite jobs** — one protects
+gains, one minimizes losses. Neither supersedes the other.
+
+**Not present on the ORB:** no BOS exit (that is sweep-only) · no max-hold · no 11:00 exit.
+
+Theta protection is deliberately narrow (v1.5). The v1.3 check fired on the first green tick —
+58 of 77 exits were theta-bleed at a **median 60-second hold**, capping trends while the day's
+P&L came from the few trades that reached the trail. Decay is projected per **calendar** day
+(1440 min); v1.3 divided by the 390-minute RTH day and overstated decay ~3.7×.
+
+---
+
+## Risk
+
+- **Grade A = 1.5× base risk · Grade B = 1.0×. There is no Grade C** — below-threshold setups
+  return `None` and never fire.
+- **Regime reassessment after *every* losing trade.** A loss is fresh information about whether
+  the regime read still holds.
+- **The only circuit breaker is `DAILY_LOSS_LIMIT_USD`** (default = one trade's risk). It halts
+  **new entries** when the day's **NET realized P&L** is down by that amount. Wins offset
+  losses — a green day keeps trading no matter how many individual losses stack up; only a
+  genuinely red day halts. Seeded from the DB on startup, so it survives restarts within the
+  session. Open positions keep being managed to their exits. Override via `configure.sh` →
+  option 6.
+  > The old count-based breaker (`SESSION_LOSS_LIMIT = 2`) was **deleted in config v3.2.** It
+  > had gated nothing since risk_manager v1.4 — which requests a reassessment after *every*
+  > loss — yet four dashboards still printed *"Session CB: 2 losses → halt"*, a halt that could
+  > never occur. `session_losses` survives as a statistic only.
+- **Broker reconciliation** (`execution/broker_reconcile.py`, `BROKER_RECONCILE_ENABLED`,
+  default **off**): on a LIVE restart, a position found open at the broker with no DB plan is
+  *adopted* and managed by a generic exit path (sign-correct `ADOPTED_STOP_PCT` stop, long-side
+  trail, 15:45 close). Paper never reconciles.
+
+## Session windows
+
+| Gate | Window |
+|---|---|
+| **Opening-range lockout** | **No entries for any strategy before 9:35 ET.** Universal floor at `can_enter`; opens at 9:35:00 sharp. |
+| ORB | 9:35 – **11:00** ET (hard cutoff) |
+| Iron Condor | 11:00 – 14:00 ET |
+| Butterfly | 12:00 – 14:00 ET (requires GEX PINNING) |
+| Sweep Reversal | 9:35 – 14:00 ET |
+| Global entry cutoff | **14:00 ET** — past this the tape turns erratic on dealer hedging |
+| Hard close | 15:45 ET, all positions |
+| VIX > 20 | Blocks butterflies (halved size in the 15–20 zone) |
+| VIX > 30 | Blocks all new entries |
+| Fed day | **The bot trades Fed days.** `is_fed_day` only boosts ORB conviction. |
+
+---
+
+# 🔧 OPEN DEFECTS AND UNRESOLVED DECISIONS
+
+**This section is the scrub list. Everything here is known; none of it is fixed.**
+
+### A. The v3 stack has two Layer-1 implementations
+`analysis/regime_confluence.py` v1.0 (in-tree; implements `docs/REGIME_TRUTHS.md` v0.2's
+three-tier grammar) and `conviction_integrator.EvidenceAdapter` (off-repo) **both** produce a
+regime evidence vector, and **both define `ramp()`, `flat_angle_deg()`, and
+`midline_crossings()` — with different math.** Landing the integrator as-is gives you two
+divergent Layer-1s feeding one Layer-2. That is exactly the circularity failure `ROADMAP.md`
+§Risks names.
+**Decision needed:** `RegimeConfluenceScorer` is canonical; `EvidenceAdapter` is retired, or
+demoted to an explicitly-labeled no-repo fallback.
+
+### B. `regime_confluence.py` is built but **wired to nothing**
+It is imported only by `tests/replay_confluence.py`. No runtime path touches it. The conviction
+integrator (Layer 2) is **not in this repo at all**, and as it stands it still emits `UNKNOWN`
+— ROADMAP Phase 0.1 requires deleting that from the emission law. **The port is a semantic
+change, not a copy.**
+
+### C. `docs/REPLAY_VALIDATION.md` justifies its method on a **false premise**
+It says to calibrate on the DXFeed CSVs *"not the live **yfinance** shadow observer — the
+observer scores off yfinance."* **The observer does not score off yfinance.** The v3.0 purge
+rewrote `market_data.py` behind the preserved `get_cache()` seam, and the observer was silently
+migrated onto the shared store (CHANGELOG: it *"required zero changes"*). The *conclusion* (use
+the CSVs) is still right. The *reason* is wrong — and it will send an agent off to "re-purge" a
+thing that is already clean.
+
+### D. The shadow observer ships as **unextracted tarballs**
+`observer/shadow_ops_v1.0.tar` and `observer/shadow_subsystem_v1.0.tar`. Code that cannot be
+grepped, diffed, or version-checked — which is precisely how `observer.py`'s docstring came to
+describe a yfinance feed it no longer uses, without anyone noticing.
+**Extract to `observer/shadow/` + `deploy/`.**
+
+### E. `VWAP_FILTER_ACTIVE` — a hard gate that was never built
+Marked `UNWIRED`. Genesis constant: present at the initial commit, never referenced, **mentioned
+in zero changelog entries.** What exists is a *soft* score in `setup_scorer` (weight 0.15;
+misaligned = 0.25 on that dimension). It **cannot veto anything**:
+
+```
+Short ORB · UNKNOWN regime · price ABOVE VWAP  (i.e. shorting into strength)
+  regime_conviction  0.20 × 0.00 = 0.000
+  orb_quality        0.30 × 1.00 = 0.300
+  vwap_alignment     0.15 × 0.25 = 0.0375   ← the "filter"
+  liquidity_clear    0.20 × 1.00 = 0.200
+  macro_context      0.15 × 0.50 = 0.075
+                                 = 0.6125  →  Grade B  →  FIRES
+```
+
+VWAP misalignment costs **11 points on a 100-point scale, against a 55 threshold.**
+**`crypto_trader` learned the opposite lesson the hard way** — shorts above VWAP and longs below
+VWAP had to become **hard blocks**, because a relaxed validator let shorts into a strong uptrend
+and produced consecutive losses. **That lesson is not ported here.**
+
+### F. `MIN_RRR` — a risk/reward floor that was never built
+Marked `UNWIRED`. Same genesis story, same changelog silence. No RRR floor exists anywhere. The
+ORB's RRR is *structural* (stop = impulsive origin, target = 100% of range width), so it varies
+per setup and is currently **ungated**.
+
+### G. The near-miss retest is unmeasured
+The removed grace band was *intended* to admit a "B-grade almost-retest" (the wick approaches the
+range but doesn't enter). **The code never did that** — the same condition's first clause already
+required the wick to enter, so the near-miss never fired. If it is worth grading, it must be
+**measured, not gated**: log `retest_depth = (orb_high − candle_low) / ATR` on every setup
+(negative = near-miss), feed it to `orb_quality`, and let the Phase-3 ROI buckets decide.
+**ATR-relative, never a percentage** — percentages scale into holes on high-priced instruments,
+which is the root cause of every tolerance bug this file has had.
+
+### H. Two "no entry after" times in two files
+`config.NO_ENTRY_AFTER_ET = (11, 0)` (ORB-only) vs `time_utils.NO_ENTRY = dtime(14, 0)`
+**hardcoded, not read from config.** Edit the config value expecting the global cutoff to move
+and it won't. `time_utils` should read from `config`.
+
+### I. `session_guard.can_enter(is_butterfly=...)` is an inert branch
+`main.py` never passes `is_butterfly=True`, so the butterfly-specific cutoff path is unreachable.
+Config v3.1 set `BUTTERFLY_ENTRY_CUTOFF_ET = (14, 0)` so that config agrees with live behavior.
+**If 15:00 is ever wanted, the call site must be fixed too.**
+
+### J. The repo-wide v3.0 bump destroyed version legibility
+Every file's title reads `v3.0` regardless of actual maturity, so version headers no longer carry
+information. `check_versions.sh` can confirm a deploy landed; it can no longer tell you what is
+*mature*.
+
+### K. Re-arm: unresolved
+`runaway` and `timeout` never re-arm. Note the v3.5 origin gate makes this partly redundant —
+after a runaway, price is extended and **cannot produce a valid break candle** until it returns to
+the range anyway. A unified rule (*"re-arm on any invalidation before 11:00; the origin gate
+decides whether a break is real"*) would be simpler and could not fire an extended breakout.
+**Counter-argument:** current behavior is a deliberate hand-off to Sweep Reversal. Unchanged
+pending a decision.
+
+### L. `fix_structure_analyzer.sh` is a dead one-off
+It patches a `None`-formatting crash in `structure_analyzer.py` — **a bug already fixed in-tree by
+v1.1 (2026-06-30)**. Running it against current code is at best a no-op and at worst re-applies a
+patch to already-patched source. It has no place in a deployed tree. **Delete it.**
+
+### M. Known pending, not addressed
+Ghost folder on Windows tarball extraction · `setup_ec2.bat` security warning on double-click ·
+dedicated Telegram bot for options-trader notifications.
+
+---
+
+## File structure — every file, and what it currently does
+
+**Legend:** ✅ live in the trading loop · 🧪 dev/analysis only · ⚙️ ops/deploy · 📄 docs · ⚠️ defective or unwired
+
+### Root
+
+| File | Purpose |
+|---|---|
+| `main.py` ✅ | **v3.2.** The bot. 15s loop: analyze → classify regime → dispatch strategy → score → size → enter; manages open positions, runs the BWB roll check, enforces the daily-loss halt, writes `orb_state.json` each tick. Holds the `UNKNOWN` hard gate and the ORB un-gate exception. |
+| `config.py` ✅ | **v3.2.** Every tunable parameter + credential accessors (env-only, never in source). `PAPER_TRADING` defaults `True`. |
+| `README.md` 📄 | This file. Current state, not aspiration. |
+| `ROADMAP.md` 📄 | **Build status lives here.** v2→v3 reconciliation, honest distance-to-vision, Phases 0–4, and the named risks. |
+| `CHANGELOG.md` 📄 | v3.0 purge changelog (fork point, changed-file table, verification status). |
+| `requirements.txt` ⚙️ | tastytrade, httpx, anyio, pandas, numpy, pytz. **No market-data dependency** — sqlite3 is stdlib. |
+| `status.py` 🧪 | Live snapshot: ORB state/range/latches, regime, GEX pin, open position, daily-loss banner. Reads `orb_state.json` as authoritative. |
+| `query.py` 🧪 | Performance dashboard against `trades.db` — W/L, R, grades, exit reasons. |
+| `debug_status.py` 🧪 | Verbose diagnostic for `status.py` instrument/env resolution. |
+| `eod_summary.py` ⚙️ | Per-box EOD P&L writer (~15:50 ET, own timer). Emits `pnl_today.json` for control-side harvest. |
+| `stress_theta_bleed.py` 🧪 | Offline stress test for the four theta gates. Patches `minutes_since`; no network. **Lives at root, not `tests/`.** |
+| `test_candle_logger.py` 🧪 | Offline self-test: builds a synthetic feed store, verifies the logger's CSV output. **Root, not `tests/`.** |
+
+### Shell / ops
+
+| File | Purpose |
+|---|---|
+| `install.sh` ⚙️ | Web installer — the one-liner entry point. Pulls and runs `setup_ec2.sh`. |
+| `setup_ec2.sh` ⚙️ | **v3.2.** Full box build: venv, deps, systemd units for `optionsbot` + `candle-feed` (bot ordered `After=`/`Wants=` the feed), credentials into the unit env, cleanup, drops to shell with venv active. |
+| `bootstrap.example.sh` ⚙️ | Template for unattended deploy. Copy to `bootstrap.sh` (gitignored) and put secrets *there*. Shredded by `setup_ec2.sh` on completion. |
+| `configure.sh` ⚙️ | Runtime settings menu: instrument, risk, paper/live, Telegram, TT creds, **daily-loss-cap override (option 6)**. |
+| `check_versions.sh` ⚙️ | Recursive version-header + critical-string verification after a deploy. **Should also enforce the fleet↔control parity invariant. It does not.** |
+| `push.sh` ⚙️ | Git push/deploy wrapper — self-healing, optional restart, verifies the push landed. |
+| `snapshot.sh` ⚙️ | Bot state backup; **redacts secrets** before archiving. |
+| `harden_hosts.sh` ⚙️ | Host hardening for a trading box (guards against unattended-upgrade restarts mid-session). Invoked from control. |
+| `pull_today_ohlc.sh` ⚙️ | Background-detached EOD retrieval of today's full 1-min session on a box (works around `fleet.py`'s ~22s SSH ceiling). **Invoked by `fleet.py`.** |
+| `install_candle_feed.sh` ⚙️ | Installs `candle-feed.service` on a box provisioned before v3.0. |
+| `install_candle_logger_timer.sh` ⚙️ | Installs the 16:05 ET EOD candle-logger timer. |
+| `install_eod_timer.sh` ⚙️ | Installs the 15:50 ET EOD P&L-writer timer. |
+| `fix_structure_analyzer.sh` ⚠️ | **DEAD.** A one-off patch for a `None`-format crash in `structure_analyzer.py` — **already fixed in-tree by v1.1 (2026-06-30).** Re-running it against current code is at best a no-op. Delete. |
+
+### `analysis/` — the reading of the tape
+
+| File | Purpose |
+|---|---|
+| `orb_engine.py` ✅ | **v3.5.** The ORB state machine. Break → armed → retest → open, plus the three invalidations, the re-arm rule, the session break latches, and the impulsive-candle stop level. **No tolerances anywhere.** |
+| `get_orb_range.py` ✅ | Resolves the 9:30–9:35 range through `market_data.fetch_candles` (same feed the bot trades) → `orb_range.json` with `ESTABLISHED`/`IN_PROGRESS`/`EXPIRED`. |
+| `regime_classifier.py` ✅ | **v1.3 — the LIVE classifier.** Memoryless boolean cascade, first-match-wins. Emits one label + a post-hoc conviction number that currently gates nothing. |
+| `regime_confluence.py` ⚠️ | **v1.0 — LAYER 1 of v3. BUILT, WIRED TO NOTHING.** Instantaneous graded per-regime evidence (`hard_veto × soft_necessary × Σ corroborators`), implementing `REGIME_TRUTHS.md` v0.2. Imported only by `tests/replay_confluence.py`. |
+| `trend_engine.py` ✅ | EMA stacks, **ADX from the 5m timeframe**, momentum, timeframe alignment count. |
+| `volatility_engine.py` ✅ | Bollinger Bands, VWAP, ATR, expansion/contraction state. Feeds condor strikes and regime evidence. |
+| `structure_analyzer.py` ✅ | Swings, HH/HL/LH/LL sequence, S/R zones, **FVGs** (which the trail parks against). |
+| `liquidity_mapper.py` ✅ | Maps named pools (PDH/PDL, equal highs/lows, session H/L). Feeds the sweep definition and the ORB's `liquidity_clear` score. |
+
+### `strategy/` — what to trade when
+
+| File | Purpose |
+|---|---|
+| `base_strategy.py` ✅ | `OptionsSignal` + the premium-level math every strategy inherits (`stop_premium`, `target_premium`, `trail_activation_premium`). |
+| `orb_strategy.py` ✅ | Turns a confirmed ORB engine state into a signal: strike selection, liquidity-path check (**blocks on a named pool in the path with no extra confluence**), target adjustment, confluence notes. |
+| `sweep_reversal_strategy.py` ✅ | Post-sweep reversal. Delta-band strike selection scaled inversely to reversal strength. ATR-aware recovery window. |
+| `iron_condor_strategy.py` ✅ | Legged condor, **BB-anchored strikes, zero delta**. Plan state machine + per-leg price triggers. |
+| `condor_roll.py` ✅ | Broken-wing roll solver: smallest roll toward price that makes the tested side risk-free. One-time, final. |
+| `butterfly_strategy.py` ✅ | **v3.1.** Debit butterfly centered on the **GEX pin**. Gated on PINNING + proximity + noon–14:00 + one-per-session. |
+
+### `execution/` — orders and exits
+
+| File | Purpose |
+|---|---|
+| `entry_engine.py` ✅ | Places the opening order (paper fills at the mark). Writes the `TradeRecord`, including `underlying_stop` — **the impulsive candle's wick, which the exit engine reads back.** |
+| `exit_engine.py` ✅ | **v3.2.** All exits, routed per strategy. ORB: hard close · unconditional −25% floor · impulsive-origin structure stop · gated theta bleed · FVG/% trails. Sweep: BOS. Butterfly/condor: premium + regime-flip. Adopted: generic. |
+| `position_manager.py` ✅ | Owns the single open position (the condor's two verticals are the sole exception). Live chain marks for P&L in paper. |
+| `broker_reconcile.py` ⚙️ | **LIVE-only, default OFF.** Adopt / keep / phantom-close reconciliation against the broker on restart. Paper never reconciles. |
+
+### `risk/` — sizing and gates
+
+| File | Purpose |
+|---|---|
+| `setup_scorer.py` ✅ | Scores a signal across 5 weighted dimensions per strategy → **Grade A (1.5×) / B (1.0×) / no trade.** There is no Grade C. |
+| `risk_manager.py` ✅ | **v3.1.** Contract sizing, half-budget condor legs, reassess-after-every-loss, and the **net daily-loss halt** (DB-seeded, restart-proof). |
+| `session_guard.py` ✅ | **v3.1.** RTH · **9:35 opening-range lockout (universal floor)** · 15:45 hard close · 14:00 entry cutoff · VIX-crisis lockout. |
+
+### `data/` — one producer, many readers
+
+| File | Purpose |
+|---|---|
+| `candle_feed.py` ✅ | **v3.2. THE single DXFeed producer per box.** Owns the box's only `DXLinkStreamer` subscription (its symbol across 1m/5m/15m/1h/1d + VIX) → SQLite (WAL) + heartbeat. **No other process may open a stream.** |
+| `market_data.py` ✅ | Pure store **reader**. `fetch_candles`/`fetch_quote`/`fetch_all_candles` keep the v2 contract byte-for-byte, which is why nothing downstream changed. Fails loud on a stale heartbeat. |
+| `data_cache.py` ✅ | Per-timeframe cache over the reader. A refresh failing past 3× the staleness ceiling returns `None` — a dead feed can't hide behind an aging frame. |
+| `options_chain.py` ✅ | 0DTE chain from the TastyTrade SDK: strikes, greeks, marks, delta-band selection. |
+| `gex_data.py` ✅ | **GEX computed live from that chain** (gamma × OI × 100 × spot, puts negated). Derives call wall, put wall, pin, flip, environment, ORB bias. No scraping. |
+| `macro_data.py` ✅ | VIX (via `fetch_quote("VIX")` — same store), IV rank, Fed/FOMC calendar detection. |
+| `tasty_client.py` ✅ | TastyTrade session/account (OAuth refresh, shared event loop). |
+| `candle_logger.py` ⚙️ | **v3.1.** EOD store consumer → `data/OHLC/<date>/<SYMBOL>.csv`. **This CSV is the calibration substrate for the whole v3 campaign.** |
+
+### `database/`, `notifications/`, `utils/`
+
+| File | Purpose |
+|---|---|
+| `database/trade_logger.py` ✅ | SQLite trade log. Spread columns for condor legs, `get_open_trades()`, `realized_pnl_today()` (which seeds the daily halt), `update_fields()`. |
+| `notifications/alert_manager.py` ✅ | The 4 core Telegram events (start, stop, entry, exit) + BWB roll + daily-loss-limit. |
+| `notifications/telegram_sender.py` ✅ | Bot API transport. |
+| `notifications/test_telegram.py` 🧪 | Connectivity check. |
+| `utils/time_utils.py` ✅ | ET/RTH helpers. **⚠️ Hardcodes `NO_ENTRY = 14:00` instead of reading config — see defect H.** |
+| `utils/math_utils.py` ✅ | Strike snapping, ORB strike selection, expected move, rounding. |
+| `utils/check_sdk.py` 🧪 | TastyTrade SDK diagnostic. |
+
+### `observer/` — the shadow subsystem ⚠️
+
+| File | Purpose |
+|---|---|
+| `shadow_subsystem_v1.0.tar` ⚠️ | **UNEXTRACTED.** Contains `shadow/observer.py`, `scorers.py`, `primitives.py`, `registry.py`, `eod_compare.py`, `deploy/shadow-observer.service`. Observe-only: runs the same engines in its own process and appends one JSON line per tick to `data/shadow/<date>/<SYMBOL>.jsonl`. **Never trades.** |
+| `shadow_ops_v1.0.tar` ⚠️ | **UNEXTRACTED.** `shadow/trading_day.py`, `shadow_devtools.sh`, start/stop service+timer units. |
+
+> Both are **opaque blobs** — un-greppable, un-diffable, un-version-checkable. This is exactly how `observer.py`'s docstring came to describe a yfinance feed it no longer uses. **See defect D.**
+
+### `deploy/` — systemd units (never imported by the bot)
+
+| File | Purpose |
+|---|---|
+| `candle-feed.service` ⚙️ | Reference unit for the feed producer (`setup_ec2.sh` generates the real one). |
+| `candle-logger.service` ⚙️ | EOD 1-min OHLC export unit (store consumer; needs no credentials). |
+| `candle-logger.timer` ⚙️ | Fires the logger weekdays at 16:05 ET, shortly after the close. |
+| `README_candle_logger.md` 📄 | Operator notes for the logger. |
+
+### `docs/`
+
+| File | Purpose |
+|---|---|
+| `REGIME_TRUTHS.md` 📄 | **v0.2.** The Layer-1 definitional audit: per-regime hard vetoes + graded confluence, the three-tier factor grammar, the discriminator matrix. `regime_confluence.py` is its implementation. |
+| `REPLAY_VALIDATION.md` ⚠️ | **v1.0.** The Layer-1 validation/calibration plan. **Its stated premise is false — see defect C.** |
+| `README_orb_stop_rework_v3_1.md` 📄 | The impulsive-wick stop fix, with the MU 07-10 reference. |
+| `README_orb_regime_ungate_v3_2.md` 📄 | The `UNKNOWN` un-gate rationale. |
+
+### `tests/` — ships to the fleet, **runs on control**
+
+| File | Purpose |
+|---|---|
+| `replay_confluence.py` 🧪 | **The v3 workhorse.** Replays `regime_confluence` over harvested DXFeed 1-min tape to accumulate paired scores vs outcomes — the data that will eventually place the conviction bars. |
+| `replay_classifier.py` 🧪 | Replays the live v1.3 classifier over logged tape (built for the sweep-definition correction). |
+| `test_orb_retest_v33.py` 🧪 | **NEW.** Locks the MU 2026-07-10 reference: 09:48 is not a break · 09:49 is · stop = impulsive wick low · 09:50 retest fires · a body closing inside disarms · runaway doesn't re-arm. 10/10. |
+| `test_regime_gate.py` 🧪 | State-transition pressure test on the `UNKNOWN` gate + reassessment throttle. |
+| `test_market_data_contract.py` 🧪 | Locks the v3.0 reader contract (17 assertions). Run this before any change near `market_data.py`. |
+| `verify_feed_v3.sh` ⚙️ | **ON-BOX acceptance gate.** Proves single-subscription, store health, ORB equivalence. Run during RTH on one paper box before a fleet deploy. |
+
+### Runtime artifacts (gitignored, never committed)
+`trades.db` · `bot.log` · `orb_range.json` · `orb_state.json` · `pnl_today.json` · `credentials.py` · `bootstrap.sh` · `*.pem` · `data/OHLC/` · `data/shadow/`
+
+**Referenced but not in this repo — by design:** `fleet.py` (control plane, lives in `day_trader_pro`).
+**Referenced but genuinely missing:** `docs/persistence_integrator_design.md` (cited by `conviction_integrator.py`).
+**Gone, and it was never a runtime dependency:** `timing_analysis.py`.
 
 ---
 
 ## Deployment
 
-### Web install (mobile / Termius / any SSH client)
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TX-9AI/options_trader_v3/main/install.sh -o install.sh && bash install.sh
 ```
 
-Have ready:
-- TastyTrade Client Secret, Refresh Token, Account Number
-- Telegram Bot Token and Chat ID
-- GitHub repo (optional — only the source-of-truth server needs this)
-
-`setup_ec2.sh` cleans up the deploy directory and installer on completion and drops you into `~/options-trader` with the venv active.
-
-### Multi-server workflow
-
-One server is git-connected (typically QQQ). Develop and patch there, push to GitHub, deploy additional instances (SPX, future symbols) fresh via the install one-liner. Skip the GitHub prompt on follower servers by pressing ENTER.
-
----
-
-## Key Commands
-
-### Service control
-```bash
-sudo systemctl start optionsbot
-sudo systemctl stop optionsbot
-sudo systemctl restart optionsbot
-```
-
-### Monitoring
-```bash
-python status.py          # Live status + ORB H/L/width/state + GEX pin + daily-loss banner
-python query.py           # Performance dashboard
-journalctl -u optionsbot -f --no-pager | grep -v "tastytrade\|FEED_DATA\|received"
-```
-
-### Clearing the Python bytecode cache
-
-**Always do this after uploading new code, before restarting the service.**
+**Always purge the bytecode cache before restarting.** This is the single most common cause of "I
+pushed the fix but it's still broken" — and it matters more than usual right now, because v3.4
+renamed the `ORBState` strings.
 
 ```bash
 cd ~/options-trader
 find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null
 sudo systemctl restart optionsbot
+bash check_versions.sh
 ```
 
-This is the single most common cause of "I pushed the fix but it's still broken."
+Monitoring: `python status.py` · `python query.py` · `bash configure.sh` (risk, mode, daily-loss
+cap override).
 
-### Configuration & overrides
-```bash
-bash configure.sh         # Instrument, risk, mode, Telegram, TT creds, DAILY LOSS CAP override
-```
-
-### Verify all fixes are present
-```bash
-bash check_versions.sh    # Recursive version-header + critical-string checks after a deploy
-```
-
-### Push / snapshot
-```bash
-bash push.sh "your message"
-bash snapshot.sh
-```
-
-### Clean restart (wipes trade history)
-```bash
-sudo systemctl stop optionsbot
-rm -f ~/options-trader/trades.db ~/options-trader/bot.log
-sudo systemctl start optionsbot
-```
+**`config.py` must always default to `PAPER_TRADING = True`.**
 
 ---
 
-## Telegram Alerts
+## Changelog
 
-Core events: bot started, bot stopped, trade entered, trade closed (P&L), plus broken-wing roll and daily-loss-limit alerts when they fire.
+### v3.5 / v3.4 / v3.3 — 2026-07-12 (the ORB made definitional + doc scrub)
+- **`orb_engine` v3.5** — the origin gate now keys on the **open** (`orb_low ≤ open ≤ orb_high`),
+  not the wick. `ORB_BREAK_BUFFER` **removed** from the break test *and* the session latch, which
+  preserves the latch's documented invariant that it uses the same threshold as
+  `_check_for_break()`. Net effect: **fewer** breaks (the origin gate is strictly tighter) and
+  **earlier** breaks (no buffer to clear). Side effect: marginally more breaks latch the sweep
+  gate.
+- **`orb_engine` v3.4** — state vocabulary corrected. `ORBState.RANGING` and `Regime.RANGING`
+  shared a string while meaning unrelated things. Now `NO_RANGE` / `WAITING_FOR_BREAK` /
+  `ARMED_LONG` / `ARMED_SHORT` / `OPEN_*`.
+- **`orb_engine` v3.3** — **retest grace band removed.** `body_low >= orb_high * 0.999` admitted a
+  candle whose body **closed back inside the range** as a confirmed retest, and bought it (~$0.97
+  inside on MU; **~6 points on SPX**). That is the disarm condition. The near-miss it was
+  *intended* to admit was never reachable.
+- **`exit_engine` v3.2** — doc sync, **zero executable lines changed.** `_evaluate_orb`'s docstring
+  still described the pre-v3.1 range-boundary stop — the exact bug v3.1 fixed, and a trap for
+  anyone "correcting" the code back toward it. Now marked `[HISTORICAL — do not restore]`.
+  Butterfly TP corrected (20%, not 25%).
+- **`config` v3.2 / v3.1** — deleted (all verified unimported): `SESSION_LOSS_LIMIT`,
+  `ORB_BREAK_BUFFER`, `ORB_TRAIL_ACTIVATION`, `CONDOR_SHORT_DELTA`, `CONDOR_DELTA_TOLERANCE`,
+  `MIN_TF_CONFLUENCE`, `ENTRY_COOLDOWN_MINUTES`. Retained and explicitly marked **UNWIRED**:
+  `MIN_RRR`, `VWAP_FILTER_ACTIVE`. The condor "delta-primary" comment was corrected — strikes have
+  been BB-anchored since v1.1. Butterfly cutoff 15:00 → 14:00 (the 15:00 was unreachable; **not**
+  a behavior change).
+- Twilio dependency removed from `requirements.txt` (Telegram replaced it in v2.0; the dep
+  lingered for six weeks).
+- **Verified:** `test_orb_retest_v33` (10/10) · `test_market_data_contract` (17/17) ·
+  `stress_theta_bleed` (7/7) · `test_regime_gate` — all pass.
 
----
+### v3.2 / v3.1 — 2026-07-11 (ORB stop rework + regime un-gate)
+- Stop anchors to the impulsive candle's **wick**, not its body. Inverted-risk entries
+  **28% → 0%** across 44 symbol-sessions; median entry risk 0.089% → 0.201%; setup count unchanged
+  (92 → 96).
+- Structure exit fires on a close **beyond the impulsive origin**, not the range boundary. Runs
+  beside the unconditional −25% floor as an **AND**.
+- `ORB_FIRES_REGARDLESS_OF_REGIME` (default on) — see the v2.5 note at the top of this file.
+- **Not P&L-validated.** Stop geometry and gate placement only; option-premium P&L cannot be
+  reconstructed from underlying OHLC. That is a paper-forward question.
 
-## File Structure
+### v3.0 — 2026-07-10 (Yahoo-Finance purge)
+Single shared TastyTrade/DXFeed store per box. `market_data.py` rewritten as a pure reader with a
+byte-identical contract, so every downstream consumer needed zero changes. Readers fail loud on a
+stale heartbeat. **No trading logic touched.**
 
-```
-options_trader_v3/
-├── main.py                    # Main loop, regime dispatch, GEX, entry/exit, roll check, daily-loss gate (v3.2 — ORB regime un-gate)
-├── config.py                  # All tunable parameters incl. DAILY_LOSS_LIMIT_USD, ORB_FIRES_REGARDLESS_OF_REGIME (v1.4)
-├── status.py                  # Live status: ORB state, regime, GEX, strategy, daily-loss banner (v1.12)
-├── query.py                   # Performance dashboard
-├── check_versions.sh          # Recursive version/fix verification
-├── push.sh                    # Git push, self-healing
-├── setup_ec2.sh               # EC2 setup + cleanup (updated — control-side)
-├── harden_hosts.sh            # Host hardening (control-side workstream)
-├── configure.sh               # Settings + daily-loss-cap override (v1.6)
-├── install.sh                 # Web installer
-├── snapshot.sh                # Bot state backup
-├── analysis/
-│   ├── get_orb_range.py       # ORB range fetch — three-state, via bot's own feed (v1.3)
-│   ├── orb_engine.py          # ORB state machine — impulsive-origin stop, origin gate, ORB-beats-sweep, break latches (v3.2)
-│   ├── trend_engine.py        # ADX from 5m
-│   ├── structure_analyzer.py  # FVGs, S/R, swings
-│   ├── regime_classifier.py
-│   ├── volatility_engine.py   # BB bands, VWAP, ATR
-│   └── liquidity_mapper.py
-├── strategy/
-│   ├── orb_strategy.py
-│   ├── butterfly_strategy.py
-│   ├── iron_condor_strategy.py  # Legged, BB-anchored
-│   ├── condor_roll.py           # NEW v2.3 — broken-wing roll solver + executor (v1.0)
-│   ├── sweep_reversal_strategy.py
-│   └── base_strategy.py
-├── execution/
-│   ├── exit_engine.py         # Strategy-aware exits, ORB structure stop at impulsive origin + −25% floor, gated theta-bleed (v3.1)
-│   ├── entry_engine.py
-│   └── position_manager.py    # Multi-position condor tracking, credit-spread P&L (v1.7)
-├── risk/
-│   ├── setup_scorer.py        # A/B only, no Grade C
-│   ├── risk_manager.py        # Half-budget condor sizing, reassess-every-loss, net daily-loss halt (v1.5)
-│   └── session_guard.py       # RTH + ORB-formation lockout (<9:35) + hard-close/cutoff gates (v1.2)
-├── data/
-│   ├── gex_data.py
-│   ├── options_chain.py
-│   ├── candle_feed.py         # NEW v3.0 — THE single DXFeed producer per box → SQLite store (v3.2)
-│   ├── market_data.py         # Pure reader of the shared store — signatures unchanged (v3.0)
-│   ├── data_cache.py
-│   ├── macro_data.py
-│   ├── tasty_client.py
-│   └── candle_logger.py       # EOD 1-min OHLC → CSV, now a store consumer (v3.0)
-├── database/trade_logger.py   # Spread columns, get_open_trades(), realized_pnl_today(), update_fields() (v1.4)
-├── notifications/
-│   ├── alert_manager.py
-│   └── telegram_sender.py
-├── deploy/                     # NEW v2.4 — systemd units + notes (not imported by the bot)
-│   ├── candle-logger.service
-│   ├── candle-logger.timer
-│   └── README_candle_logger.md
-├── tests/                      # Offline test artifacts (dev-only, never deployed)
-│   ├── test_candle_logger.py
-│   ├── stress_theta_bleed.py
-│   ├── replay_classifier.py    # Replay corrected sweep logic over logged tape
-│   ├── test_regime_gate.py     # Gate/reassessment state-transition pressure test
-│   └── test_market_data_contract.py  # NEW v3.0 — reader return-contract lock
-└── utils/
-    ├── math_utils.py
-    └── time_utils.py
-```
-
----
-
-## Dependencies
-
-```
-tastytrade
-pandas
-numpy
-requests
-tzdata
-```
-
-Market data has **no external dependency** as of v3.0: all candles and quotes
-come from the single shared TastyTrade/DXFeed store maintained by
-`data/candle_feed.py` (`candle-feed.service`). `sqlite3` is stdlib.
+*Earlier: v2.4 (theta rework, 9:35 lockout, break-latch fix, candle logger) · v2.3 (tracked condor
+legs, BWB roll, narrow wings, three-state ORB range, net daily-loss halt) · v2.2 (iron condor) ·
+v2.1 (ADX from 5m, Grade C eliminated) · v2.0 (live GEX, Telegram) · v1.0.*
 
 ---
 
 ## Security
-
-- All credentials stored in systemd environment only — never in source files.
-- `.gitignore` excludes `credentials.py`, `*.pem`, `orb_range.json`, `orb_state.json`.
-- `snapshot.sh` redacts secrets before archiving.
+Credentials live in the systemd environment only — never in source. `.gitignore` excludes
+`credentials.py`, `*.pem`, `orb_range.json`, `orb_state.json`. `snapshot.sh` redacts secrets before
+archiving.
