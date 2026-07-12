@@ -2,7 +2,7 @@
 # v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
 #         mapping optimization (single shared TastyTrade candle feed). No
 #         logic change in this file.
-# options_trader_v2/harden_hosts.sh — v1.0
+# options_trader_v3/harden_hosts.sh — v1.0
 # =============================================================================
 # Host hardening for a trading box. Two independent guards against the
 # mid-session restarts we traced to unattended-upgrades -> needrestart on

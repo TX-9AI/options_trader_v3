@@ -146,7 +146,7 @@ print_ok "Telegram configured."
 print_step "4/8" "GitHub Repository (optional)"
 echo ""
 echo -e "  Enter the GitHub repo to link this server to for push.sh."
-echo -e "  Format: TX-9AI/options_trader_v2"
+echo -e "  Format: TX-9AI/options_trader_v3"
 echo -e "  (Full URLs are also accepted and will be normalized automatically)"
 echo -e "  Press ENTER to skip."
 echo ""
@@ -161,11 +161,11 @@ fi
 
 # ── Normalize GITHUB_REPO: strip protocol, host, trailing .git/slash ─────────
 # Accepts any of:
-#   TX-9AI/options_trader_v2
-#   https://github.com/TX-9AI/options_trader_v2
-#   https://github.com/TX-9AI/options_trader_v2.git
-#   github.com/TX-9AI/options_trader_v2
-# Always normalizes to: TX-9AI/options_trader_v2
+#   TX-9AI/options_trader_v3
+#   https://github.com/TX-9AI/options_trader_v3
+#   https://github.com/TX-9AI/options_trader_v3.git
+#   github.com/TX-9AI/options_trader_v3
+# Always normalizes to: TX-9AI/options_trader_v3
 if [[ -n "$GITHUB_REPO" ]]; then
     GITHUB_REPO="${GITHUB_REPO#https://}"
     GITHUB_REPO="${GITHUB_REPO#http://}"

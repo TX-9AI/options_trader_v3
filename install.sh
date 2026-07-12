@@ -6,19 +6,24 @@
 # v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
 #         mapping optimization (single shared TastyTrade candle feed). No
 #         logic change in this file.
+# v3.1 — 2026-07-12 — REPO POINTER FIX: the clone URL and the documented
+#         one-liner still targeted options_trader_v2, so every fresh install
+#         from this repo silently deployed v2 code (caught on the QQQ-TEST
+#         rebuild, whose banner printed v2.5 — v2's setup_ec2.sh). Now clones
+#         options_trader_v3. Display banner v2.0 -> v3.1 (was never bumped).
 #
 # Run on a fresh EC2:
-#   curl -fsSL https://raw.githubusercontent.com/TX-9AI/options_trader_v2/main/install.sh -o install.sh && bash install.sh
+#   curl -fsSL https://raw.githubusercontent.com/TX-9AI/options_trader_v3/main/install.sh -o install.sh && bash install.sh
 # =============================================================================
 
 set -e
 
-REPO="https://github.com/TX-9AI/options_trader_v2.git"
+REPO="https://github.com/TX-9AI/options_trader_v3.git"
 DEPLOY_DIR="$HOME/options-trader-deploy"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
-echo "║     options_trader v2.0  |  Web Installer           ║"
+echo "║     options_trader v3.1  |  Web Installer           ║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 

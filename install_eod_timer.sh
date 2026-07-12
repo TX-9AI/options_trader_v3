@@ -2,7 +2,7 @@
 # v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
 #         mapping optimization (single shared TastyTrade candle feed). No
 #         logic change in this file.
-# options_trader_v2/install_eod_timer.sh — v1.0
+# options_trader_v3/install_eod_timer.sh — v1.0
 # Installs the bot-side EOD P&L writer as a systemd timer: 15:50 ET, weekdays.
 # Runs eod_summary.py so ~/eod/pnl_today.json is written 5 min before the
 # control server's 16:00 sweep pulls it. Timezone-aware (no DST drift).
