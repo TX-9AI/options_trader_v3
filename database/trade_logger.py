@@ -1,5 +1,12 @@
 """
 database/trade_logger.py — Options trade logging (SQLite).
+v3.1 — 2026-07-12 — F5 FIX (exit-reason integrity): new trail_stop column
+        (schema + migration) + update_trail_stop(). The trail is now persisted
+        separately; stop_premium is the immutable entry-time -25% floor.
+        update_stop() removed — its only caller (position_manager) overwrote
+        stop_premium with the trail, so every trail-armed exit was labeled
+        'hard_stop_25pct'/'stop_hit'. Restart survivability preserved: the
+        exit engine seeds its in-memory trail from trail_stop on recovery.
 v3.0 — original release
 v1.1 — 2026-06-27 — add orb_range_high, orb_range_low, current_premium
         columns to schema for ORB exit logic and live P&L display
@@ -84,6 +91,7 @@ class TradeLogger:
         max_loss          REAL,
         stop_premium      REAL,
         trail_activation  REAL,
+        trail_stop        REAL DEFAULT 0.0,
         target_premium    REAL,
         underlying_entry  REAL,
         underlying_stop   REAL,
@@ -161,6 +169,7 @@ class TradeLogger:
             ("short_symbol",    "TEXT"),
             ("long_symbol",     "TEXT"),
             ("is_short_position", "INTEGER DEFAULT 0"),
+            ("trail_stop",      "REAL DEFAULT 0.0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {definition}")
@@ -215,11 +224,17 @@ class TradeLogger:
             f"exit=${exit_price:.2f} pnl=${pnl_usd:+.2f}"
         )
 
-    def update_stop(self, trade_id: str, new_stop: float):
+    def update_trail_stop(self, trade_id: str, new_trail: float):
+        """v3.1 — persist the ratcheted trail SEPARATELY from stop_premium.
+        stop_premium is the IMMUTABLE entry-time -25% floor; the old
+        update_stop() overwrote it with the trail, which made the exit
+        engine's floor checks fire at the trail level and label every
+        trail-armed exit 'hard_stop_25pct'/'stop_hit' — poisoning exit_reason
+        distributions. Recovery seeds the in-memory trail from this column."""
         with self._connect() as conn:
             conn.execute(
-                "UPDATE trades SET stop_premium=? WHERE trade_id=?",
-                (new_stop, trade_id)
+                "UPDATE trades SET trail_stop=? WHERE trade_id=?",
+                (new_trail, trade_id)
             )
 
     def update_current_premium(self, trade_id: str, premium: float):
