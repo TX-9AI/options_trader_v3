@@ -107,7 +107,11 @@ The setup is mechanical. As of **v3.5 there are no tolerances anywhere in it.**
 
 ```
 BREAK  = a 1m candle that OPENS INSIDE the opening range and CLOSES OUTSIDE it.
-RETEST = the next 1m candle WICKS INTO the range and CLOSES OUTSIDE it.
+RETEST = a SUBSEQUENT 1m candle — any bar within ORB_MAX_RETEST_BARS (12) of the
+         break, NOT only the very next one — whose WICK enters the range and
+         whose BODY stays entirely OUTSIDE it. Bars in between that neither
+         retest, close back inside, nor reach the 50% TP simply pass; the
+         engine stays ARMED and keeps waiting.
 STOP   = a 1m CLOSE beyond the impulsive (break) candle's WICK.
 ```
 
