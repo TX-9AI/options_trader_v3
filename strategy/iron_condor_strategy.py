@@ -1,5 +1,13 @@
 """
 strategy/iron_condor_strategy.py — Legged Iron Condor for RANGING regime.
+v3.1 — 2026-07-12 — FIX missing import (latent since v1.0, 2026-06-30):
+        OptionContract/OptionsChain were referenced in CondorPlan's dataclass
+        annotations and in method signatures but never imported. Python 3.14's
+        lazy annotation evaluation (PEP 649) masked it on the fleet; on any
+        Python <= 3.13 the module raises NameError at import, which kills
+        main.py at startup (verified 3.12 vs 3.14 A/B on the identical tree).
+        One import line added, matching the canonical form used by
+        base_strategy.py and gex_data.py. No logic change.
 v3.0 — 2026-06-30 — initial release (simultaneous entry placeholder)
 v1.1 — 2026-06-30 — full redesign: legged entry via price-triggered verticals.
 v1.2 — 2026-07-02 — docstring/comment cleanup: strike selection is BB-band
@@ -57,6 +65,7 @@ from zoneinfo import ZoneInfo
 from strategy.base_strategy import BaseOptionsStrategy, OptionsSignal
 from analysis.regime_classifier import RegimeState, Regime
 from analysis.volatility_engine import VolatilityState, VolatilityEngine
+from data.options_chain import OptionContract, OptionsChain
 from data.macro_data import MacroSnapshot
 from config import (
     CONDOR_WING_WIDTH_SPX, CONDOR_WING_WIDTH_QQQ,
