@@ -1,5 +1,17 @@
 """
 execution/exit_engine.py — Strategy-aware exit logic for all options positions.
+v3.3 — 2026-07-12 — F5 FIX (exit-reason integrity; behaviorally neutral).
+        position_manager used to overwrite record['stop_premium'] (+DB) with
+        every trail update, so the floor checks here (ORB #1b, sweep #2,
+        adopted #2) fired AT THE TRAIL LEVEL and labeled every trail-armed
+        exit 'hard_stop_25pct'/'stop_hit'/'adopted_stop_long' — including
+        post-target exits at +100%+. Exit LEVEL was always correct (it was
+        the trail); the LABEL lied, poisoning exit_reason distributions for
+        Phase-3 calibration. Now: stop_premium is immutable (the true entry
+        -25% floor), trails persist in the new trail_stop column, and
+        _seed_trail_from_record() re-arms the in-memory trail on restart so
+        recovery survivability is preserved. Same exit ticks, same exit
+        prices — only the labels change to the truth.
 v3.2 — 2026-07-12 — DOC SYNC (no logic change). Three docstrings in this file
         contradicted the code beneath them and were actively dangerous: an agent
         or engineer reading them would "correct" working code back into a fixed
@@ -302,6 +314,28 @@ class ExitEngine:
         self._post_target_trail: dict = {}   # trade_id \u2192 bool (ORB only)
         self._trade_logger  = get_trade_logger()
 
+    def _seed_trail_from_record(self, record: TradeRecord) -> None:
+        """v3.3 — recovery seed. If this trade has a persisted trail level
+        (record['trail_stop'], written by position_manager v3.1) and this
+        engine instance has no in-memory trail for it yet (i.e. we restarted
+        mid-position), adopt the persisted level so the locked profit floor
+        survives the restart. Adopted longs also re-arm their persistent-trail
+        flag, since their trail block is gated on _trail_active."""
+        trade_id = record.get("trade_id", "")
+        if not trade_id or trade_id in self._trail_stops:
+            return
+        try:
+            persisted = float(record.get("trail_stop", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return
+        if persisted > 0:
+            self._trail_stops[trade_id] = persisted
+            if record.get("strategy", "") == "ADOPTED":
+                self._trail_active[trade_id] = True
+            logger.info(
+                f"Trail recovered from DB: {trade_id[:8]} trail=${persisted:.2f}"
+            )
+
     def evaluate(self,
                  record: TradeRecord,
                  current_premium: float,
@@ -314,6 +348,13 @@ class ExitEngine:
                 neutral strategies (butterfly, condor) that depend on RANGING.
         """
         strategy = record.get("strategy", "")
+
+        # v3.3: restart recovery — re-arm the in-memory trail from the persisted
+        # trail_stop column (position_manager writes it there as of v3.1;
+        # stop_premium is the immutable -25% floor and is never overwritten).
+        # Without this seed, a mid-trail restart would forget the locked level
+        # until the trail re-armed on its own.
+        self._seed_trail_from_record(record)
 
         if record.get("is_butterfly"):
             return self._evaluate_butterfly(record, current_premium, regime=regime)
@@ -380,7 +421,9 @@ class ExitEngine:
         #     below the +50% trail activation — so a trade that never armed the
         #     trail had NO floor and could bleed toward zero while the structure
         #     stop held (CRM 2026-07-09: -83%). The floor must fire every tick,
-        #     regardless of trail state.
+        #     regardless of trail state. As of v3.3, record['stop_premium'] is
+        #     IMMUTABLE (set once at entry; trails persist in trail_stop), so
+        #     this check is truthful: it fires only at the real -25% floor.
         stop_prem = record.get("stop_premium", 0.0) or (entry_prem * 0.75)
         if stop_prem > 0 and current_premium <= stop_prem:
             decision.should_exit = True
