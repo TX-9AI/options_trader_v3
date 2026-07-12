@@ -1,35 +1,53 @@
 """
-options_trader_v2/analysis/conviction_integrator.py — Persistence (conviction-integrator) regime engine.
+options_trader_v3/analysis/conviction_integrator.py — Layer 2: persistence
+(conviction-integrator) regime engine.
 
-v1.0 — 2026-07-09 — NEW FILE. SHADOW-MODE ONLY: this module drives nothing.
-        It runs alongside regime_classifier v1.x, consumes the same per-tick
-        state objects, and maintains a RUNNING CONVICTION PER REGIME that
-        integrates evidence over time — rising on agreement, decaying on
-        disagreement, with decay resistance scaled by banked conviction.
-        The emitted regime is the argmax conviction past a commit threshold,
-        with hysteresis and displacement-by-competitor; UNKNOWN is the
-        genuine-ambiguity fallback (rare by construction), and remains a hard
-        NO-TRADE gate wherever it is consumed.
+v2.0 — 2026-07-12 — PHASE 0 PORT to v3 (ROADMAP 0.1). Three changes:
+        1. EMISSION LAW: always argmax. The UNKNOWN fallback is DELETED from
+           emission — there is always an emitted best-fit label with graded
+           conviction. Indecision is a LOW CONVICTION NUMBER, not a seventh
+           label; Layer 3 gates on conviction, so an uncommitted read simply
+           doesn't clear any trade's bar. The θ_hold/θ_commit/δ hysteresis
+           band is KEPT for label stability: an incumbent above θ_hold is
+           displaced only by a challenger that is committed-grade AND clearly
+           better. Below θ_hold the incumbent loses privilege and emission
+           follows plain argmax (which is usually still the fading incumbent —
+           label continuity improves vs v1.0's drop-to-UNKNOWN).
+        2. The STALE/gap state SURVIVES unchanged: a wall-clock gap > dt_max
+           decays all conviction on tau_stale and flags stale=True until a
+           full evidence vector is observed (or replay() warms the book).
+           The no-trade condition for DATA FAULTS survives; the no-trade
+           condition for INDECISION does not.
+        3. EvidenceAdapter and its duplicated helpers/knobs are RETIRED.
+           Layer 1 is analysis/regime_confluence.py (RegimeConfluenceScorer)
+           and nothing else — resolves the two-Layer-1 collision (defects A/B).
+           This module consumes the scorer's vector:
+               scorer.score(vol, trend, structure, liq, closes, atr).evidence()
+           → Dict[label, float∈[0,1] | None], keyed by the six regime labels.
 
-        Design contract (see docs/persistence_integrator_design.md):
-        • Fast to recognize, slow to abandon. Recognition is instantaneous at
-          the evidence level; COMMITMENT (emitting a tradeable regime) and
-          ABANDONMENT (dropping a held regime) are durational.
-        • A single-tick flicker can never force UNKNOWN over a held regime.
-        • A held regime is displaced by a COMPETING regime accumulating its
-          own conviction (belief yields to better belief), not by decaying
-          into UNKNOWN.
-        • Updates are dt-aware (wall-clock), so irregular tick spacing and
-          bar-vs-tick evidence cadence are handled identically.
-        • The integrator governs CLASSIFICATION ONLY. It must never sit in
-          the path of price-based stops/targets/trails (exit_engine) — those
-          stay instantaneous.
+v1.0 — 2026-07-09 — initial (options_trader_v2, shadow-mode). Leaky per-regime
+        conviction integration: rising on agreement, decaying on disagreement,
+        decay resistance scaled by banked conviction; argmax emission with
+        hysteresis and displacement-by-competitor; dt-aware; snapshot/replay
+        warm start. THRESHOLDS ARE PRIORS — re-fit from accumulated
+        candle-logger tape before this engine drives the live classify path.
 
-        THRESHOLDS ARE PRIORS, not calibration: every number in
-        IntegratorParams was set against one synthetic validation suite
-        seeded by the 2026-07-09 regime_log post-mortem. They MUST be
-        re-fit on accumulated candle-logger tape (multi-day) before this
-        engine is allowed to drive the live classify path.
+SHADOW-MODE: this module still drives nothing in the live loop. It exists to
+run alongside the v1.3 classifier (both reading the shared store), logging
+per tick: both labels, the full conviction vector, trigger, and stale flag —
+the paired data that calibrates Phase-2/3 conviction bars.
+
+Design contract (unchanged):
+  • Fast to recognize, slow to abandon. Recognition is instantaneous at the
+    evidence level; COMMITMENT and ABANDONMENT are durational.
+  • A single-tick flicker can never move the emitted label off a held regime.
+  • A held regime is displaced by a COMPETING regime accumulating its own
+    conviction (belief yields to better belief).
+  • Updates are dt-aware (wall-clock); irregular tick spacing is handled
+    identically to regular cadence.
+  • The integrator governs CLASSIFICATION ONLY. It must never sit in the path
+    of price-based stops/targets/trails (exit_engine) — those stay
+    instantaneous.
 """
 
 import json
@@ -42,16 +60,22 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Regime names duplicated as plain strings so this module stays importable in
-# isolation (backtests, shadow harness, notebooks) without the repo on path.
-# They MUST match analysis.regime_classifier.Regime verbatim.
-TRENDING_BULL     = "TRENDING_BULL"
-TRENDING_BEAR     = "TRENDING_BEAR"
-RANGING           = "RANGING"
-BREAKOUT_VOLATILE = "BREAKOUT_VOLATILE"
-COMPRESSION       = "COMPRESSION"
-SWEEP_REVERSAL    = "SWEEP_REVERSAL"
-UNKNOWN           = "UNKNOWN"
+# Regime labels: imported from the canonical Layer 1 when the repo is on
+# path (single source of truth), with string fallbacks so this module stays
+# importable in isolation (backtests, notebooks) — same guard pattern as
+# regime_confluence v1.1.
+try:
+    from analysis.regime_confluence import (      # type: ignore
+        TRENDING_BULL, TRENDING_BEAR, RANGING,
+        BREAKOUT_VOLATILE, COMPRESSION, SWEEP_REVERSAL,
+    )
+except Exception:                                 # pragma: no cover - isolation
+    TRENDING_BULL     = "TRENDING_BULL"
+    TRENDING_BEAR     = "TRENDING_BEAR"
+    RANGING           = "RANGING"
+    BREAKOUT_VOLATILE = "BREAKOUT_VOLATILE"
+    COMPRESSION       = "COMPRESSION"
+    SWEEP_REVERSAL    = "SWEEP_REVERSAL"
 
 INTEGRATED_REGIMES = (
     TRENDING_BULL, TRENDING_BEAR, RANGING,
@@ -109,7 +133,7 @@ class IntegratorParams:
 
 @dataclass
 class IntegratorState:
-    regime:      str = UNKNOWN            # emitted regime (argmax past threshold, hysteresis applied)
+    regime:      str = ""                 # emitted regime (always-argmax; "" only before the first update)
     conviction:  float = 0.0              # conviction of the emitted regime
     convictions: Dict[str, float] = field(default_factory=dict)  # full vector
     trigger:     str = ""                 # why the emission changed this tick ("" if unchanged)
@@ -133,17 +157,21 @@ class ConvictionIntegrator:
     tracks evidence, it does not saturate past it); the decay time constant
     GROWS exponentially with banked conviction, so a 0.95 regime shrugs off
     the single-tick contradiction that tears down a 0.55 regime — the
-    operator's rule, exactly, and the reason a flicker cannot force UNKNOWN.
+    operator's rule, exactly, and the reason a flicker cannot move the label.
 
-    Emission law (hysteresis + displacement):
+    Emission law (v2.0 — always argmax, hysteresis + displacement):
       1. If an incumbent is held and C_inc ≥ θ_hold: keep it — UNLESS some
          challenger has C ≥ θ_commit AND C ≥ C_inc + δ, in which case switch
          to the challenger (belief yields to better belief, not to noise).
-      2. Otherwise: take argmax C. If it clears θ_commit, commit it.
-         Else emit UNKNOWN (genuine ambiguity — nothing holds conviction).
+      2. Otherwise the incumbent has no privilege: emission follows plain
+         argmax with its graded conviction. There is NO UNKNOWN — indecision
+         is a low conviction number on the best-fit label, and Layer 3's
+         per-trade bars are what refuse to trade it.
 
-    θ_hold < θ_commit is the hysteresis band: harder to enter than to keep,
-    so the emitted label cannot chatter across a single threshold.
+    θ_hold < θ_commit is the hysteresis band: harder to displace than to
+    keep, so the emitted label cannot chatter across a single threshold
+    while conviction is meaningful. The `stale` flag (data gap / unwarmed)
+    is the ONLY hard no-trade marker this engine emits.
     """
 
     def __init__(self, params: Optional[IntegratorParams] = None):
@@ -230,17 +258,21 @@ class ConvictionIntegrator:
                 trigger = f"displaced {self.incumbent}({inc_c:.2f}) → {top_r}({top_c:.2f})"
                 self.incumbent = top_r
         else:
-            if self.incumbent is not None:
-                trigger = f"{self.incumbent} fell below hold ({self.C[self.incumbent]:.2f} < {p.theta_hold})"
-                self.incumbent = None
-            if top_c >= p.theta_commit:
-                self.incumbent = top_r
-                trigger = (trigger + "; " if trigger else "") + f"committed {top_r}({top_c:.2f})"
+            # v2.0 always-argmax: below θ_hold the incumbent loses privilege
+            # and emission follows the best fit — which is usually still the
+            # fading incumbent, so label continuity is preserved without a
+            # drop to UNKNOWN. On a cold/unwarmed book (all-zero conviction)
+            # the label is the deterministic tiebreak head and `stale`/near-
+            # zero conviction tell the caller not to trust it yet.
+            if self.incumbent is not None and top_r != self.incumbent:
+                trigger = (f"{self.incumbent} fell below hold "
+                           f"({self.C[self.incumbent]:.2f} < {p.theta_hold}); "
+                           f"argmax → {top_r}({top_c:.2f})")
+            elif self.incumbent is None:
+                trigger = f"argmax {top_r}({top_c:.2f})"
+            self.incumbent = top_r
 
-        if self.incumbent is not None:
-            regime, conviction = self.incumbent, self.C[self.incumbent]
-        else:
-            regime, conviction = UNKNOWN, 0.0
+        regime, conviction = self.incumbent, self.C[self.incumbent]
 
         return IntegratorState(
             regime=regime,
@@ -310,170 +342,118 @@ class ConvictionIntegrator:
         except (OSError, ValueError, KeyError, TypeError):
             return False
 
+# ── Standalone validation suite (runs only when executed directly) ───────────
+if __name__ == "__main__":                     # pragma: no cover
+    import random, tempfile
+    random.seed(7)
+    TICK = 15.0
+    ALL  = INTEGRATED_REGIMES
 
-# ─── Evidence: graded signals from the existing engine states ────────────────
-# The v1.x boolean `_is_*` conditions become graded evidence in [0,1].
-# ramp() is the universal primitive: 0 below lo, 1 above hi, linear between.
+    def ev(**kw):
+        base = {r: 0.0 for r in ALL}
+        base.update(kw)
+        return base
 
-def ramp(x: float, lo: float, hi: float) -> float:
-    if hi <= lo:
-        return 1.0 if x >= hi else 0.0
-    return min(max((x - lo) / (hi - lo), 0.0), 1.0)
+    fails = []
+    def check(name, cond, detail=""):
+        print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f"  ({detail})" if detail else ""))
+        if not cond:
+            fails.append(name)
 
+    print("(1) no-UNKNOWN invariant — 500 random-evidence ticks")
+    ig = ConvictionIntegrator(); t = 0.0; bad = 0
+    for _ in range(500):
+        t += TICK
+        e = {r: (None if random.random() < 0.1 else random.random()) for r in ALL}
+        s = ig.update(t, e)
+        if s.regime not in ALL:
+            bad += 1
+    check("emitted label always one of the six", bad == 0, f"{bad} violations")
 
-def flat_angle_deg(closes: List[float], atr: float) -> Optional[float]:
-    """
-    Instrument-agnostic trend/flat read over a window of closes (validated on
-    real tape; fixed the SPX raw-percent false-positive, 48% → 17%):
+    print("(2) convergence — constant RANGING evidence 0.8")
+    ig = ConvictionIntegrator(); t = 0.0
+    for _ in range(400):                       # 100 min of 15s ticks
+        t += TICK
+        s = ig.update(t, ev(RANGING=0.8))
+    check("conviction tracks evidence (≈0.8, never past it)",
+          0.75 <= s.convictions[RANGING] <= 0.8, f"C={s.convictions[RANGING]:.3f}")
+    check("emits RANGING", s.regime == RANGING, s.regime)
 
-        angle = arctan( |slope·n| / (ATR·√n) )   in degrees, 0=flat … 90=steep
+    print("(3) flicker resistance — one contradicting tick vs a 0.9 incumbent")
+    ig = ConvictionIntegrator(); t = 0.0
+    for _ in range(200):
+        t += TICK
+        ig.update(t, ev(TRENDING_BULL=0.95))
+    before = ig.update(t, ev(TRENDING_BULL=0.95))
+    t += TICK
+    flick = ig.update(t, ev(TRENDING_BULL=0.0, RANGING=1.0))     # single flicker
+    check("label survives the flicker", flick.regime == TRENDING_BULL, flick.regime)
+    check("conviction dents, not shatters",
+          flick.conviction > 0.75 * before.conviction,
+          f"{before.conviction:.2f} → {flick.conviction:.2f}")
 
-    Numerator: net regression drift over the window. Denominator: the
-    random-walk noise scale — the drift a pure noise process of this ATR
-    would exhibit over n bars. The ratio is dimensionless, so one angle
-    cutoff serves SPX and a $4 name alike.
-    """
-    n = len(closes)
-    if n < 8 or atr is None or atr <= 0:
-        return None
-    xbar = (n - 1) / 2.0
-    ybar = sum(closes) / n
-    sxx = sum((i - xbar) ** 2 for i in range(n))
-    sxy = sum((i - xbar) * (closes[i] - ybar) for i in range(n))
-    slope = sxy / sxx if sxx > 0 else 0.0
-    drift = abs(slope * n)
-    noise = atr * math.sqrt(n)
-    return math.degrees(math.atan2(drift, noise))
+    print("(4) displacement — sustained breakout evidence vs held trend")
+    switched_at = None
+    for i in range(60):
+        t += TICK
+        s = ig.update(t, ev(TRENDING_BULL=0.0, BREAKOUT_VOLATILE=0.95))
+        if s.regime == BREAKOUT_VOLATILE and switched_at is None:
+            switched_at = i + 1
+            check("displacement trigger recorded", "displaced" in s.trigger, s.trigger)
+    check("challenger displaces the incumbent", switched_at is not None,
+          f"after {switched_at} ticks" if switched_at else "never")
 
+    print("(5) below-hold — always-argmax, label continuity (v2.0 law)")
+    ig = ConvictionIntegrator(); t = 0.0
+    for _ in range(200):
+        t += TICK
+        ig.update(t, ev(COMPRESSION=0.9))
+    labels = set()
+    for _ in range(400):                       # let it fade on zero evidence
+        t += TICK
+        s = ig.update(t, ev())
+        labels.add(s.regime)
+    check("fading incumbent keeps the label via argmax (no drop-out)",
+          labels == {COMPRESSION}, str(labels))
+    check("conviction reports the fade honestly", s.conviction < 0.20,
+          f"C={s.conviction:.3f}")
 
-def midline_crossings(closes: List[float]) -> int:
-    """Crossings of the window's regression midline. Used ONLY as graded
-    confirmation AFTER the flat-angle veto has passed: conditional on a flat
-    center, many crossings = two-sided rotation (a range that oscillates),
-    few = a pin/drift. NO R²/fit-quality filter — shark-fin scatter is
-    expected and allowed; only the CENTER must hold."""
-    n = len(closes)
-    if n < 8:
-        return 0
-    xbar = (n - 1) / 2.0
-    ybar = sum(closes) / n
-    sxx = sum((i - xbar) ** 2 for i in range(n))
-    sxy = sum((i - xbar) * (closes[i] - ybar) for i in range(n))
-    slope = sxy / sxx if sxx > 0 else 0.0
-    resid = [closes[i] - (ybar + slope * (i - xbar)) for i in range(n)]
-    return sum(
-        1 for a, b in zip(resid, resid[1:])
-        if a != 0 and b != 0 and (a > 0) != (b > 0)
-    )
+    print("(6) gap → STALE survives; replay warms")
+    ig = ConvictionIntegrator(); t = 0.0
+    for _ in range(100):
+        t += TICK
+        ig.update(t, ev(RANGING=0.8))
+    s = ig.update(t + 600.0, ev(RANGING=0.8))  # 10-min gap
+    check("gap flags stale", s.stale is True)
+    samples = []
+    tt = t + 600.0
+    for _ in range(100):
+        tt += TICK
+        samples.append((tt, ev(RANGING=0.8)))
+    s = ig.replay(samples)
+    check("replay clears stale + recommits", s.stale is False and s.regime == RANGING,
+          f"stale={s.stale} regime={s.regime}")
 
+    print("(7) snapshot persistence — fresh load restores, old load refuses")
+    path = tempfile.mktemp(suffix=".json")
+    ig.save(path)
+    ig2 = ConvictionIntegrator()
+    check("fresh snapshot loads", ig2.load(path, now_ts=ig.last_ts + 30.0) is True)
+    check("state restored", abs(ig2.C[RANGING] - ig.C[RANGING]) < 1e-9
+          and ig2.incumbent == ig.incumbent)
+    ig3 = ConvictionIntegrator()
+    check("stale snapshot refused (caller must replay)",
+          ig3.load(path, now_ts=ig.last_ts + 9999.0) is False)
 
-# Evidence calibration knobs (PRIORS — recalibrate from candle-logger tape).
-FLAT_ANGLE_CUT_DEG   = 20.0   # hard veto: at/above this the center is not flat
-FLAT_ANGLE_SOFT_DEG  = 8.0    # full flat credit at (CUT − SOFT) = 12°
-RANGE_WINDOW_BARS    = 25     # window for angle + crossings (matches tape study)
-ADX_STRONG_SOLO      = 35.0   # ADX above which trend carries without alignment
-SWEEP_HALFLIFE_BARS  = 3.0    # sweep evidence half-life without follow-through
+    print("(8) Layer-1 handshake — consumes RegimeConfluenceScorer's vector")
+    try:
+        from analysis.regime_confluence import RegimeConfluenceScorer, REGIMES as L1
+        check("label sets identical", set(L1) == set(ALL))
+    except Exception as e:
+        print(f"  [skip] repo Layer 1 not importable here: {e}")
 
-
-class EvidenceAdapter:
-    """
-    Maps the per-tick engine states (VolatilityState, TrendState, StructureMap,
-    LiquidityMap) plus a rolling window of 1-min closes+ATR into the graded
-    evidence vector the integrator consumes. Field names below are the REAL
-    attributes read off regime_classifier v1.2 / the engines at HEAD ef76b4a.
-
-    Contract notes:
-    • Evidence is INSTANTANEOUS and may be noisy — that is the design. The
-      integrator supplies the persistence; the adapter must NOT smooth.
-    • Return None (not 0.0) for a regime whose inputs are unavailable.
-    """
-
-    def __init__(self,
-                 adx_trend_threshold: float = 25.0,   # config.ADX_TREND_THRESHOLD
-                 adx_range_threshold: float = 20.0):  # config.ADX_RANGE_THRESHOLD
-        self.adx_trend = adx_trend_threshold
-        self.adx_range = adx_range_threshold
-
-    def evidence(self, vol_state, trend_state, structure, liq_map,
-                 closes: Optional[List[float]] = None,
-                 atr: Optional[float] = None) -> Dict[str, Optional[float]]:
-        ev: Dict[str, Optional[float]] = {}
-
-        adx = trend_state.primary_adx
-        align_frac = trend_state.aligned_timeframes / max(trend_state.total_timeframes, 1)
-
-        # ── TRENDING (directional) ────────────────────────────────────────────
-        # ADX strength ramps in from the config threshold; alignment CORROBORATES
-        # marginal ADX rather than hard-gating strong ADX (the v1.3 coverage fix,
-        # graded): above ADX_STRONG_SOLO the alignment factor is forgiven.
-        adx_s = ramp(adx, self.adx_trend - 5, ADX_STRONG_SOLO)
-        align_s = max(align_frac, ramp(adx, self.adx_trend, ADX_STRONG_SOLO))
-        contra = "LH_LL" if trend_state.is_bullish else "HH_HL"
-        struct_ok = 0.0 if structure.structure_sequence == contra else 1.0
-        trend_e = adx_s * align_s * struct_ok
-        if trend_state.overall_direction == "BULLISH":
-            ev[TRENDING_BULL], ev[TRENDING_BEAR] = trend_e, 0.0
-        elif trend_state.overall_direction == "BEARISH":
-            ev[TRENDING_BULL], ev[TRENDING_BEAR] = 0.0, trend_e
-        else:
-            ev[TRENDING_BULL] = ev[TRENDING_BEAR] = 0.0
-
-        # ── BREAKOUT_VOLATILE ────────────────────────────────────────────────
-        # v1.2 booleans, graded — with the momentum carry: when ADX is clearly
-        # high, a momentary BB re-entry does NOT zero the evidence (defense in
-        # depth against the flicker, beneath the integrator's own persistence).
-        atr_ratio = vol_state.atr_current / max(vol_state.atr_avg_20, 1e-3)
-        expand_s = ramp(atr_ratio, 1.0, 1.5) if vol_state.is_expanding else \
-                   ramp(atr_ratio, 1.1, 1.6) * 0.6
-        outside_s = 1.0 if vol_state.price_vs_bb != "INSIDE" else ramp(adx, 38.0, 50.0)
-        ev[BREAKOUT_VOLATILE] = expand_s * outside_s
-
-        # ── COMPRESSION ──────────────────────────────────────────────────────
-        squeeze_s = ramp(0.20 - vol_state.bb_width_pct, 0.0, 0.15)
-        quiet = 1.0 if (vol_state.atr_state in ("CONTRACTING", "STABLE")
-                        and not vol_state.is_expanding) else 0.0
-        ev[COMPRESSION] = squeeze_s * quiet
-
-        # ── SWEEP_REVERSAL ───────────────────────────────────────────────────
-        # Definitional gates (v1.1) stay binary: location (named zone),
-        # rejection (reclaimed), non-acceptance. Age then DECAYS the evidence —
-        # a sweep is an event; without follow-through its evidence must die,
-        # which is what lets a rising breakout displace a stale sweep label.
-        sweep = liq_map.recent_sweep
-        if sweep and getattr(sweep, "reclaimed", False) \
-                and getattr(sweep, "swept_named_level", "") \
-                and getattr(sweep, "closes_beyond", 0) < 2:
-            strength = ramp(sweep.rejection_pct, 0.002, 0.008)
-            age_decay = 0.5 ** (liq_map.sweep_age_bars / SWEEP_HALFLIFE_BARS)
-            ev[SWEEP_REVERSAL] = strength * age_decay
-        else:
-            ev[SWEEP_REVERSAL] = 0.0
-
-        # ── RANGING ──────────────────────────────────────────────────────────
-        # The validated definition: flat center is the HARD VETO (a trend cannot
-        # have a flat center — its value migrates), oscillation around the LOCAL
-        # center (the window's own regression midline — valid precisely because
-        # the veto has certified that midline flat) is graded confirmation.
-        # Elevated ADX and BB pokes are ALLOWED: energetic shark-fin chop stabs
-        # the edges by nature. Scatter is fine; only the center must hold.
-        if closes is not None and atr is not None and len(closes) >= RANGE_WINDOW_BARS:
-            w = closes[-RANGE_WINDOW_BARS:]
-            ang = flat_angle_deg(w, atr)
-            if ang is None:
-                ev[RANGING] = None
-            elif ang >= FLAT_ANGLE_CUT_DEG:
-                ev[RANGING] = 0.0                                    # veto
-            else:
-                flat_s = ramp(FLAT_ANGLE_CUT_DEG - ang, 0.0, FLAT_ANGLE_SOFT_DEG)
-                osc_s = ramp(midline_crossings(w), 2.0, 5.0)
-                ev[RANGING] = flat_s * (0.4 + 0.6 * osc_s)
-        else:
-            # Bars unavailable: fall back to the v1.2 quiet-range read so the
-            # regime is not blind, at reduced ceiling (it cannot see energetic
-            # chop — that is exactly what the angle read adds).
-            quiet_range = (adx < self.adx_range
-                           and not vol_state.is_expanding
-                           and vol_state.price_vs_bb == "INSIDE")
-            ev[RANGING] = 0.6 if quiet_range else 0.0
-
-        return ev
+    print()
+    print("ALL PASS — v2.0 emission law verified: always-argmax, hysteresis kept,"
+          if not fails else f"{len(fails)} FAILURES: " + "; ".join(fails))
+    if not fails:
+        print("stale survives, UNKNOWN eliminated")
