@@ -44,7 +44,7 @@ print()
 
 print("=== STEP 4: config import ===")
 try:
-    from config import DB_PATH, SESSION_LOSS_LIMIT, BOT_NAME
+    from config import DB_PATH, BOT_NAME
     print("DB_PATH:", DB_PATH)
     print("BOT_NAME:", BOT_NAME)
 except Exception as e:
