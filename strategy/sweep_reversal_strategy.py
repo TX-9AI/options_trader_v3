@@ -1,5 +1,10 @@
 """
 strategy/sweep_reversal_strategy.py — Post-liquidity-sweep reversal for options.
+v3.1 — 2026-07-13 — defect H rename only: NO_ENTRY_AFTER_ET -> ORB_NO_ENTRY_AFTER_ET.
+        Same constant, same (11, 0) value, same behaviour. This file is precisely
+        why the rename earns its keep: the 11:00 ORB cutoff is the ARM condition
+        here (past it, the ORB window is over and sweep works any level), which
+        the old name did nothing to convey.
 v3.0 — 2026-07-06 — entry-gate tuning (separate pass from detection): recovery
         window is ATR-aware (LARGER of SWEEP_MAX_RECOVERY_PCT or
         SWEEP_RECOVERY_ATR_MULT × ATR%) so fast/volatile reversals aren't
@@ -44,7 +49,7 @@ from data.macro_data import MacroSnapshot
 from utils.time_utils import now_et
 from config import (
     SWEEP_DELTA_STRONG, SWEEP_DELTA_WEAK, SWEEP_MAX_AGE_BARS,
-    NO_ENTRY_AFTER_ET,
+    ORB_NO_ENTRY_AFTER_ET,
     SWEEP_MAX_RECOVERY_PCT, SWEEP_RECOVERY_ATR_MULT, SWEEP_BOS_LOOKBACK,
 )
 
@@ -332,14 +337,14 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         not a wick that pokes the boundary and closes back inside. That wick is
         still 'in range, awaiting break' → no trade.
 
-        - Past the 11:00 ET ORB cutoff (NO_ENTRY_AFTER_ET): always True — the
+        - Past the 11:00 ET ORB cutoff (ORB_NO_ENTRY_AFTER_ET): always True — the
           ORB window is over, sweep reversal is free to work any level.
         - No established range for today: True (nothing to gate on).
         - Otherwise: a high sweep needs a registered break HIGH (a 1-min close
           above the ORB high); a low sweep needs a registered break LOW.
         """
         now = now_et()
-        if (now.hour, now.minute) >= NO_ENTRY_AFTER_ET:
+        if (now.hour, now.minute) >= ORB_NO_ENTRY_AFTER_ET:
             return True
 
         eng = get_orb_engine()
