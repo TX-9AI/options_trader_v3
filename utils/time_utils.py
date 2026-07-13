@@ -1,6 +1,14 @@
 """
 utils/time_utils.py — Timezone, RTH session helpers, and time utilities.
 All bot logic operates in US/Eastern time to match market hours.
+v3.1 — 2026-07-13 — NO_ENTRY is READ FROM CONFIG (defect H). It was hardcoded
+        as dtime(14, 0), so editing config could not move the global cutoff.
+        It now derives from config.GLOBAL_NO_ENTRY_ET.
+        NOT a behaviour change: GLOBAL_NO_ENTRY_ET is (14, 0), the same value
+        that was hardcoded. Note the config constant this does NOT read is
+        ORB_NO_ENTRY_AFTER_ET (11:00) — that is the ORB-scoped cutoff, a
+        different rule. Wiring NO_ENTRY to it would silently move the global
+        0DTE cutoff three hours earlier.
 v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         mapping optimization (all market data now flows from the single
         shared TastyTrade candle feed — see data/candle_feed.py). No logic
@@ -12,6 +20,8 @@ from datetime import datetime, timezone, timedelta, time as dtime
 from typing import Optional, Tuple
 import pytz
 
+from config import GLOBAL_NO_ENTRY_ET
+
 logger = logging.getLogger(__name__)
 
 ET = pytz.timezone("US/Eastern")
@@ -20,7 +30,7 @@ ET = pytz.timezone("US/Eastern")
 RTH_OPEN    = dtime(9, 30)
 RTH_CLOSE   = dtime(16, 0)
 HARD_CLOSE  = dtime(15, 45)
-NO_ENTRY    = dtime(14, 0)
+NO_ENTRY    = dtime(*GLOBAL_NO_ENTRY_ET)   # global 0DTE cutoff — from config
 ORB_END     = dtime(9, 35)   # ORB defined by 9:30–9:35 candle
 
 
