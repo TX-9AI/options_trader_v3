@@ -1,12 +1,20 @@
 """
 shadow/observer.py — the shadow observer service (OBSERVE-ONLY, never trades).
+v1.1 — 2026-07-13 — DOCSTRING CORRECTION ONLY, zero code change. The line below
+        described the data source as "yfinance candles + quote". That has been
+        false since the v3.0 purge: market_data was rewritten behind the preserved
+        get_cache() seam and now reads the on-box shared SQLite store written by
+        data/candle_feed.py (TastyTrade/DXFeed), read-only and heartbeat-guarded.
+        The observer required zero changes and so nobody noticed the docstring rot
+        — which is exactly the failure mode that extracting this subsystem from its
+        tarballs was meant to expose. There is no yfinance in this repo.
 v1.0 — 2026-07-09 — initial release.
 
 Runs as its OWN systemd service (shadow-observer.service) in its OWN process —
 zero shared memory with optionsbot.service. Per tick during RTH it:
   1. reads the SAME market data source the bot's analysis reads
-     (data_cache -> market_data: yfinance candles + quote) via its own
-     in-process DataCache instance,
+     (data_cache -> market_data -> the shared TastyTrade/DXFeed candle store)
+     via its own in-process DataCache instance,
   2. runs the SAME analysis engines (volatility/trend/structure/liquidity —
      fresh instances in this process; .analyze() returns new state objects),
   3. computes the shared primitives (velocity/magnitude/position),
