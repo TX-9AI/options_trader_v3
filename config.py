@@ -1,5 +1,16 @@
 """
-config.py — options_trader v3.0
+config.py — options_trader v3.3
+v3.3 — 2026-07-13 — CUTOFF DISAMBIGUATION (defect H). Two constants named so
+        similarly they were confused for one rule are now named for their scope,
+        and the global cutoff is no longer hardcoded outside config.
+        (a) NO_ENTRY_AFTER_ET -> ORB_NO_ENTRY_AFTER_ET. Unchanged at (11, 0).
+            It is, and always was, the ORB-scoped cutoff (orb_engine v3.6) and
+            the arm condition for sweep reversal (sweep_reversal_strategy v3.1).
+        (b) NEW: GLOBAL_NO_ENTRY_ET = (14, 0) — the global 0DTE entry cutoff for
+            ALL strategies. utils/time_utils v3.1 now READS this instead of
+            hardcoding dtime(14, 0), so config is finally the single source of
+            truth for both cutoffs.
+        NOT a behaviour change: both cutoffs keep their exact prior values.
 v1.0 — original release
 v1.1 — 2026-06-27 — remove Twilio, fix SWEEP_TARGET_DELTA to 0.08,
         remove Grade C, add BUTTERFLY_ENTRY_CUTOFF_ET
@@ -179,7 +190,10 @@ TIMEZONE                    = "US/Eastern"
 RTH_OPEN_ET                 = (9, 30)
 RTH_CLOSE_ET                = (16, 0)
 HARD_CLOSE_ET               = (15, 45)
-NO_ENTRY_AFTER_ET           = (11, 0)   # ORB entries only valid until 11:00 AM ET
+ORB_NO_ENTRY_AFTER_ET       = (11, 0)   # ORB-SCOPED: ORB entries valid until 11:00 ET.
+                                        #   Also the ARM condition for sweep reversal.
+GLOBAL_NO_ENTRY_ET          = (14, 0)   # GLOBAL: no new 0DTE entries after 14:00 ET,
+                                        #   ANY strategy. Read by utils/time_utils.
 BUTTERFLY_ENTRY_CUTOFF_ET   = (14, 0)   # was 15:00 and unreachable (see v3.1 header)
 BUTTERFLY_ENTRY_START_ET    = (12, 0)   # No butterfly entries before noon
 ORB_WINDOW_MINUTES          = 5
