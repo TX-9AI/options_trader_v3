@@ -310,19 +310,56 @@ on fallbacks) now feeds both the Layer-1 replay AND the integrator's Layer-2 tra
 `tests/replay_confluence.py` v2.0. **Still shadow-only:** no live-loop path touches either —
 that is ROADMAP Phase 0.2, deliberately not yet wired.
 
-### C. `docs/REPLAY_VALIDATION.md` justifies its method on a **false premise**
-It says to calibrate on the DXFeed CSVs *"not the live **yfinance** shadow observer — the
-observer scores off yfinance."* **The observer does not score off yfinance.** The v3.0 purge
-rewrote `market_data.py` behind the preserved `get_cache()` seam, and the observer was silently
-migrated onto the shared store (CHANGELOG: it *"required zero changes"*). The *conclusion* (use
-the CSVs) is still right. The *reason* is wrong — and it will send an agent off to "re-purge" a
-thing that is already clean.
+### C. ✅ RESOLVED 2026-07-13 — `docs/REPLAY_VALIDATION.md` false premise
+It justified replaying over the DXFeed CSVs on the claim that the shadow observer *"scores off
+yfinance"* and was therefore a divergent feed. **The claim was false.** Read straight from the
+now-extracted source: `shadow/observer.py` acquires data through exactly one call —
+`get_cache(symbol)` → `data/data_cache.py` → `data/market_data.py` — and since the v3.0 purge
+`market_data` reads the on-box shared SQLite store written by `candle_feed.py`
+(TastyTrade/DXFeed), read-only, heartbeat-guarded. No yfinance in the repo; none in
+`requirements.txt`. **The observer scores off the same DXFeed tape the CSVs are cut from.**
 
-### D. The shadow observer ships as **unextracted tarballs**
-`observer/shadow_ops_v1.0.tar` and `observer/shadow_subsystem_v1.0.tar`. Code that cannot be
-grepped, diffed, or version-checked — which is precisely how `observer.py`'s docstring came to
-describe a yfinance feed it no longer uses, without anyone noticing.
-**Extract to `observer/shadow/` + `deploy/`.**
+**Resolved by `REPLAY_VALIDATION.md` v1.1:** the conclusion stands, on a true premise. The reason
+to calibrate on the CSVs is **sampling, not source** — the observer's jsonl is tick-cadenced and
+staleness-gated (a frame may repeat across ticks, or serve `None` past the hard-stale ceiling),
+while the CSVs are deterministic, evenly-spaced 1-min bars. Same tape, different sampling;
+calibration needs the deterministic one. The identical false claim in
+`tests/replay_confluence.py`'s header comment was corrected in the same pass.
+
+### D. ✅ RESOLVED 2026-07-13 — Shadow observer extracted from its tarballs
+`observer/shadow_ops_v1.0.tar` and `observer/shadow_subsystem_v1.0.tar` are **extracted and
+deleted**; the `observer/` directory is gone. All 13 members landed and were diffed
+byte-for-byte against the archives.
+
+**Correction to this defect's own instruction.** It said *"extract to `observer/shadow/`"*. **That
+was wrong** — the package belongs at **repo root `shadow/`**, and that is where it now lives.
+Three independent reasons: `shadow-observer.service` runs `python -m shadow.observer`; the modules
+import each other as `from shadow.primitives import ...`; and `observer.py` derives `REPO_ROOT` as
+two levels up from itself, so nested under `observer/` its output would land in
+`observer/data/shadow/`. Non-code members go to root (`shadow_devtools.sh`) and `deploy/`
+(5 unit/timer files).
+
+**Extraction immediately paid for itself:** with the code greppable, `observer.py`'s docstring was
+found still describing a yfinance feed — the exact rot this defect predicted, and the thing that
+made defect C's false premise plausible. Fixed in `observer.py` **v1.1** (docstring only, zero
+code change).
+
+**Two traps caught in the same pass:**
+- `shadow_devtools.sh` uploaded through the GitHub web UI landed at mode `100644`. The browser
+  uploader **cannot** set the exec bit — it writes every blob `100644`. `./shadow_devtools.sh`
+  fails with permission denied until the mode is committed from a clone. **Anything executable must
+  be pushed from a shell, never the web UI.**
+- `.gitignore` had no `data/shadow/` rule (the archived copy did). Added — without it the
+  observer's runtime jsonl shows as untracked on every box.
+
+**⚠️ Still open — path mismatch, not yet fixed.** `shadow_devtools.sh` hardcodes
+`REPO="$HOME/options-trader"` and hard-exits if that `cd` fails; `deploy/shadow-observer.service`
+sets `WorkingDirectory=/home/ubuntu/options-trader`. At least one box deploys to
+**`~/options-trader-v3`**, where both are wrong: the devtools script exits immediately and the
+observer unit will not start. Same class as the installer repo-pointer bug. Fix is to self-locate
+(`REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`, mirroring `observer.py:61`) and
+templatize `WorkingDirectory`/`ExecStart` — **pending confirmation of the fleet's canonical deploy
+path** (`systemctl cat optionsbot.service | grep WorkingDirectory`).
 
 ### E. `VWAP_FILTER_ACTIVE` — a hard gate that was never built
 Marked `UNWIRED`. Genesis constant: present at the initial commit, never referenced, **mentioned
@@ -358,10 +395,27 @@ required the wick to enter, so the near-miss never fired. If it is worth grading
 **ATR-relative, never a percentage** — percentages scale into holes on high-priced instruments,
 which is the root cause of every tolerance bug this file has had.
 
-### H. Two "no entry after" times in two files
+### H. ✅ RESOLVED 2026-07-13 — Two "no entry after" times in two files
 `config.NO_ENTRY_AFTER_ET = (11, 0)` (ORB-only) vs `time_utils.NO_ENTRY = dtime(14, 0)`
-**hardcoded, not read from config.** Edit the config value expecting the global cutoff to move
-and it won't. `time_utils` should read from `config`.
+**hardcoded**, so editing config could not move the global cutoff.
+
+**Resolved by `config.py` v3.3 + `utils/time_utils.py` v3.1**, with the call sites renamed in
+`main.py` v3.3, `analysis/orb_engine.py` v3.6, `strategy/sweep_reversal_strategy.py` v3.1:
+
+| constant | value | scope |
+|---|---|---|
+| `ORB_NO_ENTRY_AFTER_ET` | `(11, 0)` | **ORB-scoped.** The ORB entry cutoff — *and* the arm condition for sweep reversal. |
+| `GLOBAL_NO_ENTRY_ET` | `(14, 0)` | **Global.** No new 0DTE entries after 14:00, any strategy. `time_utils.NO_ENTRY` now reads it. |
+
+**Not a behaviour change** — both cutoffs keep their exact prior values (asserted at runtime:
+`NO_ENTRY == 14:00`, `ORB_NO_ENTRY_AFTER_ET == (11, 0)`).
+
+**The trap this defect was hiding.** The obvious fix — point `time_utils.NO_ENTRY` at the existing
+`NO_ENTRY_AFTER_ET` — would have **silently moved the global 0DTE cutoff from 14:00 to 11:00**,
+because the two names describe *different rules*, not one rule written twice. The rename exists so
+that can never be misread again. `orb_engine.py` is where it matters most: `past_orb_cutoff` uses
+the 11:00 constant while `is_past_entry_cutoff()` (deciding EXPIRED vs re-arm) uses the 14:00 one —
+two cutoffs, one file, previously near-indistinguishable by name.
 
 ### I. `session_guard.can_enter(is_butterfly=...)` is an inert branch
 `main.py` never passes `is_butterfly=True`, so the butterfly-specific cutoff path is unreachable.
@@ -381,10 +435,9 @@ decides whether a break is real"*) would be simpler and could not fire an extend
 **Counter-argument:** current behavior is a deliberate hand-off to Sweep Reversal. Unchanged
 pending a decision.
 
-### L. `fix_structure_analyzer.sh` is a dead one-off
-It patches a `None`-formatting crash in `structure_analyzer.py` — **a bug already fixed in-tree by
-v1.1 (2026-06-30)**. Running it against current code is at best a no-op and at worst re-applies a
-patch to already-patched source. It has no place in a deployed tree. **Delete it.**
+### L. ✅ RESOLVED 2026-07-13 — `fix_structure_analyzer.sh` deleted
+A dead one-off patching a `None`-format crash already fixed in-tree by `structure_analyzer.py`
+v1.1 (2026-06-30). Nothing referenced it. **Deleted.**
 
 ### M. Known pending, not addressed
 Ghost folder on Windows tarball extraction · `setup_ec2.bat` security warning on double-click ·
@@ -400,8 +453,8 @@ dedicated Telegram bot for options-trader notifications.
 
 | File | Purpose |
 |---|---|
-| `main.py` ✅ | **v3.2.** The bot. 15s loop: analyze → classify regime → dispatch strategy → score → size → enter; manages open positions, runs the BWB roll check, enforces the daily-loss halt, writes `orb_state.json` each tick. Holds the `UNKNOWN` hard gate and the ORB un-gate exception. |
-| `config.py` ✅ | **v3.2.** Every tunable parameter + credential accessors (env-only, never in source). `PAPER_TRADING` defaults `True`. |
+| `main.py` ✅ | **v3.3.** The bot. 15s loop: analyze → classify regime → dispatch strategy → score → size → enter; manages open positions, runs the BWB roll check, enforces the daily-loss halt, writes `orb_state.json` each tick. Holds the `UNKNOWN` hard gate and the ORB un-gate exception. |
+| `config.py` ✅ | **v3.3.** Every tunable parameter + credential accessors (env-only, never in source). `PAPER_TRADING` defaults `True`. |
 | `README.md` 📄 | This file. Current state, not aspiration. |
 | `ROADMAP.md` 📄 | **Build status lives here.** v2→v3 reconciliation, honest distance-to-vision, Phases 0–4, and the named risks. |
 | `CHANGELOG.md` 📄 | v3.0 purge changelog (fork point, changed-file table, verification status). |
@@ -424,12 +477,12 @@ dedicated Telegram bot for options-trader notifications.
 | `check_versions.sh` ⚙️ | Recursive version-header + critical-string verification after a deploy. **Should also enforce the fleet↔control parity invariant. It does not.** |
 | `push.sh` ⚙️ | Git push/deploy wrapper — self-healing, optional restart, verifies the push landed. |
 | `snapshot.sh` ⚙️ | Bot state backup; **redacts secrets** before archiving. |
+| `shadow_devtools.sh` ⚙️ | **v1.0.** Operator menu for the shadow subsystem: start/stop/restart the observer, toggle stage 1↔2, tail the journal, would-fire summary, EOD compare, isolation re-check. Observe-only — nothing here can place a trade. **⚠️ Hardcodes `REPO="$HOME/options-trader"` — see defect D.** |
 | `harden_hosts.sh` ⚙️ | Host hardening for a trading box (guards against unattended-upgrade restarts mid-session). Invoked from control. |
 | `pull_today_ohlc.sh` ⚙️ | Background-detached EOD retrieval of today's full 1-min session on a box (works around `fleet.py`'s ~22s SSH ceiling). **Invoked by `fleet.py`.** |
 | `install_candle_feed.sh` ⚙️ | Installs `candle-feed.service` on a box provisioned before v3.0. |
 | `install_candle_logger_timer.sh` ⚙️ | Installs the 16:05 ET EOD candle-logger timer. |
 | `install_eod_timer.sh` ⚙️ | Installs the 15:50 ET EOD P&L-writer timer. |
-| `fix_structure_analyzer.sh` ⚠️ | **DEAD.** A one-off patch for a `None`-format crash in `structure_analyzer.py` — **already fixed in-tree by v1.1 (2026-06-30).** Re-running it against current code is at best a no-op. Delete. |
 
 ### `analysis/` — the reading of the tape
 
@@ -494,18 +547,24 @@ dedicated Telegram bot for options-trader notifications.
 | `notifications/alert_manager.py` ✅ | The 4 core Telegram events (start, stop, entry, exit) + BWB roll + daily-loss-limit. |
 | `notifications/telegram_sender.py` ✅ | Bot API transport. |
 | `notifications/test_telegram.py` 🧪 | Connectivity check. |
-| `utils/time_utils.py` ✅ | ET/RTH helpers. **⚠️ Hardcodes `NO_ENTRY = 14:00` instead of reading config — see defect H.** |
+| `utils/time_utils.py` ✅ | **v3.1.** ET/RTH helpers. `NO_ENTRY` now reads `config.GLOBAL_NO_ENTRY_ET` (14:00) — **defect H resolved.** |
 | `utils/math_utils.py` ✅ | Strike snapping, ORB strike selection, expected move, rounding. |
 | `utils/check_sdk.py` 🧪 | TastyTrade SDK diagnostic. |
 
-### `observer/` — the shadow subsystem ⚠️
+### `shadow/` — the shadow subsystem (observe-only, never trades)
+
+Extracted from its tarballs 2026-07-13 (**defect D resolved**); `observer/` is gone.
 
 | File | Purpose |
 |---|---|
-| `shadow_subsystem_v1.0.tar` ⚠️ | **UNEXTRACTED.** Contains `shadow/observer.py`, `scorers.py`, `primitives.py`, `registry.py`, `eod_compare.py`, `deploy/shadow-observer.service`. Observe-only: runs the same engines in its own process and appends one JSON line per tick to `data/shadow/<date>/<SYMBOL>.jsonl`. **Never trades.** |
-| `shadow_ops_v1.0.tar` ⚠️ | **UNEXTRACTED.** `shadow/trading_day.py`, `shadow_devtools.sh`, start/stop service+timer units. |
+| `shadow/observer.py` 🧪 | **v1.1.** The observer service. Own systemd unit, own process, zero shared memory with `optionsbot.service`. Per RTH tick: reads the **same TastyTrade/DXFeed store the bot reads** via its own `DataCache`, runs the same engines, computes primitives, and appends one JSON line to `data/shadow/<date>/<SYMBOL>.jsonl`. Imports nothing from `execution/`, `risk/`, `strategy/`, `notifications/`. **Never trades.** |
+| `shadow/primitives.py` 🧪 | Velocity / magnitude / position accumulator — the shared measurement layer beneath the scorers. |
+| `shadow/scorers.py` 🧪 | Per-pattern precursor scorers (stage 2 only). |
+| `shadow/registry.py` 🧪 | Level registry consumed by the scorers. |
+| `shadow/eod_compare.py` 🧪 | EOD comparator: shadow log vs `trades.db` (**read-only**, `mode=ro`) + `data/OHLC/`. Reads each candidate threshold's base rate off the logs — **thresholds are the LAST parameter, set from data.** |
+| `shadow/trading_day.py` 🧪 | Weekend/holiday check. |
 
-> Both are **opaque blobs** — un-greppable, un-diffable, un-version-checkable. This is exactly how `observer.py`'s docstring came to describe a yfinance feed it no longer uses. **See defect D.**
+**Staging (`OT_SHADOW_STAGE`):** `1` = primitives measure-only (default — verify velocity against `data/OHLC/` for a few sessions before any scorer consumes it); `2` = scorers + would-fire flags logged across a **range** of candidate thresholds (0.50–0.95). **Zero firing at either stage.**
 
 ### `deploy/` — systemd units (never imported by the bot)
 
@@ -521,7 +580,7 @@ dedicated Telegram bot for options-trader notifications.
 | File | Purpose |
 |---|---|
 | `REGIME_TRUTHS.md` 📄 | **v0.2.** The Layer-1 definitional audit: per-regime hard vetoes + graded confluence, the three-tier factor grammar, the discriminator matrix. `regime_confluence.py` is its implementation. |
-| `REPLAY_VALIDATION.md` ⚠️ | **v1.0.** The Layer-1 validation/calibration plan. **Its stated premise is false — see defect C.** |
+| `REPLAY_VALIDATION.md` 📄 | **v1.1.** The Layer-1 validation/calibration plan. Premise corrected — the CSVs are the calibration substrate because their **sampling** is deterministic, not because the observer is a different feed (it is not). **Defect C resolved.** |
 | `README_orb_stop_rework_v3_1.md` 📄 | The impulsive-wick stop fix, with the MU 07-10 reference. |
 | `README_orb_regime_ungate_v3_2.md` 📄 | The `UNKNOWN` un-gate rationale. |
 
