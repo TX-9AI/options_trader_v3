@@ -30,6 +30,14 @@ v3.0 — 2026-07-10 — YAHOO-FINANCE PURGE / data stream mapping optimization.
             recent session present in the store. (Escape hatch:
             OT_FEED_INTRADAY_SCOPE=continuous restores multi-session windows.)
             1h/1d naturally span sessions.
+v3.1 — 2026-07-13 — REGRESSION FIX: session-scoping now applies to 1m ONLY.
+        Scoping 5m/15m as well broke the prior-session carry in
+        get_orb_range.py (no priors visible ⇒ "no valid opening range found in
+        lookback window" every tick, orb_range.json never refreshed — GLD and
+        GOOGL, 2026-07-13) and silently forced trend_engine's 5m vote to NEUTRAL
+        until ~14:05 ET (EMA_SLOW+5 = 55 bars unreachable in a session-scoped
+        window). The no-overnight-padding rule belongs to the 25-bar 1-minute
+        RANGING slope window and nothing else. 5m/15m/1h/1d are continuous.
 """
 
 import logging
@@ -51,7 +59,18 @@ ET = ZoneInfo("America/New_York")
 
 FEED_STALE_S     = float(os.environ.get("OT_FEED_STALE_S", "120"))
 INTRADAY_SCOPE   = os.environ.get("OT_FEED_INTRADAY_SCOPE", "session").lower()
-INTRADAY_TFS     = ("1m", "5m", "15m")
+# v3.1: ONLY 1m is session-scoped. The no-overnight-padding rule exists for the
+# RANGING slope/angle read, which is computed on a 25-bar 1-MINUTE window — a
+# window that must never bleed across the overnight gap. It was never meant for
+# 5m/15m, and applying it there broke two things:
+#   • get_orb_range.py could see NO prior sessions, so its last-valid-prior carry
+#     was always empty; if today's 09:30 bar hadn't landed in the store yet it
+#     raised "no valid opening range found in lookback window" every tick and
+#     never refreshed orb_range.json (GLD/GOOGL, 2026-07-13).
+#   • trend_engine needs EMA_SLOW+5 = 55 bars; session-scoped 5m doesn't reach 55
+#     until ~14:05 ET, silently forcing the 5m trend vote to NEUTRAL all morning.
+# 5m/15m/1h therefore return continuous multi-session history, as in v2.
+INTRADAY_TFS     = ("1m",)
 QUOTE_MAX_AGE_S  = 180.0     # latest 1m bar older than this => not a live quote
 
 
