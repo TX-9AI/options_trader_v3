@@ -1,111 +1,108 @@
-# HANDOFF — DXLink session-exhaustion fix — state as of 2026-07-13 (evening)
+# HANDOFF — DXLink session-exhaustion fix — state as of 2026-07-13 (night)
 
 **Purpose: resume-from-here document.** If this thread dies, give this file (plus
-`DIAGNOSIS_session_exhaustion_2026-07-13.md`) to the next session. The diagnosis is
-SETTLED and the fix is BUILT AND OFFLINE-VERIFIED; what remains is deployment and
-live acceptance. Do not re-derive anything in §1–§3.
+`DIAGNOSIS_session_exhaustion_2026-07-13.md`) to the next session. Diagnosis SETTLED,
+**cap MEASURED, Option 1b BUILT and offline-verified 11/11.** What remains is
+deployment. Do not re-derive §1–§3.
 
 ---
 
-## 1 · Incident (settled — do not re-diagnose)
+## 1 · Incident + diagnosis (settled — do not re-diagnose)
 
-2026-07-13: zero trades fleet-wide. Root cause **confirmed against code + SDK 13.0.0
-source**: `main.py:775` fetched the options chain every 15 s tick; `options_chain.py`
-opened a **new DXLinkStreamer websocket per call** (each open also does a fresh
-`GET /api-quote-tokens`). ~24 boxes × 4 dials/min saturated TastyTrade's unpublished
-concurrent-session pool (protocol holds 60 s keepalive windows → each churning box
-occupies 2–4 slots). **No client-side leak** — SDK teardown is clean; the pile-up is
-server-side accounting + redial cadence. The outage was **self-sustaining**: every
-rejected retry is itself a short-lived session.
+2026-07-13: zero trades fleet-wide. Confirmed root cause: `options_chain.py` opened a
+new DXLinkStreamer per 15 s tick per box (each open = fresh REST token + full WS
+lifecycle); ~24 boxes' churn saturated TastyTrade's session pool. No client-side leak
+(SDK 13.0.0 teardown verified clean); server-side 60 s keepalive windows × redial
+cadence. **Kill mechanism (corrected):** regime never degraded — empty quote maps →
+`mark=0.0` → the `mark > 0.05` liquidity filters rejected every strike in every
+regime. Validate with marks + strike selection, never regime labels.
 
-**Kill mechanism (CORRECTED from the original handoff):** the regime never degraded —
-the classifier consumes nothing chain-derived. Empty quote maps → every contract kept
-`mark=0.0` → the `mark > 0.05` liquidity filters (`options_chain.py` strike
-selectors) rejected **every strike in every regime**. Fleet table showed
-RANGING/COMPRESSION, not UNKNOWN. **Post-fix validation watches marks + strike
-selection, NOT regime labels.**
+**Problem C** (AAPL/NFLX/TSLA/GLD crash loops, 17/17/17/14 restarts): poison candle
+in the 1m table → `fetch_quote` ValueError → 30-error breaker → 7.5-min death cycles
+(135 RTH min ≈ 17 ✓). Healed automatically by candle_feed ≥ v3.2 `purge_poison()` in
+the fleet bake. No new work.
 
-**Problem C (4 crash-looping boxes — AAPL/NFLX/TSLA/GLD):** separate, already
-understood. 30-error breaker × 15 s = 7.5-min death cycles; 135 RTH minutes ≈ 17
-restarts (matches the table). Cause: poison candle in the **1m** table →
-`fetch_quote` ValueError, which fires **before** the GEX fetch (hence sess_errs=0,
-blank regime). Remedy: the already-shipped candle_feed v3.2/v3.3 + `purge_poison()`
-(currently only on GOOGL). Verify per box:
-`sqlite3 ~/options-trader/data/feed_store.db "SELECT tf, COUNT(*) FROM candles WHERE ts > 2000000000000 GROUP BY tf"`
-— expect `1m` rows on exactly those four.
+## 2 · The cap was MEASURED — this drove the design
 
-## 2 · Decision (made by Jason)
+**Option 1** (persistent streamer per box, `options_chain` v3.1) was built, verified,
+and fleet-tested 07-13 afternoon. Result: with 29 candle-feeds holding sessions, only
+**~6–11 of 29 chain streamers were ever admitted** (AMZN/CRM/DIA/LLY/MU/SMH stable;
+AAPL/GS/PLTR/TLT/XOM connected-then-died; 16 locked out in backoff all afternoon).
+**Empirical concurrent-session cap ≈ 40–45.** Option 1's 58 steady-state sessions do
+not fit. v3.1 behaved perfectly within itself — backoff held retries at the 60 s cap
+(~25 errs/30 min vs ~120 before), fail-loud refused every corpse chain — it is simply
+arithmetic-blocked. **Jason green-lit Option 1b.**
 
-**Option 1** — persistent per-box chain streamer — plus two riders (structure-fetch
-throttle, zero-mark fail-loud). Option 1b (fold Greeks/Quote into candle-feed; 29
-total sessions) is the agreed **future destination**, deliberately deferred: it
-touches candle_feed, the one component that worked flawlessly through the incident.
-Option 2 (centralize on control) REJECTED: SPOF + control is credential-free by
-design. Option 3 (REST Greeks) rejected as primary.
+## 3 · What is BUILT and VERIFIED (deploy these two files together)
 
-## 3 · What is BUILT and VERIFIED (this session)
+**`data/candle_feed.py` v3.4** — chain marks on the feed's EXISTING socket:
+- New store tables: `chain_subs` (single row: expiry + JSON symbol list, written by
+  the bot) and `chain_marks` (latest bid/ask/greeks per streamer symbol, written by
+  the feed; quote and greeks upserts each preserve the other's columns).
+- `_reconcile_chain_subs()` every 2 s flush cycle: subscribes deltas; expiry rollover
+  → `unsubscribe_all(Greeks/Quote)` + clear marks table + resubscribe. Socket
+  reconnect resets chain state and re-reconciles (same path as candle resubscribe).
+- Greeks/Quote events drain non-blocking each loop pass; marks ride the existing
+  flush. **Candle logic byte-untouched** (verified by diff: only the import line and
+  version banner changed).
 
-**`data/options_chain.py` v3.1** — complete file delivered to outputs. Changes:
-1. ONE persistent `DXLinkStreamer` per process (lazy connect on the shared
-   tasty_client loop thread, held via `AsyncExitStack`). Subscriptions reconciled
-   (only never-seen symbols subscribed); **expiry rollover** unsubscribes all +
-   clears maps (bots run continuously across days).
-2. **Reconnect backoff** 5s→60s cap (env: `OT_CHAIN_RECONNECT_BASE_S/_MAX_S`) — a
-   saturated pool is never hammered at tick cadence again.
-3. Latest-value Greeks/Quote maps persist across ticks (non-blocking drain per tick;
-   brief blocking collect only for never-seen symbols). **Staleness ceiling**
-   `OT_CHAIN_STALE_S=120`: stream down + old marks → refuse to serve them.
-4. **FAIL-LOUD:** a built chain with zero live marks returns `None` + ERROR log
-   (never again a plausible-looking corpse). `None` is also strictly safer for an
-   open position than zero marks (premium=0 would trip the −25% floor on garbage).
-5. Chain **structure** (REST strike list) cached `OT_CHAIN_STRUCT_REFRESH_S=1800` —
-   static intraday; marks ride the stream.
+**`data/options_chain.py` v3.2** — pure store reader; **the bot process now opens
+ZERO DXLink connections** (import removed; `main.py` imports clean on 3.12 AND 3.14 —
+and yes, removing the import initially reproduced the exact P0-1 annotation bug from
+the 07-12 audit; caught by the 3.12 test discipline, annotations fixed):
+- Publishes desired symbols+expiry to `chain_subs` (only on change); reads
+  `chain_marks` with the staleness ceiling (`OT_CHAIN_STALE_S=120` — stale marks are
+  refused, never served).
+- Kept from v3.1: structure cache (`OT_CHAIN_STRUCT_REFRESH_S=1800`), zero-mark
+  FAIL-LOUD — now **bootstrap-aware** (`OT_CHAIN_BOOTSTRAP_S=30`: quiet INFO while
+  the feed populates after a fresh subscribe; ERROR after).
+- Old feed on the box (≤v3.3) → helpful error: "is candle_feed v3.4 running?".
 
-**Verified offline (12/12):** persistent reuse (1 instance across ticks) · zero new
-subscriptions on steady-state ticks · structure REST cached · expiry rollover
-unsubscribe · fail-loud on dead stream · backoff blocks redial + doubles ·
-reconnect after backoff · healthy pass resets backoff · stale-mark refusal. Plus:
-py_compile on 3.12 AND 3.14 · `main.py` imports clean · ORB 10/10, contract 17/17,
-theta 7/7 suites pass. **NOT yet tested against live DXLink** — that is the next step.
-
-**Steady state after deploy: 2 sessions/box (candle-feed + chain), zero churn.**
+**Fleet steady state: exactly 29 DXLink sessions (one per box, the feed's).**
+Verified offline 11/11 end-to-end (real FeedStore + real CandleFeed machinery driven
+by a fake streamer + real reader): subs publish → feed subscribe (both types, exact
+set) → events → flush → marks rows → chain built with correct mark/greeks →
+steady-state reconcile subscribes nothing → expiry rollover unsubscribes+clears →
+stale refusal → missing-table hint. Plus ORB 10/10, contract 17/17, theta 7/7.
 
 ## 4 · Fleet state right now
 
-- All 29 `optionsbot` units **STOPPED** (~11:50 ET); boxes up; `candle-feed` units
-  RUNNING (innocent — their persistent sessions are stable).
-- 28 boxes on `818d312` — these LACK: market_data v3.1, candle_feed v3.2/v3.3
-  (poison guard + cross-thread fix), butterfly/main v3.1, and everything from the
-  07-12 remediation batch that landed after their last bake.
-- GOOGL on `a42445e` (has Fable's 07-13 fixes, not options_chain v3.1).
-- Session pool: draining since the stop; hours of margin by re-arm time.
+- 29 `optionsbot` units STOPPED (some may have been restarted for the v3.1 test —
+  re-stop before baking). `candle-feed` units RUNNING everywhere (v3.3-era on 28
+  boxes, whatever GOOGL has).
+- Repo `origin/main` has everything through options_chain **v3.1**; v3.4 feed +
+  v3.2 chain are in this session's outputs, NOT yet pushed.
 
-## 5 · REMAINING STEPS (in order)
+## 5 · REMAINING STEPS
 
-1. **Push `options_chain.py` v3.1** (from outputs) to
-   `github.com/TX-9AI/options_trader_v3` → `data/` folder, replacing the existing
-   file. (Web upload as usual.)
-2. **Prove on ONE box** (QQQ-TEST, ip 3.144.75.22, or GOOGL) during RTH Tue 07-14:
-   ```
-   cd ~/options-trader && git pull --ff-only && find . -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null; sudo systemctl restart optionsbot
-   ```
-   Acceptance (30+ min): `journalctl -u optionsbot --since "-30 min" | grep -c "exceeded the configured limit"` → **0** ·
-   `journalctl -u optionsbot --since "-30 min" | grep -m1 "Chain streamer CONNECTED"` → present once ·
-   `journalctl -u optionsbot --since "-10 min" | grep -m3 "Chain built"` → spot and marks nonzero ·
-   `ss -tn state established '( dport = :443 )' | tail -n +2 | wc -l` → small and FLAT across checks (was climbing/churning before).
-3. **Fleet bake (item 25, RTH-safe, or 23 after hours)** — v3.1 rides along with
-   everything else the 28 boxes are missing (poison fix heals problem C
-   automatically; `purge_poison()` runs at feed start).
-4. **Staged restart:** 5 boxes → watch 10 min for session errors → remaining 24.
-   If 58 stable sessions still brushes the cap (not expected — last week ran 29
-   persistent + heavy churn), the escalation path is Option 1b.
-5. **After first clean session:** confirm exit_reason labels look right (F5 fix is
-   also newly live fleet-wide) and the replay diary picks up L2 tracks (item 40).
+1. **Push BOTH files** to `github.com/TX-9AI/options_trader_v3` → `data/` folder:
+   `candle_feed.py` (v3.4) + `options_chain.py` (v3.2). They ship as a pair — v3.2
+   bot with v3.3 feed fails loud (safe, but trades nothing).
+2. **Prove on ONE box** (any; QQQ-TEST fine). Single line:
+   `cd ~/options-trader && git pull --ff-only && sudo systemctl restart candle-feed && sleep 5 && sudo systemctl restart optionsbot`
+   (feed restart is safe: `subscribe_candle` backfills from the session start on
+   reconnect). Acceptance after ~10 min RTH:
+   - `journalctl -u optionsbot --since "-10 min" | grep -m1 "Chain subs published"` → once
+   - `journalctl -u candle-feed --since "-10 min" | grep -m1 "chain marks: subscribed"` → present
+   - `journalctl -u optionsbot --since "-10 min" | grep "Chain built" | tail -2` → real spot, real counts
+   - `journalctl -u optionsbot --since "-10 min" | grep -c "exceeded the configured limit"` → 0
+   - `ss -tn state established '( dport = :443 )' | tail -n +2 | wc -l` → ~1–3, flat
+3. **Fleet bake** (devtools 25 RTH-safe / 23 after-hours) — rides with everything
+   the 28 boxes still lack from 07-12/07-13. Then restart candle-feed AND optionsbot
+   on all (feed restart is required for v3.4 tables/subscriptions):
+   `python3 fleet.py run "cd ~/options-trader && sudo systemctl restart candle-feed && sleep 5 && sudo systemctl restart optionsbot"`
+4. **Staged**: 5 boxes → 10 min watch (same acceptance) → remaining 24. Expected
+   total account sessions: 29. Headroom vs measured cap: ~11–16.
+5. After first clean session: exit_reason labels sane (F5 newly fleet-wide), replay
+   diary L2 tracks flowing (devtools 40).
 
 ## 6 · Open threads (not blocking re-arm)
 
-- **Option 1b** (Greeks/Quote into candle-feed; 29 sessions total) — the doctrine
-  completion. Build unhurried behind `verify_feed_v3.sh`.
+- **`verify_feed_v3.sh`** — not yet extended for chain_marks/chain_subs checks;
+  worth one section once the fleet is stable (freshness + row counts).
+- **`options_chain` v3.1** — superseded same-day by v3.2; its header records both.
+  If anyone finds v3.1 running anywhere, it is safe (backoff + fail-loud) but
+  session-hungry — upgrade it.
 - **Problem C verification** — run the sqlite one-liner on AAPL/NFLX/TSLA/GLD to
   confirm the 1m-table hypothesis (curiosity only; the fix ships regardless).
 - **`observer/` tarballs** (defect D) — still ungreppable; confirmed nothing in the
