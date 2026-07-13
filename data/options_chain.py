@@ -1,5 +1,38 @@
 """
 data/options_chain.py — Options chain data from TastyTrade SDK.
+v3.1 — 2026-07-13 — PERSISTENT CHAIN STREAMER (session-exhaustion fix) + fail-loud.
+        The old code opened a NEW DXLinkStreamer websocket on EVERY fetch_chain()
+        call — one full REST-token + connect + auth + subscribe + teardown cycle
+        per 15 s tick per box. Across the fleet that saturated TastyTrade's
+        (unpublished) concurrent-session pool: DXLink returned
+        'user sessions has exceeded the configured limit' roughly once per tick
+        on 24/29 boxes, quotes/Greeks came back empty, every contract kept
+        mark=0.0, the mark>0.05 liquidity filters rejected every strike in every
+        regime, and the fleet took ZERO trades on 2026-07-13 while logging a
+        plausible-looking "no setup" day. Changes:
+        1. ONE long-lived DXLinkStreamer per process (lazy connect on the shared
+           tasty_client loop thread, held via AsyncExitStack). Subscriptions are
+           RECONCILED (only never-seen symbols subscribed; expiry rollover
+           unsubscribes all and resets). Steady state: 2 sessions/box
+           (candle-feed + this), ZERO churn.
+        2. Reconnect with EXPONENTIAL BACKOFF (5s → 60s cap) on stream failure —
+           a saturated pool is never hammered at tick cadence again (the old
+           retry-every-15s kept the pool full and made the outage self-sustaining).
+        3. Latest-value Greeks/Quote maps persist across ticks (each tick drains
+           pending events non-blocking; only never-seen symbols block briefly).
+           If the stream is DOWN and the last event is older than
+           OT_CHAIN_STALE_S, fetch_chain returns None — stale marks are never
+           served as fresh (an open position priced off dead marks would trip
+           the -25% floor on garbage).
+        4. FAIL-LOUD: a built chain in which NO contract has mark>0 returns None
+           with an ERROR log instead of a structurally-valid corpse. Silent
+           zero-mark chains are what hid this outage for five hours.
+        5. Chain STRUCTURE (REST strike list) is cached OT_CHAIN_STRUCT_REFRESH_S
+           (default 30 min) — the 0DTE strike set is static intraday; only
+           Greeks/marks need per-tick freshness, and those ride the stream.
+        Env knobs: OT_CHAIN_STRUCT_REFRESH_S=1800 · OT_CHAIN_INIT_COLLECT_S=10 ·
+        OT_CHAIN_RECONNECT_BASE_S=5 · OT_CHAIN_RECONNECT_MAX_S=60 ·
+        OT_CHAIN_STALE_S=120.
 v3.0 — 2026-07-03 — delta-band sweep selection (caller passes a strength-scaled
         target delta); ORB nearest-strike snap breaks toward higher/lower delta.
 v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
@@ -18,7 +51,10 @@ Workflow:
 """
 
 import asyncio
+import contextlib
 import logging
+import os
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Optional, List, Dict
@@ -36,6 +72,13 @@ from config import (
 from utils.math_utils import round_to_strike, floor_to_strike, ceil_to_strike
 
 logger = logging.getLogger(__name__)
+
+# ── v3.1 transport knobs (env-overridable, OT_ convention) ────────────────────
+OT_CHAIN_STRUCT_REFRESH_S = float(os.environ.get("OT_CHAIN_STRUCT_REFRESH_S", "1800"))
+OT_CHAIN_INIT_COLLECT_S   = float(os.environ.get("OT_CHAIN_INIT_COLLECT_S",   "10"))
+OT_CHAIN_RECONNECT_BASE_S = float(os.environ.get("OT_CHAIN_RECONNECT_BASE_S", "5"))
+OT_CHAIN_RECONNECT_MAX_S  = float(os.environ.get("OT_CHAIN_RECONNECT_MAX_S",  "60"))
+OT_CHAIN_STALE_S          = float(os.environ.get("OT_CHAIN_STALE_S",          "120"))
 
 
 @dataclass
@@ -74,7 +117,26 @@ class OptionsChainFetcher:
     """
     Fetches the 0DTE options chain from TastyTrade and populates
     Greeks/marks via DXLinkStreamer.
+
+    v3.1: ONE persistent streamer per process. All streamer state below is
+    touched ONLY on the shared tasty_client loop thread (get_loop()).
     """
+
+    def __init__(self):
+        # persistent stream (held open across ticks via AsyncExitStack)
+        self._stack:     Optional[contextlib.AsyncExitStack] = None
+        self._streamer   = None
+        self._subscribed: set = set()
+        self._sub_expiry: str = ""            # expiry the subscriptions belong to
+        # latest-value event maps (survive ticks; cleared on expiry rollover)
+        self._greeks_latest: Dict[str, Greeks] = {}
+        self._quotes_latest: Dict[str, Quote]  = {}
+        self._last_event_wall: float = 0.0     # wall time of last drained event
+        # reconnect backoff
+        self._next_connect_ok: float = 0.0     # monotonic
+        self._backoff: float = OT_CHAIN_RECONNECT_BASE_S
+        # chain-structure cache: symbol -> (monotonic_fetched, chain_map)
+        self._struct_cache: Dict[str, tuple] = {}
 
     def fetch_chain(self, symbol: str = INSTRUMENT,
                     expiry: Optional[str] = None) -> Optional[OptionsChain]:
@@ -95,8 +157,9 @@ class OptionsChainFetcher:
         try:
             session = get_session()
 
-            # Step 1: Get full option chain (all expirations, no pricing)
-            chain_map = run_async(get_option_chain(session, symbol))
+            # Step 1: chain STRUCTURE (REST) — cached; the 0DTE strike set is
+            # static intraday. v3.1: was fetched every tick for no benefit.
+            chain_map = self._get_chain_structure(session, symbol)
 
             if not chain_map:
                 logger.warning(f"Empty option chain for {symbol}")
@@ -146,7 +209,7 @@ class OptionsChainFetcher:
 
             if streamer_syms:
                 greeks_map, quote_map = self._fetch_greeks_and_quotes(
-                    session, streamer_syms
+                    session, streamer_syms, expiry=today_str
                 )
                 self._apply_market_data(calls_raw, greeks_map, quote_map)
                 self._apply_market_data(puts_raw,  greeks_map, quote_map)
@@ -171,6 +234,20 @@ class OptionsChainFetcher:
                 except Exception:
                     pass
 
+            # v3.1 FAIL-LOUD: a chain with zero live marks is a corpse, not data.
+            # Serving it lets every liquidity filter reject every strike while
+            # the logs look like a quiet no-setup day (2026-07-13). Callers
+            # already handle None correctly; None is also strictly safer for an
+            # OPEN position than zero marks (premium=0 would trip the -25%
+            # floor on garbage).
+            if not any(c.mark > 0 for c in chain.calls + chain.puts):
+                logger.error(
+                    f"Chain FAIL-LOUD: {symbol} {today_str} built with ZERO live "
+                    f"marks ({len(chain.calls)}C/{len(chain.puts)}P) — stream "
+                    f"down or unpopulated; returning None instead of a corpse"
+                )
+                return None
+
             logger.info(
                 f"Chain built: {symbol} {today_str} "
                 f"calls={len(chain.calls)} puts={len(chain.puts)} "
@@ -182,83 +259,188 @@ class OptionsChainFetcher:
             logger.error(f"Failed to fetch chain for {symbol}: {e}")
             return None
 
+    def _get_chain_structure(self, session, symbol: str):
+        """v3.1 — REST strike-list, cached OT_CHAIN_STRUCT_REFRESH_S. On a REST
+        failure with a warm cache, serve the cache and warn (structure is
+        static intraday; marks ride the stream and stay fresh regardless)."""
+        now = time.monotonic()
+        cached = self._struct_cache.get(symbol)
+        if cached and (now - cached[0]) < OT_CHAIN_STRUCT_REFRESH_S:
+            return cached[1]
+        try:
+            chain_map = run_async(get_option_chain(session, symbol))
+            if chain_map:
+                self._struct_cache[symbol] = (now, chain_map)
+            return chain_map
+        except Exception as e:
+            if cached:
+                logger.warning(f"Chain structure refresh failed ({e}) — serving "
+                               f"cached structure ({now - cached[0]:.0f}s old)")
+                return cached[1]
+            raise
+
     def _fetch_greeks_and_quotes(
         self,
         session,
         streamer_symbols: List[str],
-        timeout: float = 10.0
+        timeout: float = OT_CHAIN_INIT_COLLECT_S,
+        expiry: str = ""
     ) -> tuple:
         """
-        Subscribe to DXLinkStreamer and collect one Greeks + Quote
-        event per symbol. Returns (greeks_map, quote_map) dicts
-        keyed by streamer_symbol.
+        v3.1 — read Greeks/Quotes from the ONE persistent streamer.
+        Ensures the connection (with reconnect backoff), reconciles
+        subscriptions, drains pending events non-blocking, and blocks briefly
+        only for symbols never seen since (re)subscribe. Returns latest-value
+        maps; on stream failure returns the last-known maps (staleness is
+        policed in fetch_chain via OT_CHAIN_STALE_S).
         """
         loop = get_loop()
         try:
             future = asyncio.run_coroutine_threadsafe(
-                self._async_fetch_greeks_quotes(session, streamer_symbols, timeout),
+                self._stream_snapshot(session, streamer_symbols, timeout, expiry),
                 loop
             )
-            return future.result(timeout=timeout + 5)
+            return future.result(timeout=timeout + 10)
         except Exception as e:
             logger.warning(f"Streamer fetch failed: {e}")
-            return {}, {}
+            return self._maps_if_fresh()
 
-    async def _async_fetch_greeks_quotes(
-        self,
-        session,
-        streamer_symbols: List[str],
-        timeout: float
-    ) -> tuple:
-        """Async: open streamer, subscribe, collect one event per symbol."""
-        greeks_map: Dict[str, Greeks] = {}
-        quote_map:  Dict[str, Quote]  = {}
+    def _maps_if_fresh(self) -> tuple:
+        """Last-known maps, but NEVER stale ones: if the stream is down and the
+        last event is older than OT_CHAIN_STALE_S, return empty maps so
+        fetch_chain fail-louds instead of pricing off dead marks."""
+        age = time.time() - self._last_event_wall
+        if self._last_event_wall and age <= OT_CHAIN_STALE_S:
+            return dict(self._greeks_latest), dict(self._quotes_latest)
+        if self._greeks_latest or self._quotes_latest:
+            logger.error(f"Chain marks STALE ({age:.0f}s > {OT_CHAIN_STALE_S:.0f}s "
+                         f"ceiling) with stream down — refusing to serve them")
+        return {}, {}
 
+    async def _stream_snapshot(self, session, streamer_symbols: List[str],
+                               timeout: float, expiry: str) -> tuple:
+        """Runs on the shared loop thread. All persistent-stream state lives here."""
+        if not await self._ensure_streamer(session):
+            return self._maps_if_fresh()
         try:
-            async with DXLinkStreamer(session) as streamer:
-                # Subscribe to both Greeks and Quote
-                await streamer.subscribe(Greeks, streamer_symbols)
-                await streamer.subscribe(Quote,  streamer_symbols)
+            # Expiry rollover (bots run continuously): yesterday's 0DTE symbols
+            # are dead air — unsubscribe everything, clear maps, start clean.
+            if expiry and expiry != self._sub_expiry:
+                if self._sub_expiry:
+                    logger.info(f"Chain streamer expiry rollover "
+                                f"{self._sub_expiry} → {expiry}: resubscribing")
+                    await self._streamer.unsubscribe_all(Greeks)
+                    await self._streamer.unsubscribe_all(Quote)
+                self._subscribed.clear()
+                self._greeks_latest.clear()
+                self._quotes_latest.clear()
+                self._sub_expiry = expiry
 
-                needed   = set(streamer_symbols)
+            new = [s for s in streamer_symbols if s not in self._subscribed]
+            if new:
+                await self._streamer.subscribe(Greeks, new)
+                await self._streamer.subscribe(Quote,  new)
+                self._subscribed.update(new)
+                logger.info(f"Chain streamer subscribed {len(new)} new symbols "
+                            f"({len(self._subscribed)} total)")
+
+            # Drain everything queued since last tick — non-blocking.
+            self._drain_nowait()
+
+            # Block briefly ONLY for symbols never seen (first tick after
+            # (re)subscribe); steady-state ticks skip this entirely.
+            needed = {s for s in streamer_symbols
+                      if s not in self._greeks_latest or s not in self._quotes_latest}
+            if needed:
                 deadline = asyncio.get_event_loop().time() + timeout
-
                 while needed and asyncio.get_event_loop().time() < deadline:
-                    remaining = deadline - asyncio.get_event_loop().time()
-                    if remaining <= 0:
-                        break
-
                     try:
-                        # Try Greeks
-                        greek = await asyncio.wait_for(
-                            streamer.get_event(Greeks), timeout=0.5
-                        )
-                        if greek and greek.event_symbol in needed:
-                            greeks_map[greek.event_symbol] = greek
+                        g = await asyncio.wait_for(
+                            self._streamer.get_event(Greeks), timeout=0.5)
+                        if g:
+                            self._greeks_latest[g.event_symbol] = g
+                            self._last_event_wall = time.time()
                     except asyncio.TimeoutError:
                         pass
-
                     try:
-                        # Try Quote
-                        quote = await asyncio.wait_for(
-                            streamer.get_event(Quote), timeout=0.5
-                        )
-                        if quote and quote.event_symbol in needed:
-                            quote_map[quote.event_symbol] = quote
+                        q = await asyncio.wait_for(
+                            self._streamer.get_event(Quote), timeout=0.5)
+                        if q:
+                            self._quotes_latest[q.event_symbol] = q
+                            self._last_event_wall = time.time()
                     except asyncio.TimeoutError:
                         pass
+                    needed = {s for s in needed
+                              if s not in self._greeks_latest
+                              or s not in self._quotes_latest}
 
-                    # Check if we have both for all symbols
-                    done = needed & set(greeks_map.keys()) & set(quote_map.keys())
-                    needed -= done
+            self._backoff = OT_CHAIN_RECONNECT_BASE_S   # healthy pass resets it
+            return dict(self._greeks_latest), dict(self._quotes_latest)
 
         except Exception as e:
-            logger.warning(f"DXLinkStreamer error: {e}")
+            await self._teardown_streamer()
+            self._note_stream_failure(e)
+            return self._maps_if_fresh()
 
-        logger.debug(
-            f"Streamer collected greeks={len(greeks_map)} quotes={len(quote_map)}"
-        )
-        return greeks_map, quote_map
+    def _drain_nowait(self):
+        """Pull every buffered event into the latest-value maps (no blocking)."""
+        while True:
+            g = self._streamer.get_event_nowait(Greeks)
+            if g is None:
+                break
+            self._greeks_latest[g.event_symbol] = g
+            self._last_event_wall = time.time()
+        while True:
+            q = self._streamer.get_event_nowait(Quote)
+            if q is None:
+                break
+            self._quotes_latest[q.event_symbol] = q
+            self._last_event_wall = time.time()
+
+    async def _ensure_streamer(self, session) -> bool:
+        """Connect the persistent streamer if absent, honoring the backoff."""
+        if self._streamer is not None:
+            return True
+        if time.monotonic() < self._next_connect_ok:
+            logger.debug("Chain streamer in reconnect backoff "
+                         f"({self._next_connect_ok - time.monotonic():.0f}s left)")
+            return False
+        try:
+            stack = contextlib.AsyncExitStack()
+            streamer = await stack.enter_async_context(DXLinkStreamer(session))
+            self._stack, self._streamer = stack, streamer
+            self._subscribed.clear()
+            self._sub_expiry = ""             # force clean resubscribe
+            logger.info("Chain streamer CONNECTED (persistent, v3.1)")
+            return True
+        except Exception as e:
+            self._note_stream_failure(e)
+            return False
+
+    def _note_stream_failure(self, e: Exception):
+        self._next_connect_ok = time.monotonic() + self._backoff
+        logger.warning(f"Chain streamer failure: {e} — next reconnect attempt "
+                       f"in {self._backoff:.0f}s")
+        self._backoff = min(self._backoff * 2, OT_CHAIN_RECONNECT_MAX_S)
+
+    async def _teardown_streamer(self):
+        stack, self._stack, self._streamer = self._stack, None, None
+        self._subscribed.clear()
+        if stack is not None:
+            try:
+                await stack.aclose()
+            except Exception:
+                pass
+
+    def close(self):
+        """Tear down the persistent streamer (tests / clean shutdown)."""
+        if self._streamer is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._teardown_streamer(), get_loop()).result(timeout=10)
+        except Exception:
+            pass
 
     def _apply_market_data(
         self,
