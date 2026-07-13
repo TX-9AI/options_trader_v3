@@ -16,6 +16,18 @@ v3.2 — 2026-07-13 — POISON-CANDLE GUARD (producer side). Reject at ingest an
         while the unit still reported ACTIVE. Also adds FeedStore.purge_poison(),
         run at startup, so a box whose store was already poisoned self-heals on
         restart with no manual sqlite surgery across the fleet.
+v3.3 — 2026-07-13 — CROSS-THREAD SQLITE FIX. FeedStore's connection is built on
+        the MAIN thread but every write (_flush -> upsert_candles / heartbeat /
+        commit / prune) is driven from the asyncio event-loop thread created by
+        get_loop(). Python's sqlite3 rejects that by default, so candle-feed
+        died on its FIRST flush on every start ("SQLite objects created in a
+        thread can only be used in that same thread") and systemd's
+        Restart=on-failure turned it into a crash-loop — which in turn piled up
+        DXLink sessions until TastyTrade returned "The number of user sessions
+        has exceeded the configured limit" (GOOGL, 2026-07-13). Connection now
+        uses check_same_thread=False with an explicit threading.Lock
+        serializing every write; still a single writer, so WAL semantics are
+        unchanged.
 
 Architecture (Mandate 2 of the Yahoo-Finance purge):
   - Runs as its own systemd unit: candle-feed.service (Before=optionsbot).
@@ -75,6 +87,7 @@ import asyncio
 import logging
 import os
 import sqlite3
+import threading
 import time as _time
 from datetime import datetime, time as dtime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -164,7 +177,18 @@ class FeedStore:
     def __init__(self, path: str):
         self.path = path
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        self.conn = sqlite3.connect(path)
+        # check_same_thread=False + an explicit lock (v3.3).
+        # The store is constructed on the MAIN thread but every write
+        # (_flush -> upsert_candles/heartbeat/commit) is driven from the asyncio
+        # event-loop thread created by get_loop(). Python's sqlite3 rejects that
+        # by default:
+        #   ProgrammingError: SQLite objects created in a thread can only be
+        #   used in that same thread.
+        # which killed candle-feed on its first flush, every start (GOOGL,
+        # 2026-07-13). We remain a SINGLE writer — the lock serializes access so
+        # allowing cross-thread use is safe.
+        self.conn = sqlite3.connect(path, check_same_thread=False)
+        self._lock = threading.Lock()
         self.conn.execute("PRAGMA journal_mode=WAL;")
         self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.conn.execute("""
@@ -188,6 +212,10 @@ class FeedStore:
         """rows: (symbol, interval, ts_ms, o, h, l, c, v). Last write wins."""
         if not rows:
             return
+        with self._lock:
+            self._upsert_candles_locked(rows)
+
+    def _upsert_candles_locked(self, rows: List[Tuple]):
         self.conn.executemany(
             "INSERT OR REPLACE INTO candles "
             "(symbol, interval, ts_epoch_ms, open, high, low, close, volume) "
@@ -202,25 +230,32 @@ class FeedStore:
         """Delete any poison rows already in the store (v3.2). Runs at feed
         startup so a box whose DB was poisoned before this guard existed
         self-heals on restart — no manual sqlite surgery across the fleet."""
-        cur = self.conn.execute(
-            "DELETE FROM candles WHERE open <= 0 OR high <= 0 OR low <= 0 "
-            "OR close <= 0 OR ts_epoch_ms < ? OR ts_epoch_ms > ?",
-            (TS_MS_MIN, _ts_ms_max()))
-        self.conn.commit()
-        n = cur.rowcount or 0
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM candles WHERE open <= 0 OR high <= 0 OR low <= 0 "
+                "OR close <= 0 OR ts_epoch_ms < ? OR ts_epoch_ms > ?",
+                (TS_MS_MIN, _ts_ms_max()))
+            self.conn.commit()
+            n = cur.rowcount or 0
         if n:
             logger.warning("purged %d poison candle row(s) from the store", n)
         return n
 
     def heartbeat(self):
-        self.conn.execute(
-            "INSERT OR REPLACE INTO feed_meta (symbol, interval, last_write_epoch) "
-            "VALUES ('__feed__','heartbeat',?)", (_time.time(),))
+        with self._lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO feed_meta (symbol, interval, last_write_epoch) "
+                "VALUES ('__feed__','heartbeat',?)", (_time.time(),))
 
     def commit(self):
-        self.conn.commit()
+        with self._lock:
+            self.conn.commit()
 
     def prune(self, symbol: str, interval: str, keep: int):
+        with self._lock:
+            self._prune_locked(symbol, interval, keep)
+
+    def _prune_locked(self, symbol: str, interval: str, keep: int):
         self.conn.execute("""
             DELETE FROM candles WHERE symbol=? AND interval=? AND ts_epoch_ms NOT IN
             (SELECT ts_epoch_ms FROM candles WHERE symbol=? AND interval=?
@@ -228,10 +263,11 @@ class FeedStore:
             (symbol, interval, symbol, interval, keep))
 
     def bar_count(self, symbol: str, interval: str) -> int:
-        cur = self.conn.execute(
-            "SELECT COUNT(*) FROM candles WHERE symbol=? AND interval=?",
-            (symbol, interval))
-        return int(cur.fetchone()[0])
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT COUNT(*) FROM candles WHERE symbol=? AND interval=?",
+                (symbol, interval))
+            return int(cur.fetchone()[0])
 
     def close(self):
         try:
@@ -391,7 +427,7 @@ def main():
     if args.db:
         os.environ["OT_FEED_DB"] = args.db
     store = FeedStore(feed_db_path())
-    logger.info("candle_feed v3.2 — store=%s symbol=%s (dxfeed=%s) vix=%s",
+    logger.info("candle_feed v3.3 — store=%s symbol=%s (dxfeed=%s) vix=%s",
                 feed_db_path(), INSTRUMENT, _dxfeed_symbol(), VIX_SYMBOL)
     store.purge_poison()   # v3.2: self-heal any pre-existing poison rows
 
