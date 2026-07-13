@@ -1,0 +1,32 @@
+[Unit]
+Description=OPT_Trader SHADOW observer (observe-only conviction scoring — places NO orders)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ── Set these to MATCH this box's trading unit (copy from optionsbot.service) ──
+User=ubuntu
+WorkingDirectory=/home/ubuntu/options-trader
+# The observer needs the SAME environment as the bot — at minimum OT_INSTRUMENT
+# (so it observes this box's symbol) plus the Tastytrade creds the quote
+# fallback path may touch. This fleet keeps env INLINE in optionsbot.service's
+# Environment= lines (no .env file): COPY THOSE Environment= LINES IN HERE,
+# then add the shadow stage below.
+#
+# Environment=OT_INSTRUMENT=...        <- copy from optionsbot.service
+# Environment=...                      <- copy remaining lines from optionsbot.service
+#
+# Build-order staging (see shadow/observer.py header):
+#   1 = primitives measure-only (default; verify velocity for a few sessions)
+#   2 = enable scorers + would-fire threshold logging (still zero firing)
+Environment=OT_SHADOW_STAGE=1
+
+ExecStart=/home/ubuntu/options-trader/venv/bin/python -m shadow.observer
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
