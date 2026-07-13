@@ -1,4 +1,25 @@
 """
+data/candle_feed.py — addendum v3.4 (see below); original header follows.
+
+v3.4 — 2026-07-13 — CHAIN MARKS ON THE SAME SOCKET (Option 1b — session-cap fix).
+        2026-07-13 proved TastyTrade's unpublished concurrent-session cap sits
+        near ~40: 29 candle-feeds + per-box chain streamers (options_chain
+        v3.1) could not all connect (~6-11 admitted, rest locked out). This
+        release finishes the v3.0 doctrine — ONE producer, many readers — by
+        carrying the options-chain Greeks/Quote subscriptions on the feed's
+        EXISTING DXLink socket. Fleet steady state: 29 sessions total, the
+        number proven safe for weeks. Mechanics:
+        • options_chain (v3.2) writes the desired streamer-symbol set + expiry
+          to a new chain_subs row in the store; the feed reconciles
+          subscriptions every flush cycle (subscribe deltas; expiry rollover
+          unsubscribes all Greeks/Quote and clears chain_marks).
+        • Greeks/Quote events drain non-blocking each loop pass into
+          latest-value buffers, flushed to a new chain_marks table on the
+          existing 2 s flush cadence. Candle handling is UNCHANGED.
+        • On socket reconnect, chain subscription state resets and
+          re-reconciles automatically (same path as candle resubscribe).
+        The bot process now opens ZERO DXLink connections.
+
 options_trader_v3/data/candle_feed.py — THE single candle-feed producer. v3.0
 v3.0 — 2026-07-10 — initial release (Yahoo-Finance purge; single shared TastyTrade
         candle feed / data stream mapping optimization). This service owns the
@@ -86,6 +107,7 @@ import argparse
 import asyncio
 import logging
 import os
+import json
 import sqlite3
 import threading
 import time as _time
@@ -94,7 +116,7 @@ from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from tastytrade import DXLinkStreamer           # module-level so tests can patch
-from tastytrade.dxfeed import Candle
+from tastytrade.dxfeed import Candle, Greeks, Quote
 
 from config import INSTRUMENT, TIMEFRAMES
 from data.tasty_client import get_session, get_loop
@@ -206,6 +228,24 @@ class FeedStore:
                 last_write_epoch REAL NOT NULL,
                 PRIMARY KEY (symbol, interval)
             );""")
+        # ── v3.4: chain-marks transport (Option 1b) ──────────────────────────
+        # chain_subs: single row WRITTEN BY THE BOT (options_chain v3.2) naming
+        # the streamer symbols + expiry it wants live marks for. chain_marks:
+        # latest-value Greeks/Quote per option symbol, WRITTEN BY THE FEED.
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS chain_subs (
+                id            INTEGER PRIMARY KEY CHECK (id = 1),
+                expiry        TEXT NOT NULL,
+                symbols       TEXT NOT NULL,          -- JSON list
+                updated_epoch REAL NOT NULL
+            );""")
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS chain_marks (
+                streamer_symbol TEXT PRIMARY KEY,
+                bid REAL, ask REAL,
+                delta REAL, gamma REAL, theta REAL, vega REAL, iv REAL,
+                updated_epoch REAL NOT NULL
+            );""")
         self.conn.commit()
 
     def upsert_candles(self, rows: List[Tuple]):
@@ -249,6 +289,49 @@ class FeedStore:
 
     def commit(self):
         with self._lock:
+            self.conn.commit()
+
+    # ── v3.4: chain-marks transport ───────────────────────────────────────────
+    def read_chain_subs(self):
+        """(expiry, [streamer_symbols]) requested by the bot, or ("", [])."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT expiry, symbols FROM chain_subs WHERE id=1").fetchone()
+        if not row:
+            return "", []
+        try:
+            return row[0] or "", json.loads(row[1] or "[]")
+        except (ValueError, TypeError):
+            return "", []
+
+    def upsert_chain_quotes(self, rows):
+        """rows: (streamer_symbol, bid, ask, epoch) — preserves greeks columns."""
+        if not rows:
+            return
+        with self._lock:
+            self.conn.executemany(
+                "INSERT INTO chain_marks (streamer_symbol, bid, ask, updated_epoch) "
+                "VALUES (?,?,?,?) ON CONFLICT(streamer_symbol) DO UPDATE SET "
+                "bid=excluded.bid, ask=excluded.ask, "
+                "updated_epoch=excluded.updated_epoch", rows)
+
+    def upsert_chain_greeks(self, rows):
+        """rows: (streamer_symbol, delta, gamma, theta, vega, iv, epoch) —
+        preserves quote columns."""
+        if not rows:
+            return
+        with self._lock:
+            self.conn.executemany(
+                "INSERT INTO chain_marks (streamer_symbol, delta, gamma, theta, "
+                "vega, iv, updated_epoch) VALUES (?,?,?,?,?,?,?) "
+                "ON CONFLICT(streamer_symbol) DO UPDATE SET "
+                "delta=excluded.delta, gamma=excluded.gamma, theta=excluded.theta, "
+                "vega=excluded.vega, iv=excluded.iv, "
+                "updated_epoch=excluded.updated_epoch", rows)
+
+    def clear_chain_marks(self):
+        with self._lock:
+            self.conn.execute("DELETE FROM chain_marks")
             self.conn.commit()
 
     def prune(self, symbol: str, interval: str, keep: int):
@@ -298,6 +381,11 @@ class CandleFeed:
         # buffer[(store_symbol, interval)][ts_ms] = row tuple
         self.buffer: Dict[Tuple[str, str], Dict[int, Tuple]] = {}
         self.backfill_logged: Dict[Tuple[str, str], bool] = {}
+        # ── v3.4 chain-marks state (reset on every socket (re)connect) ────────
+        self._chain_expiry: str = ""
+        self._chain_subscribed: set = set()
+        self._quotes_buf: Dict[str, tuple] = {}    # sym -> (sym,bid,ask,epoch)
+        self._greeks_buf: Dict[str, tuple] = {}    # sym -> (sym,d,g,t,v,iv,epoch)
 
     def _interval_of(self, event_symbol: str) -> Optional[str]:
         """'QQQ{=5m}' -> '5m' (whatever token DXFeed echoes back)."""
@@ -344,15 +432,71 @@ class CandleFeed:
         self.buffer[(key_sym, interval)] = self.buffer.get((key_sym, interval), {})
         self.buffer[(key_sym, interval)][ts_ms] = row
 
+    # ── v3.4: chain-marks handlers ─────────────────────────────────────────
+    def _on_quote(self, q: Quote):
+        sym = getattr(q, "event_symbol", "") or ""
+        if not sym:
+            return
+        try:
+            bid = float(q.bid_price or 0)
+            ask = float(q.ask_price or 0)
+        except (TypeError, ValueError):
+            return
+        self._quotes_buf[sym] = (sym, bid, ask, _time.time())
+
+    def _on_greeks(self, g: Greeks):
+        sym = getattr(g, "event_symbol", "") or ""
+        if not sym:
+            return
+        try:
+            row = (sym, float(g.delta or 0), float(g.gamma or 0),
+                   float(g.theta or 0), float(g.vega or 0),
+                   float(g.volatility or 0), _time.time())
+        except (TypeError, ValueError):
+            return
+        self._greeks_buf[sym] = row
+
+    async def _reconcile_chain_subs(self, streamer):
+        """Every flush cycle: make the socket's Greeks/Quote subscriptions match
+        what the bot requested via chain_subs. Expiry rollover unsubscribes all
+        and clears the marks table (yesterday's 0DTE symbols are dead air)."""
+        expiry, symbols = self.store.read_chain_subs()
+        if not symbols:
+            return
+        if expiry != self._chain_expiry:
+            if self._chain_subscribed:
+                logger.info("chain marks: expiry rollover %s -> %s — resubscribing",
+                            self._chain_expiry or "(none)", expiry)
+                await streamer.unsubscribe_all(Greeks)
+                await streamer.unsubscribe_all(Quote)
+            self._chain_subscribed.clear()
+            self._quotes_buf.clear()
+            self._greeks_buf.clear()
+            self.store.clear_chain_marks()
+            self._chain_expiry = expiry
+        new = [s for s in symbols if s not in self._chain_subscribed]
+        if new:
+            await streamer.subscribe(Greeks, new)
+            await streamer.subscribe(Quote,  new)
+            self._chain_subscribed.update(new)
+            logger.info("chain marks: subscribed %d new symbols (%d total, expiry %s)",
+                        len(new), len(self._chain_subscribed), expiry)
+
     def _flush(self):
         rows: List[Tuple] = []
         for bucket in self.buffer.values():
             rows.extend(bucket.values())
         self.buffer = {}
         self.store.upsert_candles(rows)
+        # v3.4: chain marks ride the same flush cadence
+        q, g = list(self._quotes_buf.values()), list(self._greeks_buf.values())
+        self._quotes_buf.clear()
+        self._greeks_buf.clear()
+        self.store.upsert_chain_quotes(q)
+        self.store.upsert_chain_greeks(g)
         self.store.heartbeat()
         self.store.commit()
-        return len(rows)
+        return len(rows) + len(q) + len(g)
 
     def _log_backfill_depth(self):
         """One-time per (symbol, interval): report depth vs required count so
@@ -374,9 +518,13 @@ class CandleFeed:
         while True:
             try:
                 async with DXLinkStreamer(session) as streamer:
+                    # v3.4: fresh socket — chain subscriptions must be rebuilt
+                    self._chain_expiry = ""
+                    self._chain_subscribed.clear()
                     for (dx_sym, tf, start) in self.subs:
                         await streamer.subscribe_candle([dx_sym], tf, start_time=start)
                         logger.info("subscribed %s %s from %s", dx_sym, tf, start.isoformat())
+                    await self._reconcile_chain_subs(streamer)
                     backoff = RECONNECT_MIN_S
                     last_flush = 0.0
                     last_prune = _time.time()
@@ -389,8 +537,20 @@ class CandleFeed:
                         except asyncio.TimeoutError:
                             if quiet_since is None:
                                 quiet_since = _time.monotonic()
+                        # v3.4: drain any queued Greeks/Quote events, non-blocking
+                        while True:
+                            g = streamer.get_event_nowait(Greeks)
+                            if g is None:
+                                break
+                            self._on_greeks(g)
+                        while True:
+                            q = streamer.get_event_nowait(Quote)
+                            if q is None:
+                                break
+                            self._on_quote(q)
                         now = _time.monotonic()
                         if now - last_flush >= FLUSH_INTERVAL_S:
+                            await self._reconcile_chain_subs(streamer)
                             n = self._flush()
                             last_flush = now
                             if n:
@@ -427,7 +587,7 @@ def main():
     if args.db:
         os.environ["OT_FEED_DB"] = args.db
     store = FeedStore(feed_db_path())
-    logger.info("candle_feed v3.3 — store=%s symbol=%s (dxfeed=%s) vix=%s",
+    logger.info("candle_feed v3.4 — store=%s symbol=%s (dxfeed=%s) vix=%s",
                 feed_db_path(), INSTRUMENT, _dxfeed_symbol(), VIX_SYMBOL)
     store.purge_poison()   # v3.2: self-heal any pre-existing poison rows
 

@@ -1,6 +1,23 @@
 """
 data/options_chain.py — Options chain data from TastyTrade SDK.
-v3.1 — 2026-07-13 — PERSISTENT CHAIN STREAMER (session-exhaustion fix) + fail-loud.
+v3.2 — 2026-07-13 — STORE READER (Option 1b — supersedes v3.1's own streamer).
+        Live fleet test of v3.1 measured TastyTrade's unpublished session cap
+        near ~40 concurrent: 29 candle-feeds + 29 per-box chain streamers do
+        NOT fit (only ~6-11 chain streamers were admitted; the rest sat in
+        backoff all afternoon). This release removes DXLink from the bot
+        process ENTIRELY: candle_feed v3.4 carries the Greeks/Quote
+        subscriptions on its existing socket and publishes latest values to a
+        chain_marks table in the shared store; this module (a) publishes the
+        desired streamer-symbol set + expiry to chain_subs, and (b) reads
+        chain_marks like every other store consumer. Fleet steady state:
+        29 sessions total — the number proven safe for weeks. Kept from v3.1:
+        structure cache (OT_CHAIN_STRUCT_REFRESH_S), staleness ceiling
+        (OT_CHAIN_STALE_S — stale marks are refused, never served), and the
+        zero-mark FAIL-LOUD (bootstrap-aware: quiet for the first ticks after
+        publishing subs while the feed populates). REQUIRES candle_feed v3.4
+        on the box — fails loud with a version hint if the tables are absent.
+v3.1 — 2026-07-13 — PERSISTENT CHAIN STREAMER (superseded same day; header kept
+        for the record). Fail-loud + structure cache introduced here survive.
         The old code opened a NEW DXLinkStreamer websocket on EVERY fetch_chain()
         call — one full REST-token + connect + auth + subscribe + teardown cycle
         per 15 s tick per box. Across the fleet that saturated TastyTrade's
@@ -41,30 +58,30 @@ v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         change in this file.
 
 Chain fetching:  get_option_chain(session, symbol) → dict[date, list[Option]]
-Greeks/marks:    DXLinkStreamer subscription for real-time Greeks and quotes
+Greeks/marks:    read from the store's chain_marks table (candle_feed v3.4 owns
+                 the one DXLink socket and publishes latest values)
 
 Workflow:
   1. get_option_chain() returns all Option objects (no pricing)
   2. Filter to today's expiry (0DTE)
-  3. Subscribe DXLinkStreamer to get Greeks (delta, IV) and Quote (bid/ask/mark)
+  3. Publish desired symbols to chain_subs; read Greeks/Quotes from chain_marks
   4. Build OptionsChain with fully populated OptionContract objects
 """
 
-import asyncio
-import contextlib
+import json
 import logging
 import os
+import sqlite3
 import time
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from datetime import date, datetime
 from typing import Optional, List, Dict
 from decimal import Decimal
 
 from tastytrade.instruments import get_option_chain, Option as TTOption, OptionType
-from tastytrade.dxfeed import Greeks, Quote
-from tastytrade import DXLinkStreamer
 
-from data.tasty_client import get_session, get_loop, run_async, TastyClientError
+from data.tasty_client import get_session, run_async, TastyClientError
 from config import (
     INSTRUMENT, STRIKE_INCREMENT, CONTRACT_MULTIPLIER,
     SWEEP_DELTA_TOLERANCE, ORB_STRIKE_DELTA_BIAS
@@ -73,12 +90,18 @@ from utils.math_utils import round_to_strike, floor_to_strike, ceil_to_strike
 
 logger = logging.getLogger(__name__)
 
-# ── v3.1 transport knobs (env-overridable, OT_ convention) ────────────────────
+# ── transport knobs (env-overridable, OT_ convention) ─────────────────────────
 OT_CHAIN_STRUCT_REFRESH_S = float(os.environ.get("OT_CHAIN_STRUCT_REFRESH_S", "1800"))
-OT_CHAIN_INIT_COLLECT_S   = float(os.environ.get("OT_CHAIN_INIT_COLLECT_S",   "10"))
-OT_CHAIN_RECONNECT_BASE_S = float(os.environ.get("OT_CHAIN_RECONNECT_BASE_S", "5"))
-OT_CHAIN_RECONNECT_MAX_S  = float(os.environ.get("OT_CHAIN_RECONNECT_MAX_S",  "60"))
 OT_CHAIN_STALE_S          = float(os.environ.get("OT_CHAIN_STALE_S",          "120"))
+OT_CHAIN_BOOTSTRAP_S      = float(os.environ.get("OT_CHAIN_BOOTSTRAP_S",      "30"))
+
+def _feed_db_path() -> str:
+    """Same resolution as data/candle_feed.feed_db_path (kept import-free so this
+    module never drags the feed's SDK surface into the bot process)."""
+    p = os.environ.get("OT_FEED_DB")
+    if p:
+        return os.path.expanduser(p)
+    return os.path.expanduser("~/options-trader/data/feed_store.db")
 
 
 @dataclass
@@ -116,27 +139,20 @@ class OptionsChain:
 class OptionsChainFetcher:
     """
     Fetches the 0DTE options chain from TastyTrade and populates
-    Greeks/marks via DXLinkStreamer.
+    Greeks/marks from the shared store (chain_marks, fed by candle_feed v3.4).
 
-    v3.1: ONE persistent streamer per process. All streamer state below is
-    touched ONLY on the shared tasty_client loop thread (get_loop()).
+    v3.2: pure STORE READER. The feed (candle_feed v3.4) owns the one DXLink
+    socket; this class publishes the desired symbol set to chain_subs and reads
+    latest marks from chain_marks. No async, no websockets, no sessions.
     """
 
     def __init__(self):
-        # persistent stream (held open across ticks via AsyncExitStack)
-        self._stack:     Optional[contextlib.AsyncExitStack] = None
-        self._streamer   = None
-        self._subscribed: set = set()
-        self._sub_expiry: str = ""            # expiry the subscriptions belong to
-        # latest-value event maps (survive ticks; cleared on expiry rollover)
-        self._greeks_latest: Dict[str, Greeks] = {}
-        self._quotes_latest: Dict[str, Quote]  = {}
-        self._last_event_wall: float = 0.0     # wall time of last drained event
-        # reconnect backoff
-        self._next_connect_ok: float = 0.0     # monotonic
-        self._backoff: float = OT_CHAIN_RECONNECT_BASE_S
         # chain-structure cache: symbol -> (monotonic_fetched, chain_map)
         self._struct_cache: Dict[str, tuple] = {}
+        # last-published subscription request (avoid rewriting an unchanged row)
+        self._published: tuple = ("", frozenset())
+        self._published_at: float = 0.0        # wall time of last publish
+        self._db_ro = None                     # cached read-only connection
 
     def fetch_chain(self, symbol: str = INSTRUMENT,
                     expiry: Optional[str] = None) -> Optional[OptionsChain]:
@@ -201,7 +217,7 @@ class OptionsChainFetcher:
                 else:
                     puts_raw.append(oc)
 
-            # Step 4: Fetch Greeks and quotes via DXLinkStreamer
+            # Step 4: publish subs + read Greeks/quotes from the store (v3.2)
             streamer_syms = [
                 oc.streamer_symbol for oc in calls_raw + puts_raw
                 if oc.streamer_symbol
@@ -241,11 +257,19 @@ class OptionsChainFetcher:
             # OPEN position than zero marks (premium=0 would trip the -25%
             # floor on garbage).
             if not any(c.mark > 0 for c in chain.calls + chain.puts):
-                logger.error(
-                    f"Chain FAIL-LOUD: {symbol} {today_str} built with ZERO live "
-                    f"marks ({len(chain.calls)}C/{len(chain.puts)}P) — stream "
-                    f"down or unpopulated; returning None instead of a corpse"
-                )
+                if self._in_bootstrap():
+                    logger.info(
+                        f"Chain warming: {symbol} {today_str} — subs published "
+                        f"{time.time() - self._published_at:.0f}s ago, waiting "
+                        f"for the feed to populate chain_marks"
+                    )
+                else:
+                    logger.error(
+                        f"Chain FAIL-LOUD: {symbol} {today_str} built with ZERO "
+                        f"live marks ({len(chain.calls)}C/{len(chain.puts)}P) — "
+                        f"feed marks absent/stale; returning None instead of a "
+                        f"corpse (is candle-feed v3.4 healthy?)"
+                    )
                 return None
 
             logger.info(
@@ -283,170 +307,96 @@ class OptionsChainFetcher:
         self,
         session,
         streamer_symbols: List[str],
-        timeout: float = OT_CHAIN_INIT_COLLECT_S,
         expiry: str = ""
     ) -> tuple:
         """
-        v3.1 — read Greeks/Quotes from the ONE persistent streamer.
-        Ensures the connection (with reconnect backoff), reconciles
-        subscriptions, drains pending events non-blocking, and blocks briefly
-        only for symbols never seen since (re)subscribe. Returns latest-value
-        maps; on stream failure returns the last-known maps (staleness is
-        policed in fetch_chain via OT_CHAIN_STALE_S).
+        v3.2 — publish the desired symbol set to chain_subs (only when it
+        changes), then read latest Greeks/Quotes from chain_marks. Rows older
+        than OT_CHAIN_STALE_S are refused. Returns (greeks_map, quote_map)
+        shaped exactly like the old streamer maps (attribute access), so
+        _apply_market_data is unchanged.
         """
-        loop = get_loop()
-        try:
-            future = asyncio.run_coroutine_threadsafe(
-                self._stream_snapshot(session, streamer_symbols, timeout, expiry),
-                loop
-            )
-            return future.result(timeout=timeout + 10)
-        except Exception as e:
-            logger.warning(f"Streamer fetch failed: {e}")
-            return self._maps_if_fresh()
+        self._publish_desired_subs(expiry, streamer_symbols)
+        return self._read_marks(streamer_symbols)
 
-    def _maps_if_fresh(self) -> tuple:
-        """Last-known maps, but NEVER stale ones: if the stream is down and the
-        last event is older than OT_CHAIN_STALE_S, return empty maps so
-        fetch_chain fail-louds instead of pricing off dead marks."""
-        age = time.time() - self._last_event_wall
-        if self._last_event_wall and age <= OT_CHAIN_STALE_S:
-            return dict(self._greeks_latest), dict(self._quotes_latest)
-        if self._greeks_latest or self._quotes_latest:
-            logger.error(f"Chain marks STALE ({age:.0f}s > {OT_CHAIN_STALE_S:.0f}s "
-                         f"ceiling) with stream down — refusing to serve them")
-        return {}, {}
-
-    async def _stream_snapshot(self, session, streamer_symbols: List[str],
-                               timeout: float, expiry: str) -> tuple:
-        """Runs on the shared loop thread. All persistent-stream state lives here."""
-        if not await self._ensure_streamer(session):
-            return self._maps_if_fresh()
-        try:
-            # Expiry rollover (bots run continuously): yesterday's 0DTE symbols
-            # are dead air — unsubscribe everything, clear maps, start clean.
-            if expiry and expiry != self._sub_expiry:
-                if self._sub_expiry:
-                    logger.info(f"Chain streamer expiry rollover "
-                                f"{self._sub_expiry} → {expiry}: resubscribing")
-                    await self._streamer.unsubscribe_all(Greeks)
-                    await self._streamer.unsubscribe_all(Quote)
-                self._subscribed.clear()
-                self._greeks_latest.clear()
-                self._quotes_latest.clear()
-                self._sub_expiry = expiry
-
-            new = [s for s in streamer_symbols if s not in self._subscribed]
-            if new:
-                await self._streamer.subscribe(Greeks, new)
-                await self._streamer.subscribe(Quote,  new)
-                self._subscribed.update(new)
-                logger.info(f"Chain streamer subscribed {len(new)} new symbols "
-                            f"({len(self._subscribed)} total)")
-
-            # Drain everything queued since last tick — non-blocking.
-            self._drain_nowait()
-
-            # Block briefly ONLY for symbols never seen (first tick after
-            # (re)subscribe); steady-state ticks skip this entirely.
-            needed = {s for s in streamer_symbols
-                      if s not in self._greeks_latest or s not in self._quotes_latest}
-            if needed:
-                deadline = asyncio.get_event_loop().time() + timeout
-                while needed and asyncio.get_event_loop().time() < deadline:
-                    try:
-                        g = await asyncio.wait_for(
-                            self._streamer.get_event(Greeks), timeout=0.5)
-                        if g:
-                            self._greeks_latest[g.event_symbol] = g
-                            self._last_event_wall = time.time()
-                    except asyncio.TimeoutError:
-                        pass
-                    try:
-                        q = await asyncio.wait_for(
-                            self._streamer.get_event(Quote), timeout=0.5)
-                        if q:
-                            self._quotes_latest[q.event_symbol] = q
-                            self._last_event_wall = time.time()
-                    except asyncio.TimeoutError:
-                        pass
-                    needed = {s for s in needed
-                              if s not in self._greeks_latest
-                              or s not in self._quotes_latest}
-
-            self._backoff = OT_CHAIN_RECONNECT_BASE_S   # healthy pass resets it
-            return dict(self._greeks_latest), dict(self._quotes_latest)
-
-        except Exception as e:
-            await self._teardown_streamer()
-            self._note_stream_failure(e)
-            return self._maps_if_fresh()
-
-    def _drain_nowait(self):
-        """Pull every buffered event into the latest-value maps (no blocking)."""
-        while True:
-            g = self._streamer.get_event_nowait(Greeks)
-            if g is None:
-                break
-            self._greeks_latest[g.event_symbol] = g
-            self._last_event_wall = time.time()
-        while True:
-            q = self._streamer.get_event_nowait(Quote)
-            if q is None:
-                break
-            self._quotes_latest[q.event_symbol] = q
-            self._last_event_wall = time.time()
-
-    async def _ensure_streamer(self, session) -> bool:
-        """Connect the persistent streamer if absent, honoring the backoff."""
-        if self._streamer is not None:
-            return True
-        if time.monotonic() < self._next_connect_ok:
-            logger.debug("Chain streamer in reconnect backoff "
-                         f"({self._next_connect_ok - time.monotonic():.0f}s left)")
-            return False
-        try:
-            stack = contextlib.AsyncExitStack()
-            streamer = await stack.enter_async_context(DXLinkStreamer(session))
-            self._stack, self._streamer = stack, streamer
-            self._subscribed.clear()
-            self._sub_expiry = ""             # force clean resubscribe
-            logger.info("Chain streamer CONNECTED (persistent, v3.1)")
-            return True
-        except Exception as e:
-            self._note_stream_failure(e)
-            return False
-
-    def _note_stream_failure(self, e: Exception):
-        self._next_connect_ok = time.monotonic() + self._backoff
-        logger.warning(f"Chain streamer failure: {e} — next reconnect attempt "
-                       f"in {self._backoff:.0f}s")
-        self._backoff = min(self._backoff * 2, OT_CHAIN_RECONNECT_MAX_S)
-
-    async def _teardown_streamer(self):
-        stack, self._stack, self._streamer = self._stack, None, None
-        self._subscribed.clear()
-        if stack is not None:
-            try:
-                await stack.aclose()
-            except Exception:
-                pass
-
-    def close(self):
-        """Tear down the persistent streamer (tests / clean shutdown)."""
-        if self._streamer is None:
+    def _publish_desired_subs(self, expiry: str, streamer_symbols: List[str]):
+        want = (expiry, frozenset(streamer_symbols))
+        if want == self._published:
             return
         try:
-            asyncio.run_coroutine_threadsafe(
-                self._teardown_streamer(), get_loop()).result(timeout=10)
-        except Exception:
-            pass
+            conn = sqlite3.connect(_feed_db_path(), timeout=3.0)
+            try:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS chain_subs (
+                        id            INTEGER PRIMARY KEY CHECK (id = 1),
+                        expiry        TEXT NOT NULL,
+                        symbols       TEXT NOT NULL,
+                        updated_epoch REAL NOT NULL
+                    );""")
+                conn.execute(
+                    "INSERT OR REPLACE INTO chain_subs (id, expiry, symbols, "
+                    "updated_epoch) VALUES (1, ?, ?, ?)",
+                    (expiry, json.dumps(sorted(streamer_symbols)), time.time()))
+                conn.commit()
+            finally:
+                conn.close()
+            self._published = want
+            self._published_at = time.time()
+            logger.info(f"Chain subs published: {len(streamer_symbols)} symbols, "
+                        f"expiry {expiry} — feed will subscribe within a flush cycle")
+        except Exception as e:
+            logger.warning(f"Chain subs publish failed: {e}")
+
+    def _ro_conn(self):
+        if self._db_ro is None:
+            self._db_ro = sqlite3.connect(
+                f"file:{_feed_db_path()}?mode=ro", uri=True, timeout=3.0)
+        return self._db_ro
+
+    def _read_marks(self, streamer_symbols: List[str]) -> tuple:
+        greeks_map: Dict[str, object] = {}
+        quote_map:  Dict[str, object] = {}
+        try:
+            floor = time.time() - OT_CHAIN_STALE_S
+            cur = self._ro_conn().execute(
+                "SELECT streamer_symbol, bid, ask, delta, gamma, theta, vega, iv,"
+                " updated_epoch FROM chain_marks WHERE updated_epoch >= ?", (floor,))
+            rows = {r[0]: r for r in cur.fetchall()}
+        except sqlite3.OperationalError as e:
+            # table absent (feed still on <= v3.3) or db missing entirely
+            self._db_ro = None
+            logger.error(f"chain_marks unreadable ({e}) — is candle_feed v3.4 "
+                         f"running on this box?")
+            return {}, {}
+        except Exception as e:
+            self._db_ro = None
+            logger.warning(f"chain_marks read failed: {e}")
+            return {}, {}
+
+        for sym in streamer_symbols:
+            r = rows.get(sym)
+            if r is None:
+                continue
+            _, bid, ask, delta, gamma, theta, vega, iv, _ep = r
+            if (bid or 0) > 0 or (ask or 0) > 0:
+                quote_map[sym] = SimpleNamespace(
+                    event_symbol=sym, bid_price=bid or 0.0, ask_price=ask or 0.0)
+            if any((delta, gamma, theta, vega, iv)):
+                greeks_map[sym] = SimpleNamespace(
+                    event_symbol=sym, delta=delta or 0.0, gamma=gamma or 0.0,
+                    theta=theta or 0.0, vega=vega or 0.0, volatility=iv or 0.0)
+        return greeks_map, quote_map
+
+    def _in_bootstrap(self) -> bool:
+        """True during the grace window right after publishing a new sub set —
+        the feed needs a flush cycle or two to subscribe and populate."""
+        return (time.time() - self._published_at) < OT_CHAIN_BOOTSTRAP_S
 
     def _apply_market_data(
         self,
         contracts: List[OptionContract],
-        greeks_map: Dict[str, Greeks],
-        quote_map:  Dict[str, Quote]
+        greeks_map: Dict[str, object],
+        quote_map:  Dict[str, object]
     ):
         """Apply Greeks and Quote data to OptionContract objects."""
         for oc in contracts:
