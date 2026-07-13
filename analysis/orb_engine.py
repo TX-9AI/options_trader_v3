@@ -1,5 +1,12 @@
 """
 analysis/orb_engine.py — Opening Range Breakout state machine.
+v3.6 — 2026-07-13 — defect H rename only: NO_ENTRY_AFTER_ET -> ORB_NO_ENTRY_AFTER_ET
+        (import + the past_orb_cutoff test). Same constant, same (11, 0) value,
+        same behaviour. NOTE the two cutoffs in this file are DIFFERENT rules and
+        always were: past_orb_cutoff uses the 11:00 ORB-scoped constant, while
+        is_past_entry_cutoff() (from utils.time_utils, used in notify_position_closed
+        to decide EXPIRED vs re-arm) uses the 14:00 GLOBAL cutoff. The rename makes
+        that distinction legible at the call site.
 v3.5 — 2026-07-12 — THE BREAK IS NOW DEFINITIONAL. Two changes, one principle:
         the setup is mechanical, so every tolerance is removed and the rule is
         stated exactly.
@@ -171,7 +178,7 @@ from utils.time_utils import now_et, is_past_entry_cutoff
 from utils.math_utils import orb_strike_selection
 from config import (
     ORB_MAX_RETEST_BARS, STRIKE_INCREMENT, INSTRUMENT,
-    NO_ENTRY_AFTER_ET, ORB_FIRES_REGARDLESS_OF_REGIME
+    ORB_NO_ENTRY_AFTER_ET, ORB_FIRES_REGARDLESS_OF_REGIME
 )
 
 logger = logging.getLogger(__name__)
@@ -308,7 +315,7 @@ class ORBEngine:
             self._load_range_from_file()
 
         now = now_et()
-        past_orb_cutoff = (now.hour, now.minute) >= NO_ENTRY_AFTER_ET
+        past_orb_cutoff = (now.hour, now.minute) >= ORB_NO_ENTRY_AFTER_ET
         d.entries_expired = past_orb_cutoff
 
         # Maintain the session break latches on EVERY tick, in EVERY state, the
