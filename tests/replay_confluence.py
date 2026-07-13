@@ -22,7 +22,10 @@
 #         the report step on the consolidated fleet_trades CSV. No scoring-logic change.
 #   Layer-1 VALIDATION + CALIBRATION harness. Replays analysis/regime_confluence.py
 #   over the candle logger's DXFeed 1-min OHLC (data/OHLC/<date>/<SYMBOL>.csv) — the
-#   traded tape, store-consistent per ROADMAP (NOT the live yfinance observer feed).
+#   traded tape, store-consistent per ROADMAP. NOT the shadow observer jsonl —
+#   not because the observer is a different feed (it is not; see REPLAY_VALIDATION
+#   v1.1) but because its sampling is tick-cadenced and staleness-gated, where
+#   calibration needs deterministic, evenly-spaced 1-min bars.
 #
 #   Method: AS-OF replay. For each 1-min bar t of the session, slice every timeframe
 #   frame to bars ≤ t, run the REAL engines (volatility/trend/structure/liquidity —
