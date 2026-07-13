@@ -1,5 +1,8 @@
 """
-main.py — options_trader v3.2
+main.py — options_trader v3.3
+v3.3 — 2026-07-13 — defect H rename only: NO_ENTRY_AFTER_ET -> ORB_NO_ENTRY_AFTER_ET
+        (import + the orb_state.json "past_cutoff" flag). Same constant, same
+        (11, 0) value, same behaviour — the name now states its ORB scope.
 v3.2 — 2026-07-11 — REGIME UN-GATE for the flagship ORB (config-switched,
         ORB_FIRES_REGARDLESS_OF_REGIME, default on). A confirmed ORB break+retest
         now fires regardless of the regime label — including UNKNOWN and
@@ -103,7 +106,7 @@ from config import (
     POLL_INTERVAL_SECONDS, LOG_LEVEL, LOG_FILE, LOG_ROTATION_MB,
     PAPER_TRADING, RISK_PER_TRADE_USD, DAILY_LOSS_LIMIT_USD,
     REGIME_REASSESS_MINUTES, INSTRUMENT, SessionConfig, DIRECTIONAL_ONLY,
-    NO_ENTRY_AFTER_ET, BROKER_RECONCILE_ENABLED, ORB_FIRES_REGARDLESS_OF_REGIME
+    ORB_NO_ENTRY_AFTER_ET, BROKER_RECONCILE_ENABLED, ORB_FIRES_REGARDLESS_OF_REGIME
 )
 
 
@@ -235,7 +238,7 @@ def run_analysis(state: BotState) -> dict:
             "broke_high": _eng.broke_high,
             "broke_low":  _eng.broke_low,
             "price":      price,
-            "past_cutoff": (_now_et.hour, _now_et.minute) >= NO_ENTRY_AFTER_ET,
+            "past_cutoff": (_now_et.hour, _now_et.minute) >= ORB_NO_ENTRY_AFTER_ET,
             "updated_at": _now_et.strftime("%Y-%m-%d %H:%M:%S ET"),
         }
         _state_path = os.path.join(os.path.dirname(LOG_FILE), "orb_state.json")
