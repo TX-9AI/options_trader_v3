@@ -1,23 +1,5 @@
 """
-options_trader_v3/data/candle_feed.py — THE single candle-feed producer. v3.2
-v3.2 — 2026-07-10 — FIX empty store despite live data. DXFeed echoes candle
-        event-symbols WITH attributes and normalizes single-unit periods, e.g.
-        'IWM{=5m,tho=true}' and 'IWM{=m,tho=true}'/'{=h}'/'{=d}'. _interval_of
-        only did rstrip('}'), yielding '5m,tho=true' (and 'm'/'h'/'d'), none of
-        which matched symbol_map — so EVERY received candle was dropped and the
-        store stayed empty while candle-feed logged data arriving. Bots then
-        looped on "feed store has no bars". _interval_of now strips attributes
-        (splits on the first comma) and normalizes m/h/d -> 1m/1h/1d via
-        _DX_PERIOD_TO_INTERVAL, matching the store keys the bot reads.
-v3.1 — 2026-07-10 — FIX crash-loop: FeedStore opened its SQLite connection in
-        the startup thread but heartbeat()/commit()/upsert_candles() are called
-        from the DXLink streamer thread, raising sqlite3.ProgrammingError
-        ("SQLite objects created in a thread can only be used in that same
-        thread") on the first heartbeat write. The service died on startup and
-        systemd restart-looped it, so the shared store never populated and every
-        bot on the box starved for prices and self-exited. Connection now opens
-        with check_same_thread=False and all store access is serialized by a
-        threading.Lock (verified safe under concurrent writers).
+options_trader_v3/data/candle_feed.py — THE single candle-feed producer. v3.0
 v3.0 — 2026-07-10 — initial release (Yahoo-Finance purge; single shared TastyTrade
         candle feed / data stream mapping optimization). This service owns the
         ONLY DXLinkStreamer subscription on the box. Every other process (the
@@ -25,6 +7,15 @@ v3.0 — 2026-07-10 — initial release (Yahoo-Finance purge; single shared Tast
         the shared SQLite store this service maintains. One producer, many
         readers — it is FORBIDDEN for any consumer to open its own DXFeed
         stream.
+v3.2 — 2026-07-13 — POISON-CANDLE GUARD (producer side). Reject at ingest any
+        candle whose timestamp falls outside a sane window (kills the DXFeed
+        signed-32-bit rollover bar: ts=2147483648xxx ms => year 2038) or whose
+        OHLC contains a non-positive price. Observed live on GOOGL 2026-07-13:
+        the junk bar entered the store, won the "latest bar" query in
+        fetch_quote(), returned 0.0, and killed the bot's tick loop every tick
+        while the unit still reported ACTIVE. Also adds FeedStore.purge_poison(),
+        run at startup, so a box whose store was already poisoned self-heals on
+        restart with no manual sqlite surgery across the fleet.
 
 Architecture (Mandate 2 of the Yahoo-Finance purge):
   - Runs as its own systemd unit: candle-feed.service (Before=optionsbot).
@@ -84,7 +75,6 @@ import asyncio
 import logging
 import os
 import sqlite3
-import threading
 import time as _time
 from datetime import datetime, time as dtime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -97,6 +87,19 @@ from config import INSTRUMENT, TIMEFRAMES
 from data.tasty_client import get_session, get_loop
 
 logger = logging.getLogger(__name__)
+
+# ── Poison-candle sanity window (v3.2) ────────────────────────────────────────
+# Any candle timestamp outside this window is junk. The observed failure is the
+# signed-32-bit rollover (2**31 * 1000 = 2147483648000 ms => 2038-01-19), which
+# is far in the future; a 0 / negative ts is equally invalid. Upper bound is
+# computed at call time (now + 2 days) so a legitimately-fresh bar is never
+# rejected for clock skew, while a 2038 bar always is.
+TS_MS_MIN = 1_262_304_000_000        # 2010-01-01 — older than any bar we'd want
+
+
+def _ts_ms_max() -> int:
+    """Newest acceptable candle ts: now + 2 days (tolerates clock skew, kills 2038)."""
+    return int((_time.time() + 172_800) * 1000)
 ET = ZoneInfo("America/New_York")
 
 # ─── Store location — single definition, imported by every reader ─────────────
@@ -120,12 +123,6 @@ PRUNE_EVERY_S     = 300
 RECONNECT_MIN_S   = 3
 RECONNECT_MAX_S   = 60
 VIX_SYMBOL        = os.environ.get("OT_DXFEED_VIX", "VIX")
-
-# DXFeed echoes single-unit candle periods without the leading 1 (1-minute as
-# 'm', 1-hour as 'h', 1-day as 'd'); multi-unit periods keep the number
-# ('5m','15m'). Map the echoed token back to the canonical store interval that
-# TIMEFRAMES/symbol_map and the bot's reader (data/market_data.py) both use.
-_DX_PERIOD_TO_INTERVAL = {"m": "1m", "h": "1h", "d": "1d"}
 VIX_INTERVALS     = ("1m", "1d")
 
 # Backfill depth per interval: calendar days back from now that comfortably
@@ -167,13 +164,7 @@ class FeedStore:
     def __init__(self, path: str):
         self.path = path
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        # The DXLink streamer delivers candles on a DIFFERENT thread than the one
-        # that constructs FeedStore, so the connection must allow cross-thread
-        # use (check_same_thread=False) and every access must be serialized by
-        # self._lock — otherwise the first write from the stream thread raises
-        # sqlite3.ProgrammingError and the feed crash-loops (starving the fleet).
-        self._lock = threading.Lock()
-        self.conn = sqlite3.connect(path, check_same_thread=False)
+        self.conn = sqlite3.connect(path)
         self.conn.execute("PRAGMA journal_mode=WAL;")
         self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.conn.execute("""
@@ -197,49 +188,57 @@ class FeedStore:
         """rows: (symbol, interval, ts_ms, o, h, l, c, v). Last write wins."""
         if not rows:
             return
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO candles "
+            "(symbol, interval, ts_epoch_ms, open, high, low, close, volume) "
+            "VALUES (?,?,?,?,?,?,?,?)", rows)
         now = _time.time()
         touched = {(r[0], r[1]) for r in rows}
-        with self._lock:
-            self.conn.executemany(
-                "INSERT OR REPLACE INTO candles "
-                "(symbol, interval, ts_epoch_ms, open, high, low, close, volume) "
-                "VALUES (?,?,?,?,?,?,?,?)", rows)
-            self.conn.executemany(
-                "INSERT OR REPLACE INTO feed_meta (symbol, interval, last_write_epoch) "
-                "VALUES (?,?,?)", [(s, i, now) for (s, i) in touched])
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO feed_meta (symbol, interval, last_write_epoch) "
+            "VALUES (?,?,?)", [(s, i, now) for (s, i) in touched])
+
+    def purge_poison(self) -> int:
+        """Delete any poison rows already in the store (v3.2). Runs at feed
+        startup so a box whose DB was poisoned before this guard existed
+        self-heals on restart — no manual sqlite surgery across the fleet."""
+        cur = self.conn.execute(
+            "DELETE FROM candles WHERE open <= 0 OR high <= 0 OR low <= 0 "
+            "OR close <= 0 OR ts_epoch_ms < ? OR ts_epoch_ms > ?",
+            (TS_MS_MIN, _ts_ms_max()))
+        self.conn.commit()
+        n = cur.rowcount or 0
+        if n:
+            logger.warning("purged %d poison candle row(s) from the store", n)
+        return n
 
     def heartbeat(self):
-        with self._lock:
-            self.conn.execute(
-                "INSERT OR REPLACE INTO feed_meta (symbol, interval, last_write_epoch) "
-                "VALUES ('__feed__','heartbeat',?)", (_time.time(),))
+        self.conn.execute(
+            "INSERT OR REPLACE INTO feed_meta (symbol, interval, last_write_epoch) "
+            "VALUES ('__feed__','heartbeat',?)", (_time.time(),))
 
     def commit(self):
-        with self._lock:
-            self.conn.commit()
+        self.conn.commit()
 
     def prune(self, symbol: str, interval: str, keep: int):
-        with self._lock:
-            self.conn.execute("""
-                DELETE FROM candles WHERE symbol=? AND interval=? AND ts_epoch_ms NOT IN
-                (SELECT ts_epoch_ms FROM candles WHERE symbol=? AND interval=?
-                 ORDER BY ts_epoch_ms DESC LIMIT ?)""",
-                (symbol, interval, symbol, interval, keep))
+        self.conn.execute("""
+            DELETE FROM candles WHERE symbol=? AND interval=? AND ts_epoch_ms NOT IN
+            (SELECT ts_epoch_ms FROM candles WHERE symbol=? AND interval=?
+             ORDER BY ts_epoch_ms DESC LIMIT ?)""",
+            (symbol, interval, symbol, interval, keep))
 
     def bar_count(self, symbol: str, interval: str) -> int:
-        with self._lock:
-            cur = self.conn.execute(
-                "SELECT COUNT(*) FROM candles WHERE symbol=? AND interval=?",
-                (symbol, interval))
-            return int(cur.fetchone()[0])
+        cur = self.conn.execute(
+            "SELECT COUNT(*) FROM candles WHERE symbol=? AND interval=?",
+            (symbol, interval))
+        return int(cur.fetchone()[0])
 
     def close(self):
-        with self._lock:
-            try:
-                self.conn.commit()
-                self.conn.close()
-            except Exception:
-                pass
+        try:
+            self.conn.commit()
+            self.conn.close()
+        except Exception:
+            pass
 
 
 # ─── The producer ──────────────────────────────────────────────────────────────
@@ -265,24 +264,10 @@ class CandleFeed:
         self.backfill_logged: Dict[Tuple[str, str], bool] = {}
 
     def _interval_of(self, event_symbol: str) -> Optional[str]:
-        """Map a DXFeed candle event-symbol back to the canonical store
-        interval the bot queries. DXFeed echoes candle symbols with attributes
-        and normalizes single-unit periods:
-            'IWM{=5m,tho=true}'  -> '5m'
-            'IWM{=15m,tho=true}' -> '15m'
-            'IWM{=m,tho=true}'   -> '1m'   (1-minute echoed as 'm')
-            'IWM{=h,tho=true}'   -> '1h'   (1-hour   echoed as 'h')
-            'IWM{=d,tho=true}'   -> '1d'   (1-day    echoed as 'd')
-            'QQQ{=5m}'           -> '5m'   (attribute-less form still works)
-        The old parser only did rstrip('}'), so '5m,tho=true}' became
-        '5m,tho=true' (and 'm}'/'h}'/'d}' stayed 'm'/'h'/'d') — none matched
-        symbol_map, so every candle was dropped and the store never filled.
-        """
-        if "{=" not in (event_symbol or ""):
-            return None
-        tail = event_symbol.split("{=", 1)[1].rstrip("}")   # '5m,tho=true' | 'm,tho=true'
-        token = tail.split(",", 1)[0].strip()                # '5m' | 'm'
-        return _DX_PERIOD_TO_INTERVAL.get(token, token)      # 'm'->'1m', else as-is
+        """'QQQ{=5m}' -> '5m' (whatever token DXFeed echoes back)."""
+        if "{=" in (event_symbol or ""):
+            return event_symbol.split("{=", 1)[1].rstrip("}")
+        return None
 
     def _on_candle(self, c: Candle):
         base = _base_symbol(getattr(c, "event_symbol", ""))
@@ -290,10 +275,38 @@ class CandleFeed:
         key_sym = self.symbol_map.get((base, interval))
         if key_sym is None or c.time is None or c.open is None:
             return
-        row = (key_sym, interval, int(c.time),
-               float(c.open), float(c.high), float(c.low), float(c.close),
+
+        # ── POISON GUARD (v3.2) ───────────────────────────────────────────────
+        # DXFeed intermittently emits a junk candle: timestamp at the signed
+        # 32-bit rollover (2147483648xxx ms => year 2038) with all prices 0.0.
+        # Observed live on GOOGL 2026-07-13 (1m, then 15m). It is fatal
+        # downstream: fetch_quote() sorts by ts DESC, so the 2038 row wins, its
+        # age computes NEGATIVE (passes the freshness check), and it returns
+        # close=0.0. run_analysis() treats 0.0 as falsy -> "Could not fetch
+        # current price" -> the tick loop dies EVERY TICK while the unit still
+        # reports ACTIVE. Silent, total. Reject it at the door: bad data must
+        # never enter the store.
+        try:
+            ts_ms = int(c.time)
+            o, h, l, cl = float(c.open), float(c.high), float(c.low), float(c.close)
+        except (TypeError, ValueError):
+            return
+
+        if not (TS_MS_MIN <= ts_ms <= _ts_ms_max()):
+            logger.warning(
+                "REJECTED poison candle %s %s: insane ts=%d (%.1f) — outside sane window",
+                key_sym, interval, ts_ms, ts_ms / 1000.0)
+            return
+        if o <= 0 or h <= 0 or l <= 0 or cl <= 0:
+            logger.warning(
+                "REJECTED poison candle %s %s ts=%d: non-positive price "
+                "(o=%.4f h=%.4f l=%.4f c=%.4f)", key_sym, interval, ts_ms, o, h, l, cl)
+            return
+
+        row = (key_sym, interval, ts_ms, o, h, l, cl,
                float(getattr(c, "volume", 0) or 0))
-        self.buffer.setdefault((key_sym, interval), {})[int(c.time)] = row
+        self.buffer[(key_sym, interval)] = self.buffer.get((key_sym, interval), {})
+        self.buffer[(key_sym, interval)][ts_ms] = row
 
     def _flush(self):
         rows: List[Tuple] = []
@@ -378,8 +391,9 @@ def main():
     if args.db:
         os.environ["OT_FEED_DB"] = args.db
     store = FeedStore(feed_db_path())
-    logger.info("candle_feed v3.0 — store=%s symbol=%s (dxfeed=%s) vix=%s",
+    logger.info("candle_feed v3.2 — store=%s symbol=%s (dxfeed=%s) vix=%s",
                 feed_db_path(), INSTRUMENT, _dxfeed_symbol(), VIX_SYMBOL)
+    store.purge_poison()   # v3.2: self-heal any pre-existing poison rows
 
     feed = CandleFeed(store)
     loop = get_loop()

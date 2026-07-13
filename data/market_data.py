@@ -38,6 +38,16 @@ v3.1 — 2026-07-13 — REGRESSION FIX: session-scoping now applies to 1m ONLY.
         until ~14:05 ET (EMA_SLOW+5 = 55 bars unreachable in a session-scoped
         window). The no-overnight-padding rule belongs to the 25-bar 1-minute
         RANGING slope window and nothing else. 5m/15m/1h/1d are continuous.
+v3.2 — 2026-07-13 — POISON-CANDLE GUARD (consumer side). DXFeed intermittently
+        emits a junk candle at the signed-32-bit rollover (ts=2147483648xxx ms =>
+        2038) with all prices 0.0 (observed live: GOOGL 1m then 15m, 2026-07-13).
+        It sorted to the top of the ts DESC window, computed a NEGATIVE age (thus
+        passing the freshness check) and returned close=0.0 — which run_analysis
+        reads as falsy => "Could not fetch current price" => the tick loop died
+        EVERY TICK while systemd still reported the unit ACTIVE. Silent and total.
+        fetch_quote() and fetch_candles() now exclude non-positive prices and
+        future-dated bars at the SQL layer, and fetch_quote re-asserts a
+        non-negative age before returning. Feed-side fix: data/candle_feed.py v3.2.
 """
 
 import logging
@@ -128,10 +138,16 @@ def fetch_candles(symbol: str, timeframe: str, count: int) -> Optional[pd.DataFr
             return None
 
         fetch_n = max(count * 3, count + 10)   # margin for NaN drops / scoping
+        # Poison filter (v3.1): exclude non-positive prices and future-dated bars
+        # (DXFeed 2**31 rollover junk). A 2038-stamped bar would otherwise sort to
+        # the top of the DESC window and land at the END of the ascending frame —
+        # i.e. it would masquerade as the newest bar to every engine.
         cur = conn.execute(
             "SELECT ts_epoch_ms, open, high, low, close, volume FROM candles "
-            "WHERE symbol=? AND interval=? ORDER BY ts_epoch_ms DESC LIMIT ?",
-            (symbol, timeframe, fetch_n))
+            "WHERE symbol=? AND interval=? AND close > 0 AND open > 0 "
+            "AND ts_epoch_ms <= ? "
+            "ORDER BY ts_epoch_ms DESC LIMIT ?",
+            (symbol, timeframe, int((_time.time() + 172_800) * 1000), fetch_n))
         rows = cur.fetchall()
     finally:
         conn.close()
@@ -185,14 +201,25 @@ def fetch_quote(symbol: str) -> Optional[float]:
             if _feed_alive(conn):
                 cur = conn.execute(
                     "SELECT ts_epoch_ms, close FROM candles "
-                    "WHERE symbol=? AND interval='1m' AND close IS NOT NULL "
-                    "ORDER BY ts_epoch_ms DESC LIMIT 1", (symbol,))
+                    "WHERE symbol=? AND interval='1m' AND close > 0 "
+                    "AND ts_epoch_ms <= ? "
+                    "ORDER BY ts_epoch_ms DESC LIMIT 1",
+                    (symbol, int((_time.time() + 172_800) * 1000)))
                 row = cur.fetchone()
                 if row and row[1] is not None:
                     age = _time.time() - (float(row[0]) / 1000.0)
-                    if age <= QUOTE_MAX_AGE_S:
-                        return float(row[1])
-                    logger.debug(f"store 1m bar for {symbol} is {age:.0f}s old — "
+                    price = float(row[1])
+                    # A quote must be POSITIVE and NOT from the future. A poison
+                    # bar (DXFeed 2**31 rollover ts, close=0.0 — GOOGL 2026-07-13)
+                    # would otherwise win the ORDER BY, compute a NEGATIVE age
+                    # (passing the freshness check) and return 0.0, which
+                    # run_analysis reads as falsy => "Could not fetch current
+                    # price" => dead tick loop while the unit reports ACTIVE.
+                    # The SQL filters it, and 0 <= age re-asserts it here.
+                    if price > 0 and 0 <= age <= QUOTE_MAX_AGE_S:
+                        return price
+                    logger.debug(f"store 1m bar for {symbol} unusable "
+                                 f"(price={price} age={age:.0f}s) — "
                                  f"falling back to TastyTrade REST quote")
         except Exception as e:
             logger.debug(f"store quote failed for {symbol}: {e}")
