@@ -4,6 +4,12 @@ v3.0 — original release
 v3.1 — 2026-07-12 — DOC SYNC (no logic change): the header described
         BUTTERFLY_ENTRY_CUTOFF_ET as a "hard exit at 2:00 PM". It is an ENTRY
         cutoff only and is not consulted by exit_engine at all. Corrected.
+v1.4 — 2026-07-14 — DISCOUNT GATE: net_debit ≤ BUTTERFLY_MAX_DEBIT_PCT_WIDTH ×
+        wing width (config, prior 0.33 ≈ min 2:1 RR). Encodes the operator's
+        thesis — enter the pin-centered tent while price is still a walk away
+        and the fly is cheap — as the risk:reward stated directly, instead of
+        a delta proxy (whipsaws on 0DTE gamma; dies with the Greeks feed).
+        Ratio logged on every evaluation for ledger calibration.
 v1.1 — 2026-06-29 — GEX pin center strike, fixed wings by instrument,
         noon-2PM entry window, one-per-session limit, TP at 20%
 v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
@@ -49,6 +55,7 @@ from config import (
     BUTTERFLY_ENTRY_START_ET, BUTTERFLY_ENTRY_CUTOFF_ET,
     STRIKE_INCREMENT, INSTRUMENT, VIX_BUTTERFLY_DISABLE,
     CONTRACT_MULTIPLIER
+, BUTTERFLY_MAX_DEBIT_PCT_WIDTH
 )
 
 logger = logging.getLogger(__name__)
@@ -196,6 +203,24 @@ class ButterflyStrategy(BaseOptionsStrategy):
             return None
 
         wing_width = upper.strike - center.strike
+
+        # ── v1.4 DISCOUNT GATE: the thesis is buying the tent CHEAP while
+        # price still has to migrate into it. Delta was considered and
+        # rejected as the proximity proxy (0DTE gamma makes it whipsaw; it
+        # also dies with the Greeks feed). The debit-to-width ratio states
+        # the edge directly: price on the pin => fat debit => rejected.
+        # The ratio is logged on EVERY evaluation — accept or reject — so
+        # the ledger can calibrate the prior.
+        debit_ratio = net_debit / wing_width if wing_width > 0 else 1.0
+        logger.info(
+            f"Butterfly debit-ratio: {debit_ratio:.2f} "
+            f"(debit={net_debit:.2f} / wing={wing_width:.0f}, "
+            f"gate ≤ {BUTTERFLY_MAX_DEBIT_PCT_WIDTH:.2f})"
+        )
+        if debit_ratio > BUTTERFLY_MAX_DEBIT_PCT_WIDTH:
+            logger.info("Butterfly: tent too expensive — no discount, no edge; skip")
+            return None
+
         max_profit = wing_width - net_debit
         if max_profit <= 0:
             logger.info(
