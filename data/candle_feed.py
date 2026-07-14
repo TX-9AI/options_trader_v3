@@ -298,18 +298,52 @@ class CandleFeed:
         # buffer[(store_symbol, interval)][ts_ms] = row tuple
         self.buffer: Dict[Tuple[str, str], Dict[int, Tuple]] = {}
         self.backfill_logged: Dict[Tuple[str, str], bool] = {}
+        self._unmapped_seen: set = set()   # v3.5: warn-once on unmapped candles
 
     def _interval_of(self, event_symbol: str) -> Optional[str]:
-        """'QQQ{=5m}' -> '5m' (whatever token DXFeed echoes back)."""
-        if "{=" in (event_symbol or ""):
-            return event_symbol.split("{=", 1)[1].rstrip("}")
-        return None
+        """Map DXFeed's echoed candle symbol back to OUR config timeframe key.
+
+        'AAPL{=5m}'            -> '5m'
+        'AAPL{=5m,tho=true}'   -> '5m'    (attributes stripped)
+        'AAPL{=m,tho=true}'    -> '1m'    (DXFeed canonicalizes 1m -> m)
+        'AAPL{=h,tho=true}'    -> '1h'
+        'AAPL{=d,tho=true}'    -> '1d'
+
+        v3.5 — TWO bugs fixed here, both of which SILENTLY DROPPED EVERY CANDLE:
+        (1) DXFeed echoes the symbol back with its ATTRIBUTES attached (the
+            trading-hours flag, ',tho=true'); the old parser returned
+            '5m,tho=true' and never matched symbol_map.
+        (2) DXFeed CANONICALIZES a leading 1: we subscribe '1m'/'1h'/'1d' and it
+            echoes 'm'/'h'/'d'. Even with (1) fixed, those three would still miss
+            the map — and 1m is what fetch_quote() reads, i.e. the bot's price.
+        Result on 2026-07-14: feeds 'active', authenticated and streaming, store
+        taking ZERO writes; bots read yesterday's bars, no ORB range for today,
+        fleet-wide EXPIRED/UNKNOWN, and not one error logged anywhere.
+        """
+        if "{=" not in (event_symbol or ""):
+            return None
+        token = event_symbol.split("{=", 1)[1].rstrip("}")
+        token = token.split(",", 1)[0].strip()      # drop ',tho=true' etc.
+        # Re-expand DXFeed's canonical bare units back to our config keys.
+        return {"m": "1m", "h": "1h", "d": "1d", "s": "1s"}.get(token, token)
 
     def _on_candle(self, c: Candle):
-        base = _base_symbol(getattr(c, "event_symbol", ""))
-        interval = self._interval_of(getattr(c, "event_symbol", "")) or ""
+        ev_sym = getattr(c, "event_symbol", "")
+        base = _base_symbol(ev_sym)
+        interval = self._interval_of(ev_sym) or ""
         key_sym = self.symbol_map.get((base, interval))
-        if key_sym is None or c.time is None or c.open is None:
+        if key_sym is None:
+            # v3.5: NEVER drop a candle silently. This branch swallowed the
+            # entire feed on 2026-07-14 (unparsed 'tho=true' attribute) with no
+            # log line anywhere. Warn once per distinct unmapped key.
+            if ev_sym and (base, interval) not in self._unmapped_seen:
+                self._unmapped_seen.add((base, interval))
+                logger.warning(
+                    "DROPPING candles: event_symbol=%r parsed to (base=%r, interval=%r) "
+                    "which is NOT in symbol_map %r — nothing will be stored for it",
+                    ev_sym, base, interval, sorted(self.symbol_map.keys()))
+            return
+        if c.time is None or c.open is None:
             return
 
         # ── POISON GUARD (v3.2) ───────────────────────────────────────────────
