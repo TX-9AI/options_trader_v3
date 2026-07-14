@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # validate_regime.sh — v2.0 — Layer-1 regime ops on 1-REPORTER (control box, no trading).
+# v2.1 — 2026-07-14 — LAYOUT CONSOLIDATION: tape from ohlc/<date>/ (new
+#        lowercase _ohlc_ names, legacy _OHLC_ accepted), replay jsonl + diary
+#        under reports/. Logic unchanged.
 #
 # Single entrypoint for the MANUAL regime-validation workflow. Inert code library
 # (~/options-trader-v3) + read-only replay over harvest's OHLC tape. No systemd, no
 # credentials, no live path. Tape-only — never reads trades.
 #
 # Data (authoritative, per day_trader_pro/harvest.py):
-#     ~/day_trader_pro/data/harvest/<date>/<SYM>_OHLC_<date>.csv        (tape in)
+#     ~/day_trader_pro/ohlc/<date>/<SYM>_ohlc_<date>.csv               (tape in)
+#     ~/day_trader_pro/reports/  — replay jsonl + rolling diary        (products out)
 #     ~/day_trader_pro/data/harvest/<date>/regime_replay_<date>.jsonl   (tick log out)
 #     ~/day_trader_pro/data/regime_diary.{jsonl,md}                     (rolling diary)
 #
@@ -25,8 +29,8 @@ REPO_URL="https://github.com/TX-9AI/options_trader_v3.git";
 REPO_DIR="$HOME/options-trader-v3";
 VENV="$REPO_DIR/venv";
 PY="$VENV/bin/python";
-HARVEST="$HOME/day_trader_pro/data/harvest";
-DIARY_DIR="$HOME/day_trader_pro/data";
+HARVEST="$HOME/day_trader_pro/ohlc";           # v2.1: consolidated tape root
+DIARY_DIR="$HOME/day_trader_pro/reports";      # v2.1: all aggregates live here
 
 ensure_env() {
   if [ ! -d "$REPO_DIR/.git" ]; then
@@ -48,9 +52,9 @@ do_pull() { echo "[pull] git pull --ff-only"; git pull --ff-only || echo "[pull]
 run_date() {
   local D="$1"; local DAY="$HARVEST/$D";
   if [ ! -d "$DAY" ]; then echo "no harvest folder for $D at $DAY (has harvest.py run?)"; return 1; fi;
-  local N; N="$(ls "$DAY"/*_OHLC_*.csv 2>/dev/null | wc -l)";
-  if [ "$N" -eq 0 ]; then echo "no *_OHLC_*.csv in $DAY"; return 1; fi;
-  local LOG="$DAY/regime_replay_$D.jsonl";
+  local N; N="$(ls "$DAY"/*_ohlc_*.csv "$DAY"/*_OHLC_*.csv 2>/dev/null | wc -l)";
+  if [ "$N" -eq 0 ]; then echo "no *_ohlc_*.csv in $DAY"; return 1; fi;
+  local LOG="$DIARY_DIR/regime_replay_$D.jsonl"; mkdir -p "$DIARY_DIR";
   echo "[replay] $D: $N symbol CSVs -> scoring through real engines (--no-v13)";
   "$PY" -m tests.replay_confluence "$DAY" --no-v13 --jsonl "$LOG";
   local RC=$?;
@@ -68,7 +72,7 @@ case "${1:-}" in
   --report)
     ensure_env;
     D="${2:-$(TZ=America/New_York date +%F)}";
-    LOG="$HARVEST/$D/regime_replay_$D.jsonl";
+    LOG="$DIARY_DIR/regime_replay_$D.jsonl";
     if [ ! -f "$LOG" ]; then echo "no saved report for $D at $LOG — run a replay for $D first"; exit 1; fi;
     "$PY" -m tests.replay_confluence --report-only "$LOG";
     ;;
@@ -80,10 +84,10 @@ case "${1:-}" in
     ensure_env; do_pull;
     if [ "${2:-}" = "--rebuild" ]; then
       echo "[backfill] REBUILD: re-scoring every dated tape";
-      "$PY" -m tests.regime_backfill --harvest "$HARVEST" --diary-dir "$DIARY_DIR" --rebuild;
+      "$PY" -m tests.regime_backfill --harvest "$HARVEST" --diary-dir "$DIARY_DIR" --reports "$DIARY_DIR" --rebuild;
     else
       echo "[backfill] filling diary gaps that have tape on disk";
-      "$PY" -m tests.regime_backfill --harvest "$HARVEST" --diary-dir "$DIARY_DIR";
+      "$PY" -m tests.regime_backfill --harvest "$HARVEST" --diary-dir "$DIARY_DIR" --reports "$DIARY_DIR";
     fi;
     ;;
   [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])

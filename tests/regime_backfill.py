@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # tests/regime_backfill.py — options_trader_v3
+# v1.1 — 2026-07-14 — LAYOUT CONSOLIDATION: tape root defaults to
+#   ~/day_trader_pro/ohlc (dated subfolders, <SYM>_ohlc_<date>.csv — legacy
+#   _OHLC_ names still accepted), replay jsonl now written under reports/
+#   (new --reports arg), diary default moves to reports/. Logic unchanged.
 # v1.0 — 2026-07-11 — NEW FILE. Failsafe backfill for the manual regime replay.
 #   The regime replay is MANUAL (you review each day). This catches up any days
 #   whose OHLC tape harvest already collected but that were never replayed/diaried.
@@ -40,7 +44,8 @@ def dates_with_tape(harvest_root: str) -> List[str]:
         day_dir = os.path.join(harvest_root, name)
         if not os.path.isdir(day_dir):
             continue
-        if glob.glob(os.path.join(day_dir, "*_OHLC_*.csv")):
+        if (glob.glob(os.path.join(day_dir, "*_ohlc_*.csv"))
+                or glob.glob(os.path.join(day_dir, "*_OHLC_*.csv"))):
             out.append(name)
     return out
 
@@ -67,9 +72,11 @@ def _run(mod_args: List[str]) -> int:
     return subprocess.call([sys.executable, "-m"] + mod_args)
 
 
-def process_date(date: str, harvest_root: str, diary_dir: str) -> bool:
+def process_date(date: str, harvest_root: str, diary_dir: str,
+                 reports_dir: str) -> bool:
     day_dir = os.path.join(harvest_root, date)
-    log = os.path.join(day_dir, f"regime_replay_{date}.jsonl")
+    os.makedirs(reports_dir, exist_ok=True)
+    log = os.path.join(reports_dir, f"regime_replay_{date}.jsonl")
     print(f"\n=== {date} ===")
     rc = _run(["tests.replay_confluence", day_dir, "--no-v13", "--jsonl", log])
     if rc not in (0, 2):   # 0=all pass, 2=ran but an acceptance check failed (still valid data)
@@ -84,8 +91,9 @@ def process_date(date: str, harvest_root: str, diary_dir: str) -> bool:
 
 def main():
     ap = argparse.ArgumentParser(description="Failsafe backfill for the manual regime replay")
-    ap.add_argument("--harvest", default=os.path.expanduser("~/day_trader_pro/data/harvest"))
-    ap.add_argument("--diary-dir", default=os.path.expanduser("~/day_trader_pro/data"))
+    ap.add_argument("--harvest", default=os.path.expanduser("~/day_trader_pro/ohlc"))
+    ap.add_argument("--diary-dir", default=os.path.expanduser("~/day_trader_pro/reports"))
+    ap.add_argument("--reports", default=os.path.expanduser("~/day_trader_pro/reports"))
     ap.add_argument("--from", dest="date_from", default=None, help="lower bound YYYY-MM-DD (incl.)")
     ap.add_argument("--to", dest="date_to", default=None, help="upper bound YYYY-MM-DD (incl.)")
     ap.add_argument("--rebuild", action="store_true", help="re-run even dates already in the diary")
@@ -122,7 +130,7 @@ def main():
 
     ok = 0
     for d in todo:
-        if process_date(d, args.harvest, args.diary_dir):
+        if process_date(d, args.harvest, args.diary_dir, args.reports):
             ok += 1
     print(f"\nbackfill complete: {ok}/{len(todo)} dates diaried.")
     sys.exit(0)

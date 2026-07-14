@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # tests/regime_diary.py — options_trader_v3
+# v1.2 — 2026-07-14 — LAYOUT CONSOLIDATION: --harvest default retired in favor
+#   of --reports (the replay jsonl lives at reports/regime_replay_<date>.jsonl
+#   now); --diary-dir default moves to ~/day_trader_pro/reports. Old flags kept
+#   working. Digest logic unchanged.
 # v1.1 — 2026-07-12 — LAYER-2 digest (backward compatible) + first push to GitHub
 #   (v1.0 lived only on the control box — this file was never in the repo).
 #   When a tick log carries "l2" fields (replay_confluence v2.0+), each diary
@@ -246,9 +250,10 @@ def main():
     ap = argparse.ArgumentParser(description="Rolling regime diary (upsert by date)")
     ap.add_argument("--log", help="path to a regime_replay_<date>.jsonl to digest + upsert")
     ap.add_argument("--date", help="with --harvest: locate the day's log automatically")
-    ap.add_argument("--harvest", default=os.path.expanduser("~/day_trader_pro/data/harvest"),
-                    help="harvest root (holds <date>/regime_replay_<date>.jsonl)")
-    ap.add_argument("--diary-dir", default=os.path.expanduser("~/day_trader_pro/data"),
+    ap.add_argument("--reports", "--harvest", dest="reports",
+                    default=os.path.expanduser("~/day_trader_pro/reports"),
+                    help="reports root (holds regime_replay_<date>.jsonl)")
+    ap.add_argument("--diary-dir", default=os.path.expanduser("~/day_trader_pro/reports"),
                     help="where regime_diary.{jsonl,md} live")
     ap.add_argument("--view", action="store_true", help="print the whole diary and exit")
     args = ap.parse_args()
@@ -258,9 +263,9 @@ def main():
 
     log_path = args.log
     if not log_path and args.date:
-        log_path = os.path.join(args.harvest, args.date, f"regime_replay_{args.date}.jsonl")
+        log_path = os.path.join(args.reports, f"regime_replay_{args.date}.jsonl")
     if not log_path:
-        ap.error("give --log <jsonl>, or --date <YYYY-MM-DD> (+ --harvest), or --view")
+        ap.error("give --log <jsonl>, or --date <YYYY-MM-DD> (+ --reports), or --view")
     if not os.path.isfile(log_path):
         print(f"no tick log at {log_path} — run the replay for that date first"); sys.exit(1)
 
