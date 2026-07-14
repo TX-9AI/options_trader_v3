@@ -1,5 +1,12 @@
 """
-analysis/liquidity_mapper.py — Institutional liquidity mapping.
+analysis/liquidity_mapper.py — v3.1 — 2026-07-14 — AS-OF named levels.
+        _find_named_levels derived 'today' from the wall clock, so (a) every
+        tape replay saw ZERO named pools (measured: 0 of 1,367 evals across
+        3 symbols × 26 sessions — the sweep chain's first link, severed), and
+        (b) live Mondays had no PDH/PDL (calendar-minus-one = Sunday). Dates
+        now derive from the frame's last bar; 'yesterday' is the previous
+        TRADING day present in the frame. Session windows unchanged.
+--- original header follows --- — Institutional liquidity mapping.
 Tracks equal highs/lows, stop clusters, liquidity sweeps, and
 imbalance fills. Core input for the sweep reversal strategy.
 
@@ -165,7 +172,18 @@ class LiquidityMapper:
         confirmed = [s for s in lmap.sweeps if s.confirmed]
         if confirmed:
             deduped = self._dedupe_sweeps(confirmed)
-            recent = min(deduped, key=lambda s: s.bars_ago * self._tf_minutes(s.timeframe))
+            # v3.1: NAMED sweeps take precedence. Unnamed pools (equal-high/low
+            # clusters) are swept every few minutes, so recency-across-all-pools
+            # meant a genuine PDH/session-level raid was displaced from this
+            # slot almost immediately — the classifier (which requires
+            # swept_named_level, definitionally) could ~never see one.
+            # Measured: sweep_detected on 100% of evals, sweep_is_named on 0%,
+            # across 3 symbols × 26 sessions. The freshness gate (age ≤ 8)
+            # still applies downstream — this only stops noise from evicting
+            # the signal.
+            named = [s for s in deduped if s.swept_named_level]
+            pick_from = named if named else deduped
+            recent = min(pick_from, key=lambda s: s.bars_ago * self._tf_minutes(s.timeframe))
             minutes_ago = recent.bars_ago * self._tf_minutes(recent.timeframe)
             lmap.recent_sweep   = recent
             lmap.sweep_age_bars = max(0, round(minutes_ago / 5.0))   # 5m-equivalent bars
@@ -230,10 +248,18 @@ class LiquidityMapper:
             else:
                 idx = idx.tz_convert('UTC')
 
-            today = now_utc.date()
-            yesterday = today - timedelta(days=1)
+            # v3.1 AS-OF FIX: derive 'today' from the FRAME'S LAST BAR, not the
+            # wall clock. now_utc.date() made every tape replay blind to named
+            # levels (historical bars never match the real today), so the
+            # regime diary's "SWEEP 0%" measured nothing — and live it was
+            # merely coincidentally right. 'yesterday' is now the previous
+            # TRADING day actually present in the frame (calendar-minus-one
+            # returned Sunday every Monday: no PDH/PDL to start the week).
+            today = idx[-1].date() if len(idx) else now_utc.date()
+            earlier = sorted({d for d in idx.date if d < today})
+            yesterday = earlier[-1] if earlier else (today - timedelta(days=1))
 
-            # Previous day
+            # Previous trading day
             prev_day_mask = idx.date == yesterday
             if prev_day_mask.any():
                 prev_day_data = df[prev_day_mask]
