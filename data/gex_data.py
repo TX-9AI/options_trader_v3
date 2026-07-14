@@ -1,4 +1,16 @@
 """
+data/gex_data.py — v3.1 — 2026-07-14 — SCALE-FREE GEX ENVIRONMENT.
+        The $1M absolute NEUTRAL threshold was unreachable with proxy OI
+        (gross chain GEX ~$50-500K on any symbol) — gex_environment was
+        permanently NEUTRAL and butterfly Gate 5 (PINNING) could never open,
+        on any box, since v3.0. Environment now classifies on RATIOS —
+        net/gross sign strength + pin-strike concentration of gross |GEX| —
+        which are scale-invariant and therefore symbol-specific by
+        construction (per operator directive 2026-07-14): QQQ at $600, MU at
+        $925, CVX at $150 classify identically for identical chain SHAPE.
+        Knobs: OT_GEX_PIN_CONC (0.15) · OT_GEX_SIGN_RATIO (0.20). PRIORS —
+        calibrate from the signal ledger once it accumulates.
+--- original header follows ---
 data/gex_data.py — GEX (Gamma Exposure) calculator from live options chain.
 
 Computed directly from the TastyTrade chain we already fetch every 15s.
@@ -40,8 +52,15 @@ logger = logging.getLogger(__name__)
 MIN_OI_THRESHOLD = 10
 
 # Net GEX threshold (in millions) to classify environment
-# Below this magnitude = NEUTRAL
-GEX_NEUTRAL_THRESHOLD_M = 1.0   # $1M net GEX
+# ── v3.1 environment thresholds — SCALE-FREE RATIOS (symbol-specific by
+# construction; the old $1M absolute made PINNING unreachable: with proxy OI
+# gross chain GEX is ~$50-500K on ANY symbol → permanently NEUTRAL → butterfly
+# Gate 5 could never open, on any box, since v3.0) ────────────────────────────
+import os as _os
+GEX_PIN_CONCENTRATION = float(_os.environ.get("OT_GEX_PIN_CONC", "0.15"))
+#   PINNING additionally requires the pin strike to hold >= this share of gross |GEX|
+GEX_SIGN_RATIO        = float(_os.environ.get("OT_GEX_SIGN_RATIO", "0.20"))
+#   |net|/gross below this = NEUTRAL (no meaningful dealer-positioning signal)
 
 
 @dataclass
@@ -194,13 +213,16 @@ def compute_gex(chain: OptionsChain, spot_price: float) -> GEXSnapshot:
         # No clean flip found — use pin strike as proxy
         snapshot.flip_strike = snapshot.pin_strike
 
-    # ── Environment classification ────────────────────────────────────────────
-    net_gex_millions = snapshot.net_gex / 1_000_000
+    # ── Environment classification (v3.1: scale-free ratios) ──────────────────
+    gross = sum(abs(sg.net_gex) for sg in snapshot.strikes) or 1.0
+    net_ratio = snapshot.net_gex / gross
+    pin_sg = max(snapshot.strikes, key=lambda s: abs(s.net_gex), default=None)
+    pin_conc = (abs(pin_sg.net_gex) / gross) if pin_sg is not None else 0.0
 
-    if net_gex_millions > GEX_NEUTRAL_THRESHOLD_M:
+    if net_ratio > GEX_SIGN_RATIO and pin_conc >= GEX_PIN_CONCENTRATION:
         snapshot.gex_environment = "PINNING"
         snapshot.orb_bias        = "DAMPENING"
-    elif net_gex_millions < -GEX_NEUTRAL_THRESHOLD_M:
+    elif net_ratio < -GEX_SIGN_RATIO:
         snapshot.gex_environment = "TRENDING"
         snapshot.orb_bias        = "AMPLIFYING"
     else:
