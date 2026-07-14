@@ -461,7 +461,7 @@ def main():
     if args.db:
         os.environ["OT_FEED_DB"] = args.db
     store = FeedStore(feed_db_path())
-    logger.info("candle_feed v3.3 — store=%s symbol=%s (dxfeed=%s) vix=%s",
+    logger.info("candle_feed v3.5 — store=%s symbol=%s (dxfeed=%s) vix=%s",
                 feed_db_path(), INSTRUMENT, _dxfeed_symbol(), VIX_SYMBOL)
     store.purge_poison()   # v3.2: self-heal any pre-existing poison rows
 
