@@ -292,7 +292,25 @@ POLL_INTERVAL_SECONDS       = 15
 # ─── REGIME CLASSIFICATION ────────────────────────────────────────────────────
 
 ADX_TREND_THRESHOLD         = 25
-ADX_RANGE_THRESHOLD         = 20
+ADX_RANGE_THRESHOLD         = 25   # v3.3 (2026-07-14): was 20 — closed the ADX
+                                   # DEAD ZONE. _is_ranging required adx<20 while
+                                   # _is_trending requires adx>=25, so ordinary
+                                   # mild-drift tape at ADX 20-25 matched NO regime
+                                   # and fell to UNKNOWN (hard no-trade). Measured
+                                   # live: AAPL sat at ADX 19.26 — 0.74 under the
+                                   # cliff — flickering RANGING<->UNKNOWN all session;
+                                   # ~85% of fleet ticks were UNKNOWN on 07-13/07-14
+                                   # and the fleet took ZERO trades for two days.
+                                   # A range does not stop being a range because ADX
+                                   # ticked 19.9 -> 20.1; it is the same regime with
+                                   # LOWER CONVICTION. _ranging_conviction already
+                                   # ramps on 1 - adx/ADX_RANGE_THRESHOLD, so raising
+                                   # the gate to the trend line extends that ramp
+                                   # across the gap: ADX 12 -> ~0.52, ADX 24 -> ~0.16.
+                                   # Matches docs/REGIME_TRUTHS.md, which defines ADX
+                                   # for RANGING as "any (allowed)" and strength as a
+                                   # SOFT-NECESSARY ramp, never a cliff.
+                                   # PRIOR — recalibrate from multi-day tape.
 ATR_EXPANSION_MULTIPLIER    = 1.5
 BB_WIDTH_COMPRESSION_PCT    = 0.20
 SWEEP_REJECTION_CANDLES     = 3
