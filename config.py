@@ -146,7 +146,17 @@ STRIKE_INCREMENT    = STRIKE_INCREMENTS.get(INSTRUMENT, 1)
 # density, so they run ONLY on these. Every other tradeable symbol is
 # directional-only (ORB + Sweep Reversal), derived automatically — add a symbol
 # to STRIKE_INCREMENTS and it's directional unless it's listed here.
-FULL_STRATEGY_INSTRUMENTS    = {"SPY", "QQQ", "SPX", "IWM"}
+# 2026-07-14 (operator directive): neutral strategies enabled FLEET-WIDE for
+# data collection — every configured symbol runs butterfly/condor eligibility.
+# Was {"SPY","QQQ","SPX","IWM"}, which silently excluded 26 of 29 live boxes.
+FULL_STRATEGY_INSTRUMENTS    = set(STRIKE_INCREMENTS)
+
+# ── Butterfly discount gate (2026-07-14, operator directive) ──────────────────
+# The fly's edge is buying the tent at a DISCOUNT while price still has to walk
+# into it: require net_debit <= this fraction of wing width (0.33 => min ~2:1
+# reward:risk). Self-normalizing across symbols; needs only marks. PRIOR —
+# calibrate from logged debit-ratio vs outcome once fleet-wide entries accrue.
+BUTTERFLY_MAX_DEBIT_PCT_WIDTH = 0.33
 DIRECTIONAL_ONLY_INSTRUMENTS = set(STRIKE_INCREMENTS) - FULL_STRATEGY_INSTRUMENTS
 DIRECTIONAL_ONLY             = INSTRUMENT in DIRECTIONAL_ONLY_INSTRUMENTS
 CONTRACT_MULTIPLIER = 100
