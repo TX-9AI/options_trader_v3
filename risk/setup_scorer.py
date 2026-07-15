@@ -1,5 +1,16 @@
 """
 risk/setup_scorer.py — Scores and grades options trade signals A/B.
+v1.2 — 2026-07-15 — BRIEF NUDGE: a signed post-sum adjustment (cap ±0.05) from
+        the pre-market move-probability brief. This box reads its own line from
+        ~/brief_flags.json ({symbol, strength 0..1, date}); the nudge is
+        +strength·cap for ORB (catalyst helps a breakout), -strength·cap for
+        butterfly/condor (catalyst fights a pin/range), and ZERO for sweep
+        reversal (structure-driven, catalyst-agnostic). Applied to the final
+        total AFTER the weighted sum and late-session modifier, BEFORE the
+        grade compare — so the ±0.05 lands literally on the score as a
+        tie-breaker; it can never rescue a bad setup or sink a good one.
+        Absent/stale/mismatched flag file => strength 0 => no nudge. Knob:
+        config.BRIEF_CONVICTION_WEIGHT (default 0.05).
 v3.0 — original release — A/B/C grading
 v1.1 — 2026-06-30 — eliminated C grade entirely. There is no such thing
         as a C-grade setup by definition — anything below the B threshold
@@ -29,6 +40,10 @@ from analysis.structure_analyzer import StructureMap
 from analysis.liquidity_mapper import LiquidityMap
 from data.macro_data import MacroSnapshot
 from config import GRADE_SIZE_MULTIPLIER, GRADE_A_MIN_SCORE, GRADE_B_MIN_SCORE
+try:
+    from config import BRIEF_CONVICTION_WEIGHT
+except Exception:
+    BRIEF_CONVICTION_WEIGHT = 0.05
 from utils.time_utils import current_session_label
 
 logger = logging.getLogger(__name__)
@@ -102,6 +117,28 @@ class SetupScorer:
     Returns A or B grade only — anything scoring below the B threshold
     is not a valid trade and returns None.
     """
+
+    def _brief_strength(self) -> float:
+        """This box's pre-market move-strength (0..1) from ~/brief_flags.json,
+        cached for the process. Any problem — missing file, stale date, wrong
+        symbol, malformed — yields 0.0 (no nudge). Never raises."""
+        if getattr(self, "_brief_cached", None) is not None:
+            return self._brief_cached
+        strength = 0.0
+        try:
+            import os, json, datetime
+            path = os.path.expanduser("~/brief_flags.json")
+            my_symbol = os.environ.get("OT_INSTRUMENT", "")
+            if os.path.isfile(path):
+                with open(path) as fh:
+                    d = json.load(fh)
+                today = datetime.date.today().isoformat()
+                if d.get("symbol") == my_symbol and d.get("date") == today:
+                    strength = max(0.0, min(1.0, float(d.get("strength", 0.0))))
+        except Exception:
+            strength = 0.0
+        self._brief_cached = strength
+        return strength
 
     def score(self,
               signal:    OptionsSignal,
@@ -195,6 +232,20 @@ class SetupScorer:
         session = current_session_label()
         if session == "late_session":
             total *= 0.85
+
+        # ── Brief nudge (v1.2) — signed pre-market prior, post-sum tie-breaker ──
+        # ORB: +  (catalyst supports a breakout)
+        # Butterfly/Condor: -  (catalyst fights a pin/range)
+        # SweepReversal: 0  (structure-driven; catalyst-agnostic)
+        brief_sign = {"ORBStrategy": 1.0,
+                      "ButterflyStrategy": -1.0,
+                      "IronCondorStrategy": -1.0,
+                      "SweepReversal": 0.0}.get(name, 0.0)
+        if brief_sign != 0.0:
+            nudge = brief_sign * self._brief_strength() * BRIEF_CONVICTION_WEIGHT
+            if nudge != 0.0:
+                total += nudge
+                breakdown["brief_nudge"] = round(nudge, 4)
 
         # ── Grade — A or B only. No C grade exists. ─────────────────────────────
         if total >= grade_a:
