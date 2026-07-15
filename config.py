@@ -331,6 +331,13 @@ REGIME_REASSESS_MINUTES     = 5
 
 GRADE_A_MIN_SCORE           = 0.78
 GRADE_B_MIN_SCORE           = 0.55
+
+# ── Brief nudge (2026-07-15) ─────────────────────────────────────────────────
+# Signed pre-market move-probability prior applied post-sum in setup_scorer:
+# +w·strength for ORB, -w·strength for neutrals, 0 for sweep reversal. This
+# value is the hard cap (strength is 0..1). Small on purpose — a tie-breaker,
+# never an override. Calibrate from the signal ledger once entries accrue.
+BRIEF_CONVICTION_WEIGHT     = 0.05
 GRADE_SIZE_MULTIPLIER       = {"A": 1.5, "B": 1.0}
 
 # ─── VOLATILITY / TREND ───────────────────────────────────────────────────────
