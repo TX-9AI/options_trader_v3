@@ -1,5 +1,14 @@
 """
 execution/position_manager.py — Manages the single open options position.
+v3.4 — 2026-07-15 — BOOK ONLY ON CONFIRMED FILL. _execute_exit() now consumes
+        the FillResult from place_exit_order(): it books P&L ONLY when
+        fill.confirmed is True and uses fill.fill_price (the ACTUAL close price
+        — simulated mark in paper, broker fill in live), never the mark we
+        passed nor entry-as-fallback. An unconfirmed result books NOTHING and
+        leaves the row OPEN (anti-orphan invariant) so flatten_all's 15:45->16:00
+        retry can act. Kills the hard-close $0.00 bookings. flatten_all still
+        passes a chain (now supplied by handle_hard_close) so paper has a real
+        mark to simulate against.
 v3.1 — 2026-07-12 — F5 FIX: trail updates now write to the trail_stop column
         via update_trail_stop() instead of overwriting stop_premium/update_stop.
         stop_premium stays the immutable entry-time -25% floor, so the exit
@@ -306,15 +315,32 @@ class PositionManager:
     def _execute_exit(self, record: TradeRecord,
                        decision: ExitDecision,
                        current_premium: float) -> bool:
-        """Place the exit, log/alert, record win/loss. Returns True if the
-        position closed, False if the order failed (caller retries)."""
+        """Place the exit and book P&L ONLY on a confirmed fill. Returns True if
+        the position genuinely closed, False if not (caller retries).
+
+        v3.4: booking is gated on FillResult.confirmed and uses the ACTUAL fill
+        price, not the mark we passed in. In paper the simulated fill price
+        equals the mark; in live it is the broker's real fill. An unconfirmed
+        result books NOTHING and leaves the row open — the anti-orphan invariant.
+        current_premium is the last-known mark, passed to the exit engine as the
+        paper fill price / live context.
+        """
         trade_id = record["trade_id"]
 
         exit_eng = get_exit_engine(self.paper_trading)
-        success  = exit_eng.place_exit_order(record, decision.exit_reason)
+        fill     = exit_eng.place_exit_order(record, decision.exit_reason,
+                                             mark_price=current_premium)
 
-        if not success:
-            logger.error(f"Exit order failed for {trade_id[:8]} — will retry next tick")
+        if not fill.confirmed:
+            logger.error(f"Exit NOT confirmed for {trade_id[:8]} "
+                         f"({fill.detail or 'no fill'}) — position stays OPEN, will retry")
+            return False
+
+        fill_price = fill.fill_price
+        if fill_price is None:
+            # confirmed with no price should be impossible; refuse to book fiction.
+            logger.error(f"Exit for {trade_id[:8]} confirmed but no fill_price — "
+                         f"refusing to book; will retry")
             return False
 
         entry_prem    = record["entry_premium"]
@@ -326,14 +352,14 @@ class PositionManager:
                          or record.get("strategy") == "IronCondorStrategy"
                          or bool(record.get("is_short_position")))
         if credit_signed:
-            pnl_per_share = entry_prem - current_premium
+            pnl_per_share = entry_prem - fill_price
         else:
-            pnl_per_share = current_premium - entry_prem
+            pnl_per_share = fill_price - entry_prem
         pnl_usd       = pnl_per_share * contracts * CONTRACT_MULTIPLIER
 
         self._trade_logger.log_exit(
             trade_id    = trade_id,
-            exit_price  = current_premium,
+            exit_price  = fill_price,
             pnl_usd     = pnl_usd,
             exit_reason = decision.exit_reason,
         )
@@ -347,7 +373,7 @@ class PositionManager:
         get_alert_manager().send_exit_alert(
             trade_id      = trade_id,
             setup_type    = record.get("setup_type", ""),
-            exit_premium  = current_premium,
+            exit_premium  = fill_price,
             entry_premium = entry_prem,
             pnl_usd       = pnl_usd,
             contracts     = contracts,

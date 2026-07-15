@@ -1,5 +1,17 @@
 """
 execution/exit_engine.py — Strategy-aware exit logic for all options positions.
+v3.4 — 2026-07-15 — FILL-CONFIRMED EXIT CONTRACT. place_exit_order() now returns
+        a FillResult (confirmed / fill_price / order_id / partial), not a bare
+        bool — the SHARED seam between paper and live so the two can't fight.
+        PAPER: simulate the fill at the last-known mark (passed in) and confirm
+        it in one pass; if no mark, decline (confirmed=False) rather than invent
+        a price. LIVE: routes to _confirm_and_book_live_exit(), which MUST book
+        only on a broker-confirmed fill at the ACTUAL fill price — currently a
+        fail-loud stub (raises NotImplementedError) so flipping to cash before
+        it exists can NEVER book an unconfirmed close at a fabricated $0.00.
+        _submit_live_close() retained (submission != fill) for Fable to call.
+        See FABLE_SPEC_live_exit_fill_confirmation.md. Fixes the 15:45 hard-close
+        batch that logged every leg at +$0.00 (booked at entry premium).
 v3.3 — 2026-07-12 — F5 FIX (exit-reason integrity; behaviorally neutral).
         position_manager used to overwrite record['stop_premium'] (+DB) with
         every trail update, so the floor checks here (ORB #1b, sweep #2,
@@ -161,6 +173,34 @@ POST_TARGET_TRAIL_LOCK_PCT = 0.85
 THETA_MIN_HOLD_MIN       = 20      # blackout: no theta exit in the first N min after entry
 THETA_MIN_GAIN_PCT       = 0.10    # gain floor: don't protect a gain smaller than this
 MINUTES_PER_CALENDAR_DAY = 1440    # theta greek is $/share/CALENDAR day (not the 390 RTH min)
+
+
+@dataclass
+class FillResult:
+    """The outcome of a close order — the SHARED CONTRACT between paper and live.
+
+    Both place_exit_order() modes return one of these; _execute_exit() books P&L
+    from it and NEVER inspects paper_trading itself. This is the seam that lets
+    the paper implementation (here, now) and the live broker-confirmation
+    implementation (Fable — see FABLE_SPEC_live_exit_fill_confirmation.md)
+    coexist without either re-tooling the other:
+
+        - confirmed=True  → the close is REAL. Book P&L at fill_price. Only a
+                            confirmed result may ever mark a DB row closed.
+        - confirmed=False → NOT filled. Book NOTHING, mark NOTHING closed. The
+                            position stays open and the caller retries/escalates.
+                            This is the anti-orphan invariant: an unconfirmed
+                            live close must never become a $0.00 (or any) row.
+
+    fill_price is the price the position ACTUALLY closed at — a simulated mark in
+    paper, the broker's real fill in live. It is never entry-as-a-fallback and
+    never a fabricated 0.0; if there is no real price, confirmed must be False.
+    """
+    confirmed:   bool
+    fill_price:  Optional[float] = None      # actual close price; None iff not confirmed
+    order_id:    Optional[str]   = None       # broker order id (live); None in paper
+    partial:     bool            = False      # live: partially filled, remainder working
+    detail:      str             = ""         # human-readable status for logs/alerts
 
 
 @dataclass
@@ -972,33 +1012,88 @@ class ExitEngine:
 
         return self._trail_stops[trade_id]
 
-    def place_exit_order(self, record: TradeRecord, reason: str) -> bool:
-        """Place closing order. Paper mode simulates. Live mode uses SDK."""
-        mode         = "PAPER" if self.paper_trading else "LIVE"
-        trade_id     = record["trade_id"]
-        contracts    = record["contracts"]
-        is_butterfly = bool(record.get("is_butterfly", False))
+    def place_exit_order(self, record: TradeRecord, reason: str,
+                         mark_price: Optional[float] = None) -> FillResult:
+        """Place a closing order and return a FillResult (the shared paper/live
+        contract). NEVER returns a bare success bool anymore: a close is only
+        'done' when FillResult.confirmed is True AND fill_price is a real price.
 
-        logger.info(
-            f"[{mode}] CLOSING {trade_id[:8]}: {reason} "
-            f"contracts={contracts}"
+        mark_price is the last-known mark for this position (spread value for a
+        condor leg, net debit for a butterfly, single mark otherwise), supplied
+        by position_manager. In PAPER it becomes the simulated fill price. In
+        LIVE it is context only — the booked price MUST be the broker's actual
+        fill, never this mark.
+        """
+        mode      = "PAPER" if self.paper_trading else "LIVE"
+        trade_id  = record["trade_id"]
+        contracts = record["contracts"]
+
+        logger.info(f"[{mode}] CLOSING {trade_id[:8]}: {reason} contracts={contracts}")
+
+        # ── PAPER: simulate the fill at the last-known mark and CONFIRM it ──────
+        # A simulated close always succeeds on the first pass — there is no
+        # broker, nothing to poll, nothing to reuse. If we have no mark we cannot
+        # invent a price, so we decline (confirmed=False) rather than book a fake
+        # one; the caller will try again next tick with a fresh mark.
+        if self.paper_trading:
+            if mark_price is None or mark_price < 0:
+                logger.warning(f"[PAPER] {trade_id[:8]}: no mark available — "
+                               f"cannot simulate a fill this pass, will retry")
+                return FillResult(confirmed=False, detail="paper: no mark yet")
+            logger.info(f"[PAPER] Simulated fill {trade_id[:8]} @ {mark_price:.2f}")
+            return FillResult(confirmed=True, fill_price=float(mark_price),
+                              detail="paper simulated fill")
+
+        # ── LIVE: submit, then book ONLY on broker-confirmed fill ──────────────
+        # place the order, capture its id, poll the broker to a bounded deadline,
+        # and return confirmed=True with the REAL fill price — or confirmed=False
+        # (position stays open, escalates). Until that exists, we must FAIL LOUD
+        # rather than fall through to the old submit==done behaviour, which would
+        # book unconfirmed live closes at a fabricated price. See the Fable spec.
+        return self._confirm_and_book_live_exit(record, reason, mark_price)
+
+    def _confirm_and_book_live_exit(self, record: TradeRecord, reason: str,
+                                    mark_price: Optional[float]) -> FillResult:
+        """LIVE close with broker fill-confirmation.  *** STUB — Fable builds this. ***
+
+        Contract this MUST satisfy (see FABLE_SPEC_live_exit_fill_confirmation.md):
+          1. Submit the close (SELL_TO_CLOSE / spread) and capture the order id.
+          2. Poll broker order status to a bounded deadline (filled / partial /
+             working / rejected / cancelled).
+          3. Return FillResult(confirmed=True, fill_price=<ACTUAL broker fill>,
+             order_id=...) ONLY on a confirmed full fill.
+          4. On partial: track the remainder to completion (or return
+             confirmed=False, partial=True and let the caller retry).
+          5. On not-filled-by-deadline / reject / error: return
+             confirmed=False — the position STAYS OPEN and is escalated. Never
+             book, never mark closed, never fabricate a price.
+
+        Until it is implemented, refuse to trade live rather than silently book
+        orphans at a fake price.
+        """
+        raise NotImplementedError(
+            "LIVE exit fill-confirmation is not implemented. Booking a live close "
+            "without broker confirmation would risk orphan positions booked at a "
+            "fabricated price. Implement _confirm_and_book_live_exit per "
+            "FABLE_SPEC_live_exit_fill_confirmation.md before trading live. "
+            "(PAPER_TRADING mode is unaffected.)"
         )
 
-        if self.paper_trading:
-            logger.info(f"[PAPER] Simulated close: {trade_id[:8]}")
-            return True
-
+    def _submit_live_close(self, record: TradeRecord) -> bool:
+        """Order SUBMISSION only (no fill confirmation). Retained for Fable to
+        call from _confirm_and_book_live_exit — it is deliberately NOT wired to
+        booking, because submission is not a fill."""
+        is_butterfly = bool(record.get("is_butterfly", False))
         try:
             session = get_session()
             account = get_account()
-
             if is_butterfly:
-                return self._close_butterfly(session, account, record, contracts)
-            else:
-                return self._close_single_leg(session, account, record, contracts)
-
+                return self._close_butterfly(session, account, record,
+                                             record["contracts"])
+            return self._close_single_leg(session, account, record,
+                                          record["contracts"])
         except Exception as e:
-            logger.error(f"Exit order failed for {trade_id[:8]}: {e}")
+            logger.error(f"Live close submit failed for {record['trade_id'][:8]}: {e}")
             return False
 
     def _close_single_leg(self, session, account, record, contracts) -> bool:
