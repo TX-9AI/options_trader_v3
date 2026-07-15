@@ -1,5 +1,9 @@
 """
 query.py — OptionsTrader Performance Dashboard
+v3.4 — 2026-07-15 — None-guard the open-position setup_score display: condor
+        legs log a NULL score (delta street-sign is NULL when Greeks are
+        unavailable), which crashed the dashboard with TypeError on :.2f.
+        Now renders "score=n/a" instead of raising.
 v3.0 — original
 v1.1 — 2026-06-29 — Fix: read INSTRUMENT from systemd env via get_runtime_env()
 v1.2 — 2026-07-09 — W/L consistency: a $0 (scratch) trade is no longer counted
@@ -197,7 +201,9 @@ def show_open_position(conn):
     print(f"  ID:            {row['trade_id'][:8]}")
     print(f"  Position:      {pos_desc}")
     print(f"  Strategy:      {row['strategy']}  |  Setup: {row['setup_type']}")
-    print(f"  Grade:         {row['setup_grade']}  (score={row['setup_score']:.2f})")
+    _score = row['setup_score']
+    _score_str = f"score={_score:.2f}" if _score is not None else "score=n/a"
+    print(f"  Grade:         {row['setup_grade']}  ({_score_str})")
     print(f"  Regime:        {row['regime']}")
     print(f"  Expiry:        {row['expiry']}")
     print(f"  Contracts:     {contracts}")

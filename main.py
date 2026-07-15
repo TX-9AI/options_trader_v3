@@ -1,5 +1,11 @@
 """
-main.py — options_trader v3.3
+main.py — options_trader v3.4
+v3.4 — 2026-07-15 — Condor legs now record |short-strike delta| as setup_score
+        (a calibration "street-sign", read AFTER the BB-anchored selector
+        picks the strike — it does NOT influence selection or sizing). NULL
+        when the Greeks feed did not populate delta, so a stored value is
+        always a genuine delta. Enables later condor threshold calibration;
+        previously condor legs logged no score at all.
 v3.3 — 2026-07-13 — defect H rename only: NO_ENTRY_AFTER_ET -> ORB_NO_ENTRY_AFTER_ET
         (import + the orb_state.json "past_cutoff" flag). Same constant, same
         (11, 0) value, same behaviour — the name now states its ORB scope.
@@ -384,6 +390,17 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState):
     is_leg1  = "Leg 1" in signal.setup_type
     max_loss = (spread_width - fill_credit) * contracts * CONTRACT_MULTIPLIER
 
+    # ── DELTA STREET-SIGN (v3.x, 2026-07-15) ──────────────────────────────────
+    # The BB-anchored selector already chose short_contract; we do NOT influence
+    # that. We only READ the delta off the strike it picked and record it as the
+    # setup_score, purely as a calibration waypoint. abs() puts put-side (negative
+    # delta) and call-side (positive) on one 0-1 scale. If the Greeks feed didn't
+    # populate delta (contract default 0.0), store NULL — a real short strike is
+    # never exactly 0.0 delta, so NULL unambiguously means "delta unavailable",
+    # not "delta was zero". Calibration can then trust every non-null value.
+    short_delta = abs(getattr(short_contract, "delta", 0.0) or 0.0)
+    delta_score = short_delta if short_delta > 0 else None
+
     # Register the leg as a TRACKED position so it is managed, exited, and P&L'd.
     # The condor is the ONLY strategy allowed a second concurrent position.
     record = make_record(
@@ -392,6 +409,7 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState):
         strategy         = "IronCondorStrategy",
         setup_type       = signal.setup_type,
         setup_grade      = "B",
+        setup_score      = delta_score,          # street-sign: |short-strike delta|
         direction        = "neutral",
         option_side      = signal.option_side,
         is_butterfly     = 0,

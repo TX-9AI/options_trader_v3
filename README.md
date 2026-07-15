@@ -179,10 +179,20 @@ delta targeting, scaled inversely to reversal strength (strong snap → far-OTM;
 near-ATM). **BOS exit** on the 1m chart — closes only, no wicks.
 
 ### Iron Condor (legged, tracked)
-RANGING fallback when no GEX pin is available. **Strikes are Bollinger-Band anchored — there
-is no delta anywhere in the condor path.** Short call = lowest liquid strike at/above the BB
-upper band; short put = highest at/below the BB lower band. Delta is deliberately excluded: it
-is relative to where price *sits*, not to the actual range boundary.
+RANGING fallback when no GEX pin is available. **Strike SELECTION is Bollinger-Band anchored —
+no delta enters the strike-picking path.** Short call = lowest liquid strike at/above the BB
+upper band; short put = highest at/below the BB lower band. Delta is deliberately excluded
+*from selection*: it is relative to where price *sits*, not to the actual range boundary.
+
+**Delta as a calibration street-sign (v3.4).** Distinct from selection: after the BB selector
+has picked the short strike, the leg **records `abs(short-strike delta)` as its `setup_score`** —
+read-only, purely as a logged waypoint. It does not influence which strike is chosen, how the
+leg is sized, or whether it fires; it is written *after* the pick is final. Condor legs
+otherwise carry no conviction score (they hardcode Grade B), so this is the axis condor
+threshold-calibration will bin fee-adjusted ROI against later. `NULL` when the Greeks feed did
+not populate delta — a real short strike is never exactly 0.0 delta, so a stored value is
+always a genuine delta. This is the *only* delta anywhere near the condor, and it decides
+nothing.
 
 The condor is **the only strategy allowed two concurrent positions** (its two verticals). Each
 vertical is a fully tracked position — managed, exited, and P&L'd independently with
@@ -453,14 +463,14 @@ dedicated Telegram bot for options-trader notifications.
 
 | File | Purpose |
 |---|---|
-| `main.py` ✅ | **v3.3.** The bot. 15s loop: analyze → classify regime → dispatch strategy → score → size → enter; manages open positions, runs the BWB roll check, enforces the daily-loss halt, writes `orb_state.json` each tick. Holds the `UNKNOWN` hard gate and the ORB un-gate exception. |
+| `main.py` ✅ | **v3.4.** The bot. 15s loop: analyze → classify regime → dispatch strategy → score → size → enter; manages open positions, runs the BWB roll check, enforces the daily-loss halt, writes `orb_state.json` each tick. Holds the `UNKNOWN` hard gate and the ORB un-gate exception. Condor legs log `abs(short-strike delta)` as `setup_score` (calibration waypoint; see Iron Condor). |
 | `config.py` ✅ | **v3.3.** Every tunable parameter + credential accessors (env-only, never in source). `PAPER_TRADING` defaults `True`. |
 | `README.md` 📄 | This file. Current state, not aspiration. |
 | `ROADMAP.md` 📄 | **Build status lives here.** v2→v3 reconciliation, honest distance-to-vision, Phases 0–4, and the named risks. |
 | `CHANGELOG.md` 📄 | v3.0 purge changelog (fork point, changed-file table, verification status). |
 | `requirements.txt` ⚙️ | tastytrade, httpx, anyio, pandas, numpy, pytz. **No market-data dependency** — sqlite3 is stdlib. |
 | `status.py` 🧪 | Live snapshot: ORB state/range/latches, regime, GEX pin, open position, daily-loss banner. Reads `orb_state.json` as authoritative. |
-| `query.py` 🧪 | Performance dashboard against `trades.db` — W/L, R, grades, exit reasons. |
+| `query.py` 🧪 | **v3.4.** Performance dashboard against `trades.db` — W/L, R, grades, exit reasons. None-guards a NULL `setup_score` (condor legs) so the open-position view can't crash on `:.2f`. |
 | `debug_status.py` 🧪 | Verbose diagnostic for `status.py` instrument/env resolution. |
 | `eod_summary.py` ⚙️ | Per-box EOD P&L writer (~15:50 ET, own timer). Emits `pnl_today.json` for control-side harvest. |
 | `stress_theta_bleed.py` 🧪 | Offline stress test for the four theta gates. Patches `minutes_since`; no network. **Lives at root, not `tests/`.** |
