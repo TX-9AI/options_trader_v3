@@ -1,5 +1,9 @@
 """
 main.py — options_trader v3.4
+v3.4 — 2026-07-15 — handle_hard_close() now fetches the options chain once and
+        passes it to flatten_all(), so the 15:45 force-flatten has real marks
+        (paper fill price / live context) instead of booking at entry premium
+        and logging every leg at +$0.00. Reused across the 15:45->16:00 retries.
 v3.4 — 2026-07-15 — Condor legs now record |short-strike delta| as setup_score
         (a calibration "street-sign", read AFTER the BB-anchored selector
         picks the strike — it does NOT influence selection or sizing). NULL
@@ -704,7 +708,17 @@ def handle_hard_close(state: BotState):
         return
 
     instrument = os.environ.get("OT_INSTRUMENT", INSTRUMENT)
-    failed = pos_mgr.flatten_all("hard_close_15:45_ET")
+    # v3.4: fetch the chain ONCE for the hard-close so flatten_all can get real
+    # marks (paper: simulated fill price; live: context). Without it, marks were
+    # None and paper booked at entry premium -> every leg logged $0.00, poisoning
+    # calibration. Fetched once here and reused across the 15:45->16:00 retries.
+    chain = None
+    try:
+        chain = get_chain_fetcher().fetch_chain()
+    except Exception as e:
+        logger.warning(f"Hard close: chain fetch failed ({e}); "
+                       f"paper marks may be unavailable this pass — will retry")
+    failed = pos_mgr.flatten_all("hard_close_15:45_ET", chain=chain)
 
     if not failed:
         logger.info("HARD CLOSE complete — all positions flat.")
