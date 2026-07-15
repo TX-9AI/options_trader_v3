@@ -1,5 +1,10 @@
 """
 strategy/condor_roll.py — Broken-wing roll of a live iron condor.
+v3.1 — 2026-07-15 — FillResult adoption: the live roll-close of the untested
+        vertical now goes through the confirmed-fill contract (place_exit_order
+        returns FillResult); the roll aborts and leaves the position OPEN unless
+        the close is broker-confirmed, instead of treating order submission as a
+        completed close. No paper-path change.
 v3.0 — 2026-07-02 — initial build.
 v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         mapping optimization (all market data now flows from the single
@@ -193,9 +198,15 @@ def _execute_roll(pos_mgr, tested: dict, untested: dict,
     try:
         # ── 1. Close the OLD untested vertical (buy it back) ──────────────────
         if not state.paper_trading:
-            ok = get_exit_engine(False).place_exit_order(untested, "rolled_to_broken_wing")
-            if not ok:
-                logger.error("Roll aborted — could not close untested vertical")
+            # v3.4: place_exit_order now returns a FillResult; a live roll-close
+            # must be broker-confirmed before we book it (same anti-orphan rule
+            # as every other live exit — see FABLE_SPEC_live_exit_fill_confirmation).
+            fill = get_exit_engine(False).place_exit_order(
+                untested, "rolled_to_broken_wing",
+                mark_price=plan.close_cost)
+            if not fill.confirmed:
+                logger.error("Roll aborted — untested vertical close not confirmed "
+                             f"({fill.detail or 'no fill'}); leaving position OPEN")
                 return False
         old_credit = float(untested.get("credit_received", untested.get("entry_premium", 0.0)))
         pnl_close  = (old_credit - plan.close_cost) * contracts * CONTRACT_MULTIPLIER
