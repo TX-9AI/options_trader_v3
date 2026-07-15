@@ -1,5 +1,15 @@
 """
-data/candle_feed.py — addendum v3.4 (see below); original header follows.
+data/candle_feed.py — addendum v3.8 (see below); original header follows.
+
+v3.8 — 2026-07-15 — SUBSCRIPTION FAULT-ISOLATION + EXCEPTIONGROUP UNWRAP.
+        Each candle subscribe is now independent: one failing (symbol,tf)
+        (e.g. an entitlement gap) is logged with its REAL cause and skipped
+        instead of killing the whole stream. And the reconnect handler now
+        unwraps asyncio's ExceptionGroup so the actual DXFeed error is
+        logged, not 'unhandled errors in a TaskGroup'. This is what left XOM
+        (and any entitlement-gapped symbol) dark and undiagnosable for two
+        days. Additive to v3.7 (parser) / v3.5 (chunked chain) — no other
+        behaviour changed.
 
 v3.5 — 2026-07-14 — CHUNKED chain subscribes (75 symbols/frame). SPX/QQQ-sized
         0DTE chains in a single subscribe frame risk a websocket 1009
@@ -114,6 +124,7 @@ import logging
 import os
 import json
 import sqlite3
+import traceback
 import threading
 import time as _time
 from datetime import datetime, time as dtime, timedelta
@@ -178,6 +189,23 @@ BACKFILL_DAYS = {
 
 def _dxfeed_symbol() -> str:
     return os.environ.get("OT_DXFEED_SYMBOL", "").strip() or INSTRUMENT
+
+
+def _explain_exc(e, _depth=0):
+    """Flatten an exception (incl. ExceptionGroup / __cause__) to a readable line.
+    v3.8 — asyncio TaskGroup wraps the real failure in an ExceptionGroup whose
+    str() is just 'unhandled errors in a TaskGroup (1 sub-exception)', which hid
+    XOM's actual stream-reject cause for two days."""
+    if _depth > 5:
+        return repr(e)
+    parts = ["%s: %s" % (type(e).__name__, e)]
+    subs = getattr(e, "exceptions", None)
+    if subs:
+        parts.append("[" + " | ".join(_explain_exc(x, _depth + 1) for x in subs) + "]")
+    cause = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
+    if cause is not None and cause is not e:
+        parts.append("<- caused by " + _explain_exc(cause, _depth + 1))
+    return " ".join(parts)
 
 
 def _base_symbol(event_symbol: str) -> str:
@@ -564,9 +592,25 @@ class CandleFeed:
                     # v3.4: fresh socket — chain subscriptions must be rebuilt
                     self._chain_expiry = ""
                     self._chain_subscribed.clear()
+                    # v3.8: subscribe each (symbol, tf) INDEPENDENTLY. A single
+                    # failing subscribe_candle used to throw out of the whole
+                    # `async with`, killing the ENTIRE stream — so one bad symbol
+                    # or timeframe (e.g. an entitlement gap on XOM) took down all
+                    # candles, for two days, with only a wrapped "unhandled errors
+                    # in a TaskGroup" to show for it. Now a failure is logged with
+                    # its REAL cause (see _explain_exc) and skipped.
+                    ok_subs = 0
                     for (dx_sym, tf, start) in self.subs:
-                        await streamer.subscribe_candle([dx_sym], tf, start_time=start)
-                        logger.info("subscribed %s %s from %s", dx_sym, tf, start.isoformat())
+                        try:
+                            await streamer.subscribe_candle([dx_sym], tf, start_time=start)
+                            logger.info("subscribed %s %s from %s", dx_sym, tf, start.isoformat())
+                            ok_subs += 1
+                        except Exception as sub_e:
+                            logger.error("SUBSCRIBE FAILED %s %s: %s — continuing without it",
+                                         dx_sym, tf, _explain_exc(sub_e))
+                    if ok_subs == 0:
+                        raise RuntimeError("no candle subscriptions succeeded")
+                    logger.info("%d/%d candle subscriptions live", ok_subs, len(self.subs))
                     await self._reconcile_chain_subs(streamer)
                     backoff = RECONNECT_MIN_S
                     last_flush = 0.0
@@ -613,7 +657,15 @@ class CandleFeed:
                 raise
             except Exception as e:
                 self._flush()
-                logger.error("feed stream error: %s — reconnecting in %ds", e, backoff)
+                # v3.8: UNWRAP. asyncio TaskGroup raises an ExceptionGroup whose
+                # str() is only "unhandled errors in a TaskGroup (1 sub-exception)"
+                # — the real DXFeed cause is in .exceptions and was thrown away,
+                # leaving XOM in a 60s reconnect loop with NO diagnosable reason
+                # for two days (07-13 -> 07-15).
+                logger.error("feed stream error: %s — reconnecting in %ds",
+                             _explain_exc(e), backoff)
+                logger.debug("feed stream traceback:\n%s",
+                             "".join(traceback.format_exception(type(e), e, e.__traceback__)))
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, RECONNECT_MAX_S)
 
@@ -630,7 +682,7 @@ def main():
     if args.db:
         os.environ["OT_FEED_DB"] = args.db
     store = FeedStore(feed_db_path())
-    logger.info("candle_feed v3.7 — store=%s symbol=%s (dxfeed=%s) vix=%s",
+    logger.info("candle_feed v3.8 — store=%s symbol=%s (dxfeed=%s) vix=%s",
                 feed_db_path(), INSTRUMENT, _dxfeed_symbol(), VIX_SYMBOL)
     store.purge_poison()   # v3.2: self-heal any pre-existing poison rows
 
