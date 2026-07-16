@@ -29,6 +29,9 @@ v1.6 — 2026-07-07 — broker reconciliation support: is_short_position column
         (schema + migration) so an adopted short survives a re-restart; and
         close_phantom() to close a DB row the broker no longer shows (broker is
         the source of truth for existence on live).
+v3.6 — 2026-07-15 — close_phantom() accepts recovered exit_price/pnl_usd so a
+        manually-closed-at-broker phantom books its REAL fill from order history
+        (broker_reconcile.match_closing_fills) instead of a flagged $0.00.
 v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         mapping optimization (all market data now flows from the single
         shared TastyTrade candle feed — see data/candle_feed.py). No logic
@@ -348,19 +351,37 @@ class TradeLogger:
         return expired
 
     def close_phantom(self, trade_id: str,
-                      reason: str = "phantom_closed_at_broker") -> None:
+                      reason: str = "phantom_closed_at_broker",
+                      exit_price: float = None,
+                      pnl_usd: float = None) -> None:
         """Close a DB row the broker no longer shows open. On LIVE, the broker is
         the source of truth for existence: if a row is open in our DB but absent
         at the broker, it has closed there (or never truly filled) and we must
-        stop 'managing' it. pnl_usd is forced to 0.0 (the real fill is unknown —
-        flag for review) with an explicit reason."""
+        stop 'managing' it.
+
+        v3.6: when the caller RECOVERED the real close from broker order history
+        (see broker_reconcile.match_closing_fills), pass exit_price + pnl_usd and
+        the row books the TRUTH — realized P&L the DAILY_LOSS_LIMIT breaker can
+        trust. Without them, pnl_usd is forced to 0.0 (the real fill is unknown —
+        flag for review) with an explicit reason, as before."""
         with self._connect() as conn:
+            if pnl_usd is not None:
+                conn.execute(
+                    "UPDATE trades SET status='closed', exit_reason=?, exit_time=?, "
+                    "exit_price=?, pnl_usd=? WHERE trade_id=?",
+                    (reason, ts_for_db(), exit_price, float(pnl_usd), trade_id),
+                )
+                logger.warning(
+                    f"Closed phantom {trade_id[:8]} — {reason} "
+                    f"(RECOVERED fill @ {exit_price} pnl=${pnl_usd:+.2f})"
+                )
+                return
             conn.execute(
                 "UPDATE trades SET status='closed', exit_reason=?, exit_time=?, "
                 "pnl_usd=COALESCE(pnl_usd, 0.0) WHERE trade_id=?",
                 (reason, ts_for_db(), trade_id),
             )
-        logger.warning(f"Closed phantom {trade_id[:8]} — {reason}")
+        logger.warning(f"Closed phantom {trade_id[:8]} — {reason} (fill unknown, pnl=0.0 FLAGGED)")
 
     def get_session_losses(self) -> int:
         today = now_utc().strftime("%Y-%m-%d")
