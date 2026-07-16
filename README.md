@@ -500,16 +500,23 @@ contract (exit_engine/position_manager v3.4) + live fill-confirmation
 (main/broker_reconcile/trade_logger v3.6). See "Fill-confirmed exits" above
 and `docs/AUDIT_paper_live_divergence_2026-07-15.md`.
 
-### O. 🔶 PARTIALLY RESOLVED — LIVE ENTRIES book on submission, not on broker fill
-**Condor legs FIXED 2026-07-15** (main v3.7 + `execution/order_confirm.py`):
-the signed-credit limit is polled to `LIVE_ENTRY_DEADLINE_SECONDS`; the record
-is written ONLY for broker-confirmed contracts at the per-leg net credit;
-unfilled → cancel and walk away (no ghost, and `notify_leg_filled()` advances
-only on real fills); partial → the filled size is booked; an uncancellable
-order pages and is adopted by reconcile if it later fills. Paper condors now
-apply `PAPER_FILL_SLIPPAGE_PCT` (env-tunable, default 1% against the trade) so
-paper mirrors live friction. Tests: `tests/test_entry_fill_confirmation.py`.
-**STILL OPEN: single-leg (b) and butterfly (c) below.** Original finding:
+### O. ✅ RESOLVED 2026-07-15 — LIVE ENTRIES book on submission, not on broker fill
+All three entry paths now record ONLY broker-confirmed fills at the broker's
+per-leg net price, sized to the CONFIRMED quantity, via
+`execution/order_confirm.confirm_order_fill` (bounded by
+`LIVE_ENTRY_DEADLINE_SECONDS`; unfilled → cancel and walk away; partial →
+book the filled size; uncancellable → page + reconcile adopts).
+**Condor legs** (main v3.7): signed-credit limit at mid; `notify_leg_filled()`
+advances only on real fills. **Single legs** (entry_engine v3.7): MARKET, fill
+price read back from fills — never the signal mark. **Butterfly**
+(entry_engine v3.7): debit priced NEGATIVE (signed convention — the old
+positive price could never fill); attempt 2 (mid + `LIMIT_IMPROVE_TICKS`)
+placed ONLY after attempt 1 is confirmed dead with zero fills, closing the
+double-position race; butterfly records now persist lower/center/upper leg
+SYMBOLS (the v3.5 live close and reconcile both require them). Paper mirrors
+live friction via `PAPER_FILL_SLIPPAGE_PCT` (env-tunable `OT_PAPER_SLIPPAGE_PCT`,
+default 1% against the trade — defect R) and returns the requested quantity in
+one pass. Tests 1–14: `tests/test_entry_fill_confirmation.py`. Original finding:
 The entry-side twin of defect N, found in the 2026-07-15 paper→live audit —
 **NOT yet fixed**. (a) Condor legs book `response.order.price or net_credit`
 the instant the mid-credit LIMIT is accepted — a never-filled entry becomes a
@@ -554,7 +561,11 @@ wipe nothing. **NOT yet fixed** — mode-filter both queries + archive
 `trades.db` on switching to LIVE in configure.sh. Audit §L3. **Do this one
 first: smallest change, blocks day-one contamination.**
 
-### R. 🟡 Paper fills are perfect (`PAPER_FILL_SLIPPAGE_PCT = 0.0`)
+### R. ✅ RESOLVED 2026-07-15 — Paper fills are perfect (was `PAPER_FILL_SLIPPAGE_PCT = 0.0`)
+Now env-tunable (`OT_PAPER_SLIPPAGE_PCT`), default **1% against the trade**
+(debits pay more, credits receive less), applied uniformly — condor legs
+included, which previously ignored the knob. Set `0.0` for apples-to-apples
+comparison with pre-change paper history. Original finding:
 Paper enters and exits at the exact mid, both sides, every trade; live pays
 spread crossing on entry and buys through the mark by
 `LIVE_CLOSE_LIMIT_BUFFER` on exit. Paper P&L is therefore a structurally
