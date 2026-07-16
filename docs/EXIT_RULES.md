@@ -1,8 +1,17 @@
 # EXIT RULES — every way every trade closes, and what it's set at
 
-Extracted from the running code (`exit_engine.py` v3.5, `base_strategy.py`,
-`config.py`), 2026-07-15. Evaluated **every tick, first match wins**, in the
-order listed per strategy.
+Extracted from the running code (`exit_engine.py` v3.8, `base_strategy.py`,
+`config.py` v2.0), 2026-07-15 — **updated for the runner refinements** (all
+env-tunable for paper A/B): directional floor 25%→**40%** (`OT_MAX_LOSS_PCT`);
+trails anchor to **5-minute FVGs** (`OT_USE_5M_FVG_TRAIL`); FVG floors clamped
+to ≤ **90% of current** (`OT_FVG_FLOOR_MAX_LOCK_PCT`); post-target fallback
+**85%→75%** (`OT_POST_TARGET_TRAIL_LOCK_PCT`); sweep's +100% hard TP replaced
+by the post-target trail (`OT_SWEEP_POST_TARGET_TRAIL`). Butterfly floor stays
+25%; condor unchanged. Sizing is full-premium based, so at $1000 positions a
+floored directional now costs ~$400 — set `OT_DAILY_LOSS_LIMIT` to match
+(e.g. 3 stops = $1,200). New telemetry: `max_premium_seen` / `min_premium_seen`
+per trade (MFE/MAE) for evidence-based tuning. Evaluated **every tick, first
+match wins**, in the order listed per strategy.
 
 Each exit is tagged by its role in the design:
 - 🛑 **LOSS-MINIMIZER** — fires on losing trades to cap the damage
@@ -26,10 +35,10 @@ Each exit is tagged by its role in the design:
 | # | Exit | Trigger | Set at | Tag |
 |---|---|---|---|---|
 | 1 | Hard close | 15:45 ET | — | ⏰ |
-| 2 | **Hard stop (−25% floor)** | premium ≤ `stop_premium` | **entry × 0.75** — immutable, set at entry, checked UNCONDITIONALLY every tick regardless of trail state | 🛑 |
+| 2 | **Hard stop (−25% floor)** | premium ≤ `stop_premium` | **entry × 0.60 (−40%, `MAX_LOSS_PCT`)** — immutable, set at entry, checked UNCONDITIONALLY every tick regardless of trail state; label carries the record's actual floor pct | 🛑 |
 | 3 | **Structure stop** | last CLOSED 1m candle beyond the impulsive candle's wick (`underlying_stop`): close < impulsive low (long) / > impulsive high (short). Closing back inside the ORB range does NOT stop | thesis level, set at entry | 🛑 (thesis death — can fire green or red) |
 | 4 | **Theta bleed** | ALL of: held ≥ **20 min** · gain ≥ **+10%** · gain < **+20%** (trail ceiling) · projected decay over next **20 min** (per CALENDAR day, θ×20/1440) ≥ current gain | narrow window: a small, stalled winner only | 📉 |
-| 5 | **Past +100%** ("target") | premium ≥ entry × 2.0 (`ORB_TP_MULTIPLIER = 1.0`) — **NO exit fires.** Trail tightens: nearest unfilled in-favor 1m FVG converted to a premium floor, else **85% of current premium** | the runner regime | 📉 |
+| 5 | **Past +100%** ("target") | premium ≥ entry × 2.0 (`ORB_TP_MULTIPLIER = 1.0`) — **NO exit fires.** Trail tightens: nearest unfilled in-favor **5m** FVG (1m fallback) converted to a premium floor, else **85% of current premium** | the runner regime | 📉 |
 | 6 | **Trail (below +100%)** | Two trails, HIGHER governs: **FVG trail** arms at **+20%** (floor = FVG level, else 80% of current — `FVG_TRAIL_LOCK_PCT`); **% trail** arms at **+50%** (`TRAIL_ACTIVATION_PCT`), initial lock at entry × 1.25 (`TRAIL_LOCK_PCT`), then ratchets to **75% of current premium**, never down | 📉 |
 
 **ORB never exits "at target."** +100% just switches it into the tightest
@@ -41,8 +50,8 @@ FVG floor hit, structure break, or theta about to eat a stalled small gain.
 | # | Exit | Trigger | Set at | Tag |
 |---|---|---|---|---|
 | 1 | Hard close | 15:45 ET | — | ⏰ |
-| 2 | Hard stop | premium ≤ `stop_premium` | **entry × 0.75** (−25%) | 🛑 |
-| 3 | **Target hit** | premium ≥ `target_premium` | **entry × 2.0** (+100%, `tp_pct = 1.0`) | 🎯 (the one true hard TP among directionals) |
+| 2 | Hard stop | premium ≤ `stop_premium` | **entry × 0.60** (−40%) | 🛑 |
+| 3 | **Past +100%** | `SWEEP_POST_TARGET_TRAIL=True` (default): NO hard exit — switches to the ORB post-target trail (5m FVG / 75%-of-current fallback). Env False restores the old `target_hit` guillotine | 📉 (was the one hard TP among directionals) |
 | 4 | **BOS exit** | 1-min break of structure against the position — only once pnl > 0 (a healthy retest that hasn't moved yet can't be BOS'd out) | structure-defined | 📉 |
 | 5 | Theta bleed | same four gates as ORB (≥20 min, gain in [+10%, +20%), decay ≥ gain) | 📉 |
 | 6 | Trail | same dual trail as ORB: FVG arms +20%, % trail arms +50% → 75%-of-current ratchet, higher governs, floored at the −25% stop | 📉 |
