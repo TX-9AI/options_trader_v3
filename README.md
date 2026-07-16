@@ -250,6 +250,35 @@ gains, one minimizes losses. Neither supersedes the other.
 
 **Not present on the ORB:** no BOS exit (that is sweep-only) · no max-hold · no 11:00 exit.
 
+### Fill-confirmed exits (v3.4/v3.5, 2026-07-15) — a close is only real when the broker says so
+
+The 2026-07-15 hard close booked ~8 condor legs at `pnl=+$0.00` because
+`flatten_all` treated order *submission* as a fill and booked at a fallback
+price. That entire class of bug is now closed:
+
+- **The shared contract:** `place_exit_order()` returns a `FillResult`
+  (`confirmed / fill_price / order_id / partial`). `_execute_exit()` books P&L
+  **only** when `confirmed=True` with a real price. Unconfirmed → the row
+  stays OPEN and the 15:45→16:00 retry loop re-attempts and pages.
+- **PAPER:** simulates the fill at the last-known mark in one pass; no mark →
+  declines and retries next tick rather than inventing a price. Unchanged
+  behavior, now formalized.
+- **LIVE (`_confirm_and_book_live_exit`, v3.5):** submit → capture the broker
+  order id → poll to a bounded deadline (`LIVE_FILL_POLL_SECONDS` /
+  `LIVE_FILL_DEADLINE_SECONDS`) → book **only** the broker's net fill price
+  read from per-leg fills. Never the mark, never entry, never $0.00.
+  Unfilled at deadline → cancel, resolve the cancel/fill race, stay open,
+  page once. **Partials:** filled portion stashed, remainder resubmitted next
+  tick at a fresh mark, booked once at the quantity-weighted net price. A
+  working order id is resumed on re-entry — retry ticks can never
+  double-submit. Verticals close as one 2-leg spread order (previously the
+  long leg was orphaned); spread closes are marketable **limits** (tastytrade
+  rejects MARKET on spreads) with the vertical debit capped at spread width;
+  limit prices follow the SDK's **signed** convention (negative=debit).
+  Acceptance tests: `tests/test_live_fill_confirmation.py` (A–E per
+  `FABLE_SPEC_live_exit_fill_confirmation.md`) — all pass; tiny-account live
+  validation still required before cash.
+
 Theta protection is deliberately narrow (v1.5). The v1.3 check fired on the first green tick —
 58 of 77 exits were theta-bleed at a **median 60-second hold**, capping trends while the day's
 P&L came from the few trades that reached the trail. Decay is projected per **calendar** day
@@ -273,10 +302,20 @@ P&L came from the few trades that reached the trail. Decay is projected per **ca
   > had gated nothing since risk_manager v1.4 — which requests a reassessment after *every*
   > loss — yet four dashboards still printed *"Session CB: 2 losses → halt"*, a halt that could
   > never occur. `session_losses` survives as a statistic only.
-- **Broker reconciliation** (`execution/broker_reconcile.py`, `BROKER_RECONCILE_ENABLED`,
-  default **off**): on a LIVE restart, a position found open at the broker with no DB plan is
-  *adopted* and managed by a generic exit path (sign-correct `ADOPTED_STOP_PCT` stop, long-side
-  trail, 15:45 close). Paper never reconciles.
+- **Broker reconciliation** (`execution/broker_reconcile.py`, v3.6): **auto-follows the
+  trading mode** — flipping to LIVE via `configure.sh` enables it, PAPER keeps it off, and an
+  explicit `OT_BROKER_RECONCILE=True/False` pins it either way (configure.sh warns loudly on
+  go-live if it's pinned off). Runs at startup and intraday every
+  `BROKER_RECONCILE_INTERVAL_MIN` minutes (default **10**), plus wind-down sweeps at
+  **15:45, 15:50, and 15:57** — the last guaranteed look before the loop goes dormant at 16:00.
+  A broker position with no DB plan is *adopted* (sign-correct `ADOPTED_STOP_PCT` stop);
+  a DB row absent at the broker is a *phantom* and is closed — **v3.6: at its REAL fill,
+  recovered from broker order history** (`match_closing_fills` — closing actions only, manual
+  closes split across multiple orders are quantity-weighted, history reaches back to the
+  phantom's entry date on restart). Only when no closing order exists (expiry, assignment)
+  does it fall back to the flagged `$0.00` booking. Recovered P&L is written to the DB, so
+  `DAILY_LOSS_LIMIT` gates on truth even for positions you closed by hand. Phantom Telegram
+  alerts carry the recovered P&L. Paper never reconciles.
 
 ## Session windows
 
@@ -453,6 +492,60 @@ v1.1 (2026-06-30). Nothing referenced it. **Deleted.**
 Ghost folder on Windows tarball extraction · `setup_ec2.bat` security warning on double-click ·
 dedicated Telegram bot for options-trader notifications.
 
+### N. ✅ RESOLVED 2026-07-15 — Exits booked on submission at fabricated prices
+The 15:45 hard close booked ~8 condor legs at `pnl=+$0.00` (order *submission*
+treated as a fill, price fell back to entry premium). Fixed by the FillResult
+contract (exit_engine/position_manager v3.4) + live fill-confirmation
+(exit_engine v3.5) + phantom P&L recovery and denser reconcile cadence
+(main/broker_reconcile/trade_logger v3.6). See "Fill-confirmed exits" above
+and `docs/AUDIT_paper_live_divergence_2026-07-15.md`.
+
+### O. 🔴 LIVE ENTRIES book on submission, not on broker fill (all three paths)
+The entry-side twin of defect N, found in the 2026-07-15 paper→live audit —
+**NOT yet fixed**. (a) Condor legs book `response.order.price or net_credit`
+the instant the mid-credit LIMIT is accepted — a never-filled entry becomes a
+managed ghost, and `notify_leg_filled()` advances the legging state machine on
+it. (b) Single-leg MARKET entries book `placed.price or signal.entry_premium`;
+a market order has no `.price`, so the recorded entry is ALWAYS the signal
+mark, never the fill. (c) Butterfly entries are broken three ways: debit sent
+as a POSITIVE price (the SDK's signed convention reads that as demanding a
+CREDIT — can never fill); fill detection reads `status` immediately after
+submission (always Received/Routed → place/cancel churn); a fill during the
+retry sleep plus a swallowed cancel failure can open a DOUBLE position.
+**Fix shape:** entry mirror of exit v3.5 (bounded poll, record only confirmed
+per-leg net fills, signed limits). Until built, live entries are unvalidated
+regardless of how good paper looks. Full detail:
+`docs/AUDIT_paper_live_divergence_2026-07-15.md` §L1.
+
+### P. 🔴 Broken-wing roll opens a FICTIONAL vertical in live
+`condor_roll._execute_roll` step 2 claims "live order placement mirrors
+_execute_condor_leg" — **no order is placed**; the rolled vertical is written
+to the DB only. Live: the real untested vertical closes (fill-confirmed),
+then a position that never existed is booked and managed. Secondary: step 1
+books the close at `plan.close_cost` instead of the confirmed
+`fill.fill_price` it just received. **NOT yet fixed** — either place a real
+signed-credit order with fill confirmation, or gate the roll to paper. Audit
+§L2.
+
+### Q. 🔴 One `trades.db`, no mode filter — paper history contaminates live truth
+`realized_pnl_today()` (the DAILY_LOSS_LIMIT source of truth) and
+`get_open_trades()`/`get_open_trades_live()` (startup recovery, position
+manager) ignore the `paper_trade` column. Switching to live after weeks of
+paper: paper P&L closed the same ET day gates the LIVE breaker, and any
+still-open paper rows are handed to the live bot, which submits real close
+orders for them until reconcile phantoms them — polluting live realized P&L
+again. Only *instrument* changes wipe the DB (paper mode only); *mode* changes
+wipe nothing. **NOT yet fixed** — mode-filter both queries + archive
+`trades.db` on switching to LIVE in configure.sh. Audit §L3. **Do this one
+first: smallest change, blocks day-one contamination.**
+
+### R. 🟡 Paper fills are perfect (`PAPER_FILL_SLIPPAGE_PCT = 0.0`)
+Paper enters and exits at the exact mid, both sides, every trade; live pays
+spread crossing on entry and buys through the mark by
+`LIVE_CLOSE_LIMIT_BUFFER` on exit. Paper P&L is therefore a structurally
+optimistic estimate of live — materially so on wide SPX spreads. Consider
+nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
+
 ---
 
 ## File structure — every file, and what it currently does
@@ -524,9 +617,9 @@ dedicated Telegram bot for options-trader notifications.
 | File | Purpose |
 |---|---|
 | `entry_engine.py` ✅ | Places the opening order (paper fills at the mark). Writes the `TradeRecord`, including `underlying_stop` — **the impulsive candle's wick, which the exit engine reads back.** |
-| `exit_engine.py` ✅ | **v3.3.** All exits, routed per strategy. ORB: hard close · unconditional −25% floor · impulsive-origin structure stop · gated theta bleed · FVG/% trails. Sweep: BOS. Butterfly/condor: premium + regime-flip. Adopted: generic. **v3.3: floor checks read the immutable `stop_premium` only; trails seed from the persisted `trail_stop` on restart — exit_reason labels are truthful.** |
-| `position_manager.py` ✅ | **v3.1.** Owns the single open position (the condor's two verticals are the sole exception). Live chain marks for P&L in paper. **Trail updates write `trail_stop`, never `stop_premium`.** |
-| `broker_reconcile.py` ⚙️ | **LIVE-only, default OFF.** Adopt / keep / phantom-close reconciliation against the broker on restart. Paper never reconciles. |
+| `exit_engine.py` ✅ | **v3.5.** All exits, routed per strategy (ORB floor/structure/theta/trails · Sweep BOS · butterfly/condor premium + regime-flip · adopted generic). **v3.4/v3.5: FillResult contract — paper simulates at the mark in one pass; live books only broker-confirmed fills at the real net fill price, with bounded polling, partial-fill weighting, idempotent order resume, 2-leg vertical closes, and signed marketable-limit pricing.** |
+| `position_manager.py` ✅ | **v3.4.** Owns the single open position (the condor's two verticals are the sole exception). **`_execute_exit` books ONLY on `FillResult.confirmed` at the actual fill price — an unconfirmed close leaves the row OPEN for the 15:45→16:00 retry loop (anti-orphan invariant).** Trail updates write `trail_stop`, never `stop_premium`. |
+| `broker_reconcile.py` ✅ | **v3.6, LIVE-only, auto-enables with LIVE mode.** Adopt / keep / phantom-close against the broker at startup + intraday (10-min cadence + 15:45/15:50/15:57 wind-down sweeps). **Phantom P&L recovery: a manually-closed position books its real fill from order history instead of a flagged $0.00.** Paper never reconciles. |
 
 ### `risk/` — sizing and gates
 
