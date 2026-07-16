@@ -1,5 +1,63 @@
 """
 execution/exit_engine.py — Strategy-aware exit logic for all options positions.
+v3.8 — 2026-07-15 — RUNNER REFINEMENTS (all config/env-tunable; see config
+        v2.0). Goals: let winners run harder, keep the loss unit deliberate,
+        give 0DTE gamma room to breathe.
+        (a) FLOOR 25%→40% for directionals: the -25% premium floor front-ran
+            the impulsive-origin structure stop on normal gamma retests,
+            stopping intact theses on noise. Floor fallbacks now read
+            MAX_LOSS_PCT; the hard-stop label carries the record's ACTUAL
+            floor pct (old records keep 25%, truthfully). Sizing is
+            full-premium based, so at $1000 positions a floored trade now
+            costs ~$400 — the daily cap should be set accordingly.
+            Butterflies stay at 25% (BUTTERFLY_STOP_LOSS_PCT); condors
+            unchanged.
+        (b) 5-MINUTE FVG TRAILS (USE_5M_FVG_TRAIL): trails anchor to 5m gaps
+            — structurally meaningful, naturally wider. 1m remains
+            authoritative for the structure stop and BOS (speed-critical).
+            evaluate()/_evaluate_orb/_evaluate_sweep accept df_5m; graceful
+            1m fallback when 5m is absent.
+        (c) FVG FLOOR CLAMP (FVG_FLOOR_MAX_LOCK_PCT=0.90): an FVG hugging
+            price can no longer set a floor tighter than 90% of current —
+            both the armed FVG trail and the post-target trail are clamped.
+        (d) LEASH UN-INVERTED: post-target no-FVG fallback 0.85→0.75
+            (POST_TARGET_TRAIL_LOCK_PCT, now in config) — proven runners no
+            longer get a shorter leash than unproven ones.
+        (e) SWEEP RUNNER MODE (SWEEP_POST_TARGET_TRAIL, default on): the +100%
+            target_hit — the one hard TP among directionals — is replaced by
+            the ORB post-target trail; env False restores it for A/B.
+        Telemetry companion: trade_logger v3.8 records per-trade MFE/MAE
+        (max/min premium seen) so every threshold above is tunable from
+        evidence.
+v3.5 — 2026-07-15 — LIVE FILL-CONFIRMATION IMPLEMENTED (closes the Fable spec).
+        _confirm_and_book_live_exit() is no longer a stub: it submits the close,
+        captures the broker order id, polls to a bounded deadline
+        (LIVE_FILL_POLL_SECONDS / LIVE_FILL_DEADLINE_SECONDS in config), and
+        returns confirmed=True ONLY on a broker-confirmed fill at the broker's
+        actual net fill price read back from per-leg fills — never the mark,
+        never entry, never $0.00. Unfilled-at-deadline → cancel, resolve the
+        cancel/fill race, return confirmed=False (position STAYS OPEN; the
+        15:45→16:00 retry loop re-attempts and it pages once per trade/kind).
+        PARTIALS: filled portion stashed on the record, remainder resubmitted
+        next tick at a fresh mark; books once, at the quantity-weighted net
+        price — never a partial as whole. IDEMPOTENT: a working order id is
+        stashed on the record and RESUMED on re-entry, so retry ticks can never
+        double-submit a close. Also fixed on the way (all live-only):
+        (a) condor-leg verticals now close as ONE 2-leg spread order
+            (BUY_TO_CLOSE short / SELL_TO_CLOSE long) — they previously routed
+            to _close_single_leg, which sold the short symbol (wrong action)
+            and orphaned the long leg at the broker;
+        (b) spread closes are marketable LIMITs (tastytrade rejects MARKET on
+            multi-leg): vertical debit capped at spread width, butterfly credit
+            floored at one tick — the old MARKET butterfly close would have
+            been rejected every tick;
+        (c) SDK signed-price convention verified (v13.x): NewOrder.price is
+            negative=debit / positive=credit and price_effect is IGNORED — a
+            positive-priced buy-to-close would never fill;
+        (d) adopted short single legs BUY_TO_CLOSE instead of selling more.
+        PAPER PATH UNTOUCHED. Acceptance tests A–E:
+        tests/test_live_fill_confirmation.py. Spec:
+        FABLE_SPEC_live_exit_fill_confirmation.md.
 v3.4 — 2026-07-15 — FILL-CONFIRMED EXIT CONTRACT. place_exit_order() now returns
         a FillResult (confirmed / fill_price / order_id / partial), not a bare
         bool — the SHARED seam between paper and live so the two can't fight.
@@ -138,33 +196,37 @@ Exit triggers by strategy:
 """
 
 import logging
+import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from datetime import datetime
 
 import pandas as pd
 
 from tastytrade.order import (
     NewOrder, Leg, OrderAction, OrderType, OrderTimeInForce,
-    PriceEffect, InstrumentType
+    PriceEffect, InstrumentType, OrderStatus
 )
+
+import config as _cfg   # live fill knobs read at CALL time (test/env tunable)
 
 from database.trade_logger import TradeRecord, get_trade_logger
 from data.tasty_client import get_session, get_account, TastyClientError
 from config import (
     PAPER_TRADING, CONTRACT_MULTIPLIER,
     BUTTERFLY_MAX_HOLD_MIN, TRAIL_LOCK_PCT, TRAIL_ACTIVATION_PCT, FVG_MIN_SIZE_PCT,
-    THETA_LOOKAHEAD_MIN, RTH_MINUTES, FVG_TRAIL_ARM_PCT, FVG_TRAIL_LOCK_PCT
+    THETA_LOOKAHEAD_MIN, RTH_MINUTES, FVG_TRAIL_ARM_PCT, FVG_TRAIL_LOCK_PCT,
+    MAX_LOSS_PCT, POST_TARGET_TRAIL_LOCK_PCT, FVG_FLOOR_MAX_LOCK_PCT,
+    USE_5M_FVG_TRAIL, SWEEP_POST_TARGET_TRAIL
 )
 from utils.time_utils import is_hard_close_time, minutes_since, now_utc, fmt_et_short
 
 logger = logging.getLogger(__name__)
 
-# Past 100% TP, the trail locks in this fraction of current premium as a
-# floor — tighter than the pre-target trail (75%), protecting gains beyond
-# the original target. Used only when no usable 1m FVG is found.
-POST_TARGET_TRAIL_LOCK_PCT = 0.85
+# POST_TARGET_TRAIL_LOCK_PCT now lives in config (v3.8): 0.85→0.75 default —
+# the old value made the leash TIGHTER past target than before it (inverted),
+# harvesting proven runners on a single gamma wick. Env: OT_POST_TARGET_TRAIL_LOCK_PCT.
 
 # ─── Theta-bleed gates (v1.5) ─────────────────────────────────────────────────
 # Bound the theta-bleed exit to its legitimate job — a small, stalled winner
@@ -353,6 +415,18 @@ class ExitEngine:
         self._bos_trackers: dict = {}   # trade_id \u2192 BOSTracker (sweep only)
         self._post_target_trail: dict = {}   # trade_id \u2192 bool (ORB only)
         self._trade_logger  = get_trade_logger()
+        self._live_exit_alerted: set = set()  # (trade_id, kind) — one page per failure kind
+
+    @staticmethod
+    def _fvg_frame(df_1m: Optional[pd.DataFrame],
+                   df_5m: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+        """v3.8: trails anchor to 5-MINUTE FVGs (structurally meaningful gaps,
+        natural gamma room) when enabled and available; 1m remains the
+        fallback — and stays authoritative for the structure stop and BOS,
+        which are speed-critical and unchanged."""
+        if USE_5M_FVG_TRAIL and df_5m is not None and len(df_5m) >= 3:
+            return df_5m
+        return df_1m
 
     def _seed_trail_from_record(self, record: TradeRecord) -> None:
         """v3.3 — recovery seed. If this trade has a persisted trail level
@@ -380,7 +454,8 @@ class ExitEngine:
                  record: TradeRecord,
                  current_premium: float,
                  df_1m: Optional[pd.DataFrame] = None,
-                 regime: Optional[str] = None) -> ExitDecision:
+                 regime: Optional[str] = None,
+                 df_5m: Optional[pd.DataFrame] = None) -> ExitDecision:
         """
         Strategy-aware exit evaluation.
         Routes to the appropriate exit logic based on strategy_name.
@@ -403,16 +478,17 @@ class ExitEngine:
         elif strategy == "ADOPTED":
             return self._evaluate_adopted(record, current_premium)
         elif strategy == "ORBStrategy":
-            return self._evaluate_orb(record, current_premium, df_1m)
+            return self._evaluate_orb(record, current_premium, df_1m, df_5m)
         else:
             # SweepReversal and any other directional strategies
-            return self._evaluate_sweep(record, current_premium, df_1m)
+            return self._evaluate_sweep(record, current_premium, df_1m, df_5m)
 
     # \u2500\u2500\u2500 ORB Exit \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     def _evaluate_orb(self, record: TradeRecord,
                        current_premium: float,
-                       df_1m: Optional[pd.DataFrame]) -> ExitDecision:
+                       df_1m: Optional[pd.DataFrame],
+                       df_5m: Optional[pd.DataFrame] = None) -> ExitDecision:
         """
         ORB exit logic (v3.2 doc sync \u2014 this now matches the code below).
         Evaluated every tick, FIRST MATCH WINS:
@@ -464,10 +540,14 @@ class ExitEngine:
         #     regardless of trail state. As of v3.3, record['stop_premium'] is
         #     IMMUTABLE (set once at entry; trails persist in trail_stop), so
         #     this check is truthful: it fires only at the real -25% floor.
-        stop_prem = record.get("stop_premium", 0.0) or (entry_prem * 0.75)
+        stop_prem = record.get("stop_premium", 0.0) or (entry_prem * (1 - MAX_LOSS_PCT))
         if stop_prem > 0 and current_premium <= stop_prem:
             decision.should_exit = True
-            decision.exit_reason = f"hard_stop_25pct pnl={pnl_pct:.1%}"
+            # label carries the record's ACTUAL floor pct (older records keep
+            # their entry-time 25%; new ones carry MAX_LOSS_PCT) — truthful
+            # either way for the exit_reason distributions.
+            floor_pct = 1 - (stop_prem / entry_prem) if entry_prem > 0 else MAX_LOSS_PCT
+            decision.exit_reason = f"hard_stop_{floor_pct:.0%} pnl={pnl_pct:.1%}"
             logger.info(
                 f"ORB HARD STOP: {trade_id[:8]} prem={current_premium:.2f} "
                 f"<= floor={stop_prem:.2f} (pnl={pnl_pct:.1%})"
@@ -529,7 +609,8 @@ class ExitEngine:
                 )
 
             trail_stop = self._update_post_target_trail(
-                trade_id, current_premium, record, df_1m, direction
+                trade_id, current_premium, record,
+                self._fvg_frame(df_1m, df_5m), direction
             )
             if trail_stop is not None:
                 if current_premium <= trail_stop:
@@ -542,10 +623,11 @@ class ExitEngine:
         # 4. TRAIL \u2014 below 100% TP: FVG-anchored once armed (+20%), plus the
         #    50% % trail; the higher of the two governs.
         if pnl_pct >= FVG_TRAIL_ARM_PCT:
-            self._update_fvg_trail(trade_id, current_premium, record, df_1m, direction)
+            self._update_fvg_trail(trade_id, current_premium, record,
+                                   self._fvg_frame(df_1m, df_5m), direction)
         trail_stop = self._update_trail(
             trade_id, current_premium, entry_prem, trail_act,
-            entry_prem * 0.75  # hard floor = 25% loss
+            record.get("stop_premium", 0.0) or entry_prem * (1 - MAX_LOSS_PCT)
         )
         trail_stop = self._trail_stops.get(trade_id, trail_stop)
         if trail_stop is not None:
@@ -597,6 +679,9 @@ class ExitEngine:
             new_trail = max(fvg_floor_premium, pct_trail)
         else:
             new_trail = pct_trail
+        # v3.8 CLAMP (same as _update_fvg_trail): the floor may never sit
+        # tighter than FVG_FLOOR_MAX_LOCK_PCT of current premium.
+        new_trail = min(new_trail, current_premium * FVG_FLOOR_MAX_LOCK_PCT)
 
         current_trail = self._trail_stops.get(trade_id, entry_prem)
         if new_trail > current_trail:
@@ -681,6 +766,10 @@ class ExitEngine:
 
         pct_trail = current_premium * FVG_TRAIL_LOCK_PCT
         new_trail = max(fvg_floor_premium, pct_trail) if fvg_floor_premium is not None else pct_trail
+        # v3.8 CLAMP: an FVG hugging price must not turn the leash into a
+        # tripwire — the floor may never sit tighter than
+        # FVG_FLOOR_MAX_LOCK_PCT of current premium.
+        new_trail = min(new_trail, current_premium * FVG_FLOOR_MAX_LOCK_PCT)
 
         current_trail = self._trail_stops.get(trade_id, entry_prem)
         if new_trail > current_trail:
@@ -695,7 +784,8 @@ class ExitEngine:
 
     def _evaluate_sweep(self, record: TradeRecord,
                          current_premium: float,
-                         df_1m: Optional[pd.DataFrame]) -> ExitDecision:
+                         df_1m: Optional[pd.DataFrame],
+                         df_5m: Optional[pd.DataFrame] = None) -> ExitDecision:
         """
         Sweep reversal exit logic:
         - Hard stop: 25% premium loss
@@ -728,10 +818,31 @@ class ExitEngine:
             decision.exit_reason = f"stop_hit pnl={pnl_pct:.1%}"
             return decision
 
-        # 3. TARGET HIT
+        # 3. TARGET — v3.8 RUNNER MODE (SWEEP_POST_TARGET_TRAIL, default on):
+        #    sweeps get the same post-target treatment as ORB — no hard TP,
+        #    the trade switches to the tightened FVG-aware trail and runs
+        #    until the market takes some back. This was the ONE hard
+        #    take-profit among directionals; env OT_SWEEP_POST_TARGET_TRAIL=
+        #    False restores the +100% target_hit for A/B.
         if current_premium >= target:
-            decision.should_exit = True
-            decision.exit_reason = f"target_hit pnl={pnl_pct:.1%}"
+            if not SWEEP_POST_TARGET_TRAIL:
+                decision.should_exit = True
+                decision.exit_reason = f"target_hit pnl={pnl_pct:.1%}"
+                return decision
+            if not self._post_target_trail.get(trade_id, False):
+                self._post_target_trail[trade_id] = True
+                logger.info(f"SWEEP TARGET REACHED (runner mode, no hard exit): "
+                            f"{trade_id[:8]} pnl={pnl_pct:.1%}")
+            trail_stop = self._update_post_target_trail(
+                trade_id, current_premium, record,
+                self._fvg_frame(df_1m, df_5m), direction
+            )
+            if trail_stop is not None:
+                if current_premium <= trail_stop:
+                    decision.should_exit = True
+                    decision.exit_reason = f"post_target_trail pnl={pnl_pct:.1%}"
+                    return decision
+                decision.new_trail_stop = trail_stop
             return decision
 
         # 4. BOS EXIT \u2014 only once premium is positive (don\'t BOS out of a
@@ -752,7 +863,8 @@ class ExitEngine:
         # 5. TRAIL \u2014 FVG-anchored once armed (+20%), plus the 50% % trail; the
         #    higher of the two governs (both write to _trail_stops).
         if pnl_pct >= FVG_TRAIL_ARM_PCT:
-            self._update_fvg_trail(trade_id, current_premium, record, df_1m, direction)
+            self._update_fvg_trail(trade_id, current_premium, record,
+                                   self._fvg_frame(df_1m, df_5m), direction)
         trail_stop = self._update_trail(
             trade_id, current_premium, entry_prem, trail_act, stop_prem
         )
@@ -1045,89 +1157,383 @@ class ExitEngine:
                               detail="paper simulated fill")
 
         # ── LIVE: submit, then book ONLY on broker-confirmed fill ──────────────
-        # place the order, capture its id, poll the broker to a bounded deadline,
-        # and return confirmed=True with the REAL fill price — or confirmed=False
-        # (position stays open, escalates). Until that exists, we must FAIL LOUD
-        # rather than fall through to the old submit==done behaviour, which would
-        # book unconfirmed live closes at a fabricated price. See the Fable spec.
+        # v3.5: implemented. Places the order, captures its id, polls the broker
+        # to a bounded deadline, and returns confirmed=True with the REAL net
+        # fill price — or confirmed=False (position stays open, retries and
+        # escalates). See _confirm_and_book_live_exit and the Fable spec.
         return self._confirm_and_book_live_exit(record, reason, mark_price)
+
+    # ── LIVE FILL-CONFIRMATION (v3.5) ────────────────────────────────────────
+    # States in which an order is still working at the broker.
+    _WORKING_STATES = {
+        OrderStatus.RECEIVED, OrderStatus.ROUTED, OrderStatus.IN_FLIGHT,
+        OrderStatus.LIVE, OrderStatus.CONTINGENT,
+        OrderStatus.CANCEL_REQUESTED, OrderStatus.REPLACE_REQUESTED,
+    }
+    # Terminal states that are NOT a full fill (may still carry partial fills).
+    _DEAD_STATES = {
+        OrderStatus.CANCELLED, OrderStatus.EXPIRED,
+        OrderStatus.REMOVED, OrderStatus.PARTIALLY_REMOVED,
+    }
 
     def _confirm_and_book_live_exit(self, record: TradeRecord, reason: str,
                                     mark_price: Optional[float]) -> FillResult:
-        """LIVE close with broker fill-confirmation.  *** STUB — Fable builds this. ***
+        """LIVE close with broker fill-confirmation.
 
-        Contract this MUST satisfy (see FABLE_SPEC_live_exit_fill_confirmation.md):
-          1. Submit the close (SELL_TO_CLOSE / spread) and capture the order id.
-          2. Poll broker order status to a bounded deadline (filled / partial /
-             working / rejected / cancelled).
-          3. Return FillResult(confirmed=True, fill_price=<ACTUAL broker fill>,
-             order_id=...) ONLY on a confirmed full fill.
-          4. On partial: track the remainder to completion (or return
-             confirmed=False, partial=True and let the caller retry).
-          5. On not-filled-by-deadline / reject / error: return
-             confirmed=False — the position STAYS OPEN and is escalated. Never
-             book, never mark closed, never fabricate a price.
+        Books ONLY on a broker-confirmed fill at the broker's actual fill price.
+        An unconfirmed close returns confirmed=False and the position STAYS
+        OPEN — the caller (flatten_all 15:45→16:00 loop / _manage_one next
+        tick) retries, and failures page once per trade per failure kind.
 
-        Until it is implemented, refuse to trade live rather than silently book
-        orphans at a fake price.
+        PARTIAL-FILL POLICY (spec §4 — documented hybrid of (a)+(b)):
+        a partial that completes within the deadline books as one fill. A
+        partial still working at the deadline is cancelled; the filled portion
+        is stashed on the record (in-memory: `_live_exit_fills`) and
+        confirmed=False, partial=True is returned. The NEXT retry tick
+        resubmits ONLY the remaining quantity at a fresh mark, and booking
+        happens once — when cumulative fills cover the full position — at the
+        quantity-weighted average net price. A partial is never booked as
+        whole. (A mid-window process restart drops the in-memory stash; the
+        startup broker_reconcile pass owns that path, as it does today.)
+
+        IDEMPOTENCY / anti-double-submit: the working order id is stashed on
+        the record (`_live_exit_order_id`). If a retry tick re-enters while a
+        prior order is still working (e.g. cancel failed, or a prior pass
+        errored mid-poll), we RESUME polling that order instead of submitting
+        a second close against the same position.
         """
-        raise NotImplementedError(
-            "LIVE exit fill-confirmation is not implemented. Booking a live close "
-            "without broker confirmation would risk orphan positions booked at a "
-            "fabricated price. Implement _confirm_and_book_live_exit per "
-            "FABLE_SPEC_live_exit_fill_confirmation.md before trading live. "
-            "(PAPER_TRADING mode is unaffected.)"
-        )
+        trade_id = record["trade_id"]
+        total    = int(record["contracts"])
+        prior: List[Tuple[float, float]] = list(record.get("_live_exit_fills") or [])
+        done_qty  = sum(q for q, _ in prior)
+        remaining = total - int(done_qty)
+        if remaining <= 0:
+            # Everything already filled across prior partials — book it.
+            return self._book_from_fills(record, prior, total,
+                                         record.get("_live_exit_last_order_id"))
 
-    def _submit_live_close(self, record: TradeRecord) -> bool:
-        """Order SUBMISSION only (no fill confirmation). Retained for Fable to
-        call from _confirm_and_book_live_exit — it is deliberately NOT wired to
-        booking, because submission is not a fill."""
-        is_butterfly = bool(record.get("is_butterfly", False))
         try:
             session = get_session()
             account = get_account()
-            if is_butterfly:
+        except Exception as e:
+            logger.error(f"LIVE exit {trade_id[:8]}: broker session unavailable: {e}")
+            return FillResult(confirmed=False, detail=f"broker session unavailable: {e}")
+
+        # ── 1. Resume a still-working prior order, else submit fresh ─────────
+        order_id = record.get("_live_exit_order_id")
+        placed   = None
+        if order_id is not None:
+            try:
+                placed = account.get_order(session, order_id)
+                logger.info(f"LIVE exit {trade_id[:8]}: resuming order {order_id} "
+                            f"(status={placed.status})")
+            except Exception as e:
+                logger.error(f"LIVE exit {trade_id[:8]}: cannot fetch prior order "
+                             f"{order_id}: {e} — will submit fresh")
+                record.pop("_live_exit_order_id", None)
+                order_id, placed = None, None
+
+        if placed is not None and placed.status in self._DEAD_STATES:
+            # Prior order died between passes — harvest any partial it made.
+            fill = self._net_fill_price(record, placed)
+            record.pop("_live_exit_order_id", None)
+            order_id, placed = None, None
+            if fill is not None and fill[0] > 0:
+                prior.append(fill)
+                record["_live_exit_fills"] = prior
+                done_qty  = sum(q for q, _ in prior)
+                remaining = total - int(done_qty)
+                if remaining <= 0:
+                    return self._book_from_fills(record, prior, total,
+                                                 record.get("_live_exit_last_order_id"))
+
+        if placed is None:
+            placed = self._submit_live_close(record, remaining, mark_price)
+            if placed is None:
+                self._alert_live_exit_once(
+                    trade_id, "submit",
+                    f"LIVE close SUBMIT FAILED {trade_id[:8]} — position stays "
+                    f"OPEN; retry loop engaged")
+                return FillResult(confirmed=False, detail="submit failed")
+            order_id = placed.id
+            record["_live_exit_order_id"]      = order_id
+            record["_live_exit_last_order_id"] = order_id
+            logger.info(f"LIVE exit {trade_id[:8]}: close submitted, order "
+                        f"{order_id}, qty={remaining} — awaiting broker fill")
+
+        # ── 2. Poll to a bounded deadline; cancel-and-resolve on timeout ─────
+        poll     = max(0.0, float(getattr(_cfg, "LIVE_FILL_POLL_SECONDS", 2.0)))
+        deadline = time.monotonic() + float(getattr(_cfg, "LIVE_FILL_DEADLINE_SECONDS", 30.0))
+        cancel_requested = False
+        while True:
+            try:
+                placed = account.get_order(session, order_id)
+            except Exception as e:
+                logger.warning(f"LIVE exit {trade_id[:8]}: poll error ({e}) — retrying")
+            status = placed.status
+
+            if status == OrderStatus.FILLED:
+                fill = self._net_fill_price(record, placed)
+                record.pop("_live_exit_order_id", None)
+                if fill is None or fill[0] <= 0:
+                    # Broker says filled but fills unreadable — refuse to book
+                    # fiction; reconcile/retry will resolve against the broker.
+                    logger.error(f"LIVE exit {trade_id[:8]}: order {order_id} "
+                                 f"FILLED but fills unreadable — NOT booking")
+                    return FillResult(confirmed=False, order_id=str(order_id),
+                                      detail="filled but fills unreadable; refusing to book")
+                prior.append(fill)
+                record["_live_exit_fills"] = prior
+                if sum(q for q, _ in prior) >= total:
+                    return self._book_from_fills(record, prior, total, order_id)
+                # Defensive: FILLED for less than requested → treat as partial.
+                return self._partial_result(record, prior, total, order_id, trade_id)
+
+            if status == OrderStatus.REJECTED:
+                record.pop("_live_exit_order_id", None)
+                why = getattr(placed, "reject_reason", None) or "unknown"
+                self._alert_live_exit_once(
+                    trade_id, "reject",
+                    f"LIVE close REJECTED {trade_id[:8]} order {order_id}: {why} "
+                    f"— position stays OPEN; retry loop engaged")
+                return FillResult(confirmed=False, order_id=str(order_id),
+                                  detail=f"rejected: {why}")
+
+            if status in self._DEAD_STATES:
+                return self._resolve_dead_order(record, placed, prior, total,
+                                                order_id, trade_id)
+
+            # Still working.
+            if time.monotonic() >= deadline:
+                if not cancel_requested:
+                    try:
+                        account.delete_order(session, order_id)
+                        cancel_requested = True
+                        # Short grace window to resolve the cancel/fill race:
+                        # the order may have filled while the cancel was in
+                        # flight — the next polls tell us which won.
+                        deadline = time.monotonic() + max(3 * poll, 6.0)
+                        logger.warning(f"LIVE exit {trade_id[:8]}: deadline hit — "
+                                       f"cancel requested for order {order_id}; "
+                                       f"resolving race")
+                        continue
+                    except Exception as e:
+                        # Cancel failed — the order may still be working. Keep
+                        # the order id on the record so the NEXT tick RESUMES
+                        # this order rather than double-submitting.
+                        self._alert_live_exit_once(
+                            trade_id, "deadline",
+                            f"LIVE close UNFILLED at deadline {trade_id[:8]} "
+                            f"order {order_id}; cancel failed ({e}) — resuming "
+                            f"same order next tick, position stays OPEN")
+                        return FillResult(confirmed=False, partial=done_qty > 0,
+                                          order_id=str(order_id),
+                                          detail="deadline; cancel failed; resuming next tick")
+                else:
+                    # Cancel didn't resolve within the grace window either.
+                    self._alert_live_exit_once(
+                        trade_id, "deadline",
+                        f"LIVE close UNRESOLVED {trade_id[:8]} order {order_id} "
+                        f"(cancel pending) — resuming next tick, position OPEN")
+                    return FillResult(confirmed=False, partial=done_qty > 0,
+                                      order_id=str(order_id),
+                                      detail="deadline; cancel unresolved; resuming next tick")
+            time.sleep(poll)
+
+    def _resolve_dead_order(self, record, placed, prior, total,
+                            order_id, trade_id) -> FillResult:
+        """A close order reached a terminal non-FILLED state. Harvest whatever
+        partial fills it made, then either book (if cumulative fills now cover
+        the position — the cancel/fill race can end here), report a partial, or
+        report a clean miss. Never books a partial as whole."""
+        record.pop("_live_exit_order_id", None)
+        fill = self._net_fill_price(record, placed)
+        if fill is not None and fill[0] > 0:
+            prior.append(fill)
+            record["_live_exit_fills"] = prior
+            if sum(q for q, _ in prior) >= total:
+                return self._book_from_fills(record, prior, total, order_id)
+            return self._partial_result(record, prior, total, order_id, trade_id)
+        self._alert_live_exit_once(
+            trade_id, "unfilled",
+            f"LIVE close NOT FILLED by deadline {trade_id[:8]} (order {order_id} "
+            f"ended {placed.status}, zero fills) — position stays OPEN; "
+            f"re-pricing and retrying")
+        return FillResult(confirmed=False, order_id=str(order_id),
+                          detail=f"not filled ({placed.status}); re-price and retry")
+
+    def _partial_result(self, record, prior, total, order_id, trade_id) -> FillResult:
+        done = sum(q for q, _ in prior)
+        record["_live_exit_fills"] = prior
+        self._alert_live_exit_once(
+            trade_id, "partial",
+            f"LIVE close PARTIAL {trade_id[:8]}: {done:g}/{total} filled — "
+            f"remainder resubmits next tick; booking deferred until fully closed")
+        return FillResult(confirmed=False, partial=True, order_id=str(order_id),
+                          detail=f"partial {done:g}/{total}; remainder resubmits next tick")
+
+    def _book_from_fills(self, record, fills, total, order_id) -> FillResult:
+        """All contracts confirmed closed — return the quantity-weighted net
+        fill price (the broker's, never the mark) and clear the exit state."""
+        qty = sum(q for q, _ in fills)
+        wavg = sum(q * p for q, p in fills) / qty
+        for k in ("_live_exit_fills", "_live_exit_order_id", "_live_exit_last_order_id"):
+            record.pop(k, None)
+        logger.info(f"LIVE exit {record['trade_id'][:8]}: CONFIRMED fill "
+                    f"{qty:g}/{total} @ net {wavg:.4f} (order {order_id})")
+        return FillResult(confirmed=True, fill_price=round(float(wavg), 4),
+                          order_id=str(order_id) if order_id is not None else None,
+                          detail=f"broker-confirmed fill, {len(fills)} order(s)")
+
+    def _alert_live_exit_once(self, trade_id: str, kind: str, msg: str):
+        logger.error(msg)
+        if (trade_id, kind) in self._live_exit_alerted:
+            return
+        self._live_exit_alerted.add((trade_id, kind))
+        try:
+            from notifications.alert_manager import get_alert_manager
+            get_alert_manager()._send(f"\U0001F6A8 {msg}")
+        except Exception as e:
+            logger.warning(f"Live-exit alert failed to send: {e}")
+
+    # ── Order construction / submission (live only) ──────────────────────────
+
+    def _submit_live_close(self, record: TradeRecord, contracts: int,
+                           mark_price: Optional[float]) -> Optional["object"]:
+        """Order SUBMISSION only (no fill confirmation) — returns the broker
+        PlacedOrder (carrying .id for polling) on submit success, else None.
+        Submission is not a fill; only _confirm_and_book_live_exit may book.
+
+        Routing (v3.5): condor legs are two-legged VERTICALS and now close as
+        a single 2-leg spread order via _close_vertical — previously they fell
+        through to _close_single_leg, which SELL_TO_CLOSEd only the short
+        symbol (wrong action for a short, long leg orphaned at the broker).
+        """
+        try:
+            session = get_session()
+            account = get_account()
+            if bool(record.get("is_butterfly", False)):
                 return self._close_butterfly(session, account, record,
-                                             record["contracts"])
-            return self._close_single_leg(session, account, record,
-                                          record["contracts"])
+                                             contracts, mark_price)
+            is_vertical = (bool(record.get("is_condor_leg"))
+                           or record.get("strategy") == "IronCondorStrategy"
+                           or (record.get("short_symbol") and record.get("long_symbol")))
+            if is_vertical:
+                return self._close_vertical(session, account, record,
+                                            contracts, mark_price)
+            return self._close_single_leg(session, account, record, contracts)
         except Exception as e:
             logger.error(f"Live close submit failed for {record['trade_id'][:8]}: {e}")
-            return False
+            return None
 
-    def _close_single_leg(self, session, account, record, contracts) -> bool:
+    @staticmethod
+    def _tick_for(record: TradeRecord) -> float:
+        """Price increment for close limits: SPX-family trades in nickels."""
+        sym = str(record.get("symbol", "") or "").upper()
+        return 0.05 if sym in ("SPX", "SPXW", "XSP") else 0.01
+
+    @classmethod
+    def _round_to_tick(cls, price: float, record: TradeRecord) -> float:
+        tick = cls._tick_for(record)
+        return max(tick, round(round(price / tick) * tick, 2))
+
+    def _place(self, session, account, order, what: str) -> Optional["object"]:
+        response = account.place_order(session, order, dry_run=False)
+        if getattr(response, "errors", None):
+            logger.error(f"{what} order errors: {response.errors}")
+            return None
+        placed = getattr(response, "order", None)
+        if placed is None or getattr(placed, "id", None) is None:
+            logger.error(f"{what} order: no order id in response — cannot poll; "
+                         f"treating as submit failure")
+            return None
+        return placed
+
+    def _close_single_leg(self, session, account, record, contracts):
         symbol = record.get("option_symbol", "")
         if not symbol:
             logger.error("Cannot close: no option_symbol in record")
-            return False
-
+            return None
+        # v3.5: an adopted SHORT leg must BUY to close, not sell more short.
+        action = (OrderAction.BUY_TO_CLOSE if record.get("is_short_position")
+                  else OrderAction.SELL_TO_CLOSE)
         leg = Leg(
             instrument_type = InstrumentType.EQUITY_OPTION,
             symbol          = symbol,
-            action          = OrderAction.SELL_TO_CLOSE,
+            action          = action,
             quantity        = contracts,
         )
         order = NewOrder(
             time_in_force = OrderTimeInForce.DAY,
-            order_type    = OrderType.MARKET,
+            order_type    = OrderType.MARKET,   # single-leg market is accepted
             legs          = [leg],
         )
-        response = account.place_order(session, order, dry_run=False)
-        if response.errors:
-            logger.error(f"Close order errors: {response.errors}")
-            return False
-        return True
+        return self._place(session, account, order, "Single-leg close")
 
-    def _close_butterfly(self, session, account, record, contracts) -> bool:
+    def _close_vertical(self, session, account, record, contracts,
+                        mark_price: Optional[float]):
+        """Close a condor-leg vertical as ONE 2-leg spread order: BUY_TO_CLOSE
+        the short strike, SELL_TO_CLOSE the long strike. tastytrade rejects
+        MARKET on spreads, so this is a marketable LIMIT: debit capped at the
+        spread width (a vertical can never be worth more than its width), so
+        even with no mark the order is bounded and safe.
+
+        SDK NOTE (verified v13.x): NewOrder.price is SIGNED — negative=debit,
+        positive=credit. price_effect on NewOrder is ignored by current SDKs.
+        Closing a short vertical PAYS a debit → price must be NEGATIVE.
+        """
+        short_sym = record.get("short_symbol", "")
+        long_sym  = record.get("long_symbol", "")
+        if not short_sym or not long_sym:
+            logger.error("Cannot close vertical: missing short/long symbols")
+            return None
+        width  = float(record.get("spread_width") or 0.0)
+        buffer = float(getattr(_cfg, "LIVE_CLOSE_LIMIT_BUFFER", 0.10))
+        if mark_price is not None and mark_price >= 0:
+            limit = mark_price + buffer
+            if width > 0:
+                limit = min(limit, width)
+        elif width > 0:
+            limit = width   # max possible value of the vertical — bounded marketable
+        else:
+            logger.error("Cannot price vertical close: no mark and no spread_width")
+            return None
+        limit = self._round_to_tick(limit, record)
+        legs = [
+            Leg(instrument_type=InstrumentType.EQUITY_OPTION,
+                symbol=short_sym, action=OrderAction.BUY_TO_CLOSE,  quantity=contracts),
+            Leg(instrument_type=InstrumentType.EQUITY_OPTION,
+                symbol=long_sym,  action=OrderAction.SELL_TO_CLOSE, quantity=contracts),
+        ]
+        order = NewOrder(
+            time_in_force = OrderTimeInForce.DAY,
+            order_type    = OrderType.LIMIT,
+            price         = Decimal(str(-limit)),   # negative = DEBIT paid to close
+            legs          = legs,
+        )
+        return self._place(session, account, order, "Vertical close")
+
+    def _close_butterfly(self, session, account, record, contracts,
+                         mark_price: Optional[float]):
+        """Close a long butterfly (sell wings, buy back the 2x short body) as
+        one 3-leg order. v3.5: MARKET → marketable LIMIT (tastytrade rejects
+        MARKET on spreads — the old market order would have failed every tick).
+        Selling the fly RECEIVES a credit → price is POSITIVE (signed SDK
+        convention), floored at one tick below mark; no mark → decline this
+        pass rather than guess (retry tick brings a fresh mark)."""
         lower_sym  = record.get("lower_symbol", "")
         center_sym = record.get("center_symbol", "")
         upper_sym  = record.get("upper_symbol", "")
-
         if not all([lower_sym, center_sym, upper_sym]):
             logger.error("Cannot close butterfly: missing leg symbols")
-            return False
-
+            return None
+        if mark_price is None or mark_price < 0:
+            logger.warning("Butterfly close: no mark to price the limit — "
+                           "declining this pass, will retry with a fresh mark")
+            return None
+        buffer = float(getattr(_cfg, "LIVE_CLOSE_LIMIT_BUFFER", 0.10))
+        limit  = self._round_to_tick(max(mark_price - buffer, self._tick_for(record)),
+                                     record)
         legs = [
             Leg(instrument_type=InstrumentType.EQUITY_OPTION,
                 symbol=lower_sym,  action=OrderAction.SELL_TO_CLOSE, quantity=contracts),
@@ -1138,14 +1544,59 @@ class ExitEngine:
         ]
         order = NewOrder(
             time_in_force = OrderTimeInForce.DAY,
-            order_type    = OrderType.MARKET,
+            order_type    = OrderType.LIMIT,
+            price         = Decimal(str(limit)),   # positive = CREDIT received
             legs          = legs,
         )
-        response = account.place_order(session, order, dry_run=False)
-        if response.errors:
-            logger.error(f"Butterfly close errors: {response.errors}")
-            return False
-        return True
+        return self._place(session, account, order, "Butterfly close")
+
+    # ── Fill readback ─────────────────────────────────────────────────────────
+
+    def _net_fill_price(self, record: TradeRecord,
+                        placed) -> Optional[Tuple[float, float]]:
+        """Read (closed_quantity, net_fill_price) from a PlacedOrder's per-leg
+        fills. The net is on the SAME basis as the marks _fetch_current_premium
+        produces, so _execute_exit's P&L math is untouched:
+          vertical:   short_avg - long_avg          (mark: short_mark - long_mark)
+          butterfly:  lower + upper - 2*center      (mark: same combination)
+          single leg: the leg's weighted avg fill
+        closed_quantity is the min across legs of (filled / leg ratio) — legs of
+        a complex order fill together, min() is the safe floor. Returns None if
+        nothing readable filled."""
+        def leg_stats(sym: str) -> Tuple[float, Optional[float]]:
+            for leg in (getattr(placed, "legs", None) or []):
+                if getattr(leg, "symbol", None) == sym:
+                    fills = getattr(leg, "fills", None) or []
+                    q = sum(float(f.quantity) for f in fills)
+                    if q <= 0:
+                        return 0.0, None
+                    p = sum(float(f.quantity) * float(f.fill_price) for f in fills) / q
+                    return q, p
+            return 0.0, None
+
+        if bool(record.get("is_butterfly", False)):
+            ql, pl = leg_stats(record.get("lower_symbol", ""))
+            qc, pc = leg_stats(record.get("center_symbol", ""))
+            qu, pu = leg_stats(record.get("upper_symbol", ""))
+            qty = min(ql, qu, qc / 2.0)
+            if qty <= 0 or None in (pl, pc, pu):
+                return None
+            return qty, round(pl + pu - 2.0 * pc, 4)
+
+        if (record.get("is_condor_leg")
+                or record.get("strategy") == "IronCondorStrategy"
+                or (record.get("short_symbol") and record.get("long_symbol"))):
+            qs, ps = leg_stats(record.get("short_symbol", ""))
+            ql, pl = leg_stats(record.get("long_symbol", ""))
+            qty = min(qs, ql)
+            if qty <= 0 or None in (ps, pl):
+                return None
+            return qty, round(ps - pl, 4)
+
+        q, p = leg_stats(record.get("option_symbol", ""))
+        if q <= 0 or p is None:
+            return None
+        return q, round(p, 4)
 
     def clear_trail(self, trade_id: str):
         self._trail_stops.pop(trade_id, None)
