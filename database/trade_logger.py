@@ -29,6 +29,15 @@ v1.6 — 2026-07-07 — broker reconciliation support: is_short_position column
         (schema + migration) so an adopted short survives a re-restart; and
         close_phantom() to close a DB row the broker no longer shows (broker is
         the source of truth for existence on live).
+v3.7 — 2026-07-15 — MODE ISOLATION (audit defect Q). Every decision/session
+        read is scoped to the current mode's rows via COALESCE(paper_trade,1):
+        get_open_trade(s), close_expired_open_trades, get_session_losses,
+        get_consecutive_losses, and _closed_today_rows — the DAILY_LOSS_LIMIT
+        source of truth. A live bot can no longer adopt open paper positions or
+        gate the real-money breaker on paper P&L (and paper stays clean of live
+        rows symmetrically). Row WRITES are untouched — trade_id-keyed updates
+        need no mode. Companion: configure.sh v2.0 archives trades.db on every
+        mode switch so histories never mix in one file to begin with.
 v3.6 — 2026-07-15 — close_phantom() accepts recovered exit_price/pnl_usd so a
         manually-closed-at-broker phantom books its REAL fill from order history
         (broker_reconcile.match_closing_fills) instead of a flagged $0.00.
@@ -44,7 +53,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 
-from config import DB_PATH
+from config import DB_PATH, PAPER_TRADING
 from utils.time_utils import ts_for_db, now_utc, now_et, ET
 
 logger = logging.getLogger(__name__)
@@ -148,8 +157,15 @@ class TradeLogger:
     );
     """
 
-    def __init__(self, db_path: str = DB_PATH):
+    def __init__(self, db_path: str = DB_PATH,
+                 paper_trading: bool = PAPER_TRADING):
         self.db_path = db_path
+        # v3.7 (defect Q): every read that drives DECISIONS or SESSION TRUTH is
+        # scoped to the CURRENT MODE's rows. Paper and live share one schema,
+        # but a live bot must never manage paper positions or gate its daily
+        # loss limit on paper P&L — and vice versa. paper_trade defaults to 1
+        # in the schema, so legacy rows count as paper (safe: live sees none).
+        self._mode_flag = 1 if paper_trading else 0
         self._ensure_db()
 
     def _ensure_db(self):
@@ -261,7 +277,9 @@ class TradeLogger:
         """Return the single open trade if any."""
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM trades WHERE status='open' ORDER BY entry_time DESC LIMIT 1"
+                "SELECT * FROM trades WHERE status='open' "
+                "AND COALESCE(paper_trade,1)=? ORDER BY entry_time DESC LIMIT 1",
+                (self._mode_flag,)
             ).fetchone()
         if row:
             return make_record(**dict(row))
@@ -272,7 +290,9 @@ class TradeLogger:
         legs; every other strategy holds at most one at a time."""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM trades WHERE status='open' ORDER BY entry_time ASC"
+                "SELECT * FROM trades WHERE status='open' "
+                "AND COALESCE(paper_trade,1)=? ORDER BY entry_time ASC",
+                (self._mode_flag,)
             ).fetchall()
         return [make_record(**dict(r)) for r in rows]
 
@@ -324,7 +344,8 @@ class TradeLogger:
         today_et = now_et().strftime("%Y-%m-%d")
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM trades WHERE status='open'"
+                "SELECT * FROM trades WHERE status='open' "
+                "AND COALESCE(paper_trade,1)=?", (self._mode_flag,)
             ).fetchall()
             expired = []
             for r in rows:
@@ -391,7 +412,8 @@ class TradeLogger:
                 WHERE status='closed'
                 AND pnl_usd < 0
                 AND date(entry_time) = ?
-            """, (today,)).fetchone()
+                AND COALESCE(paper_trade,1) = ?
+            """, (today, self._mode_flag)).fetchone()
         return row["n"] if row else 0
 
     def get_consecutive_losses(self) -> int:
@@ -399,9 +421,10 @@ class TradeLogger:
             rows = conn.execute("""
                 SELECT pnl_usd FROM trades
                 WHERE status='closed'
+                AND COALESCE(paper_trade,1) = ?
                 ORDER BY exit_time DESC
                 LIMIT 10
-            """).fetchall()
+            """, (self._mode_flag,)).fetchall()
         count = 0
         for row in rows:
             if row["pnl_usd"] < 0:
@@ -463,7 +486,8 @@ class TradeLogger:
                 SELECT * FROM trades
                 WHERE status='closed' AND pnl_usd IS NOT NULL
                 AND date(entry_time) >= ?
-            """, (lower,)).fetchall()
+                AND COALESCE(paper_trade,1) = ?
+            """, (lower, self._mode_flag)).fetchall()
         return [r for r in rows if self._et_date(r["entry_time"]) == today_et]
 
     def realized_pnl_today(self) -> float:
