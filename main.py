@@ -58,6 +58,19 @@ v2.12 — 2026-07-07 — LIVE broker reconciliation wired into recovery: the bro
         and closes PHANTOM DB rows the broker no longer shows. FAIL-SAFE: a
         failed or empty broker read never closes anything — falls back to
         DB-only recovery. Paper is unchanged (no broker query).
+v3.6 — 2026-07-15 — PHANTOM P&L RECOVERY + denser reconcile schedule.
+        (a) A phantom (DB open, broker flat — e.g. a manual close at the broker)
+            now books its REAL fill: one order-history read per reconcile pass,
+            match_closing_fills() finds the closing order(s), phantom_pnl()
+            books credit-signed truth into the DB (which DAILY_LOSS_LIMIT
+            reads). No matching order (expiry/assignment) -> flagged $0.00 as
+            before. Applies to BOTH the startup reconcile (history covers back
+            to each phantom's entry date) and intraday sweeps.
+        (b) Intraday sweeps every BROKER_RECONCILE_INTERVAL_MIN (default 10,
+            was hardcoded 30), PLUS wind-down sweeps at 15:45, 15:50, and a
+            final 15:57 post-flatten truth pass (last guaranteed look before
+            the loop goes dormant at 16:00).
+        (c) Phantom alerts now carry the recovered P&L.
 v2.13 — 2026-07-07 — INTRADAY broker reconcile (LIVE + enabled): every 30 min
         across RTH with the last sweep at 15:30, a leg-role-aware check catches
         positions the broker closed mid-session — especially a SHORT leg
@@ -116,7 +129,8 @@ from config import (
     POLL_INTERVAL_SECONDS, LOG_LEVEL, LOG_FILE, LOG_ROTATION_MB,
     PAPER_TRADING, RISK_PER_TRADE_USD, DAILY_LOSS_LIMIT_USD,
     REGIME_REASSESS_MINUTES, INSTRUMENT, SessionConfig, DIRECTIONAL_ONLY,
-    ORB_NO_ENTRY_AFTER_ET, BROKER_RECONCILE_ENABLED, ORB_FIRES_REGARDLESS_OF_REGIME
+    ORB_NO_ENTRY_AFTER_ET, BROKER_RECONCILE_ENABLED, ORB_FIRES_REGARDLESS_OF_REGIME,
+    BROKER_RECONCILE_INTERVAL_MIN
 )
 
 
@@ -913,20 +927,79 @@ def _describe_position(record: dict) -> str:
 
 
 def _intraday_reconcile_slot(now):
-    """30-minute RTH reconcile slot key, or None outside the window. Slots at
-    :00 and :30 from 09:30 to 15:30 (last = 15:30, 15 min before the 15:45
-    flatten). A slot stays 'current' until 15:45, so a late tick still catches
-    the final 15:30 sweep; nothing fires after that (the flatten takes over)."""
+    """Intraday reconcile slot key, or None outside the window. v3.6: interval
+    slots every BROKER_RECONCILE_INTERVAL_MIN minutes (default 10, was a
+    hardcoded 30) from 09:30 to 15:45, PLUS dedicated wind-down sweeps at
+    15:45 (as the flatten starts — clears phantoms the flatten would otherwise
+    fight), 15:50 (mid-window), and 15:57 (the post-flatten truth pass; the
+    reconcile block runs before the hard-close branch each tick, and the loop
+    goes dormant at 16:00, so this is the last guaranteed look of the day)."""
     if now.weekday() >= 5:
         return None
     t = now.time()
-    if t < dtime(9, 30) or t >= dtime(15, 45):
+    if t < dtime(9, 30) or t >= dtime(16, 0):
         return None
-    boundary = 0 if now.minute < 30 else 30
-    hh, mm = now.hour, boundary
-    if (hh, mm) > (15, 30):      # cap the last slot at 15:30
-        hh, mm = 15, 30
+    if t >= dtime(15, 45):
+        if t >= dtime(15, 57):
+            hh, mm = 15, 57
+        elif t >= dtime(15, 50):
+            hh, mm = 15, 50
+        else:
+            hh, mm = 15, 45
+        return f"{now:%Y-%m-%d} {hh:02d}:{mm:02d}"
+    interval = max(1, int(BROKER_RECONCILE_INTERVAL_MIN))
+    mins_since_open = (now.hour - 9) * 60 + now.minute - 30
+    slot_min = (mins_since_open // interval) * interval
+    hh, mm = 9 + (30 + slot_min) // 60, (30 + slot_min) % 60
     return f"{now:%Y-%m-%d} {hh:02d}:{mm:02d}"
+
+
+def _fetch_close_order_history(records: list) -> list:
+    """One order-history read per reconcile pass (never per phantom), covering
+    the earliest entry date among the phantom candidates. Fail-safe: any error
+    returns [] and the caller books the flagged $0.00 fallback as before."""
+    try:
+        from data.tasty_client import get_session, get_account
+        from datetime import date as _date
+        start = _date.today()
+        for rec in records:
+            et = str(rec.get("entry_time", "") or "")[:10]
+            try:
+                y, m, d = int(et[0:4]), int(et[5:7]), int(et[8:10])
+                start = min(start, _date(y, m, d))
+            except Exception:
+                pass
+        session = get_session()
+        account = get_account()
+        return account.get_order_history(session, page_offset=None,
+                                         start_date=start) or []
+    except Exception as e:
+        logger.error(f"Phantom P&L recovery: order-history read failed ({e}) — "
+                     f"phantoms will book flagged $0.00 this pass.")
+        return []
+
+
+def _close_phantom_with_recovery(trade_logger, rec, orders, reason: str) -> str:
+    """Close one phantom row, booking the REAL fill recovered from broker order
+    history when a matching closing order exists (manual close), else the
+    flagged $0.00 (expiry/assignment leave no closing order). Returns a short
+    description for the alert."""
+    from execution.broker_reconcile import match_closing_fills, phantom_pnl
+    rid = rec.get("trade_id", "")
+    match = match_closing_fills(rec, orders) if orders else None
+    if match is not None:
+        qty, net = match
+        pnl = phantom_pnl(rec, net, closed_qty=min(qty, float(rec.get("contracts", 0) or 0)))
+        full = qty >= float(rec.get("contracts", 0) or 0)
+        trade_logger.close_phantom(
+            rid,
+            reason     = f"{reason}_pnl_recovered" + ("" if full else "_partial"),
+            exit_price = net,
+            pnl_usd    = pnl,
+        )
+        return f"{rid[:8]} pnl=${pnl:+.2f}@{net}" + ("" if full else f" ({qty:g} of {rec.get('contracts')})")
+    trade_logger.close_phantom(rid, reason=reason)
+    return f"{rid[:8]} pnl=UNKNOWN($0 flagged)"
 
 
 def _intraday_reconcile(state: BotState, instrument: str):
@@ -964,6 +1037,12 @@ def _intraday_reconcile(state: BotState, instrument: str):
 
     changed  = False
     phantoms = []
+    # v3.6: find ALL whole-position phantoms first, then ONE order-history read
+    # recovers their real fills (manual closes) — see _close_phantom_with_recovery.
+    gone = [rec for rec in open_rows
+            if (leg_roles(rec)[0] | leg_roles(rec)[1])
+            and not ((leg_roles(rec)[0] | leg_roles(rec)[1]) & broker_syms)]
+    history = _fetch_close_order_history(gone) if gone else []
     for rec in open_rows:
         rid = rec.get("trade_id", "")
         short_syms, long_syms = leg_roles(rec)
@@ -971,10 +1050,12 @@ def _intraday_reconcile(state: BotState, instrument: str):
         if not all_syms:
             continue
 
-        # whole position gone at the broker -> phantom
+        # whole position gone at the broker -> phantom (real fill recovered
+        # from order history when a matching manual close exists)
         if not (all_syms & broker_syms):
-            trade_logger.close_phantom(rid, reason="phantom_intraday")
-            phantoms.append(rid)
+            desc = _close_phantom_with_recovery(trade_logger, rec, history,
+                                                reason="phantom_intraday")
+            phantoms.append(desc)
             changed = True
             continue
 
@@ -1044,10 +1125,22 @@ def _reconcile_with_broker(state: BotState, live_rows: list,
     plan = build_plan(broker, live_rows)
 
     # Phantoms: open in our DB but absent at the broker -> close (broker wins).
-    for tid in plan.close_phantom:
-        trade_logger.close_phantom(tid)
+    # v3.6: recover the REAL fill from order history (covering back to each
+    # phantom's entry date — a manual close from a prior day is still found).
     if plan.close_phantom:
-        get_alert_manager().send_phantom_closed_alert(instrument, plan.close_phantom)
+        by_id   = {r.get("trade_id", ""): r for r in live_rows}
+        gone    = [by_id[t] for t in plan.close_phantom if t in by_id]
+        history = _fetch_close_order_history(gone)
+        descs   = []
+        for tid in plan.close_phantom:
+            rec = by_id.get(tid)
+            if rec is None:
+                trade_logger.close_phantom(tid)
+                descs.append(f"{tid[:8]} pnl=UNKNOWN($0 flagged)")
+                continue
+            descs.append(_close_phantom_with_recovery(
+                trade_logger, rec, history, reason="phantom_closed_at_broker"))
+        get_alert_manager().send_phantom_closed_alert(instrument, descs)
 
     # Adopts: journal into our system of record + alert (loud for a lone short).
     anomaly_ids = set(plan.anomalies)
