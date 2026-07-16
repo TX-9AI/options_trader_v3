@@ -31,6 +31,9 @@ v1.8 — 2026-07-15 — live fill-confirmation knobs (LIVE_FILL_*, v3.5) and
         BROKER_RECONCILE_ENABLED now defaults to the trading mode (LIVE=on,
         PAPER=off) so going live via configure.sh auto-enables reconciliation —
         explicit OT_BROKER_RECONCILE=True/False still overrides.
+v1.9 — 2026-07-15 — LIVE_ENTRY_DEADLINE_SECONDS (entry fill-confirmation
+        window, defect O) and PAPER_FILL_SLIPPAGE_PCT now env-tunable with an
+        honest 1% default applied against the trade (defect R).
         Neutral strategies run ONLY on true-0DTE index products (SPY/QQQ/SPX/
         IWM); every other symbol (single names + weekly-only ETFs) is
         directional-only, derived automatically from FULL_STRATEGY_INSTRUMENTS.
@@ -405,7 +408,13 @@ ORDER_BLOCK_LOOKBACK        = 20
 
 LIMIT_RETRY_SECONDS         = 30
 LIMIT_IMPROVE_TICKS         = 1
-PAPER_FILL_SLIPPAGE_PCT     = 0.0    # paper fills at the exact bid/ask midpoint (mark)
+# v1.9 (audit defect R): paper fills now model live friction instead of the
+# frictionless exact-mid fill. Applied AGAINST the trade on every paper entry:
+# debits pay (1+pct)·mid, credits receive (1−pct)·mid — condor legs included
+# (they previously ignored this knob entirely). Default 1%: modest, but paper
+# stops structurally flattering live. Set OT_PAPER_SLIPPAGE_PCT=0.0 to restore
+# the old frictionless fills for apples-to-apples comparison with history.
+PAPER_FILL_SLIPPAGE_PCT     = float(os.environ.get("OT_PAPER_SLIPPAGE_PCT", "0.01"))
 
 # ─── TASTYTRADE API ───────────────────────────────────────────────────────────
 
@@ -468,6 +477,10 @@ LIVE_FILL_DEADLINE_SECONDS  = float(os.environ.get("OT_LIVE_FILL_DEADLINE_SECOND
 # limits: vertical debit = min(mark + buffer, spread width); butterfly credit
 # = max(mark - buffer, one tick). Retry ticks re-price at a fresh mark.
 LIVE_CLOSE_LIMIT_BUFFER     = float(os.environ.get("OT_LIVE_CLOSE_LIMIT_BUFFER", "0.10"))
+# v1.9 (audit defect O): bounded fill-confirmation window for ENTRY orders.
+# Entries are optional (unlike exits): unfilled at the deadline -> cancel and
+# walk away; the strategy re-evaluates next tick. Whatever DID fill is booked.
+LIVE_ENTRY_DEADLINE_SECONDS = float(os.environ.get("OT_LIVE_ENTRY_DEADLINE_SECONDS", "20"))
 
 
 @dataclass

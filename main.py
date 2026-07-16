@@ -58,6 +58,18 @@ v2.12 — 2026-07-07 — LIVE broker reconciliation wired into recovery: the bro
         and closes PHANTOM DB rows the broker no longer shows. FAIL-SAFE: a
         failed or empty broker read never closes anything — falls back to
         DB-only recovery. Paper is unchanged (no broker query).
+v3.7 — 2026-07-15 — CONDOR ENTRY FILL-CONFIRMATION (audit defect O, part 1).
+        _execute_condor_leg live path now confirms the fill before ANY record
+        exists: submit the signed-credit limit → poll via
+        execution/order_confirm.confirm_order_fill (bounded by
+        LIVE_ENTRY_DEADLINE_SECONDS) → book ONLY confirmed contracts at the
+        broker's per-leg net credit. Unfilled → cancel, walk away, no ghost;
+        partial → book the filled size; uncancellable → page, reconcile adopts.
+        notify_leg_filled() therefore advances the legging state machine only
+        on real fills. PAPER mirrors live friction: condor credit now applies
+        PAPER_FILL_SLIPPAGE_PCT (it previously ignored the knob and filled at
+        exact mid). price_effect kwarg dropped (ignored by SDK; sign carries
+        the credit).
 v3.6 — 2026-07-15 — PHANTOM P&L RECOVERY + denser reconcile schedule.
         (a) A phantom (DB open, broker flat — e.g. a manual close at the broker)
             now books its REAL fill: one order-history read per reconcile pass,
@@ -366,12 +378,21 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState):
     contracts = sizing.contracts
 
     if not state.paper_trading:
-        # Live 2-leg vertical credit order. NOTE: dry-run test before first live use.
+        # ── LIVE 2-leg vertical credit entry — FILL-CONFIRMED (v3.7, defect O) ─
+        # Submission is not a fill. The record is written ONLY for contracts
+        # the broker confirms filled, at the broker's per-leg net credit —
+        # never the limit price we asked for. Unfilled by the deadline →
+        # cancel and walk away (the strategy re-evaluates next tick).
+        # A PARTIAL fill is a real position: book the filled quantity.
+        # SDK NOTE (verified v13.x): NewOrder.price is SIGNED — positive =
+        # CREDIT received, which is what a short vertical collects. The old
+        # price_effect kwarg is ignored by current SDKs and is gone.
         try:
             from data.tasty_client import get_session, get_account
+            from execution.order_confirm import confirm_order_fill
             from tastytrade.order import (
                 NewOrder, Leg, OrderAction, OrderType, OrderTimeInForce,
-                PriceEffect, InstrumentType,
+                InstrumentType,
             )
             from decimal import Decimal
 
@@ -388,21 +409,41 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState):
             order = NewOrder(
                 time_in_force = OrderTimeInForce.DAY,
                 order_type    = OrderType.LIMIT,
-                price         = Decimal(str(round(net_credit, 2))),
-                price_effect  = PriceEffect.CREDIT,
+                price         = Decimal(str(round(net_credit, 2))),  # + = credit
                 legs          = legs,
             )
             response = account.place_order(session, order, dry_run=False)
             if response.errors:
                 logger.error(f"Condor leg order failed: {response.errors}")
                 return
-            fill_credit = float(getattr(response.order, "price", None) or net_credit)
-            order_id    = str(getattr(response.order, "id", "") or "")
+            basis = [(short_contract.symbol, 1, +1),
+                     (long_contract.symbol,  1, -1)]   # net = short − long (credit)
+            fill = confirm_order_fill(session, account, response.order, basis,
+                                      what="condor-leg entry")
+            if not fill.filled or fill.quantity <= 0 or fill.net_price is None:
+                logger.warning(f"Condor leg entry NOT filled ({fill.detail}) — "
+                               f"no position recorded")
+                if fill.working_order_id:
+                    get_alert_manager()._send(
+                        f"\U0001F6A8 Condor entry order {fill.working_order_id} "
+                        f"could not be cancelled and may still fill — "
+                        f"reconcile will adopt it. ({fill.detail})")
+                return
+            if fill.quantity < contracts:
+                logger.warning(f"Condor leg entry PARTIAL: {fill.quantity}/"
+                               f"{contracts} filled — booking the filled size")
+            contracts   = fill.quantity          # book what ACTUALLY filled
+            fill_credit = fill.net_price         # broker net, not our limit
+            order_id    = fill.order_id or ""
         except Exception as e:
             logger.error(f"Condor leg order failed: {e}")
             return
     else:
-        fill_credit = net_credit    # paper: fill at mid credit
+        # ── PAPER mirrors live friction (v3.7, defect R): a live mid-credit
+        # limit rarely fills at exact mid — model it as receiving slightly
+        # less than mid, governed by the same knob as every other paper fill.
+        from config import PAPER_FILL_SLIPPAGE_PCT
+        fill_credit = round(net_credit * (1 - PAPER_FILL_SLIPPAGE_PCT), 4)
         order_id    = "PAPER"
 
     is_leg1  = "Leg 1" in signal.setup_type

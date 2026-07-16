@@ -500,7 +500,16 @@ contract (exit_engine/position_manager v3.4) + live fill-confirmation
 (main/broker_reconcile/trade_logger v3.6). See "Fill-confirmed exits" above
 and `docs/AUDIT_paper_live_divergence_2026-07-15.md`.
 
-### O. 🔴 LIVE ENTRIES book on submission, not on broker fill (all three paths)
+### O. 🔶 PARTIALLY RESOLVED — LIVE ENTRIES book on submission, not on broker fill
+**Condor legs FIXED 2026-07-15** (main v3.7 + `execution/order_confirm.py`):
+the signed-credit limit is polled to `LIVE_ENTRY_DEADLINE_SECONDS`; the record
+is written ONLY for broker-confirmed contracts at the per-leg net credit;
+unfilled → cancel and walk away (no ghost, and `notify_leg_filled()` advances
+only on real fills); partial → the filled size is booked; an uncancellable
+order pages and is adopted by reconcile if it later fills. Paper condors now
+apply `PAPER_FILL_SLIPPAGE_PCT` (env-tunable, default 1% against the trade) so
+paper mirrors live friction. Tests: `tests/test_entry_fill_confirmation.py`.
+**STILL OPEN: single-leg (b) and butterfly (c) below.** Original finding:
 The entry-side twin of defect N, found in the 2026-07-15 paper→live audit —
 **NOT yet fixed**. (a) Condor legs book `response.order.price or net_credit`
 the instant the mid-credit LIMIT is accepted — a never-filled entry becomes a
