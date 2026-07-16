@@ -157,7 +157,10 @@ class AlertManager:
         """DB rows the broker no longer shows open, closed (broker wins on
         existence). Informational — we stopped managing positions that aren't
         actually there."""
-        ids = ", ".join(str(t)[:8] for t in trade_ids) if trade_ids else "-"
+        # v3.6: entries may be plain trade_ids (truncate) or recovery
+        # descriptions like "abcd1234 pnl=$-42.00@0.55" (show whole).
+        ids = ", ".join(str(t) if " " in str(t) else str(t)[:8]
+                        for t in trade_ids) if trade_ids else "-"
         self._send(
             f"\U0001F9F9 Closed {len(trade_ids)} phantom(s) | {instrument} | "
             f"{ids} | in DB but not at broker | {fmt_et_short()}"
