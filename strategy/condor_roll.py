@@ -1,5 +1,18 @@
 """
 strategy/condor_roll.py — Broken-wing roll of a live iron condor.
+v3.7 — 2026-07-15 — ROLL IS REAL (audit defect P). Step 1 (close old untested
+        vertical): both modes route through place_exit_order and book the
+        FillResult's ACTUAL fill price — the old code booked plan.close_cost
+        even when the confirmed live fill differed. Step 2 (open rolled
+        vertical): a REAL signed-credit limit order is placed and
+        fill-confirmed via execution/order_confirm — the old code wrote the
+        DB record without placing ANY live order (a fictional position). The
+        record books ONLY confirmed contracts at the broker's net credit;
+        paper mirrors live friction via PAPER_FILL_SLIPPAGE_PCT. If the open
+        fails after the close succeeded, position-truth is preserved (DB
+        matches broker), a HALF-COMPLETE page fires, and the roll re-evaluates
+        on a later tick with a fresh plan. The risk-free claim is re-checked
+        against the ACTUAL fill credit and pages if the fills came in light.
 v3.1 — 2026-07-15 — FillResult adoption: the live roll-close of the untested
         vertical now goes through the confirmed-fill contract (place_exit_order
         returns FillResult); the roll aborts and leaves the position OPEN unless
@@ -197,27 +210,99 @@ def _execute_roll(pos_mgr, tested: dict, untested: dict,
 
     try:
         # ── 1. Close the OLD untested vertical (buy it back) ──────────────────
-        if not state.paper_trading:
-            # v3.4: place_exit_order now returns a FillResult; a live roll-close
-            # must be broker-confirmed before we book it (same anti-orphan rule
-            # as every other live exit — see FABLE_SPEC_live_exit_fill_confirmation).
-            fill = get_exit_engine(False).place_exit_order(
-                untested, "rolled_to_broken_wing",
-                mark_price=plan.close_cost)
-            if not fill.confirmed:
-                logger.error("Roll aborted — untested vertical close not confirmed "
-                             f"({fill.detail or 'no fill'}); leaving position OPEN")
-                return False
+        # v3.7 (defect P): BOTH modes route through place_exit_order and book
+        # the FillResult's ACTUAL fill price — paper simulates at plan.close_cost
+        # (same as every other paper exit), live is the broker's confirmed net.
+        # The old code booked plan.close_cost even when the live fill differed.
+        fill = get_exit_engine(state.paper_trading).place_exit_order(
+            untested, "rolled_to_broken_wing",
+            mark_price=plan.close_cost)
+        if not fill.confirmed or fill.fill_price is None:
+            logger.error("Roll aborted — untested vertical close not confirmed "
+                         f"({fill.detail or 'no fill'}); leaving position OPEN")
+            return False
+        close_price = float(fill.fill_price)
         old_credit = float(untested.get("credit_received", untested.get("entry_premium", 0.0)))
-        pnl_close  = (old_credit - plan.close_cost) * contracts * CONTRACT_MULTIPLIER
-        tl.log_exit(untested["trade_id"], exit_price=plan.close_cost,
+        pnl_close  = (old_credit - close_price) * contracts * CONTRACT_MULTIPLIER
+        tl.log_exit(untested["trade_id"], exit_price=close_price,
                     pnl_usd=pnl_close, exit_reason="rolled_to_broken_wing")
         pos_mgr.remove_record(untested["trade_id"])
 
         # ── 2. Open the ROLLED untested vertical (the new risk side) ──────────
-        #      (live order placement mirrors _execute_condor_leg; paper fills at mid)
+        # v3.7 (defect P): a REAL order, fill-confirmed. The old code wrote the
+        # DB record without placing ANY live order — a fictional position. Now:
+        # live places the signed-credit limit and books ONLY the confirmed
+        # contracts at the broker's net credit; paper mirrors live friction via
+        # PAPER_FILL_SLIPPAGE_PCT (same as condor entries). If the open fails
+        # AFTER the close succeeded, position-truth is preserved (DB matches
+        # broker: old vertical gone, no new one) — we alert loudly and return
+        # False; the roll conditions re-evaluate on a later tick with a fresh
+        # plan.
+        roll_qty = contracts
+        if not state.paper_trading:
+            from data.tasty_client import get_session, get_account
+            from execution.order_confirm import confirm_order_fill
+            from tastytrade.order import (
+                NewOrder, Leg, OrderAction, OrderType, OrderTimeInForce,
+                InstrumentType,
+            )
+            from decimal import Decimal
+
+            session = get_session()
+            account = get_account()
+            legs = [
+                Leg(instrument_type=InstrumentType.EQUITY_OPTION,
+                    symbol=plan.new_short_symbol,
+                    action=OrderAction.SELL_TO_OPEN, quantity=contracts),
+                Leg(instrument_type=InstrumentType.EQUITY_OPTION,
+                    symbol=plan.new_long_symbol,
+                    action=OrderAction.BUY_TO_OPEN, quantity=contracts),
+            ]
+            order = NewOrder(
+                time_in_force = OrderTimeInForce.DAY,
+                order_type    = OrderType.LIMIT,
+                price         = Decimal(str(round(plan.roll_credit, 2))),  # + = credit
+                legs          = legs,
+            )
+            response = account.place_order(session, order, dry_run=False)
+            if response.errors:
+                logger.error(f"Rolled vertical order failed: {response.errors}")
+                get_alert_manager()._send(
+                    f"\U0001F6A8 [{mode}] ROLL HALF-COMPLETE: closed old "
+                    f"{plan.untested_side} vertical but the rolled open was "
+                    f"REJECTED — tested side is NOT risk-free; will re-evaluate")
+                return False
+            ofill = confirm_order_fill(
+                session, account, response.order,
+                [(plan.new_short_symbol, 1, +1), (plan.new_long_symbol, 1, -1)],
+                what="rolled-vertical entry")
+            if not ofill.filled or ofill.net_price is None or ofill.quantity <= 0:
+                if ofill.working_order_id:
+                    get_alert_manager()._send(
+                        f"\U0001F6A8 [{mode}] rolled-vertical order "
+                        f"{ofill.working_order_id} could not be cancelled and "
+                        f"may still fill — reconcile will adopt it")
+                get_alert_manager()._send(
+                    f"\U0001F6A8 [{mode}] ROLL HALF-COMPLETE: closed old "
+                    f"{plan.untested_side} vertical but the rolled open did NOT "
+                    f"fill ({ofill.detail}) — tested side is NOT risk-free; "
+                    f"will re-evaluate")
+                return False
+            roll_credit_fill = float(ofill.net_price)   # broker net, not the plan
+            roll_qty         = int(ofill.quantity)
+            roll_order_id    = ofill.order_id or ""
+            if roll_qty < contracts:
+                get_alert_manager()._send(
+                    f"\u26A0\uFE0F [{mode}] rolled vertical PARTIAL: "
+                    f"{roll_qty}/{contracts} filled — structure quantities "
+                    f"are mismatched; booking the filled size")
+        else:
+            from config import PAPER_FILL_SLIPPAGE_PCT
+            roll_credit_fill = round(plan.roll_credit * (1 - PAPER_FILL_SLIPPAGE_PCT), 4)
+            roll_order_id    = "PAPER"
+
         new_width  = abs(plan.new_short_strike - plan.new_long_strike)
-        new_maxloss = (new_width - plan.roll_credit) * contracts * CONTRACT_MULTIPLIER
+        new_maxloss = (new_width - roll_credit_fill) * roll_qty * CONTRACT_MULTIPLIER
         rolled = make_record(
             trade_id        = str(uuid.uuid4()),
             symbol          = INSTRUMENT,
@@ -230,12 +315,12 @@ def _execute_roll(pos_mgr, tested: dict, untested: dict,
             short_strike    = plan.new_short_strike,
             long_strike     = plan.new_long_strike,
             spread_width    = new_width,
-            credit_received = plan.roll_credit,
-            contracts       = contracts,
-            entry_premium   = plan.roll_credit,
+            credit_received = roll_credit_fill,       # CONFIRMED credit, not plan
+            contracts       = roll_qty,               # CONFIRMED quantity
+            entry_premium   = roll_credit_fill,
             total_cost      = new_maxloss,
             max_loss        = new_maxloss,
-            stop_premium    = plan.roll_credit * (1 + CONDOR_STOP_LOSS_PCT),
+            stop_premium    = roll_credit_fill * (1 + CONDOR_STOP_LOSS_PCT),
             target_premium  = CONDOR_NICKEL_CLOSE,
             regime          = "RANGING",
             is_condor_leg   = 1,
@@ -243,11 +328,25 @@ def _execute_roll(pos_mgr, tested: dict, untested: dict,
             short_symbol    = plan.new_short_symbol,
             long_symbol     = plan.new_long_symbol,
             option_symbol   = plan.new_short_symbol,
+            order_id        = roll_order_id,
             paper_trade     = 1 if state.paper_trading else 0,
             status          = "open",
         )
         tl.log_entry(rolled)
         pos_mgr.add_condor_leg(rolled)
+
+        # v3.7: the risk-free claim must survive contact with the ACTUAL fill.
+        # The plan asserted risk_free using plan.roll_credit; if the confirmed
+        # credit came in lighter, re-check and say so — the structure is still
+        # booked truthfully either way, but nobody should believe a risk-free
+        # label the fills didn't pay for.
+        actual_total_credit = (plan.total_credit_after
+                               - plan.roll_credit + roll_credit_fill)
+        if actual_total_credit < plan.tested_width:
+            get_alert_manager()._send(
+                f"\u26A0\uFE0F [{mode}] ROLL FILLED LIGHT: actual credit "
+                f"${actual_total_credit:.2f} < tested width "
+                f"${plan.tested_width:.2f} — structure is NOT fully risk-free")
 
         # ── 3. Flag the TESTED (now risk-free) vertical a broken wing too ─────
         tl.update_fields(tested["trade_id"], is_broken_wing=1)
