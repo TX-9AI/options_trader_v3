@@ -1,5 +1,8 @@
 """
 execution/position_manager.py — Manages the single open options position.
+v3.8 — 2026-07-15 — thread df_5m to exit_engine.evaluate() so trails can
+        anchor to 5-minute FVGs (exit_engine v3.8 runner refinements). 1m is
+        untouched and remains the structure-stop/BOS timeframe.
 v3.4 — 2026-07-15 — BOOK ONLY ON CONFIRMED FILL. _execute_exit() now consumes
         the FillResult from place_exit_order(): it books P&L ONLY when
         fill.confirmed is True and uses fill.fill_price (the ACTUAL close price
@@ -157,7 +160,8 @@ class PositionManager:
     def manage_open_position(self,
                               df_1m: Optional[pd.DataFrame] = None,
                               chain=None,
-                              regime: Optional[str] = None) -> bool:
+                              regime: Optional[str] = None,
+                              df_5m: Optional[pd.DataFrame] = None) -> bool:
         """Manage every open position this tick. Normally one; for a legged
         condor there can be two verticals open at once, each managed
         independently (a tested side exits on its own; the untested side
@@ -169,14 +173,15 @@ class PositionManager:
 
         still_open: List[TradeRecord] = []
         for record in list(self._open_records):
-            if self._manage_one(record, df_1m, chain, regime):
+            if self._manage_one(record, df_1m, chain, regime, df_5m):
                 still_open.append(record)
         self._open_records = still_open
         return len(self._open_records) > 0
 
     def _manage_one(self, record: TradeRecord,
                     df_1m: Optional[pd.DataFrame],
-                    chain, regime: Optional[str]) -> bool:
+                    chain, regime: Optional[str],
+                    df_5m: Optional[pd.DataFrame] = None) -> bool:
         """Manage one record. Returns True if it should remain open."""
         trade_id = record["trade_id"]
 
@@ -190,7 +195,8 @@ class PositionManager:
         self._trade_logger.update_current_premium(trade_id, current_premium)
 
         exit_eng = get_exit_engine(self.paper_trading)
-        decision = exit_eng.evaluate(record, current_premium, df_1m=df_1m, regime=regime)
+        decision = exit_eng.evaluate(record, current_premium, df_1m=df_1m,
+                                     regime=regime, df_5m=df_5m)
 
         if decision.new_trail_stop is not None:
             # v3.1: trail persists in its OWN column. stop_premium is the
