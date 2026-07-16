@@ -29,6 +29,11 @@ v1.6 — 2026-07-07 — broker reconciliation support: is_short_position column
         (schema + migration) so an adopted short survives a re-restart; and
         close_phantom() to close a DB row the broker no longer shows (broker is
         the source of truth for existence on live).
+v3.8 — 2026-07-15 — MFE/MAE TELEMETRY: max_premium_seen / min_premium_seen
+        columns (auto-migrated), updated in the same per-tick write as
+        current_premium. The evidence base for exit-threshold tuning — pairs
+        with exit_engine v3.8's runner refinements so 40% floor / 5m FVGs /
+        clamp / sweep runner mode can be judged on excursion data, not vibes.
 v3.7 — 2026-07-15 — MODE ISOLATION (audit defect Q). Every decision/session
         read is scoped to the current mode's rows via COALESCE(paper_trade,1):
         get_open_trade(s), close_expired_open_trades, get_session_losses,
@@ -176,6 +181,8 @@ class TradeLogger:
         # Migrate existing DBs — add columns if missing
         for col, definition in [
             ("current_premium", "REAL DEFAULT 0.0"),
+            ("max_premium_seen", "REAL"),
+            ("min_premium_seen", "REAL"),
             ("orb_range_high",  "REAL DEFAULT 0.0"),
             ("orb_range_low",   "REAL DEFAULT 0.0"),
             ("short_strike",    "REAL DEFAULT 0.0"),
@@ -257,11 +264,18 @@ class TradeLogger:
             )
 
     def update_current_premium(self, trade_id: str, premium: float):
-        """Update live mark price on the open trade every tick for P&L display."""
+        """Update live mark price every tick — and (v3.8) the per-trade
+        MFE/MAE telemetry: max/min premium ever seen while open. This is the
+        evidence base for tuning every exit threshold (was the floor hit by
+        trades that then recovered? how much did trails give back vs capture?).
+        SQLite scalar MAX/MIN keep it one write; COALESCE seeds on first tick."""
         with self._connect() as conn:
             conn.execute(
-                "UPDATE trades SET current_premium=? WHERE trade_id=?",
-                (premium, trade_id)
+                "UPDATE trades SET current_premium=?, "
+                "max_premium_seen=MAX(COALESCE(max_premium_seen, ?), ?), "
+                "min_premium_seen=MIN(COALESCE(min_premium_seen, ?), ?) "
+                "WHERE trade_id=?",
+                (premium, premium, premium, premium, premium, trade_id)
             )
 
     def update_fields(self, trade_id: str, **fields):
