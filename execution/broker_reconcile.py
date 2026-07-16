@@ -1,5 +1,24 @@
 """
 execution/broker_reconcile.py — LIVE broker⇄DB position reconciliation.
+v3.6 — 2026-07-15 — PHANTOM P&L RECOVERY. New pure helpers so a phantom (DB
+        open, broker flat — e.g. Jason closed it manually at the broker) can be
+        booked at its REAL fill instead of the forced $0.00:
+          match_closing_fills(record, orders) — scan broker order history for
+            CLOSING legs matching the record's symbols (BUY_TO_CLOSE on short
+            roles, SELL_TO_CLOSE on long roles; opening orders never match),
+            aggregate per-leg fills across however many orders the manual close
+            took, and return (closed_qty, net_price) on the record's own mark
+            basis (vertical: short−long; butterfly: lower+upper−2·center).
+          phantom_pnl(record, net_price) — the SAME credit-signed P&L math as
+            position_manager._execute_exit, so a recovered phantom feeds
+            DAILY_LOSS_LIMIT the truth.
+        Both are pure (no SDK, no DB) and unit-tested in
+        tests/test_phantom_pnl_recovery.py. Callers (main.py v3.6) fetch order
+        history once per reconcile pass and fall back to the flagged $0.00 only
+        when NO closing order exists (legitimately: expiry, assignment).
+        CAVEAT (documented, accepted): matching is by option symbol — two
+        same-day records on identical strikes could cross-match; 0DTE re-entry
+        on the exact same strikes is rare and the reason field flags recovery.
 v3.0 — 2026-07-07 — initial: the brokerage is the source of truth for whether a
         position EXISTS; the DB supplies the management plan. Builds a plan of
         keep / adopt / close-phantom / anomaly from broker positions + DB live
@@ -215,3 +234,92 @@ def leg_roles(record: dict) -> tuple:
     if sym:
         (short if record.get("is_short_position") else long).add(sym)
     return short, long
+
+
+# ── Phantom P&L recovery (v3.6) — pure, caller supplies order history ────────
+
+def _is_closing(action, want_buy: bool) -> bool:
+    """True if a leg's action closes a position of the given role. Tolerates
+    enum or string action values ('Buy to Close' / 'Sell to Close')."""
+    a = str(getattr(action, "value", action) or "").lower()
+    if "to close" not in a:
+        return False
+    return a.startswith("buy") if want_buy else a.startswith("sell")
+
+
+def _closing_leg_stats(orders, symbol: str, want_buy: bool):
+    """Aggregate fills for `symbol` across every CLOSING leg in `orders` with
+    the required direction. Returns (total_qty, weighted_avg_price) — (0, None)
+    if nothing filled. Orders may be tastytrade PlacedOrder objects or
+    equivalent duck-typed fakes; any order carrying fills counts (a manual
+    close that was partially filled then cancelled still closed contracts)."""
+    if not symbol:
+        return 0.0, None
+    qty, notional = 0.0, 0.0
+    for order in orders or []:
+        for leg in (getattr(order, "legs", None) or []):
+            if getattr(leg, "symbol", None) != symbol:
+                continue
+            if not _is_closing(getattr(leg, "action", ""), want_buy):
+                continue
+            for f in (getattr(leg, "fills", None) or []):
+                q = float(f.quantity)
+                qty      += q
+                notional += q * float(f.fill_price)
+    if qty <= 0:
+        return 0.0, None
+    return qty, notional / qty
+
+
+def match_closing_fills(record: dict, orders: list):
+    """Find the broker-side CLOSE of `record` inside `orders` (the account's
+    order history). Returns (closed_qty, net_price) on the same basis as the
+    record's marks — directly comparable to entry_premium — or None if no
+    closing fills exist (expiry/assignment leave no closing order; the caller
+    falls back to the flagged $0.00 phantom booking).
+
+    closed_qty is the min across legs of (filled / leg ratio): a spread only
+    counts as closed to the depth ALL its legs closed."""
+    if bool(record.get("is_butterfly", False)):
+        # Long fly: wings are long (sell to close), center is short x2 (buy).
+        ql, pl = _closing_leg_stats(orders, record.get("lower_symbol", ""),  want_buy=False)
+        qc, pc = _closing_leg_stats(orders, record.get("center_symbol", ""), want_buy=True)
+        qu, pu = _closing_leg_stats(orders, record.get("upper_symbol", ""),  want_buy=False)
+        qty = min(ql, qu, qc / 2.0)
+        if qty <= 0 or None in (pl, pc, pu):
+            return None
+        return qty, round(pl + pu - 2.0 * pc, 4)
+
+    is_vertical = (bool(record.get("is_condor_leg"))
+                   or record.get("strategy") == "IronCondorStrategy"
+                   or (record.get("short_symbol") and record.get("long_symbol")))
+    if is_vertical:
+        qs, ps = _closing_leg_stats(orders, record.get("short_symbol", ""), want_buy=True)
+        ql, pl = _closing_leg_stats(orders, record.get("long_symbol", ""),  want_buy=False)
+        qty = min(qs, ql)
+        if qty <= 0 or None in (ps, pl):
+            return None
+        return qty, round(ps - pl, 4)
+
+    want_buy = bool(record.get("is_short_position"))
+    q, p = _closing_leg_stats(orders, record.get("option_symbol", ""), want_buy=want_buy)
+    if q <= 0 or p is None:
+        return None
+    return q, round(p, 4)
+
+
+def phantom_pnl(record: dict, net_price: float, closed_qty: float = None) -> float:
+    """P&L for a recovered phantom close — IDENTICAL credit-signed math to
+    position_manager._execute_exit, so the DB realized P&L (and therefore the
+    DAILY_LOSS_LIMIT breaker) sees the truth. Uses closed_qty if given (a
+    partially-recovered phantom books only what provably closed), else the
+    record's full contract count."""
+    from config import CONTRACT_MULTIPLIER
+    entry     = float(record.get("entry_premium", 0.0) or 0.0)
+    contracts = float(closed_qty if closed_qty is not None
+                      else record.get("contracts", 0) or 0)
+    credit_signed = (bool(record.get("is_condor_leg"))
+                     or record.get("strategy") == "IronCondorStrategy"
+                     or bool(record.get("is_short_position")))
+    per_share = (entry - net_price) if credit_signed else (net_price - entry)
+    return round(per_share * contracts * CONTRACT_MULTIPLIER, 2)
