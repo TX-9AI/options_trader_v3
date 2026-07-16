@@ -533,7 +533,16 @@ per-leg net fills, signed limits). Until built, live entries are unvalidated
 regardless of how good paper looks. Full detail:
 `docs/AUDIT_paper_live_divergence_2026-07-15.md` §L1.
 
-### P. 🔴 Broken-wing roll opens a FICTIONAL vertical in live
+### P. ✅ RESOLVED 2026-07-15 — Broken-wing roll opens a FICTIONAL vertical in live
+Fixed (condor_roll v3.7): the rolled vertical is now a REAL signed-credit
+limit order, fill-confirmed via `execution/order_confirm` — the record books
+only confirmed contracts at the broker's net credit. The close of the old
+untested vertical books the ACTUAL `fill.fill_price` (both modes route through
+`place_exit_order`; paper mirrors live friction on the rolled credit). If the
+open fails after the close succeeded, position-truth is preserved, a
+HALF-COMPLETE page fires, and the roll re-evaluates next tick. The risk-free
+claim is re-checked against the ACTUAL fill credit and pages if it came in
+light. Tests: `tests/test_roll_is_real.py`. Original finding:
 `condor_roll._execute_roll` step 2 claims "live order placement mirrors
 _execute_condor_leg" — **no order is placed**; the rolled vertical is written
 to the DB only. Live: the real untested vertical closes (fill-confirmed),
@@ -635,7 +644,7 @@ nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
 | `orb_strategy.py` ✅ | Turns a confirmed ORB engine state into a signal: strike selection, liquidity-path check (**blocks on a named pool in the path with no extra confluence**), target adjustment, confluence notes. |
 | `sweep_reversal_strategy.py` ✅ | Post-sweep reversal. Delta-band strike selection scaled inversely to reversal strength. ATR-aware recovery window. |
 | `iron_condor_strategy.py` ✅ | **v3.1.** Legged condor, **BB-anchored strikes, zero delta**. Plan state machine + per-leg price triggers. **v3.1 restored an import missing since the file's first commit** — masked on the fleet by Python 3.14's lazy annotations (PEP 649); on any ≤3.13 interpreter the module raised `NameError` at import and killed `main.py`. Verified 3.12 vs 3.14 A/B. |
-| `condor_roll.py` ✅ | Broken-wing roll solver: smallest roll toward price that makes the tested side risk-free. One-time, final. |
+| `condor_roll.py` ✅ | **v3.7.** Broken-wing roll. Close of the old untested vertical books the CONFIRMED fill; the rolled vertical is a REAL fill-confirmed signed-credit order (was a DB-only fiction in live); risk-free re-checked against actual fills. |
 | `butterfly_strategy.py` ✅ | **v3.1.** Debit butterfly centered on the **GEX pin**. Gated on PINNING + proximity + noon–14:00 + one-per-session. |
 
 ### `execution/` — orders and exits
