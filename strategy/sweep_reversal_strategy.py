@@ -51,6 +51,7 @@ from config import (
     SWEEP_DELTA_STRONG, SWEEP_DELTA_WEAK, SWEEP_MAX_AGE_BARS,
     ORB_NO_ENTRY_AFTER_ET,
     SWEEP_MAX_RECOVERY_PCT, SWEEP_RECOVERY_ATR_MULT, SWEEP_BOS_LOOKBACK,
+    MAX_LOSS_PCT,
 )
 
 
@@ -181,7 +182,7 @@ class SweepReversalStrategy(BaseOptionsStrategy):
             regime           = regime.primary_regime,
             vix_at_signal    = macro.vix,
             is_fed_day       = macro.is_fed_day,
-            stop_loss_pct    = 0.25,
+            stop_loss_pct    = MAX_LOSS_PCT,
             tp_pct           = 1.0,
         )
 
@@ -274,7 +275,7 @@ class SweepReversalStrategy(BaseOptionsStrategy):
             regime           = regime.primary_regime,
             vix_at_signal    = macro.vix,
             is_fed_day       = macro.is_fed_day,
-            stop_loss_pct    = 0.25,
+            stop_loss_pct    = MAX_LOSS_PCT,
             tp_pct           = 1.0,
         )
 

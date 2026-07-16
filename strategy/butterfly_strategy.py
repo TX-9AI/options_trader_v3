@@ -54,8 +54,9 @@ from config import (
     BUTTERFLY_GEX_PIN_PROXIMITY_MULT,
     BUTTERFLY_ENTRY_START_ET, BUTTERFLY_ENTRY_CUTOFF_ET,
     STRIKE_INCREMENT, INSTRUMENT, VIX_BUTTERFLY_DISABLE,
-    CONTRACT_MULTIPLIER
-, BUTTERFLY_MAX_DEBIT_PCT_WIDTH
+    CONTRACT_MULTIPLIER,
+    BUTTERFLY_MAX_DEBIT_PCT_WIDTH,
+    BUTTERFLY_STOP_LOSS_PCT,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,7 +249,7 @@ class ButterflyStrategy(BaseOptionsStrategy):
             regime              = regime.primary_regime,
             vix_at_signal       = macro.vix,
             is_fed_day          = macro.is_fed_day,
-            stop_loss_pct       = 0.25,
+            stop_loss_pct       = BUTTERFLY_STOP_LOSS_PCT,
             tp_pct              = BUTTERFLY_TP_PCT,   # 20%
         )
 

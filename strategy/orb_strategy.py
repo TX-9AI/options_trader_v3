@@ -37,7 +37,7 @@ from analysis.liquidity_mapper import LiquidityMap, LiquidityPool
 from data.options_chain import OptionsChain
 from data.options_chain import get_chain_fetcher
 from data.macro_data import MacroSnapshot
-from config import FED_DAY_ORB_BOOST, INSTRUMENT
+from config import FED_DAY_ORB_BOOST, INSTRUMENT, MAX_LOSS_PCT
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ class ORBStrategy(BaseOptionsStrategy):
             regime            = regime.primary_regime,
             vix_at_signal     = macro.vix,
             is_fed_day        = macro.is_fed_day,
-            stop_loss_pct     = 0.25,
+            stop_loss_pct     = MAX_LOSS_PCT,
             tp_pct            = 1.0,
         )
 
