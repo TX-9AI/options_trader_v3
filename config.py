@@ -179,6 +179,11 @@ ADOPTED_STOP_PCT    = float(os.environ.get("OT_ADOPTED_STOP_PCT", str(MAX_LOSS_P
 # the operator has verified get_open_option_positions() output on a live box and
 # explicitly enables it via OT_BROKER_RECONCILE=True. Paper never reconciles.
 BROKER_RECONCILE_ENABLED = os.environ.get("OT_BROKER_RECONCILE", "False") == "True"
+# v3.6: minutes between intraday reconcile sweeps (was hardcoded 30). On top of
+# these interval slots, dedicated wind-down sweeps fire at 15:45, 15:50, and a
+# final 15:57 pass — the post-flatten truth check (the main loop goes dormant
+# at 16:00, so the last sweep must land inside the hard-close window).
+BROKER_RECONCILE_INTERVAL_MIN = int(os.environ.get("OT_BROKER_RECONCILE_INTERVAL_MIN", "10"))
 
 # ─── PAPER TRADING ────────────────────────────────────────────────────────────
 
@@ -435,6 +440,21 @@ LOG_ROTATION_MB             = 50
 # ─── BOT IDENTITY ─────────────────────────────────────────────────────────────
 
 BOT_NAME                    = os.environ.get("OT_BOT_NAME", "OptionsTrader")
+
+# ─── LIVE EXIT FILL-CONFIRMATION (v3.5) ──────────────────────────────────────
+# Governs ExitEngine._confirm_and_book_live_exit (live/cash mode ONLY — the
+# paper path never reads these). See FABLE_SPEC_live_exit_fill_confirmation.md.
+
+# Seconds between broker order-status polls while a close order is working.
+LIVE_FILL_POLL_SECONDS      = float(os.environ.get("OT_LIVE_FILL_POLL_SECONDS", "2"))
+# Total seconds to wait for a fill before cancelling and handing the position
+# back to the caller's retry loop (15:45→16:00 hard-close retries + paging).
+LIVE_FILL_DEADLINE_SECONDS  = float(os.environ.get("OT_LIVE_FILL_DEADLINE_SECONDS", "30"))
+# Marketable-limit buffer ($/share THROUGH the mark) for multi-leg closes.
+# tastytrade rejects MARKET orders on spreads, so closes go out as aggressive
+# limits: vertical debit = min(mark + buffer, spread width); butterfly credit
+# = max(mark - buffer, one tick). Retry ticks re-price at a fresh mark.
+LIVE_CLOSE_LIMIT_BUFFER     = float(os.environ.get("OT_LIVE_CLOSE_LIMIT_BUFFER", "0.10"))
 
 
 @dataclass
