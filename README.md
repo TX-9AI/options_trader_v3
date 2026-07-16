@@ -527,7 +527,13 @@ books the close at `plan.close_cost` instead of the confirmed
 signed-credit order with fill confirmation, or gate the roll to paper. Audit
 §L2.
 
-### Q. 🔴 One `trades.db`, no mode filter — paper history contaminates live truth
+### Q. ✅ RESOLVED 2026-07-15 — One `trades.db`, no mode filter (mode isolation shipped)
+Fixed by trade_logger v3.7 (every decision/session query — `get_open_trades`,
+`realized_pnl_today`, session losses, expired autoclose — is scoped to the
+current mode via `COALESCE(paper_trade,1)`; legacy NULL rows count as paper,
+the safe direction) + configure.sh v2.0 (trades.db and WAL sidecars archived
+as `trades_<mode>_<stamp>.db` on EVERY mode switch, so histories never share a
+file to begin with). Tests: `tests/test_mode_isolation.py`. Original finding:
 `realized_pnl_today()` (the DAILY_LOSS_LIMIT source of truth) and
 `get_open_trades()`/`get_open_trades_live()` (startup recovery, position
 manager) ignore the `paper_trade` column. Switching to live after weeks of
