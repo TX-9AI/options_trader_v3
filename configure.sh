@@ -14,6 +14,10 @@
 #  v1.6 — 2026-07-02 — add Daily loss cap override menu (OT_DAILY_LOSS_LIMIT)
 #  v1.7 — 2026-07-02 — add single-name instruments (directional-only) to the
 #          instrument menu for wider paper-trading coverage
+#  v2.0 — 2026-07-15 — archive trades.db (+WAL sidecars) on EVERY mode switch,
+#          labeled by the outgoing mode (trades_paper_*.db / trades_live_*.db).
+#          Paper and live histories never share a file (audit defect Q);
+#          companion to trade_logger v3.7 mode-scoped queries.
 #  v1.9 — 2026-07-15 — going LIVE now reports that broker reconciliation
 #          auto-enables with the mode (config.py v1.8 default follows
 #          OT_PAPER_TRADING); show_config gains a "Broker reconcile" status
@@ -76,6 +80,28 @@ set_env() {
 
 reload_daemon() {
     sudo systemctl daemon-reload
+}
+
+# v2.0 (audit defect Q): archive the trade DB on EVERY mode switch so paper and
+# live histories never share a file. mv on the same filesystem keeps the inode,
+# so a still-running bot finishes its session writing into the archive; the
+# restarted bot creates a fresh trades.db in the new mode. WAL sidecars move
+# with the DB so no unflushed rows are lost.
+archive_trades_db() {
+    local from_mode="$1"   # outgoing mode: "paper" or "live"
+    local db="$BOT_DIR/trades.db"
+    if [[ ! -f "$db" ]]; then
+        print_info "No trades.db to archive — starting the new mode fresh."
+        return
+    fi
+    local stamp dest
+    stamp=$(date +%Y%m%d_%H%M%S)
+    dest="$BOT_DIR/trades_${from_mode}_${stamp}.db"
+    mv "$db" "$dest"
+    [[ -f "${db}-wal" ]] && mv "${db}-wal" "${dest}-wal"
+    [[ -f "${db}-shm" ]] && mv "${db}-shm" "${dest}-shm"
+    print_ok "Archived ${from_mode} trade history → $(basename "$dest")"
+    print_info "A fresh trades.db is created on next start — ${from_mode} P&L can never leak into the new mode."
 }
 
 bot_is_running() {
@@ -258,6 +284,7 @@ change_mode() {
         if ask_yn "Switch to PAPER mode?"; then
             set_env "OT_PAPER_TRADING" "True"
             reload_daemon
+            archive_trades_db "live"
             print_ok "Switched to ${BOLD}📄 PAPER mode${RESET}."
         else
             print_info "Unchanged: LIVE."
@@ -272,6 +299,7 @@ change_mode() {
         if [[ "$confirm" == "LIVE" ]]; then
             set_env "OT_PAPER_TRADING" "False"
             reload_daemon
+            archive_trades_db "paper"
             print_ok "Switched to ${RED}${BOLD}🔴 LIVE mode${RESET}."
             # v1.9: broker reconciliation follows the mode (config.py default) —
             # LIVE turns it on automatically unless OT_BROKER_RECONCILE pins it.
