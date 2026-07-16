@@ -1,5 +1,29 @@
 """
 execution/entry_engine.py — Options order placement via TastyTrade SDK.
+v3.7 — 2026-07-15 — ENTRY FILL-CONFIRMATION (audit defect O, parts 2+3).
+        Records are written ONLY for broker-confirmed fills at the broker's
+        actual fill price, for the quantity that actually filled — never on
+        submission, never at the signal mark, never at our limit.
+        SINGLE LEG: still a MARKET order, but the fill price is now READ BACK
+        from the order's fills via order_confirm (the old code booked
+        `placed.price or signal.entry_premium` — a market order has no
+        .price, so live entries were ALWAYS recorded at the signal mark).
+        BUTTERFLY: rebuilt. (a) debit priced NEGATIVE per the SDK's signed
+        convention (the old positive price demanded a CREDIT to open a debit
+        fly — could never fill; price_effect is ignored by current SDKs and
+        is gone); (b) fill detection is a bounded poll via
+        confirm_order_fill, not an instant status peek (which always saw
+        Received/Routed and churned place→cancel→place); (c) the
+        double-position race is closed: a second attempt is placed ONLY after
+        the first is confirmed dead with zero fills — an uncancellable order
+        stops the ladder, pages, and is adopted by reconcile if it fills;
+        (d) a PARTIAL fill is booked at its weighted net for the filled size.
+        Butterfly records now persist lower/center/upper leg SYMBOLS —
+        without them the v3.5 live close and reconcile leg-matching both fail.
+        enter() sizes the record from the CONFIRMED quantity. Paper is
+        unchanged in shape (fills at mark ± PAPER_FILL_SLIPPAGE_PCT in one
+        pass) and returns the requested quantity — mirroring live as closely
+        as a simulator without a book can.
 v3.0 — original release
 v1.1 — 2026-06-27 — store orb_range_high/low in TradeRecord so exit_engine
         can detect ORB range violations on 1-min candle closes
@@ -9,11 +33,13 @@ v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         change in this file.
 
 Order types:
-  - Single-leg (ORB, SweepReversal): market order via Account.place_order()
-  - Multi-leg butterfly: limit at MID, retry once with 1-tick improvement
-    if not filled within LIMIT_RETRY_SECONDS. Never pay worse than mid.
+  - Single-leg (ORB, SweepReversal): MARKET order, fill price read back from
+    the broker's fills (bounded confirmation poll).
+  - Multi-leg butterfly: signed-DEBIT limit at MID; if confirmed dead unfilled,
+    ONE retry improved by LIMIT_IMPROVE_TICKS. Never pays worse than
+    mid + 1 tick; never places attempt 2 while attempt 1 might still fill.
 
-Paper mode: simulates fill at mark + slippage, no real order sent.
+Paper mode: simulates fill at mark ± PAPER_FILL_SLIPPAGE_PCT, no real order.
 """
 
 import logging
@@ -24,8 +50,10 @@ from typing import Optional, Tuple
 
 from tastytrade.order import (
     NewOrder, Leg, OrderAction, OrderType, OrderTimeInForce,
-    PriceEffect, InstrumentType
+    InstrumentType
 )
+
+from execution.order_confirm import confirm_order_fill
 
 from strategy.base_strategy import OptionsSignal
 from risk.setup_scorer import SetupScore
@@ -35,7 +63,7 @@ from data.tasty_client import get_session, get_account, TastyClientError
 from config import (
     PAPER_TRADING, PAPER_FILL_SLIPPAGE_PCT,
     CONTRACT_MULTIPLIER, INSTRUMENT,
-    LIMIT_RETRY_SECONDS, LIMIT_IMPROVE_TICKS
+    LIMIT_IMPROVE_TICKS
 )
 from utils.time_utils import ts_for_db, fmt_et_short
 
@@ -70,7 +98,8 @@ class EntryEngine:
                 f"net_debit=${signal.net_debit:.2f} "
                 f"grade={score.grade}"
             )
-            fill_premium, order_id = self._place_butterfly(signal, sizing.contracts)
+            fill_premium, order_id, filled_qty = self._place_butterfly(
+                signal, sizing.contracts)
         else:
             logger.info(
                 f"[{mode}] DIRECTIONAL ENTRY: "
@@ -79,13 +108,18 @@ class EntryEngine:
                 f"mark=${signal.entry_premium:.2f} "
                 f"grade={score.grade}"
             )
-            fill_premium, order_id = self._place_single_leg(signal, sizing.contracts)
+            fill_premium, order_id, filled_qty = self._place_single_leg(
+                signal, sizing.contracts)
 
-        if fill_premium is None:
-            logger.error("Entry order failed — no fill")
+        if fill_premium is None or filled_qty <= 0:
+            logger.error("Entry order failed — no confirmed fill, no position recorded")
             return None
+        if filled_qty < sizing.contracts:
+            logger.warning(
+                f"[{mode}] Entry PARTIAL: {filled_qty}/{sizing.contracts} "
+                f"filled — recording the filled size")
 
-        total_cost = fill_premium * sizing.contracts * CONTRACT_MULTIPLIER
+        total_cost = fill_premium * filled_qty * CONTRACT_MULTIPLIER
 
         record = make_record(
             trade_id          = str(uuid.uuid4()),
@@ -99,7 +133,7 @@ class EntryEngine:
             is_butterfly      = signal.is_butterfly,
             strike            = signal.strike if not signal.is_butterfly else signal.center_contract.strike,
             expiry            = signal.expiry if not signal.is_butterfly else signal.center_contract.expiry,
-            contracts         = sizing.contracts,
+            contracts         = filled_qty,
             entry_premium     = fill_premium,
             total_cost        = total_cost,
             max_loss          = total_cost,
@@ -124,6 +158,11 @@ class EntryEngine:
             record["upper_strike"]  = signal.upper_contract.strike
             record["net_debit"]     = signal.net_debit
             record["max_profit"]    = signal.max_profit
+            # v3.7: leg SYMBOLS persisted — the live close (exit_engine v3.5
+            # _close_butterfly) and reconcile leg-matching both require them.
+            record["lower_symbol"]  = signal.lower_contract.symbol
+            record["center_symbol"] = signal.center_contract.symbol
+            record["upper_symbol"]  = signal.upper_contract.symbol
 
         # ── ORB range boundaries — persisted for exit_engine range violation ──
         # exit_engine checks if 1-min close goes back inside the ORB range
@@ -144,18 +183,22 @@ class EntryEngine:
     # ─── Order Placement ──────────────────────────────────────────────────────
 
     def _place_single_leg(self, signal: OptionsSignal,
-                           contracts: int) -> Tuple[Optional[float], str]:
+                           contracts: int) -> Tuple[Optional[float], str, int]:
+        """Returns (fill_price, order_id, filled_qty). Live fill price is READ
+        BACK from the broker's fills — a market order has no .price, so the
+        old `placed.price or signal.entry_premium` always booked the signal
+        mark. filled_qty==0 means record NOTHING."""
         if self.paper_trading:
-            return self._paper_fill_single(signal)
+            return self._paper_fill_single(signal, contracts)
 
         try:
             session  = get_session()
             account  = get_account()
-            order_id = f"OT-{uuid.uuid4().hex[:8].upper()}"
+            symbol   = signal.contract.symbol
 
             leg = Leg(
                 instrument_type = InstrumentType.EQUITY_OPTION,
-                symbol          = signal.contract.symbol,
+                symbol          = symbol,
                 action          = OrderAction.BUY_TO_OPEN,
                 quantity        = contracts,
             )
@@ -167,27 +210,44 @@ class EntryEngine:
             response = account.place_order(session, order, dry_run=False)
             if response.errors:
                 logger.error(f"Order errors: {response.errors}")
-                return None, ""
+                return None, "", 0
 
-            placed     = response.order
-            fill_price = float(placed.price or signal.entry_premium)
-            live_id    = str(placed.id or order_id)
-            return fill_price, live_id
+            fill = confirm_order_fill(session, account, response.order,
+                                      [(symbol, 1, +1)], what="single-leg entry")
+            if not fill.filled or fill.net_price is None:
+                self._page_if_working(fill, "single-leg entry")
+                logger.warning(f"Single-leg entry NOT filled ({fill.detail})")
+                return None, "", 0
+            return fill.net_price, fill.order_id or "", fill.quantity
 
         except Exception as e:
             logger.error(f"Single-leg order failed: {e}")
-            return None, ""
+            return None, "", 0
 
     def _place_butterfly(self, signal: OptionsSignal,
-                          contracts: int) -> Tuple[Optional[float], str]:
+                          contracts: int) -> Tuple[Optional[float], str, int]:
+        """Returns (net_debit_fill, order_id, filled_qty). v3.7 rebuild:
+
+        - debit priced NEGATIVE (SDK signed convention — the old positive
+          price demanded a CREDIT to open a debit fly and could never fill);
+        - each attempt is confirmed via a bounded poll, not an instant
+          status peek;
+        - attempt 2 (mid improved by LIMIT_IMPROVE_TICKS) is placed ONLY
+          after attempt 1 is confirmed DEAD with ZERO fills. A partial fill
+          on attempt 1 is booked as the position (no re-place — that would
+          risk overfilling). An uncancellable order stops the ladder, pages,
+          and reconcile adopts any late fill. Never pays worse than
+          mid + LIMIT_IMPROVE_TICKS ticks."""
         if self.paper_trading:
-            return self._paper_fill_butterfly(signal)
+            return self._paper_fill_butterfly(signal, contracts)
 
         try:
-            session  = get_session()
-            account  = get_account()
-            mid      = signal.net_debit
-            order_id = f"OT-BF-{uuid.uuid4().hex[:8].upper()}"
+            session = get_session()
+            account = get_account()
+            mid     = signal.net_debit
+            basis   = [(signal.lower_contract.symbol,  1, +1),
+                       (signal.center_contract.symbol, 2, -1),
+                       (signal.upper_contract.symbol,  1, +1)]
 
             for attempt in range(2):
                 limit_price = round(mid + attempt * LIMIT_IMPROVE_TICKS * 0.01, 2)
@@ -205,49 +265,61 @@ class EntryEngine:
                 order = NewOrder(
                     time_in_force = OrderTimeInForce.DAY,
                     order_type    = OrderType.LIMIT,
-                    price         = Decimal(str(limit_price)),
-                    price_effect  = PriceEffect.DEBIT,
+                    price         = Decimal(str(-limit_price)),  # − = DEBIT paid
                     legs          = legs,
                 )
                 response = account.place_order(session, order, dry_run=False)
                 if response.errors:
+                    logger.error(f"Butterfly attempt {attempt+1} order errors: "
+                                 f"{response.errors}")
                     if attempt == 1:
-                        return None, ""
+                        return None, "", 0
                     continue
 
-                placed  = response.order
-                status  = placed.status if placed else None
-                live_id = str(placed.id or order_id)
-
-                if status and "Filled" in str(status):
-                    return float(placed.price or limit_price), live_id
-
-                if attempt == 0:
-                    time.sleep(LIMIT_RETRY_SECONDS)
-                    try:
-                        account.delete_order(session, live_id)
-                    except Exception:
-                        pass
-                else:
-                    try:
-                        account.delete_order(session, live_id)
-                    except Exception:
-                        pass
-                    return None, ""
+                fill = confirm_order_fill(session, account, response.order,
+                                          basis, what=f"butterfly entry #{attempt+1}")
+                if fill.filled and fill.net_price is not None and fill.quantity > 0:
+                    return fill.net_price, fill.order_id or "", fill.quantity
+                if fill.working_order_id:
+                    # Attempt 1 may still fill — placing attempt 2 now is the
+                    # double-position race. STOP the ladder; page; reconcile
+                    # adopts whatever lands.
+                    self._page_if_working(fill, "butterfly entry")
+                    return None, "", 0
+                logger.info(f"Butterfly attempt {attempt+1} confirmed dead "
+                            f"unfilled ({fill.detail})"
+                            + (" — improving 1 tick and retrying" if attempt == 0
+                               else " — giving up"))
+            return None, "", 0
 
         except Exception as e:
             logger.error(f"Butterfly order failed: {e}")
-            return None, ""
+            return None, "", 0
 
-        return None, ""
+    @staticmethod
+    def _page_if_working(fill, what: str):
+        """An entry order that could not be cancelled may still fill — page
+        once so it's watched; broker reconciliation ADOPTS any late fill."""
+        if not fill.working_order_id:
+            return
+        try:
+            from notifications.alert_manager import get_alert_manager
+            get_alert_manager()._send(
+                f"\U0001F6A8 {what}: order {fill.working_order_id} could not "
+                f"be cancelled and may still fill — reconcile will adopt it. "
+                f"({fill.detail})")
+        except Exception as e:
+            logger.warning(f"Working-order page failed to send: {e}")
 
-    def _paper_fill_single(self, signal: OptionsSignal) -> Tuple[float, str]:
+    def _paper_fill_single(self, signal: OptionsSignal,
+                           contracts: int) -> Tuple[float, str, int]:
         fill_price = signal.entry_premium * (1 + PAPER_FILL_SLIPPAGE_PCT)
-        return fill_price, f"PAPER-{uuid.uuid4().hex[:8].upper()}"
+        return fill_price, f"PAPER-{uuid.uuid4().hex[:8].upper()}", contracts
 
-    def _paper_fill_butterfly(self, signal: OptionsSignal) -> Tuple[float, str]:
+    def _paper_fill_butterfly(self, signal: OptionsSignal,
+                              contracts: int) -> Tuple[float, str, int]:
         fill_price = signal.net_debit * (1 + PAPER_FILL_SLIPPAGE_PCT)
-        return fill_price, f"PAPER-BF-{uuid.uuid4().hex[:8].upper()}"
+        return fill_price, f"PAPER-BF-{uuid.uuid4().hex[:8].upper()}", contracts
 
 
 _entry_engine: Optional[EntryEngine] = None
