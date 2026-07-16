@@ -178,3 +178,151 @@ def test_paper_condor_credit_applies_slippage(monkeypatch):
     # and the debit direction pays MORE (matches _paper_fill_single):
     debit = 0.90 * (1 + cfg.PAPER_FILL_SLIPPAGE_PCT)
     assert debit == pytest.approx(0.909)
+
+
+# ═══ O parts 2+3 — single-leg readback and the butterfly rebuild ═════════════
+
+from execution import entry_engine as ee  # noqa: E402
+from execution.entry_engine import EntryEngine  # noqa: E402
+
+
+class FakeBroker(FakeAccount):
+    """FakeAccount + place_order: `submits` is a list of PlacedOrders to hand
+    back per place_order call (None → errors)."""
+    def __init__(self, submits, **kw):
+        super().__init__(**kw)
+        self.submits = list(submits)
+        self.placed  = []
+
+    def place_order(self, session, order, dry_run=False):
+        self.placed.append(order)
+        nxt = self.submits.pop(0)
+        if nxt is None:
+            return NS(errors=[{"message": "refused"}], order=None)
+        return NS(errors=None, order=nxt)
+
+
+LOWER, CENTER, UPPER = "SPXW L", "SPXW C", "SPXW U"
+
+
+def fly_signal(net_debit=0.90):
+    return NS(is_butterfly=True, net_debit=net_debit,
+              lower_contract=NS(symbol=LOWER, strike=6150),
+              center_contract=NS(symbol=CENTER, strike=6200),
+              upper_contract=NS(symbol=UPPER, strike=6250))
+
+
+def single_signal(mark=2.00):
+    return NS(is_butterfly=False, entry_premium=mark,
+              contract=NS(symbol=SHORT, strike=6200))
+
+
+def live_engine(monkeypatch, broker):
+    monkeypatch.setattr(ee, "get_trade_logger", lambda: None)
+    monkeypatch.setattr(ee, "get_session", lambda: SESSION)
+    monkeypatch.setattr(ee, "get_account", lambda: broker)
+    return EntryEngine(paper_trading=False)
+
+
+# 9 — single-leg MARKET: fill price read back from fills, never the signal mark
+def test_single_leg_books_broker_fill_not_signal_mark(monkeypatch):
+    filled = order_state(11, OrderStatus.FILLED, legs=[leg(SHORT, [(2, 2.35)])])
+    broker = FakeBroker(submits=[order_state(11, OrderStatus.LIVE)], states=[filled])
+    eng = live_engine(monkeypatch, broker)
+
+    price, oid, qty = eng._place_single_leg(single_signal(mark=2.00), 2)
+    assert price == pytest.approx(2.35)   # broker fill, NOT the 2.00 mark
+    assert qty == 2 and oid == "11"
+
+
+# 10 — butterfly debit priced NEGATIVE (signed SDK convention)
+def test_butterfly_debit_is_negative_priced(monkeypatch):
+    filled = order_state(12, OrderStatus.FILLED,
+                         legs=[leg(LOWER, [(1, 2.00)]), leg(CENTER, [(2, 1.20)]),
+                               leg(UPPER, [(1, 0.80)])])
+    broker = FakeBroker(submits=[order_state(12, OrderStatus.LIVE)], states=[filled])
+    eng = live_engine(monkeypatch, broker)
+
+    price, oid, qty = eng._place_butterfly(fly_signal(net_debit=0.90), 1)
+    assert float(broker.placed[0].price) == pytest.approx(-0.90)  # − = debit
+    assert price == pytest.approx(0.40)   # broker net from fills, not the limit
+    assert qty == 1
+
+
+# 11 — ladder: attempt 2 only after attempt 1 confirmed dead with zero fills
+def test_butterfly_ladder_replaces_only_after_confirmed_dead(monkeypatch):
+    dead_empty = order_state(13, OrderStatus.CANCELLED,
+                             legs=[leg(LOWER, []), leg(CENTER, []), leg(UPPER, [])])
+    filled2 = order_state(14, OrderStatus.FILLED,
+                          legs=[leg(LOWER, [(1, 2.02)]), leg(CENTER, [(2, 1.20)]),
+                                leg(UPPER, [(1, 0.79)])])
+
+    class Ladder(FakeBroker):
+        def get_order(self, session, oid):
+            if oid == 13:
+                if self.cancelled:
+                    return dead_empty
+                return order_state(13, OrderStatus.LIVE,
+                                   legs=[leg(LOWER, []), leg(CENTER, []), leg(UPPER, [])])
+            return filled2
+
+    broker = Ladder(submits=[order_state(13, OrderStatus.LIVE),
+                             order_state(14, OrderStatus.LIVE)])
+    eng = live_engine(monkeypatch, broker)
+
+    price, oid, qty = eng._place_butterfly(fly_signal(net_debit=0.90), 1)
+    assert len(broker.placed) == 2
+    assert float(broker.placed[1].price) == pytest.approx(-0.91)  # 1-tick improve
+    assert broker.cancels == [13]           # attempt 1 was killed first
+    assert (price, qty) == (pytest.approx(0.41), 1)
+
+
+# 12 — the double-position guard: uncancellable attempt 1 STOPS the ladder
+def test_butterfly_uncancellable_never_places_second_order(monkeypatch):
+    class Stuck(FakeBroker):
+        def get_order(self, session, oid):
+            return order_state(15, OrderStatus.LIVE,
+                               legs=[leg(LOWER, []), leg(CENTER, []), leg(UPPER, [])])
+    broker = Stuck(submits=[order_state(15, OrderStatus.LIVE),
+                            order_state(16, OrderStatus.LIVE)],
+                   cancel_fails=99)
+    import notifications.alert_manager as am
+    pages = []
+    monkeypatch.setattr(am, "get_alert_manager",
+                        lambda: NS(_send=lambda m: pages.append(m)))
+    eng = live_engine(monkeypatch, broker)
+
+    price, oid, qty = eng._place_butterfly(fly_signal(), 1)
+    assert (price, qty) == (None, 0)         # nothing recorded
+    assert len(broker.placed) == 1           # attempt 2 NEVER placed
+    assert any("could not be cancelled" in m for m in pages)
+
+
+# 13 — butterfly partial on attempt 1 books the filled size, no re-place
+def test_butterfly_partial_books_filled_size_no_replace(monkeypatch):
+    def states(cancelled):
+        st = OrderStatus.CANCELLED if cancelled else OrderStatus.LIVE
+        return order_state(17, st,
+                           legs=[leg(LOWER, [(1, 2.00)]), leg(CENTER, [(2, 1.20)]),
+                                 leg(UPPER, [(1, 0.80)])])
+    broker = FakeBroker(submits=[order_state(17, OrderStatus.LIVE),
+                                 order_state(18, OrderStatus.LIVE)],
+                        states_fn=states)
+    eng = live_engine(monkeypatch, broker)
+
+    price, oid, qty = eng._place_butterfly(fly_signal(), 2)
+    assert qty == 1 and price == pytest.approx(0.40)
+    assert len(broker.placed) == 1           # partial → position, not a re-place
+
+
+# 14 — paper duplicates live shape: slippage against the trade, full qty, one pass
+def test_paper_entries_mirror_live_friction(monkeypatch):
+    monkeypatch.setattr(cfg, "PAPER_FILL_SLIPPAGE_PCT", 0.01, raising=False)
+    monkeypatch.setattr(ee, "PAPER_FILL_SLIPPAGE_PCT", 0.01, raising=False)
+    monkeypatch.setattr(ee, "get_trade_logger", lambda: None)
+    eng = EntryEngine(paper_trading=True)
+
+    p, oid, q = eng._place_single_leg(single_signal(mark=2.00), 2)
+    assert p == pytest.approx(2.02) and q == 2       # debit pays MORE
+    p, oid, q = eng._place_butterfly(fly_signal(net_debit=0.90), 3)
+    assert p == pytest.approx(0.909) and q == 3      # debit pays MORE
