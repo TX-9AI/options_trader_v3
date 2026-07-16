@@ -26,6 +26,11 @@ v1.5 — 2026-07-02 — add single-name instruments (NFLX/META/MU/MSFT/TSLA/AAPL
         NVDA/SMCI/ORCL) as DIRECTIONAL-ONLY: ORB + sweep only, no condor/
         butterfly. Widens paper-trading coverage for data collection.
 v1.6 — 2026-07-03 — expand the tradeable universe to the full screener list.
+v1.8 — 2026-07-15 — live fill-confirmation knobs (LIVE_FILL_*, v3.5) and
+        reconcile cadence (BROKER_RECONCILE_INTERVAL_MIN, v3.6); and
+        BROKER_RECONCILE_ENABLED now defaults to the trading mode (LIVE=on,
+        PAPER=off) so going live via configure.sh auto-enables reconciliation —
+        explicit OT_BROKER_RECONCILE=True/False still overrides.
         Neutral strategies run ONLY on true-0DTE index products (SPY/QQQ/SPX/
         IWM); every other symbol (single names + weekly-only ETFs) is
         directional-only, derived automatically from FULL_STRATEGY_INSTRUMENTS.
@@ -175,10 +180,18 @@ MAX_LOSS_PCT        = 0.25
 # short: stop = entry*(1+pct).
 ADOPTED_STOP_PCT    = float(os.environ.get("OT_ADOPTED_STOP_PCT", str(MAX_LOSS_PCT)))
 # Master switch for LIVE broker<->DB position reconciliation (adopt / keep /
-# phantom-close). Default OFF: even on live, reconciliation stays dormant until
-# the operator has verified get_open_option_positions() output on a live box and
-# explicitly enables it via OT_BROKER_RECONCILE=True. Paper never reconciles.
-BROKER_RECONCILE_ENABLED = os.environ.get("OT_BROKER_RECONCILE", "False") == "True"
+# phantom-close + v3.6 phantom P&L recovery).
+# v1.8: FOLLOWS TRADING MODE by default — flipping to LIVE via configure.sh
+# (or any other way OT_PAPER_TRADING=False is set) enables reconciliation
+# automatically; nothing extra to remember on go-live. Paper stays OFF (paper
+# never reconciles; the DB is truth there). An explicit OT_BROKER_RECONCILE
+# =True/False still overrides in either direction — the escape hatch if
+# get_open_option_positions() ever needs re-verifying on a live box.
+_reconcile_env = os.environ.get("OT_BROKER_RECONCILE", "")
+if _reconcile_env in ("True", "False"):
+    BROKER_RECONCILE_ENABLED = _reconcile_env == "True"
+else:
+    BROKER_RECONCILE_ENABLED = os.environ.get("OT_PAPER_TRADING", "True") == "False"
 # v3.6: minutes between intraday reconcile sweeps (was hardcoded 30). On top of
 # these interval slots, dedicated wind-down sweeps fire at 15:45, 15:50, and a
 # final 15:57 pass — the post-flatten truth check (the main loop goes dormant

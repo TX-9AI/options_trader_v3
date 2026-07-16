@@ -14,6 +14,10 @@
 #  v1.6 — 2026-07-02 — add Daily loss cap override menu (OT_DAILY_LOSS_LIMIT)
 #  v1.7 — 2026-07-02 — add single-name instruments (directional-only) to the
 #          instrument menu for wider paper-trading coverage
+#  v1.9 — 2026-07-15 — going LIVE now reports that broker reconciliation
+#          auto-enables with the mode (config.py v1.8 default follows
+#          OT_PAPER_TRADING); show_config gains a "Broker reconcile" status
+#          line; warns loudly if OT_BROKER_RECONCILE=False pins it off.
 #  v1.8 — 2026-07-03 — instrument picker now types the ticker (validated against
 #          config.STRIKE_INCREMENTS) instead of a numbered menu — scales to the
 #          full screener universe
@@ -119,6 +123,13 @@ show_config() {
     local dll=$(get_env "OT_DAILY_LOSS_LIMIT")
     echo -e "  Daily loss cap: ${BOLD}\$${dll:-${risk} (default)}${RESET}"
     echo -e "  Trading mode:   $(echo -e $mode_label)"
+    local rec_pin rec_label
+    rec_pin=$(get_env "OT_BROKER_RECONCILE")
+    if [[ "$rec_pin" == "True" ]]; then rec_label="on (pinned)"
+    elif [[ "$rec_pin" == "False" ]]; then rec_label="OFF (pinned)"
+    elif [[ "$paper" == "False" ]]; then rec_label="on (auto, follows LIVE)"
+    else rec_label="off (auto, follows PAPER)"; fi
+    echo -e "  Broker reconcile: ${BOLD}${rec_label}${RESET}"
     echo -e "  TT Account:     ${BOLD}${account:-not set}${RESET}"
     local tg_status
     if [[ -n "$telegram_token" ]]; then
@@ -262,6 +273,15 @@ change_mode() {
             set_env "OT_PAPER_TRADING" "False"
             reload_daemon
             print_ok "Switched to ${RED}${BOLD}🔴 LIVE mode${RESET}."
+            # v1.9: broker reconciliation follows the mode (config.py default) —
+            # LIVE turns it on automatically unless OT_BROKER_RECONCILE pins it.
+            local rec_pin
+            rec_pin=$(get_env "OT_BROKER_RECONCILE")
+            if [[ "$rec_pin" == "False" ]]; then
+                print_warn "Broker reconciliation is PINNED OFF (OT_BROKER_RECONCILE=False in the unit file) — phantoms and manual closes will NOT be reconciled."
+            else
+                print_ok "Broker reconciliation: auto-enabled with LIVE mode."
+            fi
         else
             print_info "Confirmation not received — mode unchanged."
         fi
