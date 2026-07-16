@@ -31,6 +31,13 @@ v1.8 — 2026-07-15 — live fill-confirmation knobs (LIVE_FILL_*, v3.5) and
         BROKER_RECONCILE_ENABLED now defaults to the trading mode (LIVE=on,
         PAPER=off) so going live via configure.sh auto-enables reconciliation —
         explicit OT_BROKER_RECONCILE=True/False still overrides.
+v2.0 — 2026-07-15 — RUNNER REFINEMENTS (all env-tunable): MAX_LOSS_PCT
+        25%→40% for directionals (butterfly pinned at 25% via
+        BUTTERFLY_STOP_LOSS_PCT); USE_5M_FVG_TRAIL (5-minute FVGs anchor
+        trails); FVG_FLOOR_MAX_LOCK_PCT=0.90 clamp; POST_TARGET_TRAIL_LOCK_PCT
+        0.85→0.75 (leash no longer inverts past target);
+        SWEEP_POST_TARGET_TRAIL=True (sweep runners trail past +100% instead
+        of the hard TP).
 v1.9 — 2026-07-15 — LIVE_ENTRY_DEADLINE_SECONDS (entry fill-confirmation
         window, defect O) and PAPER_FILL_SLIPPAGE_PCT now env-tunable with an
         honest 1% default applied against the trade (defect R).
@@ -175,7 +182,16 @@ RISK_PER_TRADE_USD  = float(os.environ.get("OT_RISK_USD", "200"))
 # Daily loss limit: halt NEW entries when the day's NET realized P&L is down by
 # this much. Defaults to one trade's risk; override via OT_DAILY_LOSS_LIMIT.
 DAILY_LOSS_LIMIT_USD = float(os.environ.get("OT_DAILY_LOSS_LIMIT", str(RISK_PER_TRADE_USD)))
-MAX_LOSS_PCT        = 0.25
+# v2.0 (runner refinement): the universal directional premium floor, now 40%
+# by default. On 0DTE, gamma routinely wicks a healthy trade -25% while the
+# thesis (impulsive origin) is intact — the old floor front-ran the structure
+# stop and stopped winners on noise. Sizing is FULL-PREMIUM based (risk unit =
+# position size), so at $1000 positions a floored trade now costs ~$400 (was
+# ~$250) — set OT_DAILY_LOSS_LIMIT with that in mind. Butterflies keep their
+# own 25% (their 20%-of-max TP can't carry a 40% stop); condors keep
+# CONDOR_STOP_LOSS_PCT. Env-tunable for A/B: OT_MAX_LOSS_PCT=0.25 restores.
+MAX_LOSS_PCT        = float(os.environ.get("OT_MAX_LOSS_PCT", "0.40"))
+BUTTERFLY_STOP_LOSS_PCT = 0.25   # pin plays keep the tight floor (see above)
 # Max-loss stop applied to an ADOPTED position (one discovered open at the
 # broker on a LIVE restart with no DB plan). Defaults to the same threshold
 # every strategy already respects, so an adopted position exits at the same
@@ -317,6 +333,20 @@ RTH_MINUTES                 = 390    # 6.5h session, to convert daily theta → 
 # for continuation); a close beyond the gap exits. Falls back to a % lock.
 FVG_TRAIL_ARM_PCT           = 0.20   # arm once the trade is up this much
 FVG_TRAIL_LOCK_PCT          = 0.80   # premium floor = 80% of current when no FVG
+# v2.0 runner refinements (all env-tunable for paper A/B):
+# 5-minute FVGs anchor the trails instead of 1-minute — structurally
+# meaningful gaps, natural gamma room; 1m stays for structure stop and BOS.
+USE_5M_FVG_TRAIL            = os.environ.get("OT_USE_5M_FVG_TRAIL", "True") != "False"
+# An FVG-derived floor may never sit tighter than this fraction of current
+# premium — a gap hugging price can't turn the runner leash into a tripwire.
+FVG_FLOOR_MAX_LOCK_PCT      = float(os.environ.get("OT_FVG_FLOOR_MAX_LOCK_PCT", "0.90"))
+# Post-target no-FVG fallback lock. Was 0.85 — TIGHTER than the pre-target
+# 75% ratchet, an inverted leash that harvested proven runners on one gamma
+# wick. Now matches the pre-target trail.
+POST_TARGET_TRAIL_LOCK_PCT  = float(os.environ.get("OT_POST_TARGET_TRAIL_LOCK_PCT", "0.75"))
+# Sweep reversals get the ORB post-target trail instead of the +100%
+# guillotine (the one hard TP among directionals). False restores target_hit.
+SWEEP_POST_TARGET_TRAIL     = os.environ.get("OT_SWEEP_POST_TARGET_TRAIL", "True") != "False"
 
 POLL_INTERVAL_SECONDS       = 15
 

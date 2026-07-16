@@ -58,6 +58,8 @@ v2.12 — 2026-07-07 — LIVE broker reconciliation wired into recovery: the bro
         and closes PHANTOM DB rows the broker no longer shows. FAIL-SAFE: a
         failed or empty broker read never closes anything — falls back to
         DB-only recovery. Paper is unchanged (no broker query).
+v3.8 — 2026-07-15 — pass df_5m through to position management so exit trails
+        anchor to 5-minute FVGs (exit_engine v3.8 runner refinements).
 v3.7 — 2026-07-15 — CONDOR ENTRY FILL-CONFIRMATION (audit defect O, part 1).
         _execute_condor_leg live path now confirms the fill before ANY record
         exists: submit the signed-credit limit → poll via
@@ -293,6 +295,7 @@ def run_analysis(state: BotState) -> dict:
         "macro":     macro,
         "orb":       orb,
         "df_1m":     df_1m,
+        "df_5m":     df_5m,
     }
 
 
@@ -871,7 +874,8 @@ def main_loop(state: BotState):
                 pos_mgr.manage_open_position(
                     chain=ctx.get("chain"),
                     df_1m=ctx.get("df_1m"),
-                    regime=regime.primary_regime if regime else None
+                    regime=regime.primary_regime if regime else None,
+                    df_5m=ctx.get("df_5m"),   # v3.8: 5m FVG trail anchor
                 )
                 # ── Condor Leg 2 check ────────────────────────────────────
                 # If Leg 1 is the open position and Leg 2 is still queued,
