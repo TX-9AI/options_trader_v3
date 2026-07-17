@@ -1,63 +1,5 @@
 """
-main.py — options_trader v3.4
-v3.4 — 2026-07-15 — handle_hard_close() now fetches the options chain once and
-        passes it to flatten_all(), so the 15:45 force-flatten has real marks
-        (paper fill price / live context) instead of booking at entry premium
-        and logging every leg at +$0.00. Reused across the 15:45->16:00 retries.
-v3.4 — 2026-07-15 — Condor legs now record |short-strike delta| as setup_score
-        (a calibration "street-sign", read AFTER the BB-anchored selector
-        picks the strike — it does NOT influence selection or sizing). NULL
-        when the Greeks feed did not populate delta, so a stored value is
-        always a genuine delta. Enables later condor threshold calibration;
-        previously condor legs logged no score at all.
-v3.3 — 2026-07-13 — defect H rename only: NO_ENTRY_AFTER_ET -> ORB_NO_ENTRY_AFTER_ET
-        (import + the orb_state.json "past_cutoff" flag). Same constant, same
-        (11, 0) value, same behaviour — the name now states its ORB scope.
-v3.2 — 2026-07-11 — REGIME UN-GATE for the flagship ORB (config-switched,
-        ORB_FIRES_REGARDLESS_OF_REGIME, default on). A confirmed ORB break+retest
-        now fires regardless of the regime label — including UNKNOWN and
-        SWEEP_REVERSAL — because the ORB engine's break+retest is self-validating
-        and the classifier does not test for it. Two changes in run_entry_logic:
-        (1) the hard UNKNOWN gate is bypassed when the engine is in a confirmed
-            OPEN state (the label no longer vetoes a proven setup);
-        (2) the ORB dispatch admits UNKNOWN and SWEEP_REVERSAL (ORB beats sweep;
-            engine no longer defers OPEN under a sweep — see orb_engine v3.2).
-        Nothing else loosens: sweep/butterfly/condor still self-gate on their own
-        regime values, and the setup scorer's B-threshold still governs (under
-        UNKNOWN the regime_conviction dimension just contributes 0). Set the flag
-        False to restore strict v2 gating. Every ORB fired under UNKNOWN is logged
-        regime=UNKNOWN — labeled tape for the shadow observer.
-v1.0 — original release
-v2.2 — 2026-07-01 — iron condor legged entry, BB-anchored strikes,
-        regime-flip exits, ORB range via get_orb_range.py/orb_range.json,
-        fed day trading enabled, ORB cutoff 11AM, condor window 11AM-2PM
-v2.3 — 2026-07-02 — fix missing ZoneInfo import causing loop error every tick
-v2.4 — 2026-07-02 — remove duplicate _execute_condor_leg (dead 2-arg def shadowed by
-        a broken 3-arg def that referenced a non-existent CondorLeg class and
-        mark_leg_filled method); single canonical impl on the real OptionsSignal
-        API with live TastyTrade placement ported in. ORB range fetch is now
-        success-keyed (retries until today's 9:30-9:35 candle is really written)
-        and the startup fetch is gated to >= 9:35 ET so it never writes a
-        stale prior-day range; instrument read from OT_INSTRUMENT (no systemd
-        unit-file parsing).
-v2.10 — 2026-07-02 — directional-only instruments (single names): skip iron
-        condor and butterfly in the dispatch; ORB + sweep only.
-v2.11 — 2026-07-07 — durable 15:45 flatten + expiry-aware recovery. handle_hard_
-        close now routes through pos_mgr.flatten_all() so EVERY open record
-        (both condor legs) is truly closed in the DB + P&L booked (the old path
-        called place_exit_order directly and never wrote status='closed'),
-        retries every tick to 16:00, and pages once on failure. Startup recovery
-        keys on EXPIRY, not entry date (the bot trades weeklies): sweep only
-        genuinely expired orphans, resume every still-live row, and flag a
-        CARRIED-overnight position. Restart alerts self-identify (box symbol +
-        fresh-boot vs service-restart from /proc/uptime).
-v2.12 — 2026-07-07 — LIVE broker reconciliation wired into recovery: the broker
-        is the source of truth for existence. _reconcile_with_broker() queries
-        open positions, KEEPs DB-planned rows confirmed there, ADOPTs+journals
-        broker positions with no DB plan (managed by the ADOPTED exit path),
-        and closes PHANTOM DB rows the broker no longer shows. FAIL-SAFE: a
-        failed or empty broker read never closes anything — falls back to
-        DB-only recovery. Paper is unchanged (no broker query).
+main.py — options_trader v3.8
 v3.8 — 2026-07-15 — pass df_5m through to position management so exit trails
         anchor to 5-minute FVGs (exit_engine v3.8 runner refinements).
 v3.7 — 2026-07-15 — CONDOR ENTRY FILL-CONFIRMATION (audit defect O, part 1).
@@ -85,12 +27,68 @@ v3.6 — 2026-07-15 — PHANTOM P&L RECOVERY + denser reconcile schedule.
             final 15:57 post-flatten truth pass (last guaranteed look before
             the loop goes dormant at 16:00).
         (c) Phantom alerts now carry the recovered P&L.
+v3.4 — 2026-07-15 — Condor legs now record |short-strike delta| as setup_score
+        (a calibration "street-sign", read AFTER the BB-anchored selector
+        picks the strike — it does NOT influence selection or sizing). NULL
+        when the Greeks feed did not populate delta, so a stored value is
+        always a genuine delta. Enables later condor threshold calibration;
+        previously condor legs logged no score at all.
+v3.4 — 2026-07-15 — handle_hard_close() now fetches the options chain once and
+        passes it to flatten_all(), so the 15:45 force-flatten has real marks
+        (paper fill price / live context) instead of booking at entry premium
+        and logging every leg at +$0.00. Reused across the 15:45->16:00 retries.
+v3.3 — 2026-07-13 — defect H rename only: NO_ENTRY_AFTER_ET -> ORB_NO_ENTRY_AFTER_ET
+        (import + the orb_state.json "past_cutoff" flag). Same constant, same
+        (11, 0) value, same behaviour — the name now states its ORB scope.
+v3.2 — 2026-07-11 — REGIME UN-GATE for the flagship ORB (config-switched,
+        ORB_FIRES_REGARDLESS_OF_REGIME, default on). A confirmed ORB break+retest
+        now fires regardless of the regime label — including UNKNOWN and
+        SWEEP_REVERSAL — because the ORB engine's break+retest is self-validating
+        and the classifier does not test for it. Two changes in run_entry_logic:
+        (1) the hard UNKNOWN gate is bypassed when the engine is in a confirmed
+            OPEN state (the label no longer vetoes a proven setup);
+        (2) the ORB dispatch admits UNKNOWN and SWEEP_REVERSAL (ORB beats sweep;
+            engine no longer defers OPEN under a sweep — see orb_engine v3.2).
+        Nothing else loosens: sweep/butterfly/condor still self-gate on their own
+        regime values, and the setup scorer's B-threshold still governs (under
+        UNKNOWN the regime_conviction dimension just contributes 0). Set the flag
+        False to restore strict v2 gating. Every ORB fired under UNKNOWN is logged
+        regime=UNKNOWN — labeled tape for the shadow observer.
+v3.1 — 2026-07-10 — condor leg ENTRY alert now names the instrument. The leg-
+        filled Telegram alert was built with a raw _send() that omitted the
+        symbol (every other entry alert routes through the structured methods
+        that already include it), so condor entries read "[PAPER] Condor Leg 2
+        …" with no way to tell which box fired. Added {INSTRUMENT} after the
+        mode, matching the "[MODE] SYMBOL | …" form of the other alerts. DB
+        logging already recorded the symbol; this was display-only.
+v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
+        mapping optimization (all market data now flows from the single
+        shared TastyTrade candle feed — see data/candle_feed.py). No logic
+        change in this file.
 v2.13 — 2026-07-07 — INTRADAY broker reconcile (LIVE + enabled): every 30 min
         across RTH with the last sweep at 15:30, a leg-role-aware check catches
         positions the broker closed mid-session — especially a SHORT leg
         auto-closed while the long remains (loud alarm, close the broken record,
         adopt the surviving long so the 15:45 flatten handles it cleanly). Only
         inspects rows we already manage; fail-safe on a bad/empty read.
+v2.12 — 2026-07-07 — LIVE broker reconciliation wired into recovery: the broker
+        is the source of truth for existence. _reconcile_with_broker() queries
+        open positions, KEEPs DB-planned rows confirmed there, ADOPTs+journals
+        broker positions with no DB plan (managed by the ADOPTED exit path),
+        and closes PHANTOM DB rows the broker no longer shows. FAIL-SAFE: a
+        failed or empty broker read never closes anything — falls back to
+        DB-only recovery. Paper is unchanged (no broker query).
+v2.11 — 2026-07-07 — durable 15:45 flatten + expiry-aware recovery. handle_hard_
+        close now routes through pos_mgr.flatten_all() so EVERY open record
+        (both condor legs) is truly closed in the DB + P&L booked (the old path
+        called place_exit_order directly and never wrote status='closed'),
+        retries every tick to 16:00, and pages once on failure. Startup recovery
+        keys on EXPIRY, not entry date (the bot trades weeklies): sweep only
+        genuinely expired orphans, resume every still-live row, and flag a
+        CARRIED-overnight position. Restart alerts self-identify (box symbol +
+        fresh-boot vs service-restart from /proc/uptime).
+v2.10 — 2026-07-02 — directional-only instruments (single names): skip iron
+        condor and butterfly in the dispatch; ORB + sweep only.
 v2.9 — 2026-07-02 — block new entries when the daily loss halt is active
         (day P&L <= -DAILY_LOSS_LIMIT_USD); open positions still exit.
 v2.8 — 2026-07-02 — (2a) ORB-window sweep override: when an ORB signal fires but
@@ -109,20 +107,22 @@ v2.5 — 2026-07-02 — ORB range is now three-state (ESTABLISHED/IN_PROGRESS/
         unconditionally (populates last-valid EXPIRED range pre-open); the
         open-poll runs from 9:30 ET and latches only when today's range is
         ESTABLISHED. Flag renamed orb_range_fetched_today -> _established_.
-v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
-        mapping optimization (all market data now flows from the single
-        shared TastyTrade candle feed — see data/candle_feed.py). No logic
-        change in this file.
-v3.1 — 2026-07-10 — condor leg ENTRY alert now names the instrument. The leg-
-        filled Telegram alert was built with a raw _send() that omitted the
-        symbol (every other entry alert routes through the structured methods
-        that already include it), so condor entries read "[PAPER] Condor Leg 2
-        …" with no way to tell which box fired. Added {INSTRUMENT} after the
-        mode, matching the "[MODE] SYMBOL | …" form of the other alerts. DB
-        logging already recorded the symbol; this was display-only.
+v2.4 — 2026-07-02 — remove duplicate _execute_condor_leg (dead 2-arg def shadowed by
+        a broken 3-arg def that referenced a non-existent CondorLeg class and
+        mark_leg_filled method); single canonical impl on the real OptionsSignal
+        API with live TastyTrade placement ported in. ORB range fetch is now
+        success-keyed (retries until today's 9:30-9:35 candle is really written)
+        and the startup fetch is gated to >= 9:35 ET so it never writes a
+        stale prior-day range; instrument read from OT_INSTRUMENT (no systemd
+        unit-file parsing).
+v2.3 — 2026-07-02 — fix missing ZoneInfo import causing loop error every tick
+v2.2 — 2026-07-01 — iron condor legged entry, BB-anchored strikes,
+        regime-flip exits, ORB range via get_orb_range.py/orb_range.json,
+        fed day trading enabled, ORB cutoff 11AM, condor window 11AM-2PM
+v1.0 — original release
+
 0DTE options bot: ORB, Sweep Reversal, Butterfly
 RTH only (9:30–16:00 ET), hard close 15:45 ET.
-
 Run modes:
   python main.py            — interactive startup (prompts instrument, risk $, paper/live)
   python main.py --service  — non-interactive for systemd

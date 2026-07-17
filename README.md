@@ -591,7 +591,7 @@ nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
 
 | File | Purpose |
 |---|---|
-| `main.py` ✅ | **v3.4.** The bot. 15s loop: analyze → classify regime → dispatch strategy → score → size → enter; manages open positions, runs the BWB roll check, enforces the daily-loss halt, writes `orb_state.json` each tick. Holds the `UNKNOWN` hard gate and the ORB un-gate exception. Condor legs log `abs(short-strike delta)` as `setup_score` (calibration waypoint; see Iron Condor). |
+| `main.py` ✅ | **v3.8.** The bot. 15s loop: analyze → classify regime → dispatch strategy → score → size → enter; manages open positions, runs the BWB roll check, enforces the daily-loss halt, writes `orb_state.json` each tick. Holds the `UNKNOWN` hard gate and the ORB un-gate exception. Condor legs log `abs(short-strike delta)` as `setup_score` (calibration waypoint; see Iron Condor). **v3.7: live condor legs book ONLY broker-confirmed fills (`order_confirm`); v3.6: phantom P&L recovery + 10-min reconcile cadence with 15:45/15:50/15:57 wind-down sweeps; v3.8: threads `df_5m` into position management for the 5m FVG trail anchor.** |
 | `config.py` ✅ | **v3.3.** Every tunable parameter + credential accessors (env-only, never in source). `PAPER_TRADING` defaults `True`. |
 | `README.md` 📄 | This file. Current state, not aspiration. |
 | `ROADMAP.md` 📄 | **Build status lives here.** v2→v3 reconciliation, honest distance-to-vision, Phases 0–4, and the named risks. |
@@ -626,7 +626,7 @@ nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
 
 | File | Purpose |
 |---|---|
-| `orb_engine.py` ✅ | **v3.5.** The ORB state machine. Break → armed → retest → open, plus the three invalidations, the re-arm rule, the session break latches, and the impulsive-candle stop level. **No tolerances anywhere.** |
+| `orb_engine.py` ✅ | **v3.6.** The ORB state machine. Break → armed → retest → open, plus the three invalidations, the re-arm rule, the session break latches, and the impulsive-candle stop level. **No tolerances anywhere.** |
 | `get_orb_range.py` ✅ | Resolves the 9:30–9:35 range through `market_data.fetch_candles` (same feed the bot trades) → `orb_range.json` with `ESTABLISHED`/`IN_PROGRESS`/`EXPIRED`. |
 | `regime_classifier.py` ✅ | **v1.3 — the LIVE classifier.** Memoryless boolean cascade, first-match-wins. Emits one label + a post-hoc conviction number that currently gates nothing. |
 | `regime_confluence.py` ✅ | **v1.1 — LAYER 1 of v3 (canonical, sole).** Instantaneous graded per-regime evidence (`hard_veto × soft_necessary × Σ corroborators`), implementing `REGIME_TRUTHS.md` v0.2. v1.1 fixed a silent config-import failure (a wrong-home constant threw the whole guarded block; every constant ran on fallbacks). Feeds the L1 replay and the L2 integrator via `tests/replay_confluence.py` v2.0. **No live-loop path yet — Phase 0.2.** |
@@ -652,8 +652,8 @@ nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
 | File | Purpose |
 |---|---|
 | `entry_engine.py` ✅ | Places the opening order (paper fills at the mark). Writes the `TradeRecord`, including `underlying_stop` — **the impulsive candle's wick, which the exit engine reads back.** |
-| `exit_engine.py` ✅ | **v3.5.** All exits, routed per strategy (ORB floor/structure/theta/trails · Sweep BOS · butterfly/condor premium + regime-flip · adopted generic). **v3.4/v3.5: FillResult contract — paper simulates at the mark in one pass; live books only broker-confirmed fills at the real net fill price, with bounded polling, partial-fill weighting, idempotent order resume, 2-leg vertical closes, and signed marketable-limit pricing.** |
-| `position_manager.py` ✅ | **v3.4.** Owns the single open position (the condor's two verticals are the sole exception). **`_execute_exit` books ONLY on `FillResult.confirmed` at the actual fill price — an unconfirmed close leaves the row OPEN for the 15:45→16:00 retry loop (anti-orphan invariant).** Trail updates write `trail_stop`, never `stop_premium`. |
+| `exit_engine.py` ✅ | **v3.8.** All exits, routed per strategy (ORB floor/structure/theta/trails · Sweep BOS · butterfly/condor premium + regime-flip · adopted generic). **v3.4/v3.5: FillResult contract — paper simulates at the mark in one pass; live books only broker-confirmed fills at the real net fill price, with bounded polling, partial-fill weighting, idempotent order resume, 2-leg vertical closes, and signed marketable-limit pricing. v3.8: runner refinements — 40% premium floor (butterfly stays 25%), 5m-anchored FVG trails, 0.75 post-target fallback, sweep post-target trail replaces the +100% hard TP, MFE/MAE telemetry (see `docs/EXIT_RULES.md`).** |
+| `position_manager.py` ✅ | **v3.8.** Owns the single open position (the condor's two verticals are the sole exception). **`_execute_exit` books ONLY on `FillResult.confirmed` at the actual fill price — an unconfirmed close leaves the row OPEN for the 15:45→16:00 retry loop (anti-orphan invariant).** Trail updates write `trail_stop`, never `stop_premium`. **v3.8: threads `df_5m` through to `exit_engine.evaluate()` (5m FVG trail anchor).** |
 | `broker_reconcile.py` ✅ | **v3.6, LIVE-only, auto-enables with LIVE mode.** Adopt / keep / phantom-close against the broker at startup + intraday (10-min cadence + 15:45/15:50/15:57 wind-down sweeps). **Phantom P&L recovery: a manually-closed position books its real fill from order history instead of a flagged $0.00.** Paper never reconciles. |
 
 ### `risk/` — sizing and gates
@@ -668,7 +668,7 @@ nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
 
 | File | Purpose |
 |---|---|
-| `candle_feed.py` ✅ | **v3.2. THE single DXFeed producer per box.** Owns the box's only `DXLinkStreamer` subscription (its symbol across 1m/5m/15m/1h/1d + VIX) → SQLite (WAL) + heartbeat. **No other process may open a stream.** |
+| `candle_feed.py` ✅ | **v3.8. THE single DXFeed producer per box.** Owns the box's only `DXLinkStreamer` subscription (its symbol across 1m/5m/15m/1h/1d + VIX) → SQLite (WAL) + heartbeat. **No other process may open a stream.** |
 | `market_data.py` ✅ | Pure store **reader**. `fetch_candles`/`fetch_quote`/`fetch_all_candles` keep the v2 contract byte-for-byte, which is why nothing downstream changed. Fails loud on a stale heartbeat. |
 | `data_cache.py` ✅ | Per-timeframe cache over the reader. A refresh failing past 3× the staleness ceiling returns `None` — a dead feed can't hide behind an aging frame. |
 | `options_chain.py` ✅ | 0DTE chain from the TastyTrade SDK: strikes, greeks, marks, delta-band selection. |
@@ -681,7 +681,7 @@ nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
 
 | File | Purpose |
 |---|---|
-| `database/trade_logger.py` ✅ | **v3.1.** SQLite trade log. Spread columns for condor legs, `get_open_trades()`, `realized_pnl_today()` (which seeds the daily halt), `update_fields()`. **New `trail_stop` column (auto-migrated) + `update_trail_stop()`; `update_stop()` removed — its only caller was the floor-overwrite bug.** |
+| `database/trade_logger.py` ✅ | **v3.8.** SQLite trade log. Spread columns for condor legs, `get_open_trades()`, `realized_pnl_today()` (which seeds the daily halt), `update_fields()`. **`trail_stop` column (auto-migrated) + `update_trail_stop()`; `update_stop()` removed — its only caller was the floor-overwrite bug. v3.7: every read is mode-scoped via `COALESCE(paper_trade,1)` (defect Q — paper history can never feed the live loss breaker). v3.8: `max/min_premium_seen` MFE/MAE columns, updated every tick.** |
 | `notifications/alert_manager.py` ✅ | The 4 core Telegram events (start, stop, entry, exit) + BWB roll + daily-loss-limit. |
 | `notifications/telegram_sender.py` ✅ | Bot API transport. |
 | `notifications/test_telegram.py` 🧪 | Connectivity check. |

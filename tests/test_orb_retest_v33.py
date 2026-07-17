@@ -9,6 +9,11 @@ Reference tape (MU 07-10, 1m):
   09:49  O 971.35 H 975.49 L 971.27 C 973.59            -> BREAK (impulsive candle)
   09:50  green doji: wicks INTO range, closes OUTSIDE   -> RETEST -> fire long
 """
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pandas as pd
 from analysis.orb_engine import ORBEngine, ORBState
 

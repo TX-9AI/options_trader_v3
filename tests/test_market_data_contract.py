@@ -20,6 +20,8 @@ import time
 from datetime import datetime, timedelta, time as dtime, timezone
 from zoneinfo import ZoneInfo
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 ET = ZoneInfo("America/New_York")
 fails = []
 
