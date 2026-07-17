@@ -146,8 +146,19 @@ class TrendEngine:
         """
         state = TrendState()
 
-        # Timeframes to analyze for trend (ordered by weight)
-        tf_weights = {"1d": 0.3, "4h": 0.25, "1h": 0.25, "15m": 0.15, "5m": 0.05}
+        # Timeframes to analyze for trend (ordered by weight).
+        # v3.1 (2026-07-16): direction is now intraday-primary, consistent with
+        # primary_adx already being 5m-sourced. The old stack put 0.80 of the
+        # direction weight on 1d/4h/1h — but 4h is NEVER produced by the live
+        # feed (1m/5m/15m/1h/1d only) so its weight evaporated, and 1d (~10 bars)
+        # / 1h (~50 bars) sit under EMA_SLOW+5=55 on the live feed's thin
+        # backfill, returning NEUTRAL and diluting the vote below the 0.30 gate.
+        # 5m carried only 0.05 and could never lift bull/bear past 0.30 alone,
+        # pinning overall_direction to NEUTRAL and making TRENDING unreachable
+        # (2026-07-13..16 replay: 0 TRENDING across 34,925 ticks). Now the frames
+        # the 0DTE bot actually trades and that reach depth in-session (5m/15m)
+        # drive direction; 1h/1d are context. 4h dropped (never produced).
+        tf_weights = {"1d": 0.15, "1h": 0.20, "15m": 0.30, "5m": 0.35}
 
         weighted_bull  = 0.0
         weighted_bear  = 0.0

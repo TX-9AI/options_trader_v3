@@ -204,7 +204,7 @@ def orb_setups(df):
         e = OE.ORBEngine()
         e._data.orb_high, e._data.orb_low, e._data.orb_width = oh, ol, oh - ol
         e._range_date = ix[0].strftime("%Y-%m-%d")
-        e._data.state = OE.ORBState.RANGING
+        e._data.state = OE.ORBState.WAITING_FOR_BREAK
         for k in range(2, len(sess) + 1):
             sub = sess.iloc[:k]
             _CLOCK["t"] = ix[k - 1].to_pydatetime()
