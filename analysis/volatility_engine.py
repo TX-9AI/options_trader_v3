@@ -47,7 +47,7 @@ class VolatilityState:
     # Price position
     price_vs_bb:        str   = "INSIDE"  # ABOVE_UPPER / BELOW_LOWER / INSIDE
     vwap:               float = 0.0
-    price_vs_vwap:      str   = "ABOVE"   # ABOVE / BELOW
+    price_vs_vwap:      str   = "NONE"   # ABOVE / BELOW / NONE (undefined: no volume)
 
     # Derived
     is_compressing:     bool  = False
@@ -148,14 +148,34 @@ class VolatilityEngine:
                 state.price_vs_bb = "INSIDE"
 
         # ── VWAP Position ─────────────────────────────────────────────────────
-        try:
-            typical  = (df_5m["high"] + df_5m["low"] + df_5m["close"]) / 3
-            vwap_val = float((typical * df_5m["volume"]).cumsum().iloc[-1] /
-                              df_5m["volume"].cumsum().iloc[-1])
-            state.vwap         = vwap_val
-            state.price_vs_vwap = "ABOVE" if current_price >= vwap_val else "BELOW"
-        except Exception as e:
-            logger.debug(f"VWAP calculation error: {e}")
+        # Volume-weighted; UNDEFINED when the tape carries no volume — e.g. cash
+        # indices like SPX, whose candles report volume=0. There the divisor is
+        # 0 and 0/0 yields NaN. NaN is a numpy RuntimeWarning, NOT an exception,
+        # so the old try/except never fired: state.vwap became NaN and every
+        # `current_price >= NaN` is False, silently pinning price_vs_vwap to
+        # BELOW each tick (a false VWAP signal into orb_strategy). Guard the
+        # divisor: no volume -> VWAP unavailable, neutral "NONE" label, and the
+        # vwap>0 checks downstream correctly skip it.
+        vol_cum = float(df_5m["volume"].cumsum().iloc[-1]) if len(df_5m) else 0.0
+        if vol_cum > 0:
+            try:
+                typical  = (df_5m["high"] + df_5m["low"] + df_5m["close"]) / 3
+                vwap_val = float((typical * df_5m["volume"]).cumsum().iloc[-1] / vol_cum)
+                if vwap_val == vwap_val and vwap_val not in (float("inf"), float("-inf")):
+                    state.vwap          = vwap_val
+                    state.price_vs_vwap = "ABOVE" if current_price >= vwap_val else "BELOW"
+                else:
+                    state.vwap = 0.0
+                    state.price_vs_vwap = "NONE"
+            except Exception as e:
+                logger.debug(f"VWAP calculation error: {e}")
+                state.vwap = 0.0
+                state.price_vs_vwap = "NONE"
+        else:
+            # No volume on the tape (cash index / product without size) — VWAP
+            # is not meaningful; leave it unavailable rather than fabricate one.
+            state.vwap = 0.0
+            state.price_vs_vwap = "NONE"
 
         # ── Recommended Stop Distance ─────────────────────────────────────────
         state.stop_atr_distance = state.atr_current * atr_stop_multiplier
