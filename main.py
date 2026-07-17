@@ -871,6 +871,23 @@ def main_loop(state: BotState):
 
             # ── Manage open position ──────────────────────────────────────
             if pos_mgr.has_open_position():
+                # ── Broken-wing roll: FIRST REFUSAL ───────────────────────
+                # The roll must run BEFORE manage_open_position. The per-leg
+                # 25% condor stop lives in manage_open_position; if it runs
+                # first it closes the tested leg, and the roll needs BOTH
+                # verticals open — so the stop used to guillotine the tested
+                # side before the roll could ever act. check_and_execute_roll
+                # self-gates: it executes ONLY when a risk-free roll exists,
+                # so when no roll is viable the stop still fires exactly as
+                # before (same 25% downside, no new risk). When a roll IS
+                # viable, it converts the untested side and the tested side
+                # goes risk-free instead of stopping at a loss.
+                try:
+                    from strategy.condor_roll import check_and_execute_roll
+                    check_and_execute_roll(pos_mgr, ctx.get("chain"), ctx["price"], state)
+                except Exception as _roll_err:
+                    logger.warning(f"Roll check failed: {_roll_err}")
+
                 pos_mgr.manage_open_position(
                     chain=ctx.get("chain"),
                     df_1m=ctx.get("df_1m"),
@@ -894,16 +911,6 @@ def main_loop(state: BotState):
                     )
                     if leg_signal is not None:
                         _execute_condor_leg(leg_signal, state)
-
-                # ── Broken-wing roll check ────────────────────────────────
-                # Both condor verticals open + one side tested → roll the
-                # untested side into a BWB if it makes the tested side
-                # risk-free. One-time, final adjustment.
-                try:
-                    from strategy.condor_roll import check_and_execute_roll
-                    check_and_execute_roll(pos_mgr, ctx.get("chain"), ctx["price"], state)
-                except Exception as _roll_err:
-                    logger.warning(f"Roll check failed: {_roll_err}")
             else:
                 attempt_new_entry(ctx, regime, state)
 

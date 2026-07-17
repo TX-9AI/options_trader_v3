@@ -310,7 +310,11 @@ BUTTERFLY_GEX_PIN_PROXIMITY_MULT = 1.0  # Multiplier on expected move
 CONDOR_WING_WIDTH_SPX       = 5      # Narrow wings — affordable verticals (was 25)
 CONDOR_WING_WIDTH_QQQ       = 5      # Fixed wing width in points on QQQ/SPY
 CONDOR_EXPECTED_MOVE_GUARDRAIL_MULT = 1.2  # Short strikes must be within this x EM
-CONDOR_PROXIMITY_STRIKES    = 2      # Strikes inside the short strike that trigger entry
+CONDOR_PROXIMITY_STRIKES    = 2      # (legacy) strikes inside the short — superseded by CONDOR_TRIGGER_APPROACH
+# Fraction of the distance from the BB midline to each short strike that price
+# must travel before that side's spread fires. Higher = price must get closer
+# to the band before selling (richer premium, fewer fills). Env-tunable for A/B.
+CONDOR_TRIGGER_APPROACH     = float(os.environ.get("OT_CONDOR_TRIGGER_APPROACH", "0.65"))
                                      # (2 strikes = 10pt on SPX, $2 on QQQ — scales naturally)
 CONDOR_STOP_LOSS_PCT        = 0.25   # Exit if spread value rises to 125% of credit received
 CONDOR_NICKEL_CLOSE         = 0.05   # Close leg when spread value decays to $0.05

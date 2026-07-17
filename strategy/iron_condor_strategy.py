@@ -71,6 +71,7 @@ from config import (
     CONDOR_WING_WIDTH_SPX, CONDOR_WING_WIDTH_QQQ,
     CONDOR_EXPECTED_MOVE_GUARDRAIL_MULT,
     CONDOR_PROXIMITY_STRIKES,
+    CONDOR_TRIGGER_APPROACH,
     CONDOR_NICKEL_CLOSE, CONDOR_STOP_LOSS_PCT,
     CONDOR_ENTRY_START_ET, CONDOR_ENTRY_CUTOFF_ET,
     STRIKE_INCREMENT, INSTRUMENT, VIX_BUTTERFLY_DISABLE
@@ -289,11 +290,26 @@ class IronCondorStrategy(BaseOptionsStrategy):
         long_call_strike = short_call.strike + wing * STRIKE_INCREMENT
         long_put_strike  = short_put.strike  - wing * STRIKE_INCREMENT
 
-        # Trigger prices: 2 strikes (CONDOR_PROXIMITY_STRIKES) from short strike
-        # Call spread: fires when price rises to within 2 strikes of short call
-        call_trigger = short_call.strike - CONDOR_PROXIMITY_STRIKES * STRIKE_INCREMENT
-        # Put spread: fires when price drops to within 2 strikes of short put
-        put_trigger  = short_put.strike  + CONDOR_PROXIMITY_STRIKES * STRIKE_INCREMENT
+        # ── PREMIUM-RICH SEQUENTIAL TRIGGERS ─────────────────────────────────
+        # Intent: each short is sold only when price has traveled to THAT side's
+        # band, so its premium is rich at the moment of sale — sell the call up
+        # near the upper band, sell the put down near the lower band, and mean-
+        # reversion carries the structure. The old rule placed the trigger
+        # CONDOR_PROXIMITY_STRIKES (2) *inside* each short — measured in
+        # strikes*increment. For increment-5 names that is 10pt inside a ~10pt-
+        # wide condor, so both triggers overshot PAST the channel centre and
+        # crossed: both fire-conditions were true the instant price touched the
+        # middle, filling both legs at once with neither premium rich (and
+        # starving the risk-free roll of the credit it needs).
+        #
+        # Now: anchor to the BB midline (the range centre) and require price to
+        # travel CONDOR_TRIGGER_APPROACH of the way from the midline to each
+        # short before that side fires. Scale-free across strike increments and
+        # widths; keeps each trigger up near its own band.
+        mid = vol_state.bb_middle if vol_state.bb_middle > 0 else current_price
+        call_trigger = mid + CONDOR_TRIGGER_APPROACH * (short_call.strike - mid)
+        # Put spread: fires only when price drops most of the way to the lower band
+        put_trigger  = mid - CONDOR_TRIGGER_APPROACH * (mid - short_put.strike)
 
         # Determine which leg is more likely to fill first based on current price
         # — whichever side's trigger is closer to current price is Leg 1
@@ -496,7 +512,7 @@ class IronCondorStrategy(BaseOptionsStrategy):
         self._add_confluence(
             signal,
             f"Price reached trigger ({plan.call_trigger_price if side == 'call' else plan.put_trigger_price:.0f}) — "
-            f"{CONDOR_PROXIMITY_STRIKES} strikes from short"
+            f"{int(CONDOR_TRIGGER_APPROACH*100)}% of the way to the {side} band (premium rich)"
         )
 
         logger.info(
