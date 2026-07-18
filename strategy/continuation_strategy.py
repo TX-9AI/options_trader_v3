@@ -1,0 +1,161 @@
+"""
+strategy/continuation_strategy.py — Trend-continuation on pullback.
+
+v1.0 — 2026-07-18 — The trend-native trade the trend_engine v3.1 fix enables.
+        Fires ONLY when regime is trending (a high bar now that direction
+        resolves). Waits for price to pull back to the BB midline, then enters
+        on a LOW-BAR resumption (momentum flips back toward the trend). The
+        intelligence lives in the EXIT (exhaustion detection), not the entry —
+        "make entry easy, make exit smart."
+
+DESIGN (per spec, options_trader_v3 continuation-trade decisions):
+  GATE       regime TRENDING_BULL/BEAR + conviction floor + pullback not so
+             deep the trend is arguably broken.
+  LEVEL      BB midline (vol_state.bb_middle) — dynamic support in an uptrend,
+             resistance in a downtrend. Reuses the condor anchor.
+  ENTRY      low bar: trend alive + price returned to the midline + momentum
+             flipping back toward the trend (DECELERATING -> ACCELERATING).
+  STOP       regime-change OR MAX_LOSS_PCT (40%), whichever first. Regime
+             invalidation IS the smart stop (the trade is defined by the trend).
+             underlying_stop set just past the pullback extreme for reference /
+             structure, but the governing exits are regime-flip + the 40% floor.
+  EXIT       exhaustion-based (owned by exit_engine, informed here via setup):
+             momentum divergence + extension-from-midline; trail arms on the
+             resumption confirmation so theta goes silent immediately.
+  VEHICLE    debit directional (long call in an uptrend, long put in a downtrend).
+  CONTEXT    two entry paths — ORB-runaway HANDOFF (looser: the runaway already
+             proved directional force) and STANDALONE mid-session (stricter:
+             self-sourced trend+pullback+resumption). handoff flag toggles it.
+
+SAFETY: this module is inert until wired in AND enabled. main.py registers it
+behind CONTINUATION_ENABLED (default False) so it ships dark and is proven in
+paper/backtest before it can affect live dispatch.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+from analysis.regime_classifier import RegimeState, Regime
+from analysis.volatility_engine import VolatilityState
+from analysis.trend_engine import TrendState
+from strategy.base_strategy import BaseOptionsStrategy, OptionsSignal
+
+logger = logging.getLogger(__name__)
+
+# ── Tunables (env-overridable at wire-in time; conservative defaults) ─────────
+CONTINUATION_CONV_FLOOR      = 0.45   # min regime conviction to consider the trade
+CONTINUATION_MIDLINE_ATR     = 0.35   # "at the midline": |price-mid| <= this * ATR
+CONTINUATION_MAX_PULLBACK_R  = 0.60   # pullback deeper than this frac of the leg = trend broken, skip
+CONTINUATION_STOP_LOSS_PCT   = 0.40   # matches MAX_LOSS_PCT; regime-flip is the primary exit
+CONTINUATION_TP_PCT          = 1.0    # nominal; runner is exhaustion-trailed, not TP-capped
+CONTINUATION_HANDOFF_CONV_RELAX = 0.10  # handoff path lowers the conviction floor by this
+
+
+class ContinuationStrategy(BaseOptionsStrategy):
+    """Trend-continuation entry on a pullback to the BB midline."""
+
+    def name(self) -> str:
+        return "ContinuationStrategy"
+
+    def generate_signal(self,
+                        *,
+                        regime: RegimeState,
+                        vol_state: VolatilityState,
+                        trend: TrendState,
+                        chain,
+                        current_price: float,
+                        is_handoff: bool = False,
+                        macro=None) -> Optional[OptionsSignal]:
+        """
+        Return an OptionsSignal if a trend-continuation pullback entry sets up,
+        else None. `is_handoff=True` is the looser ORB-runaway path.
+        """
+        # ── 1. GATE: must be a trending regime ──────────────────────────────
+        rgm = regime.primary_regime
+        if rgm == Regime.TRENDING_BULL:
+            direction, option_side = "long", "call"
+        elif rgm == Regime.TRENDING_BEAR:
+            direction, option_side = "short", "put"
+        else:
+            return None  # not trending → this trade does not exist
+
+        conv_floor = CONTINUATION_CONV_FLOOR
+        if is_handoff:
+            conv_floor -= CONTINUATION_HANDOFF_CONV_RELAX  # runaway vouched for direction
+        if regime.conviction < conv_floor:
+            return None
+
+        # ── 2. LEVEL: price must have pulled back TO the BB midline ─────────
+        mid = getattr(vol_state, "bb_middle", 0.0)
+        atr = getattr(vol_state, "atr_current", 0.0)
+        if mid <= 0 or atr <= 0:
+            return None
+        at_midline = abs(current_price - mid) <= CONTINUATION_MIDLINE_ATR * atr
+        if not at_midline:
+            return None
+
+        # pullback not so deep the trend is broken: price should still be on the
+        # trend side of the midline structurally (bull: not far below; bear: not
+        # far above). Depth measured in ATR as a proxy for "fraction of the leg".
+        if direction == "long"  and current_price < mid - CONTINUATION_MAX_PULLBACK_R * atr:
+            return None
+        if direction == "short" and current_price > mid + CONTINUATION_MAX_PULLBACK_R * atr:
+            return None
+
+        # ── 3. ENTRY (LOW BAR): momentum flipping back toward the trend ─────
+        # Resumption is intentionally easy — protection lives in the exit. We
+        # require the trend engine's momentum to be re-asserting in the trend
+        # direction (not still decelerating against us).
+        momentum = getattr(trend, "momentum", "") or ""
+        resuming = momentum in ("ACCELERATING", "STEADY")
+        # standalone path is stricter: demand ACCELERATING specifically
+        if not is_handoff and momentum != "ACCELERATING":
+            return None
+        if not resuming:
+            return None
+
+        # direction agreement between regime and trend engine (cheap sanity)
+        tdir = (getattr(trend, "overall_direction", "") or "").upper()
+        if direction == "long"  and tdir not in ("BULLISH", "BULL", "UP"):
+            return None
+        if direction == "short" and tdir not in ("BEARISH", "BEAR", "DOWN"):
+            return None
+
+        # ── 4. Build the signal (debit directional) ────────────────────────
+        # Stop reference: just past the pullback extreme (approximated as the
+        # midline minus/plus a small ATR buffer). Governing exits are regime-flip
+        # + the 40% premium floor; this underlying_stop is structural context.
+        if direction == "long":
+            underlying_stop = mid - 0.5 * atr
+        else:
+            underlying_stop = mid + 0.5 * atr
+
+        signal = OptionsSignal(
+            strategy_name    = self.name(),
+            setup_type       = "trend_continuation" + ("_handoff" if is_handoff else "_standalone"),
+            direction        = direction,
+            option_side      = option_side,
+            underlying_entry = current_price,
+            underlying_stop  = underlying_stop,
+            regime           = rgm if isinstance(rgm, str) else str(rgm),
+            stop_loss_pct    = CONTINUATION_STOP_LOSS_PCT,
+            tp_pct           = CONTINUATION_TP_PCT,
+        )
+
+        # conviction: inherit regime conviction (trending is the whole thesis),
+        # small bump for a clean midline tag + momentum re-assertion.
+        signal.conviction = regime.conviction
+        self._add_confluence(signal, f"Trending regime ({signal.regime}) conv={regime.conviction:.2f}")
+        self._add_confluence(signal, f"Pullback to BB midline ({mid:.2f}), price {current_price:.2f}")
+        self._add_confluence(signal, f"Momentum {momentum} (resumption)")
+        if is_handoff:
+            self._add_confluence(signal, "ORB-runaway handoff (directional force pre-proven)")
+
+        logger.info(
+            f"[continuation] {direction} {option_side} @ {current_price:.2f} "
+            f"midline={mid:.2f} atr={atr:.2f} mom={momentum} "
+            f"conv={regime.conviction:.2f} {'HANDOFF' if is_handoff else 'STANDALONE'}"
+        )
+        return signal

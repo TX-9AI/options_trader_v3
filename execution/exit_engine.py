@@ -218,7 +218,9 @@ from config import (
     BUTTERFLY_MAX_HOLD_MIN, TRAIL_LOCK_PCT, TRAIL_ACTIVATION_PCT, FVG_MIN_SIZE_PCT,
     THETA_LOOKAHEAD_MIN, RTH_MINUTES, FVG_TRAIL_ARM_PCT, FVG_TRAIL_LOCK_PCT,
     MAX_LOSS_PCT, POST_TARGET_TRAIL_LOCK_PCT, FVG_FLOOR_MAX_LOCK_PCT,
-    USE_5M_FVG_TRAIL, SWEEP_POST_TARGET_TRAIL
+    USE_5M_FVG_TRAIL, SWEEP_POST_TARGET_TRAIL,
+    CONTINUATION_EXHAUST_EXT_ATR, CONTINUATION_EXHAUST_MIN_GAIN,
+    CONTINUATION_EXHAUST_TRAIL_LOCK
 )
 from utils.time_utils import is_hard_close_time, minutes_since, now_utc, fmt_et_short
 
@@ -411,6 +413,7 @@ class ExitEngine:
     def __init__(self, paper_trading: bool = PAPER_TRADING):
         self.paper_trading  = paper_trading
         self._trail_stops:  dict = {}
+        self._exhaust_state: dict = {}   # per-trade {ext, mom} for continuation divergence
         self._trail_active: dict = {}
         self._bos_trackers: dict = {}   # trade_id \u2192 BOSTracker (sweep only)
         self._post_target_trail: dict = {}   # trade_id \u2192 bool (ORB only)
@@ -455,7 +458,9 @@ class ExitEngine:
                  current_premium: float,
                  df_1m: Optional[pd.DataFrame] = None,
                  regime: Optional[str] = None,
-                 df_5m: Optional[pd.DataFrame] = None) -> ExitDecision:
+                 df_5m: Optional[pd.DataFrame] = None,
+                 vol_state=None,
+                 trend=None) -> ExitDecision:
         """
         Strategy-aware exit evaluation.
         Routes to the appropriate exit logic based on strategy_name.
@@ -479,6 +484,10 @@ class ExitEngine:
             return self._evaluate_adopted(record, current_premium)
         elif strategy == "ORBStrategy":
             return self._evaluate_orb(record, current_premium, df_1m, df_5m)
+        elif strategy == "ContinuationStrategy":
+            return self._evaluate_continuation(record, current_premium, df_1m,
+                                               df_5m=df_5m, regime=regime,
+                                               vol_state=vol_state, trend=trend)
         else:
             # SweepReversal and any other directional strategies
             return self._evaluate_sweep(record, current_premium, df_1m, df_5m)
@@ -1123,6 +1132,191 @@ class ExitEngine:
             self._trail_stops[trade_id] = new_trail
 
         return self._trail_stops[trade_id]
+
+    # ─── Continuation (trend-pullback) Exit — EXHAUSTION-BASED ────────────────
+    #
+    # This is where the continuation trade lives or dies. Entry is deliberately a
+    # low bar; the intelligence is here. The move is ridden while it has energy
+    # and cut when it's SPENT — which is a different question than "was I proven
+    # wrong" (that's the regime-flip / 40% floor below). Two exhaustion signals:
+    #
+    #   (1) EXTENSION-FROM-MIDLINE  — price stretched an abnormal distance from
+    #       the BB midline (its mean). Cheap, early, stateless. FIRST TIER:
+    #       tightens the trail hard (protect the stretched gain) but does NOT
+    #       exit — a strong trend can stay extended.
+    #   (2) MOMENTUM DIVERGENCE     — price prints a new run-favorable extreme
+    #       while momentum (5m rate-of-change) is WEAKER than at the prior
+    #       extreme: the move is continuing on fumes. CONFIRMATION: exits.
+    #
+    # COMBINE MODE (v1 = two-stage): extension tightens, divergence exits.
+    #   ── NOTE TO FUTURE-SELF ─────────────────────────────────────────────
+    #   A stricter "mode 3" was discussed and intentionally deferred: require
+    #   BOTH signals to agree before exiting (divergence AND extension), which
+    #   maps closer to how the operator actually trades — you don't bail on
+    #   divergence alone if the move isn't also stretched. v1 ships the safer
+    #   two-stage form (divergence-alone can exit). If you're reading this
+    #   because you're reconsidering exits: the hook is the `_exhausted` combine
+    #   step below — gate the exit on (divergence and extended) instead of
+    #   (divergence) to become mode 3. Left as a code change, not a live flag,
+    #   by the operator's request (they don't expect to touch it).
+    #   ────────────────────────────────────────────────────────────────────
+    #
+    # ENGINE STATE: prefers the live vol_state/trend threaded from main.py (exact
+    # — same midline/momentum the entry judged against). Falls back to values
+    # RECOMPUTED from df_5m when the state isn't available (restart recovery,
+    # adopted positions) so this NEVER raises — it only degrades precision.
+    def _evaluate_continuation(self, record: TradeRecord,
+                               current_premium: float,
+                               df_1m: Optional[pd.DataFrame],
+                               df_5m: Optional[pd.DataFrame] = None,
+                               regime: Optional[str] = None,
+                               vol_state=None,
+                               trend=None) -> ExitDecision:
+        decision   = ExitDecision()
+        trade_id   = record["trade_id"]
+        entry_prem = record["entry_premium"]
+        direction  = record.get("direction", "long")
+
+        pnl_pct = (current_premium - entry_prem) / entry_prem if entry_prem > 0 else 0
+        pnl_usd = (current_premium - entry_prem) * record["contracts"] * CONTRACT_MULTIPLIER
+        decision.current_pnl_pct = pnl_pct
+        decision.current_pnl_usd = pnl_usd
+
+        # 1. HARD CLOSE (session end)
+        if is_hard_close_time():
+            decision.should_exit = True
+            decision.exit_reason = "hard_close_15:45_ET"
+            return decision
+
+        # 2. REGIME-FLIP EXIT — the primary smart stop. The trade is DEFINED by
+        #    the trend; if regime is no longer trending in our direction, the
+        #    thesis is dead regardless of P&L. (regime is a string here.)
+        rgm = (regime or "").upper()
+        still_trending = (
+            (direction == "long"  and "TRENDING_BULL" in rgm) or
+            (direction == "short" and "TRENDING_BEAR" in rgm)
+        )
+        if regime is not None and not still_trending:
+            decision.should_exit = True
+            decision.exit_reason = f"regime_flip ({regime})"
+            return decision
+
+        # 3. HARD FLOOR — 40% premium loss (disaster backstop beneath regime-flip)
+        stop_prem = record.get("stop_premium", 0.0) or (entry_prem * (1 - MAX_LOSS_PCT))
+        if stop_prem > 0 and current_premium <= stop_prem:
+            decision.should_exit = True
+            floor_pct = 1 - (stop_prem / entry_prem) if entry_prem > 0 else MAX_LOSS_PCT
+            decision.exit_reason = f"max_loss_floor_{int(floor_pct*100)}pct"
+            return decision
+
+        # ── EXHAUSTION SIGNALS ────────────────────────────────────────────────
+        underlying = self._underlying_from_5m(df_5m)   # last close, or None
+
+        # (1) EXTENSION-FROM-MIDLINE
+        midline, atr = self._midline_atr(vol_state, df_5m)
+        extended = False
+        if underlying is not None and midline is not None and atr and atr > 0:
+            stretch_atr = abs(underlying - midline) / atr
+            extended = stretch_atr >= CONTINUATION_EXHAUST_EXT_ATR
+
+        # (2) MOMENTUM DIVERGENCE — new favorable price extreme on weaker momentum
+        diverging = self._momentum_divergence(trade_id, record, underlying,
+                                              direction, trend, df_5m)
+
+        # ── COMBINE (v1 two-stage) ────────────────────────────────────────────
+        # Only manage exhaustion once the trade has a real gain to protect (mirror
+        # the runner philosophy — don't exhaust-exit a trade that hasn't worked).
+        if pnl_pct >= CONTINUATION_EXHAUST_MIN_GAIN:
+            if diverging:
+                # CONFIRMATION → exit. (mode-3 hook: `and extended`)
+                decision.should_exit = True
+                decision.exit_reason = "exhaustion_divergence" + ("_extended" if extended else "")
+                return decision
+            if extended:
+                # FIRST TIER → tighten the trail hard, keep riding.
+                new_trail = current_premium * CONTINUATION_EXHAUST_TRAIL_LOCK
+                cur = self._trail_stops.get(trade_id, entry_prem)
+                if new_trail > cur:
+                    self._trail_stops[trade_id] = new_trail
+                    decision.new_trail_stop = new_trail
+
+        # 4. STANDARD RUNNER TRAIL — arms on the resumption gain, then owns the
+        #    trade (this is also what silences theta via the v1.5 trail ceiling).
+        trail_stop = self._update_fvg_trail(trade_id, current_premium, record,
+                                            df_1m, direction)
+        if trail_stop is not None:
+            decision.new_trail_stop = max(decision.new_trail_stop or 0.0, trail_stop)
+            if current_premium <= trail_stop:
+                decision.should_exit = True
+                decision.exit_reason = "continuation_trail"
+                return decision
+
+        return decision
+
+    # ─── Exhaustion helpers (self-contained; live-state-preferred) ────────────
+    def _underlying_from_5m(self, df_5m: Optional[pd.DataFrame]) -> Optional[float]:
+        if df_5m is None or len(df_5m) == 0:
+            return None
+        try:
+            return float(df_5m["close"].iloc[-1])
+        except Exception:
+            return None
+
+    def _midline_atr(self, vol_state, df_5m):
+        """Prefer live vol_state; else recompute midline (20-SMA 5m close) + ATR."""
+        midline = None
+        atr = None
+        if vol_state is not None:
+            midline = getattr(vol_state, "bb_middle", None) or None
+            atr = getattr(vol_state, "atr_current", None) or None
+        if (midline is None or atr is None) and df_5m is not None and len(df_5m) >= 20:
+            try:
+                midline = float(df_5m["close"].tail(20).mean())
+                tr = (df_5m["high"] - df_5m["low"]).tail(14)
+                atr = float(tr.mean())
+            except Exception:
+                pass
+        return midline, atr
+
+    def _momentum_divergence(self, trade_id, record, underlying, direction,
+                             trend, df_5m) -> bool:
+        """
+        True when price makes a NEW run-favorable extreme but momentum is weaker
+        than it was at the prior extreme. Momentum = live trend reading if given,
+        else 5m rate-of-change. State (last extreme + its momentum) is carried in
+        self._exhaust_state per trade_id.
+        """
+        if underlying is None:
+            return False
+        # momentum reading: prefer a numeric from df_5m ROC (comparable across
+        # extremes); the live `trend` object gives a categorical we can't diff.
+        mom = None
+        if df_5m is not None and len(df_5m) >= 6:
+            try:
+                c = df_5m["close"]
+                mom = float(c.iloc[-1] - c.iloc[-6])  # 5-bar ROC
+            except Exception:
+                mom = None
+        if mom is None:
+            return False
+
+        st = self._exhaust_state.setdefault(trade_id, {"ext": None, "mom": None})
+        favorable_new_extreme = (
+            st["ext"] is None or
+            (direction == "long"  and underlying > st["ext"]) or
+            (direction == "short" and underlying < st["ext"])
+        )
+        diverged = False
+        if favorable_new_extreme:
+            # new extreme: does momentum confirm or diverge vs the prior extreme?
+            if st["mom"] is not None:
+                if direction == "long":
+                    diverged = mom < st["mom"] and mom <= 0
+                else:
+                    diverged = mom > st["mom"] and mom >= 0
+            st["ext"] = underlying
+            st["mom"] = mom
+        return diverged
 
     def place_exit_order(self, record: TradeRecord, reason: str,
                          mark_price: Optional[float] = None) -> FillResult:

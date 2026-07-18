@@ -525,3 +525,10 @@ class SessionConfig:
     risk_per_trade_usd: float   = 200.0
     notes:              str     = ""
     confirmed_at:       Optional[str] = None
+
+# ─── CONTINUATION (trend-pullback) exhaustion exit ────────────────────────────
+# Exhaustion detection for the trend-continuation runner. Extension tightens the
+# trail; momentum divergence exits. All env-tunable for paper-phase calibration.
+CONTINUATION_EXHAUST_EXT_ATR    = float(os.environ.get("OT_CONT_EXT_ATR", "2.0"))   # ATRs from midline = "stretched"
+CONTINUATION_EXHAUST_MIN_GAIN   = float(os.environ.get("OT_CONT_MIN_GAIN", "0.15")) # only manage exhaustion past +15%
+CONTINUATION_EXHAUST_TRAIL_LOCK = float(os.environ.get("OT_CONT_TRAIL_LOCK", "0.85"))# extension tightens trail to 85% of premium

@@ -161,7 +161,8 @@ class PositionManager:
                               df_1m: Optional[pd.DataFrame] = None,
                               chain=None,
                               regime: Optional[str] = None,
-                              df_5m: Optional[pd.DataFrame] = None) -> bool:
+                              df_5m: Optional[pd.DataFrame] = None,
+                              vol_state=None, trend=None) -> bool:
         """Manage every open position this tick. Normally one; for a legged
         condor there can be two verticals open at once, each managed
         independently (a tested side exits on its own; the untested side
@@ -173,7 +174,7 @@ class PositionManager:
 
         still_open: List[TradeRecord] = []
         for record in list(self._open_records):
-            if self._manage_one(record, df_1m, chain, regime, df_5m):
+            if self._manage_one(record, df_1m, chain, regime, df_5m, vol_state, trend):
                 still_open.append(record)
         self._open_records = still_open
         return len(self._open_records) > 0
@@ -181,7 +182,8 @@ class PositionManager:
     def _manage_one(self, record: TradeRecord,
                     df_1m: Optional[pd.DataFrame],
                     chain, regime: Optional[str],
-                    df_5m: Optional[pd.DataFrame] = None) -> bool:
+                    df_5m: Optional[pd.DataFrame] = None,
+                    vol_state=None, trend=None) -> bool:
         """Manage one record. Returns True if it should remain open."""
         trade_id = record["trade_id"]
 
@@ -196,7 +198,8 @@ class PositionManager:
 
         exit_eng = get_exit_engine(self.paper_trading)
         decision = exit_eng.evaluate(record, current_premium, df_1m=df_1m,
-                                     regime=regime, df_5m=df_5m)
+                                     regime=regime, df_5m=df_5m,
+                                     vol_state=vol_state, trend=trend)
 
         if decision.new_trail_stop is not None:
             # v3.1: trail persists in its OWN column. stop_premium is the

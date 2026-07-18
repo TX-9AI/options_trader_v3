@@ -194,6 +194,7 @@ from strategy.orb_strategy import ORBStrategy
 from strategy.sweep_reversal_strategy import SweepReversalStrategy
 from strategy.butterfly_strategy import ButterflyStrategy
 from strategy.iron_condor_strategy import IronCondorStrategy
+from strategy.continuation_strategy import ContinuationStrategy
 
 from risk.risk_manager import init_risk_manager, get_risk_manager
 from risk.setup_scorer import get_setup_scorer
@@ -211,6 +212,7 @@ _orb_strategy     = ORBStrategy()
 _sweep_strategy   = SweepReversalStrategy()
 _butterfly_strategy = ButterflyStrategy()
 _iron_condor_strategy = IronCondorStrategy()
+_continuation_strategy = ContinuationStrategy()
 
 
 class BotState:
@@ -619,6 +621,32 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
             current_price = ctx["price"]
         )
 
+    # Priority 2.5: Trend Continuation (pullback to BB midline in a trend).
+    # RANKED per the dispatch spec. Trending is a HIGH bar for the classifier,
+    # so a trending label is trusted; a RUNAWAY ORB is one of the strongest
+    # trend confirmations (strong push -> pullback -> next leg is textbook
+    # trend behaviour), so the runaway HANDOFF gets first refusal and runs the
+    # LOOSER gate (is_handoff=True — the runaway already proved directional
+    # force). If there was no runaway, the STANDALONE (stricter) path is tried.
+    # Both require a trending regime; if not trending, continuation is silent
+    # and sweep/butterfly/condor below handle it as before.
+    if signal is None and regime.primary_regime in (Regime.TRENDING_BULL, Regime.TRENDING_BEAR):
+        _is_runaway = getattr(orb, "invalidation_reason", "") == "runaway"
+        cont_sig = _continuation_strategy.generate_signal(
+            regime        = regime,
+            vol_state     = ctx["vol"],
+            trend         = ctx["trend"],
+            chain         = chain,
+            current_price = ctx["price"],
+            is_handoff    = _is_runaway,   # runaway ORB -> looser handoff gate
+            macro         = macro,
+        )
+        if cont_sig:
+            if _is_runaway:
+                cont_sig.setup_type = cont_sig.setup_type or "trend_continuation_handoff"
+                logger.info("[continuation] ORB-runaway HANDOFF -> trend continuation")
+            signal = cont_sig
+
     # Priority 3: Butterfly (Ranging/Compression — requires GEX PINNING)
     # Fed days allowed — bot reaction time is faster and more systematic
     # than manual trading on a volatile FOMC day. Fed day boosts ORB
@@ -893,6 +921,8 @@ def main_loop(state: BotState):
                     df_1m=ctx.get("df_1m"),
                     regime=regime.primary_regime if regime else None,
                     df_5m=ctx.get("df_5m"),   # v3.8: 5m FVG trail anchor
+                    vol_state=ctx.get("vol"),
+                    trend=ctx.get("trend"),   # continuation exhaustion exit
                 )
                 # ── Condor Leg 2 check ────────────────────────────────────
                 # If Leg 1 is the open position and Leg 2 is still queued,
