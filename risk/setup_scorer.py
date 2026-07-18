@@ -1,5 +1,14 @@
 """
 risk/setup_scorer.py — Scores and grades options trade signals A/B.
+v1.3 — 2026-07-18 — SIGNAL JOURNAL (ROADMAP Phase 3.1 instrumentation, log-only):
+        every scored signal — including below-B REJECTS — emits one `scored`
+        event to analysis/signal_journal with the full breakdown, thresholds,
+        regime conviction, quote context (bid/ask/spread/IV at signal time)
+        and vol/macro snapshot. Zero behavior change: the journal call is
+        wrapped so any failure degrades to a missing log line, never an
+        exception; grading logic is untouched. This is the perishable data
+        the Phase-3 conviction-bar buckets need — "a gate you can't
+        counterfactual is a gate you can't calibrate."
 v1.2 — 2026-07-15 — BRIEF NUDGE: a signed post-sum adjustment (cap ±0.05) from
         the pre-market move-probability brief. This box reads its own line from
         ~/brief_flags.json ({symbol, strength 0..1, date}); the nudge is
@@ -45,6 +54,13 @@ try:
 except Exception:
     BRIEF_CONVICTION_WEIGHT = 0.05
 from utils.time_utils import current_session_label
+
+# Signal journal (v1.3) — log-only instrumentation. Guarded import: if the
+# module is absent or broken the scorer runs exactly as before.
+try:
+    from analysis import signal_journal as _journal
+except Exception:
+    _journal = None
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +274,9 @@ class SetupScorer:
                 f"(need >= {grade_b:.2f}) strategy={name} "
                 f"breakdown={breakdown}"
             )
+            self._journal_scored(signal, regime, vol_state, macro,
+                                 total, "REJECT", breakdown,
+                                 grade_a, grade_b, session)
             return None
 
         multiplier = GRADE_SIZE_MULTIPLIER[grade]
@@ -274,7 +293,34 @@ class SetupScorer:
             f"strategy={name} mult={multiplier}x "
             f"breakdown={breakdown}"
         )
+        self._journal_scored(signal, regime, vol_state, macro,
+                             total, grade, breakdown,
+                             grade_a, grade_b, session)
         return result
+
+    @staticmethod
+    def _journal_scored(signal, regime, vol_state, macro,
+                        total, grade, breakdown, grade_a, grade_b, session):
+        """v1.3 — one `scored` event per scored signal, REJECTs included.
+        Log-only; every failure is swallowed inside signal_journal."""
+        if _journal is None:
+            return
+        try:
+            _journal.journal(
+                "scored",
+                signal   = _journal.signal_ctx(signal),
+                regime   = _journal.regime_ctx(regime),
+                vol      = _journal.vol_ctx(vol_state),
+                macro    = _journal.macro_ctx(macro),
+                score    = {"total": round(float(total), 4),
+                            "grade": grade,
+                            "grade_a_bar": grade_a,
+                            "grade_b_bar": grade_b,
+                            "breakdown": breakdown,
+                            "session": session},
+            )
+        except Exception:
+            pass
 
     def _orb_quality(self, signal: OptionsSignal,
                       regime: RegimeState,

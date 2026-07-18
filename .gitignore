@@ -52,4 +52,5 @@ ohlc/
 
 # Shadow observer output — generated at runtime (in-project data dir)
 data/shadow/
+data/signal_journal/
 *.patch

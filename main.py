@@ -1,5 +1,17 @@
 """
-main.py — options_trader v3.8
+main.py — options_trader v3.9
+v3.9 — 2026-07-18 — SIGNAL JOURNAL DISPOSITIONS (ROADMAP Phase 3.1, log-only,
+        zero behavior change): attempt_new_entry now emits what happened to
+        every signal AFTER scoring — `disposition` events for fired /
+        sizing_rejected / invalid_signal (below-B REJECTs are already emitted
+        by setup_scorer v1.3's `scored` event) — plus `condor_plan` /
+        `condor_leg` events carrying regime conviction at decision time (the
+        condor bypasses the score path, so without these its conviction bar
+        could never be calibrated). ORB dispositions carry retest_depth_px
+        (orb_engine v3.7, defect G) and its ATR-relative form. All emissions
+        route through analysis/signal_journal (guarded import, every failure
+        swallowed) — the trading loop is byte-identical if the journal is
+        absent or broken.
 v3.8 — 2026-07-15 — pass df_5m through to position management so exit trails
         anchor to 5-minute FVGs (exit_engine v3.8 runner refinements).
 v3.7 — 2026-07-15 — CONDOR ENTRY FILL-CONFIRMATION (audit defect O, part 1).
@@ -189,6 +201,12 @@ from analysis.structure_analyzer import get_structure_analyzer
 from analysis.liquidity_mapper import get_liquidity_mapper
 from analysis.regime_classifier import get_regime_classifier, RegimeState, Regime
 from analysis.orb_engine import get_orb_engine, ORBState
+
+# v3.9 — signal journal (log-only). Guarded: the loop runs identically without it.
+try:
+    from analysis import signal_journal as _sigj
+except Exception:
+    _sigj = None
 
 from strategy.orb_strategy import ORBStrategy
 from strategy.sweep_reversal_strategy import SweepReversalStrategy
@@ -686,6 +704,16 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
                     f"Condor plan active — Leg 1={plan.leg1_side.upper()} "
                     f"trigger@{plan.call_trigger_price if plan.leg1_side == 'call' else plan.put_trigger_price:.0f}"
                 )
+                if _sigj is not None:
+                    try:
+                        _sigj.journal("condor_plan",
+                                      regime=_sigj.regime_ctx(regime),
+                                      plan={"leg1_side": plan.leg1_side,
+                                            "call_trigger": round(plan.call_trigger_price, 2),
+                                            "put_trigger": round(plan.put_trigger_price, 2),
+                                            "underlying": round(ctx["price"], 2)})
+                    except Exception:
+                        pass
     else:
         # Active plan: check if a leg should fire this tick
         leg_signal = _iron_condor_strategy.check_leg_triggers(
@@ -695,7 +723,16 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
         )
         if leg_signal is not None:
             # Route directly to entry — bypasses normal signal/score path
-            # since condor legs are credit spreads with their own P&L math
+            # since condor legs are credit spreads with their own P&L math.
+            # v3.9: journal conviction at fire time — the condor's Phase-3
+            # bar (provisional 0.65) is uncalibratable without it.
+            if _sigj is not None:
+                try:
+                    _sigj.journal("condor_leg",
+                                  regime=_sigj.regime_ctx(regime),
+                                  leg={"underlying": round(ctx["price"], 2)})
+                except Exception:
+                    pass
             _execute_condor_leg(leg_signal, state)
 
     if signal is None:
@@ -704,6 +741,13 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
 
     if not signal.is_valid:
         logger.warning(f"Invalid signal from {signal.strategy_name}")
+        if _sigj is not None:
+            try:
+                _sigj.journal("disposition", outcome="invalid_signal",
+                              signal=_sigj.signal_ctx(signal),
+                              regime=_sigj.regime_ctx(regime))
+            except Exception:
+                pass
         return
 
     # ── Score and size ─────────────────────────────────────────────────────────
@@ -732,6 +776,16 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
 
     if not sizing.allowed:
         logger.info(f"Sizing rejected: {sizing.reject_reason}")
+        if _sigj is not None:
+            try:
+                _sigj.journal("disposition", outcome="sizing_rejected",
+                              reason=str(sizing.reject_reason),
+                              signal=_sigj.signal_ctx(signal),
+                              regime=_sigj.regime_ctx(regime),
+                              score={"grade": score.grade,
+                                     "total": score.score})
+            except Exception:
+                pass
         return
 
     # Populate contract count in signal
@@ -749,6 +803,25 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
             f"contracts={sizing.contracts} "
             f"total=${sizing.total_cost:.2f}"
         )
+        if _sigj is not None:
+            try:
+                _orb_ctx = None
+                if signal.strategy_name == "ORBStrategy":
+                    _depth = float(getattr(ctx["orb"], "retest_depth_px", 0.0))
+                    _atr   = float(getattr(ctx["vol"], "atr_current", 0.0))
+                    _orb_ctx = {"retest_depth_px": round(_depth, 4),
+                                "retest_depth_atr": (round(_depth / _atr, 4)
+                                                     if _atr > 0 else None)}
+                _sigj.journal("disposition", outcome="fired",
+                              signal=_sigj.signal_ctx(signal),
+                              regime=_sigj.regime_ctx(regime),
+                              score={"grade": score.grade,
+                                     "total": score.score},
+                              fill={"contracts": sizing.contracts,
+                                    "total_cost": round(sizing.total_cost, 2)},
+                              orb=_orb_ctx)
+            except Exception:
+                pass
 
 
 def handle_session_reset(state: BotState):

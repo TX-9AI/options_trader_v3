@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# shadow_devtools.sh v1.0 — operator menu for the SHADOW subsystem (QQQ-TEST).
-# Run from the repo root:  cd ~/options-trader && ./shadow_devtools.sh
+# shadow_devtools.sh v1.1 — operator menu for the SHADOW subsystem (QQQ-TEST).
+# Run from anywhere: the script self-locates its repo (defect D remainder —
+# the v1.0 hardcoded $HOME/options-trader hard-exited on any other checkout,
+# e.g. the control box's ~/options-trader-v3). Mirrors observer.py's
+# REPO_ROOT derivation so script and service always agree on the tree.
 # Observe-only subsystem: nothing here can place a trade.
 set -uo pipefail
 
-REPO="$HOME/options-trader"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY="$REPO/venv/bin/python"
 OBS="shadow-observer.service"
 DROPIN_DIR="/etc/systemd/system/${OBS}.d"

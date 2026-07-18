@@ -1,5 +1,20 @@
 """
 analysis/orb_engine.py — Opening Range Breakout state machine.
+v3.7 — 2026-07-18 — DEFECT G MEASUREMENT (log-only, zero gating change): the
+        near-miss retest is now MEASURED, never gated, exactly as the defect
+        prescribes. (1) ORBData.retest_depth_px records the confirming retest
+        candle's penetration into the range (long: orb_high - low; short:
+        high - orb_low) so the fired setup carries its own retest depth.
+        (2) every 1-min candle examined while ARMED emits a `retest_check`
+        event to analysis/signal_journal with the raw px depth (NEGATIVE =
+        near-miss: the wick approached but never entered) + orb_width +
+        outcome, building the depth distribution the Phase-3 ROI buckets
+        need before anyone decides whether a "B-grade almost-retest" is
+        worth grading. Depth is logged in PX and divided by tape ATR offline
+        (ATR-relative per defect G — never a percentage; percentages scale
+        into holes on high-priced instruments). Confirm/invalidate logic is
+        byte-identical; the journal import is guarded and every emission is
+        swallowed on failure.
 v3.6 — 2026-07-13 — defect H rename only: NO_ENTRY_AFTER_ET -> ORB_NO_ENTRY_AFTER_ET
         (import + the past_orb_cutoff test). Same constant, same (11, 0) value,
         same behaviour. NOTE the two cutoffs in this file are DIFFERENT rules and
@@ -181,6 +196,12 @@ from config import (
     ORB_NO_ENTRY_AFTER_ET, ORB_FIRES_REGARDLESS_OF_REGIME
 )
 
+# v3.7 — defect-G measurement. Guarded: engine runs identically without it.
+try:
+    from analysis.signal_journal import journal as _sig_journal
+except Exception:
+    _sig_journal = None
+
 logger = logging.getLogger(__name__)
 
 ORB_RANGE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orb_range.json")
@@ -216,6 +237,10 @@ class ORBData:
     attempt_number:     int   = 0
     entries_expired:    bool  = False
     invalidation_reason: str  = ""   # 'runaway' | 'close_inside' | 'timeout'
+    retest_depth_px:    float = 0.0  # v3.7 (defect G): confirming retest wick's
+                                     # penetration into the range, in PX
+                                     # (long: orb_high - low; short: high - orb_low).
+                                     # Measured only — gates nothing.
 
 
 class ORBEngine:
@@ -504,6 +529,25 @@ class ORBEngine:
         body_high = max(open_, close)
         body_low  = min(open_, close)
 
+        # v3.7 (defect G) — MEASURE the retest depth on every examined candle,
+        # near-misses included (negative depth = wick approached but never
+        # entered the range). Log-only; gates nothing; failures swallowed.
+        if _sig_journal is not None:
+            try:
+                depth_px = ((d.orb_high - low) if d.break_direction == "long"
+                            else (high - d.orb_low))
+                _sig_journal("retest_check", orb={
+                    "direction":        d.break_direction,
+                    "attempt":          d.attempt_number,
+                    "bars_since_break": d.bars_since_break,
+                    "retest_depth_px":  round(depth_px, 4),
+                    "orb_width":        round(d.orb_width, 4),
+                    "candle": {"open": open_, "high": high,
+                               "low": low, "close": close},
+                })
+            except Exception:
+                pass
+
         if d.break_direction == "long":
             # (a) Runaway breakout — ran to the 50% TP with no retest → invalidate.
             # This is the setup that most favors a sweep reversal instead.
@@ -529,8 +573,9 @@ class ORBEngine:
                 if regime == "SWEEP_REVERSAL" and not ORB_FIRES_REGARDLESS_OF_REGIME:
                     logger.debug("ORB retest met but regime=SWEEP_REVERSAL — deferring to sweep")
                     return
-                d.state        = ORBState.OPEN_LONG
-                d.confirmed_at = str(now_et())
+                d.state           = ORBState.OPEN_LONG
+                d.confirmed_at    = str(now_et())
+                d.retest_depth_px = round(d.orb_high - low, 4)   # v3.7 defect G
                 logger.info(f"ORB CONFIRMED LONG (attempt #{d.attempt_number}): wick={low:.2f} body_low={body_low:.2f}")
             # (b) Retrace into range — 1m candle closes back inside the ORB range.
             elif close < d.orb_high:
@@ -553,8 +598,9 @@ class ORBEngine:
                 if regime == "SWEEP_REVERSAL" and not ORB_FIRES_REGARDLESS_OF_REGIME:
                     logger.debug("ORB retest met but regime=SWEEP_REVERSAL — deferring to sweep")
                     return
-                d.state        = ORBState.OPEN_SHORT
-                d.confirmed_at = str(now_et())
+                d.state           = ORBState.OPEN_SHORT
+                d.confirmed_at    = str(now_et())
+                d.retest_depth_px = round(high - d.orb_low, 4)   # v3.7 defect G
                 logger.info(f"ORB CONFIRMED SHORT (attempt #{d.attempt_number}): wick={high:.2f} body_high={body_high:.2f}")
             # (b) Retrace into range — 1m candle closes back inside the ORB range.
             elif close > d.orb_low:

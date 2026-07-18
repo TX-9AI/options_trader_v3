@@ -37,6 +37,48 @@ v2 gating.
 
 ---
 
+## 📦 DAY-ZERO ROLLOUT — 2026-07-18 build (deploy state)
+
+Monday 2026-07-18 is **day zero** on a materially changed engine, and the start of the
+~2-week hands-off baseline window (regime labels trusted, L2 weights frozen, condor behavior
+confirmed) that gates the pitchfork. What lands and how:
+
+**Already live on the fleet (Fri 2026-07-17):**
+- `trend_engine` v3.1 — intraday-primary tf_weights, the dead-4h TRENDING fix (confirmed via
+  journal: AVGO threw TRENDING_BEAR conviction 0.52).
+
+**Landing this deploy pass (fleet flat, one `devtools` option-23 FULL wake→bake→restart→STOP,
+catching the 19 asleep boxes):**
+- `volatility_engine` VWAP zero-volume guard — SPX NaN→"BELOW" false-signal fix (commit `cf5def8`).
+- Iron condor premium-rich band-approach triggers + roll-gets-first-refusal (commit `792d802`).
+- Trend Continuation strategy — NEW, paper-first on all boxes from Monday (the 2-week baseline is
+  its proving ground).
+- Signal journal instrumentation (v1.0 module + `setup_scorer` v1.3 + `main.py` v3.9 +
+  `orb_engine` v3.7) — **log-only, zero behavior change.**
+
+**Deploy discipline:** full-file drop-ins, never `git apply` patches (patch desyncs against
+uncertain server versions burned ~a dozen turns). **The deploy gate is
+`python3 -c "import ast; ast.parse(open('<f>').read())"` on the box** — NOT pytest (wrong-venv /
+no-pytest on boxes burned this repeatedly). After the pull, `bash check_versions.sh | grep
+MISSING` must print nothing; the canary set now fingerprints every day-zero change plus the
+instrumentation, so a stale sync surfaces immediately. **Parity invariant:** the same engines
+must reach the control checkout (`~/options-trader-v3`) so the replay harness scores Monday's
+tape with the bot that traded it — pull + `check_versions.sh` on control right after the fleet.
+
+**Path note:** the 29 boxes deploy to `~/options-trader` (no `-v3`); the control server checkout
+is `~/options-trader-v3`.
+
+**Deliberately NOT in this pass:** the offline-replay bookmark (defect S — build and prove inert
+on the tester first); observer fleet deployment (one QQQ-TEST box at stage 1 is the whole ask);
+shadow-observer service-unit templatizing (defect D service-half); any gate change. Monday's
+engine *decisions* are exactly what was approved Friday.
+
+**The Monday habit:** after the EOD conductor runs on control, `cd ~/day_trader_pro &&
+./label_day.sh` to tag the session's trend/sweep/pin/breakout symbols — this is what fills the
+Layer-1 Tier-B tape gaps (see `docs/REPLAY_VALIDATION.md` and `ROADMAP.md` L1.7).
+
+---
+
 ## Architecture
 
 ### Fleet topology — and the parity invariant
@@ -76,6 +118,35 @@ stale numbers driving a decision.
 The purge is real and verified: **zero `yfinance` imports repo-wide.** It is the load-bearing
 prerequisite for everything else — calibrating conviction against ROI on a feed the bot
 doesn't trade is calibrating a board it never plays on.
+
+### Signal journal — Phase-3.1 instrumentation (shipped, v1.0, 2026-07-18)
+
+`analysis/signal_journal.py` is a **log-only** subsystem that makes the *perishable* part of
+every trading decision durable. The 1-min OHLC tape can be replayed forever; what evaporates at
+16:00 is what the option chain looked like at signal time — premium, bid/ask spread, IV, greeks
+— and which gate disposed of each signal. Without it, every session between now and the Phase-3
+calibration campaign is tape that can never *become* calibration data. ROADMAP Phase 3.1 states
+the rule: *"a gate you can't counterfactual is a gate you can't calibrate."*
+
+It writes append-only JSONL to `data/signal_journal/<YYYY-MM-DD>/<SYMBOL>.jsonl` (gitignored,
+self-locating repo root like the shadow observer). Event vocabulary:
+
+| event | emitted by | carries |
+|---|---|---|
+| `scored` | `setup_scorer` v1.3 | every scored signal **including below-B REJECTs** — grade, total, both thresholds, full breakdown, regime conviction, and the signal's quote context (bid/ask/mark/spread/IV/greeks) |
+| `disposition` | `main.py` v3.9 | what happened after scoring: `fired` / `sizing_rejected` / `invalid_signal`; ORB dispositions carry `retest_depth_px` + its ATR-relative form |
+| `retest_check` | `orb_engine` v3.7 | per-armed-candle retest penetration depth in PX (**negative = near-miss**) + `orb_width` — the defect-G distribution |
+| `condor_plan` / `condor_leg` | `main.py` v3.9 | regime conviction at condor decision/fire time — the condor bypasses the score path, so without these its Phase-3 bar could never be calibrated |
+
+**Design guarantee:** every emission is wrapped so any failure (full disk, bad payload,
+permissions) degrades to a missing log line, never a raised exception. The trading loop is
+byte-identical whether the journal is present, absent, or broken. It imports nothing from
+`execution/`, `risk/`, `strategy/`, or `notifications/`, never opens `trades.db`, and places no
+orders. Join key across events: `ts_et` + symbol (one signal per tick, single-threaded per box).
+
+Collection: journal files ride `snapshot.sh` today; an EOD-conductor collection phase will be
+added when volume justifies it — **deliberately not wired into the conductor chain yet**, which
+is finally flawless and stays untouched until any addition is proven inert on the tester.
 
 ---
 
@@ -556,14 +627,15 @@ code change).
 - `.gitignore` had no `data/shadow/` rule (the archived copy did). Added — without it the
   observer's runtime jsonl shows as untracked on every box.
 
-**⚠️ Still open — path mismatch, not yet fixed.** `shadow_devtools.sh` hardcodes
-`REPO="$HOME/options-trader"` and hard-exits if that `cd` fails; `deploy/shadow-observer.service`
-sets `WorkingDirectory=/home/ubuntu/options-trader`. At least one box deploys to
-**`~/options-trader-v3`**, where both are wrong: the devtools script exits immediately and the
-observer unit will not start. Same class as the installer repo-pointer bug. Fix is to self-locate
-(`REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`, mirroring `observer.py:61`) and
-templatize `WorkingDirectory`/`ExecStart` — **pending confirmation of the fleet's canonical deploy
-path** (`systemctl cat optionsbot.service | grep WorkingDirectory`).
+**⚠️ Half resolved 2026-07-18 — script fixed, service half still open.**
+`shadow_devtools.sh` **v1.1** now self-locates (`REPO="$(cd "$(dirname
+"${BASH_SOURCE[0]}")" && pwd)"`, mirroring `observer.py:61`) — it runs from any checkout,
+including the control box's `~/options-trader-v3`. **Still open:**
+`deploy/shadow-observer.service` hardcodes `WorkingDirectory`/`ExecStart` to
+`/home/ubuntu/options-trader`. That matches the 29 boxes' canonical path, so a QQQ-TEST
+deployment works today as-is; templatizing the unit (sed the path at install time, like
+`setup_ec2.sh` does for `optionsbot.service`) remains the durable fix before any
+non-standard-path deployment. Same class as the installer repo-pointer bug.
 
 ### E. `VWAP_FILTER_ACTIVE` — a hard gate that was never built
 Marked `UNWIRED`. Genesis constant: present at the initial commit, never referenced, **mentioned
@@ -590,14 +662,18 @@ Marked `UNWIRED`. Same genesis story, same changelog silence. No RRR floor exist
 ORB's RRR is *structural* (stop = impulsive origin, target = 100% of range width), so it varies
 per setup and is currently **ungated**.
 
-### G. The near-miss retest is unmeasured
+### G. 🔄 MEASUREMENT SHIPPED 2026-07-18 — the near-miss retest is now logged (not yet graded)
 The removed grace band was *intended* to admit a "B-grade almost-retest" (the wick approaches the
 range but doesn't enter). **The code never did that** — the same condition's first clause already
-required the wick to enter, so the near-miss never fired. If it is worth grading, it must be
-**measured, not gated**: log `retest_depth = (orb_high − candle_low) / ATR` on every setup
-(negative = near-miss), feed it to `orb_quality`, and let the Phase-3 ROI buckets decide.
-**ATR-relative, never a percentage** — percentages scale into holes on high-priced instruments,
-which is the root cause of every tolerance bug this file has had.
+required the wick to enter, so the near-miss never fired. The defect prescribed: if it is worth
+grading, **measure it, don't gate it.** Done as of `orb_engine` v3.7 — every armed 1-min candle
+emits a `retest_check` event to `analysis/signal_journal` carrying the penetration depth in PX
+(**negative = near-miss**, wick approached but never entered) plus `orb_width`, and the confirming
+candle records `ORBData.retest_depth_px`. Depth is logged in PX and divided by tape ATR **offline**
+(ATR-relative per this defect — never a percentage; percentages scale into holes on high-priced
+instruments, the root cause of every tolerance bug this file has had). **Still open:** whether to
+feed `retest_depth` into `orb_quality` at all — that decision belongs to the Phase-3 ROI buckets
+once the depth distribution has accumulated. The measurement gates nothing today.
 
 ### H. ✅ RESOLVED 2026-07-13 — Two "no entry after" times in two files
 `config.NO_ENTRY_AFTER_ET = (11, 0)` (ORB-only) vs `time_utils.NO_ENTRY = dtime(14, 0)`
@@ -736,6 +812,26 @@ spread crossing on entry and buys through the mark by
 optimistic estimate of live — materially so on wide SPX spreads. Consider
 nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
 
+### S. Offline replay is HTF-starved — the diary under-reports TRENDING by construction
+The daily regime replay (`validate_regime.sh run_date` → `tests/replay_confluence.py`)
+feeds the harness **one day-folder at a time**, so the 1h/1d timeframes never accumulate
+enough bars to clear their EMA warmups: `trend_engine` returns NEUTRAL on the starved
+timeframes and the vote dilutes — the exact mechanism behind the 0-TRENDING-in-34,925-ticks
+finding (2026-07-16), *partially* addressed by trend v3.1's reweighting but structurally
+present in every diary row scored on single-day tape. **Live boxes are unaffected**
+(feed_store.db carries weeks of depth — why live trend detection works). Consequence:
+diary baseline rows are trend-blind until fixed, and the Tier-B TRENDING acceptance row
+cannot be honestly closed through the daily replay even once a real trend day is on tape.
+**Fix = the BOOKMARK:** persist a rolling ~15-session window of **bars** per symbol
+(bars, not engine state — the engines are stateless pure functions of the dataframes
+passed in, so no serialization/drift risk), load+append+roll each EOD run, score today
+with warm depth. Scores only ONE day per run (avoids the abandoned seed-builder's
+per-bar full-stack slowness). Build and prove on the TESTER against copies of real
+`ohlc/<date>/` folders **before** grafting onto `validate_regime.sh` — the EOD conductor
+chain is finally flawless and stays untouched until the bookmark is proven inert.
+Mitigation meanwhile: `regime_backfill --rebuild` re-scores all dated tape once the
+bookmark lands, so no diary row is permanently lost — they are just wrong until rebuilt.
+
 ---
 
 ## File structure — every file, and what it currently does
@@ -746,7 +842,7 @@ nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
 
 | File | Purpose |
 |---|---|
-| `main.py` ✅ | **v3.8.** The bot. 15s loop: analyze → classify regime → dispatch strategy → score → size → enter; manages open positions, runs the BWB roll check, enforces the daily-loss halt, writes `orb_state.json` each tick. Holds the `UNKNOWN` hard gate and the ORB un-gate exception. Condor legs log `abs(short-strike delta)` as `setup_score` (calibration waypoint; see Iron Condor). **v3.7: live condor legs book ONLY broker-confirmed fills (`order_confirm`); v3.6: phantom P&L recovery + 10-min reconcile cadence with 15:45/15:50/15:57 wind-down sweeps; v3.8: threads `df_5m` into position management for the 5m FVG trail anchor.** |
+| `main.py` ✅ | **v3.9.** The bot. 15s loop: analyze → classify regime → dispatch strategy → score → size → enter; manages open positions, runs the BWB roll check, enforces the daily-loss halt, writes `orb_state.json` each tick. Holds the `UNKNOWN` hard gate and the ORB un-gate exception. Condor legs log `abs(short-strike delta)` as `setup_score` (calibration waypoint; see Iron Condor). **v3.7: live condor legs book ONLY broker-confirmed fills (`order_confirm`); v3.6: phantom P&L recovery + 10-min reconcile cadence with 15:45/15:50/15:57 wind-down sweeps; v3.8: threads `df_5m` into position management for the 5m FVG trail anchor; v3.9: signal-journal dispositions (fired/sizing_rejected/invalid) + condor plan/leg conviction events — log-only, Phase 3.1.** |
 | `config.py` ✅ | **v3.3.** Every tunable parameter + credential accessors (env-only, never in source). `PAPER_TRADING` defaults `True`. |
 | `README.md` 📄 | This file. Current state, not aspiration. |
 | `ROADMAP.md` 📄 | **Build status lives here.** v2→v3 reconciliation, honest distance-to-vision, Phases 0–4, and the named risks. |
@@ -770,7 +866,7 @@ nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
 | `check_versions.sh` ⚙️ | Recursive version-header + critical-string verification after a deploy. **Should also enforce the fleet↔control parity invariant. It does not.** |
 | `push.sh` ⚙️ | Git push/deploy wrapper — self-healing, optional restart, verifies the push landed. |
 | `snapshot.sh` ⚙️ | Bot state backup; **redacts secrets** before archiving. |
-| `shadow_devtools.sh` ⚙️ | **v1.0.** Operator menu for the shadow subsystem: start/stop/restart the observer, toggle stage 1↔2, tail the journal, would-fire summary, EOD compare, isolation re-check. Observe-only — nothing here can place a trade. **⚠️ Hardcodes `REPO="$HOME/options-trader"` — see defect D.** |
+| `shadow_devtools.sh` ⚙️ | **v1.1.** Operator menu for the shadow subsystem: start/stop/restart the observer, toggle stage 1↔2, tail the journal, would-fire summary, EOD compare, isolation re-check. Observe-only — nothing here can place a trade. **v1.1: self-locates its repo (defect D script-half resolved); the service unit's hardcoded path remains — see defect D.** |
 | `harden_hosts.sh` ⚙️ | Host hardening for a trading box (guards against unattended-upgrade restarts mid-session). Invoked from control. |
 | `pull_today_ohlc.sh` ⚙️ | Background-detached EOD retrieval of today's full 1-min session on a box (works around `fleet.py`'s ~22s SSH ceiling). **Invoked by `fleet.py`.** |
 | `install_candle_feed.sh` ⚙️ | Installs `candle-feed.service` on a box provisioned before v3.0. |
@@ -781,7 +877,8 @@ nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
 
 | File | Purpose |
 |---|---|
-| `orb_engine.py` ✅ | **v3.6.** The ORB state machine. Break → armed → retest → open, plus the three invalidations, the re-arm rule, the session break latches, and the impulsive-candle stop level. **No tolerances anywhere.** |
+| `orb_engine.py` ✅ | **v3.7.** The ORB state machine. Break → armed → retest → open, plus the three invalidations, the re-arm rule, the session break latches, and the impulsive-candle stop level. **No tolerances anywhere. v3.7: defect-G measurement — `retest_depth_px` recorded on confirm + per-candle `retest_check` journal events (near-misses included); gates nothing.** |
+| `signal_journal.py` 🧪 | **v1.0 — Phase-3.1 instrumentation (log-only, never trades).** Append-only JSONL at `data/signal_journal/<date>/<SYMBOL>.jsonl`: `scored` (every scored signal incl. REJECTs, with bid/ask/IV quote context — the perishable data), `disposition` (fired/sizing_rejected/invalid), `retest_check` (defect-G depth distribution), `condor_plan`/`condor_leg` (conviction at decision time). Every emission swallowed on failure — the loop is byte-identical without it. Gitignored runtime output. |
 | `get_orb_range.py` ✅ | Resolves the 9:30–9:35 range through `market_data.fetch_candles` (same feed the bot trades) → `orb_range.json` with `ESTABLISHED`/`IN_PROGRESS`/`EXPIRED`. |
 | `regime_classifier.py` ✅ | **v1.3 — the LIVE classifier.** Memoryless boolean cascade, first-match-wins. Emits one label + a post-hoc conviction number that currently gates nothing. |
 | `regime_confluence.py` ✅ | **v1.1 — LAYER 1 of v3 (canonical, sole).** Instantaneous graded per-regime evidence (`hard_veto × soft_necessary × Σ corroborators`), implementing `REGIME_TRUTHS.md` v0.2. v1.1 fixed a silent config-import failure (a wrong-home constant threw the whole guarded block; every constant ran on fallbacks). Feeds the L1 replay and the L2 integrator via `tests/replay_confluence.py` v2.0. **No live-loop path yet — Phase 0.2.** |
@@ -816,7 +913,7 @@ nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
 
 | File | Purpose |
 |---|---|
-| `setup_scorer.py` ✅ | Scores a signal across 5 weighted dimensions per strategy → **Grade A (1.5×) / B (1.0×) / no trade.** There is no Grade C. |
+| `setup_scorer.py` ✅ | **v1.3.** Scores a signal across 5 weighted dimensions per strategy → **Grade A (1.5×) / B (1.0×) / no trade.** There is no Grade C. **v1.3: emits a `scored` journal event for every scored signal, below-B REJECTs included (Phase 3.1 counterfactual capture).** |
 | `risk_manager.py` ✅ | **v3.1.** Contract sizing, half-budget condor legs, reassess-after-every-loss, and the **net daily-loss halt** (DB-seeded, restart-proof). |
 | `session_guard.py` ✅ | **v3.1.** RTH · **9:35 opening-range lockout (universal floor)** · 15:45 hard close · 14:00 entry cutoff · VIX-crisis lockout. |
 

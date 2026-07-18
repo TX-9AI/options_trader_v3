@@ -80,6 +80,22 @@ check "database/trade_logger.py"         'COALESCE(paper_trade,1)'      "v3.7 mo
 check "strategy/condor_roll.py"          "ROLL IS REAL"                 "v3.7 roll places a real order (defect P)"
 check "config.py"                        "SWEEP_POST_TARGET_TRAIL"      "v2.0 runner refinements in config"
 check "execution/position_manager.py"    "df_5m"                        "v3.8 5m FVG trail anchor threaded"
+
+# ── 2026-07-17/18 day-zero fingerprints (trend v3.1 + VWAP + condor + continuation) ──
+check "analysis/trend_engine.py"         '"5m": 0.35'                   "trend v3.1 intraday-primary tf_weights (dead-4h fix)"
+check "analysis/volatility_engine.py"    'price_vs_vwap = "NONE"'       "VWAP zero-volume guard (SPX NaN->BELOW fix)"
+check "config.py"                        "CONDOR_TRIGGER_APPROACH"      "condor premium-rich band-approach triggers"
+check "strategy/continuation_strategy.py" "ContinuationStrategy"        "continuation trade strategy present"
+check "main.py"                          "_continuation_strategy"       "continuation registered in dispatch"
+check "execution/exit_engine.py"         "_evaluate_continuation"       "continuation exhaustion exit"
+check "strategy/continuation_strategy.py" "CONTINUATION_CONV_FLOOR"     "continuation conviction floor present"
+check "config.py"                        "CONTINUATION_EXHAUST_EXT_ATR" "continuation exhaustion config block"
+
+# ── v3.9 Phase-3.1 instrumentation fingerprints (log-only) ────────────────
+check "analysis/signal_journal.py"       "def journal"                  "v1.0 signal journal module present"
+check "risk/setup_scorer.py"             "_journal_scored"              "v1.3 scorer emits scored events (REJECTs included)"
+check "analysis/orb_engine.py"           "retest_depth_px"              "v3.7 defect-G retest depth measurement"
+check "main.py"                          "condor_leg"                   "v3.9 condor conviction journaled at fire time"
 check "status.py"                        "ORB High"                    "Structured ORB display"
 check "status.py"                        "No Trade"                    "No Trade display string"
 check "notifications/alert_manager.py"   "send_shutdown_alert"          "Shutdown alert method"
