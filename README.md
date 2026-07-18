@@ -68,9 +68,20 @@ tape with the bot that traded it — pull + `check_versions.sh` on control right
 **Path note:** the 29 boxes deploy to `~/options-trader` (no `-v3`); the control server checkout
 is `~/options-trader-v3`.
 
+**Also activated this pass (2026-07-18):** the shadow observer, **on the live QQQ paper box**
+(the real fleet instance, `OT_INSTRUMENT=QQQ`, `~/options-trader`) — **not a separate QQQ-TEST
+instance.** This is deliberate and is the whole point of the one-producer/many-readers design:
+the observer opens **no DXFeed of its own**, it reads the shared store that the QQQ box's own
+`candle-feed.service` already fills. One feed, two readers (bot + observer) — no 11th
+subscription. Installed as `shadow-observer.service` with `shadow-start`/`shadow-stop` timers
+(09:00 / 16:30 ET, Mon–Fri), env supplied via a `.d/env.conf` drop-in copied from
+`optionsbot.service` (secrets never leave the box), running **stage 1 (primitives measure-only)**.
+Smoke-tested clean; dormant until Monday 09:00 ET. Stays at stage 1 for several sessions
+(velocity verification against `data/OHLC/`) before stage 2 is considered.
+
 **Deliberately NOT in this pass:** the offline-replay bookmark (defect S — build and prove inert
-on the tester first); observer fleet deployment (one QQQ-TEST box at stage 1 is the whole ask);
-shadow-observer service-unit templatizing (defect D service-half); any gate change. Monday's
+on the tester first); observer *fleet* deployment (one live box — QQQ — is the whole ask, not all
+29); shadow-observer service-unit templatizing (defect D service-half); any gate change. Monday's
 engine *decisions* are exactly what was approved Friday.
 
 **The Monday habit:** after the EOD conductor runs on control, `cd ~/day_trader_pro &&
@@ -632,10 +643,11 @@ code change).
 "${BASH_SOURCE[0]}")" && pwd)"`, mirroring `observer.py:61`) — it runs from any checkout,
 including the control box's `~/options-trader-v3`. **Still open:**
 `deploy/shadow-observer.service` hardcodes `WorkingDirectory`/`ExecStart` to
-`/home/ubuntu/options-trader`. That matches the 29 boxes' canonical path, so a QQQ-TEST
-deployment works today as-is; templatizing the unit (sed the path at install time, like
-`setup_ec2.sh` does for `optionsbot.service`) remains the durable fix before any
-non-standard-path deployment. Same class as the installer repo-pointer bug.
+`/home/ubuntu/options-trader`. That matches the 29 boxes' canonical path — and the observer is now
+**live on the QQQ paper box** (2026-07-18) at exactly that path, so the hardcode is correct for the
+one box it runs on. Templatizing the unit (sed the path at install time, like `setup_ec2.sh` does
+for `optionsbot.service`) remains the durable fix before any **non-standard-path** deployment.
+Same class as the installer repo-pointer bug.
 
 ### E. `VWAP_FILTER_ACTIVE` — a hard gate that was never built
 Marked `UNWIRED`. Genesis constant: present at the initial commit, never referenced, **mentioned
@@ -866,7 +878,7 @@ bookmark lands, so no diary row is permanently lost — they are just wrong unti
 | `check_versions.sh` ⚙️ | Recursive version-header + critical-string verification after a deploy. **Should also enforce the fleet↔control parity invariant. It does not.** |
 | `push.sh` ⚙️ | Git push/deploy wrapper — self-healing, optional restart, verifies the push landed. |
 | `snapshot.sh` ⚙️ | Bot state backup; **redacts secrets** before archiving. |
-| `shadow_devtools.sh` ⚙️ | **v1.1.** Operator menu for the shadow subsystem: start/stop/restart the observer, toggle stage 1↔2, tail the journal, would-fire summary, EOD compare, isolation re-check. Observe-only — nothing here can place a trade. **v1.1: self-locates its repo (defect D script-half resolved); the service unit's hardcoded path remains — see defect D.** |
+| `shadow_devtools.sh` ⚙️ | **v1.1.** Operator menu for the shadow subsystem (live on the QQQ paper box): start/stop/restart the observer, toggle stage 1↔2, tail the journal, would-fire summary, EOD compare, isolation re-check. Observe-only — nothing here can place a trade. **v1.1: self-locates its repo (defect D script-half resolved); the service unit's hardcoded path remains — see defect D.** |
 | `harden_hosts.sh` ⚙️ | Host hardening for a trading box (guards against unattended-upgrade restarts mid-session). Invoked from control. |
 | `pull_today_ohlc.sh` ⚙️ | Background-detached EOD retrieval of today's full 1-min session on a box (works around `fleet.py`'s ~22s SSH ceiling). **Invoked by `fleet.py`.** |
 | `install_candle_feed.sh` ⚙️ | Installs `candle-feed.service` on a box provisioned before v3.0. |
@@ -945,6 +957,12 @@ bookmark lands, so no diary row is permanently lost — they are just wrong unti
 ### `shadow/` — the shadow subsystem (observe-only, never trades)
 
 Extracted from its tarballs 2026-07-13 (**defect D resolved**); `observer/` is gone.
+
+**Live since 2026-07-18 on the QQQ paper box** (the real fleet instance, `OT_INSTRUMENT=QQQ`) —
+**not a separate QQQ-TEST box.** The observer is a *reader*: it opens no DXFeed and reads the
+shared store that the QQQ box's own `candle-feed.service` fills, so running it costs no additional
+brokerage subscription (one producer, many readers). Running stage 1, timers armed for
+09:00/16:30 ET Mon–Fri.
 
 | File | Purpose |
 |---|---|

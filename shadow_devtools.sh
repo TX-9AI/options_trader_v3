@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shadow_devtools.sh v1.1 — operator menu for the SHADOW subsystem (QQQ-TEST).
+# shadow_devtools.sh v1.1 — operator menu for the SHADOW subsystem (live on the QQQ paper box).
 # Run from anywhere: the script self-locates its repo (defect D remainder —
 # the v1.0 hardcoded $HOME/options-trader hard-exited on any other checkout,
 # e.g. the control box's ~/options-trader-v3). Mirrors observer.py's

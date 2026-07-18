@@ -113,6 +113,11 @@ and live-wiring remain.**
   both reading the shared store; log both labels + the full conviction vector +
   stale flag per tick; warm-start from session bars at 9:30–9:35 (the ORB
   lockout covers the commit window). Observe-only — still drives no trade.
+  *NOTE:* the `shadow-observer.service` now live on the QQQ paper box
+  (2026-07-18) is a **different** shadow subsystem — it runs the velocity
+  primitives + sweep-precursor scorers, **not** the conviction integrator. It
+  does not advance L2.5; it advances the separate sweep-precursor track (see
+  the parallel list below). L2.5 still needs the integrator itself wired in.
 - ⬜ **L2.6 — Freeze the L2 weights as a stable baseline.** The pitchfork and any
   new conviction dimension can only be measured against a *frozen* L2. *To
   close:* a clean ~2-week hands-off production window (the one starting Monday
@@ -190,6 +195,10 @@ L1.6 + L1.7 (labeled TREND/SWEEP/pin/breakout tape)   <- calendar time + label_d
 Two things run *in parallel* and don't block the path:
 - **L3.1 instrumentation** is already logging — every session from Monday is
   calibration-grade data banked ahead of the L3.3 campaign.
+- **The sweep-precursor observer** (`shadow-observer.service`, live on the QQQ
+  paper box since 2026-07-18, stage 1) is banking velocity-primitive data to
+  validate against `data/OHLC/` before its scorers (stage 2) are ever trusted —
+  the sweep-reversal precursor track, independent of the L1→L2→L3 spine.
 - **The pitchfork** (see README §PLANNED) is gated on **L2.6** (frozen weights),
   not on all of L3 — it enters as a new conviction dimension the moment L2 is a
   stable baseline.
