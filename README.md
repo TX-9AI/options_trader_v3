@@ -1,4 +1,4 @@
-# options_trader v3 — Vertigo Capital
+# Options Trader v3 — Vertigo Capital
 
 **Intraday options day-trading suite · 29-box fleet · TastyTrade/DXFeed · single shared candle store per box · paper-first**
 
@@ -30,8 +30,10 @@ This is intentional — it is how labeled tape gets generated for the Phase-3 ca
 **It is also why the fleet stays in paper.** `PAPER_TRADING` defaults to `True` and must not
 be flipped on any box until the conviction bars exist. See `ROADMAP.md` §Risks.
 
-Sweep, butterfly, and condor are **untouched**: they still self-gate and still do not fire
-under `UNKNOWN`. Set `ORB_FIRES_REGARDLESS_OF_REGIME = False` to restore strict v2 gating.
+Sweep, butterfly, condor, and trend continuation are **untouched** by this: they still
+self-gate and still do not fire under `UNKNOWN` (continuation hard-requires a *trending*
+regime, a strictly higher bar). Set `ORB_FIRES_REGARDLESS_OF_REGIME = False` to restore strict
+v2 gating.
 
 ---
 
@@ -89,7 +91,7 @@ strategy except the ORB**.
 
 | Regime | Strategies permitted to fire |
 |---|---|
-| TRENDING_BULL / TRENDING_BEAR | **ORB** |
+| TRENDING_BULL / TRENDING_BEAR | **ORB · Trend Continuation** |
 | BREAKOUT_VOLATILE | **ORB** |
 | SWEEP_REVERSAL | Sweep Reversal · **ORB (v3.2 — ORB wins)** |
 | RANGING | Iron Condor · Butterfly (if GEX PINNING) · **ORB** |
@@ -382,6 +384,7 @@ P&L came from the few trades that reached the trail. Decay is projected per **ca
 |---|---|
 | **Opening-range lockout** | **No entries for any strategy before 9:35 ET.** Universal floor at `can_enter`; opens at 9:35:00 sharp. |
 | ORB | 9:35 – **11:00** ET (hard cutoff) |
+| Trend Continuation | 9:35 – 14:00 ET (trending regime only; runaway-ORB handoff + standalone) |
 | Iron Condor | 11:00 – 14:00 ET |
 | Butterfly | 12:00 – 14:00 ET (requires GEX PINNING) |
 | Sweep Reversal | 9:35 – 14:00 ET |
@@ -795,6 +798,7 @@ nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
 | `base_strategy.py` ✅ | `OptionsSignal` + the premium-level math every strategy inherits (`stop_premium`, `target_premium`, `trail_activation_premium`). |
 | `orb_strategy.py` ✅ | Turns a confirmed ORB engine state into a signal: strike selection, liquidity-path check (**blocks on a named pool in the path with no extra confluence**), target adjustment, confluence notes. |
 | `sweep_reversal_strategy.py` ✅ | Post-sweep reversal. Delta-band strike selection scaled inversely to reversal strength. ATR-aware recovery window. |
+| `continuation_strategy.py` ✅ | **NEW 2026-07-18.** Trend-continuation on pullback to the BB midline. Trending-regime-gated (a stingy label is the signal). Low-bar entry (momentum resumption); exhaustion-based exit owns the risk. Two paths: runaway-ORB **handoff** (looser) + **standalone** (stricter). Debit directional. Paper-first. |
 | `iron_condor_strategy.py` ✅ | **v3.1.** Legged condor, **BB-anchored strikes, zero delta**. Plan state machine + per-leg price triggers. **v3.1 restored an import missing since the file's first commit** — masked on the fleet by Python 3.14's lazy annotations (PEP 649); on any ≤3.13 interpreter the module raised `NameError` at import and killed `main.py`. Verified 3.12 vs 3.14 A/B. |
 | `condor_roll.py` ✅ | **v3.7.** Broken-wing roll. Close of the old untested vertical books the CONFIRMED fill; the rolled vertical is a REAL fill-confirmed signed-credit order (was a DB-only fiction in live); risk-free re-checked against actual fills. |
 | `butterfly_strategy.py` ✅ | **v3.1.** Debit butterfly centered on the **GEX pin**. Gated on PINNING + proximity + noon–14:00 + one-per-session. |
@@ -804,8 +808,8 @@ nonzero paper slippage so the next stretch of paper predicts live. Audit §M1.
 | File | Purpose |
 |---|---|
 | `entry_engine.py` ✅ | Places the opening order (paper fills at the mark). Writes the `TradeRecord`, including `underlying_stop` — **the impulsive candle's wick, which the exit engine reads back.** |
-| `exit_engine.py` ✅ | **v3.8.** All exits, routed per strategy (ORB floor/structure/theta/trails · Sweep BOS · butterfly/condor premium + regime-flip · adopted generic). **v3.4/v3.5: FillResult contract — paper simulates at the mark in one pass; live books only broker-confirmed fills at the real net fill price, with bounded polling, partial-fill weighting, idempotent order resume, 2-leg vertical closes, and signed marketable-limit pricing. v3.8: runner refinements — 40% premium floor (butterfly stays 25%), 5m-anchored FVG trails, 0.75 post-target fallback, sweep post-target trail replaces the +100% hard TP, MFE/MAE telemetry (see `docs/EXIT_RULES.md`).** |
-| `position_manager.py` ✅ | **v3.8.** Owns the single open position (the condor's two verticals are the sole exception). **`_execute_exit` books ONLY on `FillResult.confirmed` at the actual fill price — an unconfirmed close leaves the row OPEN for the 15:45→16:00 retry loop (anti-orphan invariant).** Trail updates write `trail_stop`, never `stop_premium`. **v3.8: threads `df_5m` through to `exit_engine.evaluate()` (5m FVG trail anchor).** |
+| `exit_engine.py` ✅ | **v3.8.** All exits, routed per strategy (ORB floor/structure/theta/trails · Sweep BOS · butterfly/condor premium + regime-flip · adopted generic). **v3.4/v3.5: FillResult contract — paper simulates at the mark in one pass; live books only broker-confirmed fills at the real net fill price, with bounded polling, partial-fill weighting, idempotent order resume, 2-leg vertical closes, and signed marketable-limit pricing. v3.8: runner refinements — 40% premium floor (butterfly stays 25%), 5m-anchored FVG trails, 0.75 post-target fallback, sweep post-target trail replaces the +100% hard TP, MFE/MAE telemetry (see `docs/EXIT_RULES.md`). NEW 2026-07-18: `_evaluate_continuation` — exhaustion exit (regime-flip primary · 40% floor · extension-from-midline tightens trail · momentum divergence exits), prefers live `vol_state`/`trend` with `df_5m` fallback so it never raises on a missing snapshot.** |
+| `position_manager.py` ✅ | **v3.8.** Owns the single open position (the condor's two verticals are the sole exception). **`_execute_exit` books ONLY on `FillResult.confirmed` at the actual fill price — an unconfirmed close leaves the row OPEN for the 15:45→16:00 retry loop (anti-orphan invariant).** Trail updates write `trail_stop`, never `stop_premium`. **v3.8: threads `df_5m` through to `exit_engine.evaluate()` (5m FVG trail anchor). NEW 2026-07-18: also threads optional `vol_state`/`trend` (defaults preserve every existing caller — avoids the 2026-07-16 signature-mismatch crash) for the continuation exhaustion exit.** |
 | `broker_reconcile.py` ✅ | **v3.6, LIVE-only, auto-enables with LIVE mode.** Adopt / keep / phantom-close against the broker at startup + intraday (10-min cadence + 15:45/15:50/15:57 wind-down sweeps). **Phantom P&L recovery: a manually-closed position books its real fill from order history instead of a flagged $0.00.** Paper never reconciles. |
 
 ### `risk/` — sizing and gates
