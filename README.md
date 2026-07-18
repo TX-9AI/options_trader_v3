@@ -178,6 +178,36 @@ requires all three: **location** (at a named pool), **penetration**, and **rejec
 delta targeting, scaled inversely to reversal strength (strong snap → far-OTM; weak →
 near-ATM). **BOS exit** on the 1m chart — closes only, no wicks.
 
+### Trend Continuation (NEW 2026-07-18 — paper-first, the trend-native trade)
+The trade the `trend_engine v3.1` fix exists to enable. Fires **only in a trending regime** —
+and because the classifier is *stingy* about calling trend (it is a high bar to clear), a
+trending label is itself the high-conviction signal. Debit directional (long call in
+`TRENDING_BULL`, long put in `TRENDING_BEAR`).
+
+**Philosophy: make entry easy, make exit smart.** Entry is a deliberately *low* bar — the
+protection lives in the exit, not the entry. Price pulls back to the **BB midline**
+(`bb_middle`, the same anchor the condor uses), momentum flips back toward the trend, and it
+enters. Two entry paths, both trend-gated:
+
+- **Handoff (looser).** A **runaway ORB** — a break that ran to the 50% TP with no retest —
+  is one of the *strongest* trend confirmations there is (strong push → pullback → next leg is
+  textbook trend behaviour). So when a runaway ORB invalidates in a trending regime, it now
+  **hands off to continuation first** (`main.py` Priority 2.5, `is_handoff=True`): conviction
+  floor relaxed 0.45→0.35, `STEADY` momentum accepted. This replaces the old hardcoded
+  runaway→sweep chain. Sweep still owns a runaway heading into a near/strong mapped zone when
+  *not* trending.
+- **Standalone (stricter).** No runaway vouching for it, so it must self-source the setup:
+  conviction ≥ 0.45 and `ACCELERATING` momentum required.
+
+**Downside = regime-change OR 40%, whichever first.** Regime-invalidation *is* the smart
+stop — the trade is *defined* by the trend, so a flip out of trending kills the thesis
+regardless of P&L (this mirrors how the condor self-gates on RANGING). The 40% floor is the
+disaster backstop beneath it. No separate structural stop.
+
+All thresholds env-tunable (`OT_CONT_*`). The `MIDLINE_ATR` band (how close to the midline
+counts as "at" it, default 0.35·ATR) is the primary knob — it controls how *often* the trade
+fires — and is the first thing to calibrate off the paper baseline.
+
 ### Iron Condor (legged, tracked)
 RANGING fallback when no GEX pin is available. **Strike SELECTION is Bollinger-Band anchored —
 no delta enters the strike-picking path.** Short call = lowest liquid strike at/above the BB
@@ -249,6 +279,35 @@ now tell the truth.
 gains, one minimizes losses. Neither supersedes the other.
 
 **Not present on the ORB:** no BOS exit (that is sweep-only) · no max-hold · no 11:00 exit.
+
+### Trend Continuation — EXHAUSTION-based (NEW 2026-07-18)
+
+The continuation exit is where the trade lives or dies, so it is the deliberately intelligent
+half. Evaluated every tick, first match wins:
+
+| # | Trigger | Condition | Purpose |
+|---|---|---|---|
+| 1 | Hard close | 15:45 ET | Time |
+| 2 | **Regime flip** | Regime no longer trending **in our direction** | **Thesis death — the primary stop** |
+| 3 | **−40% floor** | `premium ≤ entry × 0.60` (`MAX_LOSS_PCT`) | Disaster backstop |
+| 4 | **Exhaustion (two-stage)** | *Only past +15% gain.* **Extension:** price ≥ 2·ATR from the midline → **tighten trail to 85%** (does *not* exit — a strong trend can stay stretched). **Divergence:** new favourable price extreme on **weaker** 5-bar momentum → **exit** | **Detect a spent move** |
+| 5 | Runner trail | Standard FVG trail; once armed it owns the trade (and silences theta via the v1.5 trail ceiling) | Let it run |
+
+The distinction from a normal stop: a stop asks *"was I proven wrong?"* (that is #2/#3).
+Exhaustion asks *"is the move **tired**, even while still technically going my way?"* — which is
+what stops a continuation trade from handing back its gains at the turn. **Extension tightens,
+divergence exits** (v1 two-stage). A stricter "both must agree" mode is noted in-code for
+future reconsideration; it maps closer to how the operator trades but is intentionally not a
+live flag.
+
+**Engine-state exactness with a safety net.** The exit prefers the *live* `vol_state`/`trend`
+threaded down from `main.py` (so it judges exhaustion against the same midline/momentum the
+entry used), but **falls back to recomputing midline and ROC from `df_5m`** when that state is
+absent (restart recovery, adopted positions). It therefore *cannot* raise on a missing engine
+snapshot — it only degrades precision. The `vol_state`/`trend` kwargs were added
+**optional-with-defaults** through `manage_open_position → _manage_one → evaluate()`
+specifically to avoid the 2026-07-16 signature-mismatch crash-loop; every existing strategy
+routes byte-identically with them present (regression-checked).
 
 ### Fill-confirmed exits (v3.4/v3.5, 2026-07-15) — a close is only real when the broker says so
 
@@ -331,6 +390,99 @@ P&L came from the few trades that reached the trail. Decay is projected per **ca
 | VIX > 20 | Blocks butterflies (halved size in the 15–20 zone) |
 | VIX > 30 | Blocks all new entries |
 | Fed day | **The bot trades Fed days.** `is_fed_day` only boosts ORB conviction. |
+
+---
+
+# 🔱 PLANNED — Pitchfork sloped S/R (designed, NOT built, gated on Layer 2)
+
+**Status: design-complete, deliberately unbuilt. Do not deploy before Layer 2 is ready.**
+This section is the build brief so the next hands (or the next thread) inherit the full
+requirement, not a hunch.
+
+## What it is
+
+An Andrews-style **median-line pitchfork** used as *sloped* support/resistance — the tilted
+cousin of the Bollinger Band (BB is `mean ± σ` around a **horizontal** MA; a pitchfork is the
+median line ± tines around a **sloped** axis anchored to three swing pivots). It is folded
+**into `LiquidityMapper` as a long-lived sloped-zone object**, not a separate module — because
+an S/R level and a liquidity pool are frequently the *same* price described twice, and unifying
+them lets one zone carry both its S/R character and its liquidity character.
+
+## Hard requirements (these are the spec, not suggestions)
+
+- **HTF-anchored.** Pivots come from **daily/hourly** swings, computed on HTF data — never by
+  zooming out an intraday calc. An LTF-anchored fork redraws every 20 minutes and means nothing.
+- **Placed once, persists until invalidated.** A fork is not re-anchored on every wiggle. It
+  stands until price *earns* its death: a **decisive close beyond the outer tine** on the wrong
+  side, **or** the anchoring swing structure itself is broken. It is **NOT** invalidated by
+  price merely tagging the median or a tine — those are *reactions*, the fork working as
+  designed. (Naive implementations kill the fork on first touch; do not.)
+- **Deterministic placement off `LiquidityMapper` swing pivots.** A pitchfork is pure
+  coordinate geometry once the three pivots are chosen; the only hard problem is *anchor
+  selection*, solved with a scoring rule (pick the anchoring price has reacted to most),
+  validated offline. **NOT the vision API** — non-deterministic, un-backtestable, opaque in the
+  live loop; that violates the "regime shapes the trade, outcomes never feed classification"
+  discipline. The API's only legitimate role here is **offline anchor-quality validation**
+  (batch-check that the deterministic anchors look sane across many tapes), never the live call.
+- **Bands, not lines.** Zones are ranges (the tines are ranges by construction), which composes
+  with liquidity pools and the BB/ORB ranges already in use.
+
+## Where it contributes (ranked by whether it moves P&L)
+
+1. **Conviction scoring** — rail-distance + confluence as new dimensions. A setup entering *at*
+   a strong confluence zone is objectively higher-probability. This is the real payoff.
+2. **The continuation trade's exit** — structural-level proximity is the **highest-confidence
+   exhaustion signal** (a spent move *at a level* beats a spent move in open air). This is the
+   `_evaluate_continuation` "ADD structural-level proximity" hook, already flagged in-code.
+3. **Exit/target anchors** — the opposite rail is a natural target / trail-tighten point.
+4. **NOT regime definition.** A fork tells you *where* a trend pauses, not *whether* you are
+   trending. Regime stays ADX/structure/BB-driven. Do not wire it into the classifier.
+
+## Empirical weight — ship at zero
+
+The pitchfork conviction dimension **ships at weight 0 (shadow)** and is calibrated to
+*realized edge* from paper data — exactly as `conviction_integrator` was deployed to observe
+before it gated. The weight is a function of `(rail strength × timeframe × confluence)` and is
+**allowed to stay 0** if the tape shows no edge. Do not hand-tune a weight; discover it.
+
+## What we are WAITING FOR — the gate
+
+**Build it when ready; do NOT deploy it until Layer 2 is set.** "Set" means:
+
+1. **Trend labels trusted in production** — the `trend_engine v3.1` fix has weeks of live
+   confirmation, not one afternoon.
+2. **Conviction weights frozen** — the pitchfork enters as a *new* conviction dimension, and
+   that is only measurable if the *existing* Layer-2 weights are a stable baseline. Calibrating
+   a new dimension against a moving target is impossible. **This is the real gate.**
+3. **A clean baseline logged** — a stretch of untouched production performance to compare the
+   pitchfork twin against.
+
+Concretely: **~2-week hands-off window from the 2026-07-XX day-zero** (materially changed
+engine: trend v3.1 + VWAP + condor triggers + continuation), *then* the pitchfork build spins
+up against a frozen Layer-2.
+
+## How it gets built (isolation plan)
+
+- An **ironically-named git fork** of this repo (keeps the production fleet's `git pull` safe).
+  Pitchfork lives in **additive, separate modules** so upstream merges stay clean.
+- Its own **isolated yfinance HTF feed** (cannibalized from v1/v2) — *not* the broker DXFeed
+  stream. Adequate because the fork is HTF *context*, never execution; the entry fill still
+  happens on real DXFeed price. Keep the two feeds strictly separated — yfinance HTF in, fork
+  geometry out, **no yfinance price ever touches an entry/exit decision.**
+- Backtest/replay harness **resident on the tester**.
+- Proven via a **QQQ twin A/B**: the pitchfork-weighted tester vs a production QQQ twin on the
+  current engine — same execution data, one variable (pitchfork conviction).
+- **First concrete deliverable when the build starts:** the swing-pivot rule that anchors the
+  fork + the invalidation condition. Everything else is geometry that follows from those two.
+
+## Related future trade (prelude only, not scheduled)
+
+**Rejection-fade** — the near-opposite of continuation. Sell a **premium-rich credit spread**
+at a level that has been **firmly rejected**, with conviction **scaling up by HTF rejection
+count** (a level rejected three times on the daily >> a one-touch). Continuation trades *with*
+momentum into a level expecting breakthrough (debit); rejection-fade sells *against* momentum
+into a level expecting it to hold (credit). This trade *wants* the pitchfork/LiquidityMapper
+multi-touch HTF zone with a rejection-count attribute — it is the pitchfork's natural partner.
 
 ---
 
