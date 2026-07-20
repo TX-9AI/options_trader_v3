@@ -1,5 +1,13 @@
 """
 status.py — Live bot status snapshot.
+v1.12 — 2026-07-20 — daily-loss banner reads the limit from the LIVE unit env
+        (get_runtime_env, same as Risk) instead of `from config import
+        DAILY_LOSS_LIMIT_USD`, which resolved in the status process's own env
+        where OT_RISK_USD is absent — so it fell back to $200 and printed a
+        FALSE "DAILY LOSS LIMIT HIT / new entries halted" banner while the bot
+        (systemd env) was correctly enforcing the risk-coupled limit. Same
+        class of bug as v1.1's original fix; this closes the last config
+        import that was env-sensitive.
 v3.0 — original release
 v1.1 — 2026-06-27 — read INSTRUMENT and PAPER_TRADING from systemd env
         so status.py reflects live config, not config.py defaults
@@ -80,6 +88,16 @@ except Exception:
 INSTRUMENT    = get_runtime_env("OT_INSTRUMENT", "QQQ")
 PAPER_TRADING = get_runtime_env("OT_PAPER_TRADING", "True") != "False"
 RISK_PER_TRADE = get_runtime_env("OT_RISK_USD", "200")
+
+# Daily loss limit, resolved the same way config.py resolves it — but against
+# the LIVE unit environment (like RISK_PER_TRADE above), NOT this SSH process's
+# os.environ. v1.12 fix: `from config import DAILY_LOSS_LIMIT_USD` resolved in
+# the status process, where OT_RISK_USD is absent, so it silently fell back to
+# $200 and printed a false "DAILY LOSS LIMIT HIT" banner while the bot itself
+# (systemd env) was correctly enforcing the risk-coupled limit. Fallback chain
+# mirrors config.py:184: explicit OT_DAILY_LOSS_LIMIT, else one trade's risk.
+DAILY_LOSS_LIMIT = float(get_runtime_env("OT_DAILY_LOSS_LIMIT",
+                                         RISK_PER_TRADE or "200"))
 
 
 def now_et():
@@ -464,10 +482,12 @@ def main():
         worst  = s["worst"]  or 0
         wr     = wins / total * 100 if total else 0
         cb_warning = ""
-        from config import DAILY_LOSS_LIMIT_USD
-        if pnl <= -DAILY_LOSS_LIMIT_USD:
+        # v1.12: use DAILY_LOSS_LIMIT (live unit env, top of file) — NOT
+        # `from config import DAILY_LOSS_LIMIT_USD`, which resolved against this
+        # process's env and falsely reported $200 / a phantom halt.
+        if pnl <= -DAILY_LOSS_LIMIT:
             cb_warning = (f"  \U0001F6D1  DAILY LOSS LIMIT HIT "
-                          f"(day P&L ${pnl:+.0f} <= -${DAILY_LOSS_LIMIT_USD:.0f}) "
+                          f"(day P&L ${pnl:+.0f} <= -${DAILY_LOSS_LIMIT:.0f}) "
                           f"\u2192 new entries halted (override via configure.sh)")
         print(f"  Trades:       {total}  ({wins}W / {losses}L)")
         print(f"  Win rate:     {wr:.0f}%")
