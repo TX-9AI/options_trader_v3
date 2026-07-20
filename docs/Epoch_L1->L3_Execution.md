@@ -1,4 +1,13 @@
-Both repos cloned, all 14 md docs read (ROADMAP v2.0, REGIME_TRUTHS v0.2, REPLAY_VALIDATION, README defect ledger, harness docs, DTP README), plus the integrator source for the actual priors. Answers:
+**Layer 1 — is the regime label correct?**
+We're calibrating the thresholds that turn raw price geometry into a regime label and a strength score — chiefly the flatness veto angle (`FLAT_ANGLE_CUT_DEG`, currently 20°, which the data says should sit around 22–24°), the flatness-depth ramp, and each regime's detection cutoffs. The goal is to stop over-vetoing genuine ranges into that all-zero UNKNOWN residual and score them correctly instead. What we use: multi-day human-labeled tape (your `label_day.sh` passes), replayed through the regime-diary/replay harness so the classifier's output can be scored against the labels. No money involved — purely "does the label match what a human sees."
+
+**Layer 2 — is the label stable?**
+We're calibrating the integrator's priors that convert the noisy per-tick regime scores into one committed regime with hysteresis: the commit threshold (~0.65), the hold threshold (~0.45), the displacement margin a challenger needs (~0.12), the stale/gap timeouts, and each regime's rise/decay/decay-resistance constants. These govern how fast the bot commits, how stubbornly it holds, and how easily a new regime unseats the current one. What we use: the same labeled tape, but scored on *label behavior* — the L2 report's churn metric (how often the committed label flips vs how often raw L1 flips), the emitted distribution, and stale %. You tune until commitment lands in the right bar-count windows. Still no P&L — L2 is judged on stability against labeled tape, never outcomes.
+
+**Layer 3 — is the label tradeable, and at what conviction?**
+We're calibrating the gate matrix: which regimes permit which trade types, and the conviction floor ("bar") each trade type must clear before it's allowed to fire (provisional ~0.40 for ORB/sweep, ~0.65 condor, ~0.70 butterfly), plus the schedule for lowering those bars live and how often to recalibrate. What we use: actual trade outcomes — fee- and slippage-adjusted ROI, bucketed by conviction decile per trade type, from the paper fleet first and live later. You run wide-open at a low floor to collect trades across every conviction level, then set each bar at the lowest bucket whose *marginal* expectancy is still positive (min ~40 trades/bucket).
+
+The clean through-line: **L1 and L2 calibrate against labeled tape (truth about the market), L3 calibrates against money (P&L by conviction).** That ordering is also the firewall — outcomes only ever touch the last layer, so trade results can never bleed back and corrupt how the regime itself is classified.
 
 **1) Will the remaining unknown chunk resolve into known buckets with lower scores?**
 
