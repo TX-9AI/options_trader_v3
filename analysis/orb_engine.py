@@ -1,5 +1,34 @@
 """
 analysis/orb_engine.py — Opening Range Breakout state machine.
+v3.9 — 2026-07-20 — STALE-RETEST TIMEOUT RESTORED, CORRECTED (supersedes v3.8's
+        removal; per user spec same day). The window's only job: after a break,
+        call the retest STALE once ORB_MAX_RETEST_BARS real 1-minute bars pass
+        with no confirm (not far enough to be a runaway). Fixes vs pre-v3.8:
+        (1) TICK-COUNTING BUG — the old counter incremented every 15-second
+        engine tick, not per bar (journal: one candle logged 4x), so 12 "bars"
+        expired in ~3 minutes; now dedupes on the candle timestamp
+        (last_retest_bar_ts) and counts true bars. (2) NON-TERMINAL — expiry
+        now calls _rearm() (WAITING_FOR_BREAK) instead of a dormant
+        INVALIDATED; a fresh close beyond either level starts a new attempt
+        with a fresh window. Timing: the break candle is excluded from the
+        count, so with ORB_MAX_RETEST_BARS=12 the stale signal fires on the
+        13th post-break bar — a 13-minute window. Runaway stays terminal;
+        close_inside re-arm
+        unchanged. Day-zero SMH replay under these rules: pre-10:00 attempt
+        goes stale ~10:12 OR dies close_inside, either way 10:06's fresh break
+        re-arms and 10:07's confirm FIRES the short.
+v3.8 — 2026-07-20 — RETEST TIMEOUT REMOVED (structural defect, user spec): the
+        ORB_MAX_RETEST_BARS=12 timeout invalidation retired an armed side on a
+        CLOCK, not a market event — and because 'timeout' was terminal (never
+        re-armed), a stale expired attempt left the engine blind to a FRESH
+        valid break. Day-zero cost: SMH 10:06 break + 10:07 textbook confirm
+        (H 566.99 wick-in, body-high 566.59 out, close 566.50 out vs ORB low
+        566.71) went untaken; journal retest_check proved the armed window
+        ended 10:03:15 and never re-armed. Fix: timeout deleted from the state
+        machine. ARMED now persists until one of three REAL outcomes: retest
+        confirm (trade), 1m close back inside (re-arm via close_inside), or
+        runaway to the 50% TP (terminal, hands to sweep). bars_since_break
+        kept as journal telemetry only. ORB_MAX_RETEST_BARS no longer imported.
 v3.7 — 2026-07-18 — DEFECT G MEASUREMENT (log-only, zero gating change): the
         near-miss retest is now MEASURED, never gated, exactly as the defect
         prescribes. (1) ORBData.retest_depth_px records the confirming retest
@@ -229,6 +258,7 @@ class ORBData:
     break_candle_close: float = 0.0
     break_direction:    str   = ""
     bars_since_break:   int   = 0
+    last_retest_bar_ts: str   = ""   # v3.9: dedupe 15s ticks -> count real 1m bars
     target_100pct:      float = 0.0
     target_50pct:       float = 0.0
     stop_level:         float = 0.0
@@ -236,7 +266,7 @@ class ORBData:
     confirmed_at:       str   = ""
     attempt_number:     int   = 0
     entries_expired:    bool  = False
-    invalidation_reason: str  = ""   # 'runaway' | 'close_inside' | 'timeout'
+    invalidation_reason: str  = ""   # 'runaway' | 'close_inside' (v3.8: 'timeout' removed)
     retest_depth_px:    float = 0.0  # v3.7 (defect G): confirming retest wick's
                                      # penetration into the range, in PX
                                      # (long: orb_high - low; short: high - orb_low).
@@ -382,7 +412,9 @@ class ORBEngine:
             # engine already EXPIRED above, so this branch is inherently
             # before-cutoff — i.e. the rule is exactly "1-min close back inside
             # the range AND before 11:00". A runaway (a) NEVER re-arms (it hands
-            # off to sweep reversal); a timeout NEVER re-arms.
+            # off to sweep reversal). v3.8: 'timeout' no longer exists — the
+            # retest clock was removed per spec; armed persists until a market
+            # event resolves it.
             if d.invalidation_reason == "close_inside":
                 self._rearm()
             else:
@@ -408,7 +440,7 @@ class ORBEngine:
 
         Deliberately independent of the ORB entry state machine: the sweep
         reversal gate must know a genuine breakout occurred even when the ORB
-        is dormant (post-runaway / timeout / OPEN / EXPIRED), which _before_
+        is dormant (post-runaway / OPEN / EXPIRED), which _before_
         v1.9 was impossible because the latches were only set inside
         _check_for_break() (RANGING-only). Uses the SAME closed candle
         (iloc[-2]) and the SAME break threshold as _check_for_break(), so the
@@ -477,6 +509,7 @@ class ORBEngine:
             d.break_candle_high  = high_
             d.break_candle_low   = low_
             d.bars_since_break   = 0
+            d.last_retest_bar_ts = str(df_1m.index[-2])  # break candle excluded from stale count
             d.target_100pct      = d.orb_high + d.orb_width
             d.target_50pct       = d.orb_high + d.orb_width * 0.5
             d.stop_level         = d.break_candle_low
@@ -497,6 +530,7 @@ class ORBEngine:
             d.break_candle_high  = high_
             d.break_candle_low   = low_
             d.bars_since_break   = 0
+            d.last_retest_bar_ts = str(df_1m.index[-2])  # break candle excluded from stale count
             d.target_100pct      = d.orb_low - d.orb_width
             d.target_50pct       = d.orb_low - d.orb_width * 0.5
             d.stop_level         = d.break_candle_high
@@ -514,11 +548,31 @@ class ORBEngine:
         d = self._data
         if df_1m is None or len(df_1m) < 2:
             return
-        d.bars_since_break += 1
+        # v3.9 STALE-RETEST TIMEOUT, per spec 2026-07-20: the window applies
+        # ONLY while ARMED (i.e. after the break, which is the only place this
+        # method runs) and its sole purpose is to declare a retest STALE after
+        # ORB_MAX_RETEST_BARS 1-minute bars pass without one — too slow to be a
+        # retest, not far enough to be a runaway. On expiry the engine goes
+        # straight back to WAITING_FOR_BREAK (non-terminal): a fresh 1m close
+        # beyond either level starts a new attempt with a fresh window.
+        #   Two defects in the pre-v3.8 timeout, both fixed here:
+        #   (1) it counted 15-SECOND LOOP TICKS as "bars" (journal 2026-07-20:
+        #       one candle logged 4x, each tick incrementing), so "12 bars"
+        #       actually expired in ~3 minutes;
+        #   (2) it was TERMINAL (never re-armed), so an expired stale attempt
+        #       left the engine blind to SMH's fresh 10:06 break + 10:07
+        #       textbook confirm. Now: real bars, and expiry re-arms.
+        candle_ts = str(df_1m.index[-2])
+        if candle_ts != d.last_retest_bar_ts:
+            d.last_retest_bar_ts = candle_ts
+            d.bars_since_break += 1
         if d.bars_since_break > ORB_MAX_RETEST_BARS:
-            d.state = ORBState.INVALIDATED
-            d.invalidation_reason = "timeout"
-            logger.info(f"ORB: retest timeout — INVALIDATED")
+            logger.info(
+                f"ORB: retest STALE after {d.bars_since_break - 1} bars with no "
+                f"confirm (attempt #{d.attempt_number}) — re-arming, waiting "
+                f"for a fresh break"
+            )
+            self._rearm()
             return
 
         candle    = df_1m.iloc[-2]
