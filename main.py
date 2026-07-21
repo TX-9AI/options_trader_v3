@@ -1,5 +1,17 @@
 """
-main.py — options_trader v3.9
+main.py — options_trader v4.0
+v4.0 — 2026-07-21 — L2.5: LIVE regime now driven by the Layer-2 conviction
+        integrator's committed label (Layer-1 confluence evidence → integrator),
+        replacing the v1.3 boolean classifier's raw argmax as the trade gate.
+        Cures the fleet-wide UNKNOWN flicker (v1.3 dropped to UNKNOWN mid-trend
+        at avg ADX ~29 — a hard no-trade gate firing during the strongest
+        conditions). The integrator holds a regime through single-tick evidence
+        drops (theta_hold hysteresis) and never emits UNKNOWN. Gates run WIDE
+        OPEN (conviction logged, not gated — L3 tunes bars later); paper P&L is
+        the arbiter. v1.3 still runs and populates RegimeState's rich fields;
+        only primary_regime/conviction are overridden. Book persisted per box
+        (data/integrator_state.json), warm-loaded at boot. Rollback:
+        OT_REGIME_ENGINE=v13.
 v3.9 — 2026-07-18 — SIGNAL JOURNAL DISPOSITIONS (ROADMAP Phase 3.1, log-only,
         zero behavior change): attempt_new_entry now emits what happened to
         every signal AFTER scoring — `disposition` events for fired /
@@ -202,6 +214,31 @@ from analysis.liquidity_mapper import get_liquidity_mapper
 from analysis.regime_classifier import get_regime_classifier, RegimeState, Regime
 from analysis.orb_engine import get_orb_engine, ORBState
 
+# ── L2.5 (2026-07-21): wire the Layer-1 confluence scorer + Layer-2 conviction
+# integrator into the LIVE regime decision. The committed (integrated) label
+# replaces the v1.3 boolean classifier's raw argmax as the regime that gates
+# trades. WHY: the v1.3 classifier flickers to UNKNOWN for a single tick at high
+# ADX (fleet-wide: UNKNOWN fired at avg ADX ~29, i.e. mid-trend, up to 41 on
+# AAPL) — each flicker a hard no-trade gate slamming shut during exactly the
+# high-conviction moments. The integrator holds a regime through single-tick
+# evidence drops (theta_hold hysteresis) and NEVER emits UNKNOWN — indecision is
+# a low conviction number on a best-fit label, not a seventh label. Gates run
+# WIDE OPEN this week (conviction logged, not gated — L3 tunes the bars later);
+# paper P&L is the de-facto arbiter of L1+L2 quality. Rollback: OT_REGIME_ENGINE=v13.
+_REGIME_ENGINE = os.environ.get("OT_REGIME_ENGINE", "L2").lower()   # "L2" | "v13"
+try:
+    from analysis.regime_confluence import RegimeConfluenceScorer
+    from analysis.conviction_integrator import ConvictionIntegrator, RANGE_WINDOW_BARS
+    _L2_OK = True
+except Exception as _l2e:                       # pragma: no cover
+    _L2_OK = False
+    logger.warning("L2.5 unavailable (%s) — falling back to v1.3 classifier", _l2e)
+
+_l1_scorer   = RegimeConfluenceScorer() if _L2_OK else None
+_l2_integ    = ConvictionIntegrator() if _L2_OK else None
+_L2_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "data", "integrator_state.json")
+
 # v3.9 — signal journal (log-only). Guarded: the loop runs identically without it.
 try:
     from analysis import signal_journal as _sigj
@@ -320,7 +357,16 @@ def run_analysis(state: BotState) -> dict:
 
 
 def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> RegimeState:
-    """Classify current market regime and log transitions."""
+    """Classify current market regime and log transitions.
+
+    L2.5: when OT_REGIME_ENGINE=L2 (default), the regime that gates trades is the
+    Layer-2 conviction integrator's COMMITTED label — computed from the Layer-1
+    confluence evidence vector — not the v1.3 boolean classifier's raw argmax.
+    The v1.3 classifier still runs (its rich fields — adx, structure, bb_width —
+    populate RegimeState and the logs), but its primary_regime is OVERRIDDEN by
+    the integrator's stable label, which never emits UNKNOWN and holds through
+    single-tick flicker. OT_REGIME_ENGINE=v13 restores the raw v1.3 label.
+    """
     regime = get_regime_classifier().classify(
         vol_state  = ctx["vol"],
         trend_state= ctx["trend"],
@@ -331,10 +377,40 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
     )
     state.last_regime_at = now_utc()
 
+    # ── L2.5 override: committed integrator label drives the gate ──────────────
+    l2_label = None
+    l2_conv  = None
+    if _REGIME_ENGINE == "L2" and _L2_OK:
+        try:
+            closes = None
+            df1m = ctx.get("df_1m")
+            if df1m is not None and len(df1m) >= RANGE_WINDOW_BARS:
+                closes = df1m["close"].tolist()[-RANGE_WINDOW_BARS:]
+            atr = getattr(ctx["vol"], "atr_current", None)
+            evidence = _l1_scorer.evidence(ctx["vol"], ctx["trend"],
+                                           ctx["structure"], ctx["liq_map"],
+                                           closes=closes, atr=atr)
+            st = _l2_integ.update(now_utc().timestamp(), evidence)
+            # persist the book so a mid-session restart doesn't reset conviction
+            try:
+                _l2_integ.save(_L2_STATE_PATH)
+            except Exception:
+                pass
+            # a warmed, committed label overrides v1.3; an unwarmed/cold book
+            # (stale, or empty label before first real evidence) leaves v1.3 in
+            # place so the open isn't driven by a zero-conviction argmax.
+            if st.regime and not st.stale:
+                l2_label, l2_conv = st.regime, st.conviction
+                regime.primary_regime = st.regime
+                regime.conviction     = st.conviction
+        except Exception as e:
+            logger.warning("L2.5 integrator step failed (%s) — using v1.3 label", e)
+
     if regime.primary_regime != state.last_regime_name:
+        engine_tag = f" [L2 c={l2_conv:.2f}]" if l2_label else " [v13]"
         logger.info(
             f"REGIME: {state.last_regime_name} → {regime.primary_regime} "
-            f"(conviction={regime.conviction:.2f} trigger={trigger})"
+            f"(conviction={regime.conviction:.2f} trigger={trigger}){engine_tag}"
         )
         get_alert_manager().send_regime_alert(
             old_regime = state.last_regime_name,
@@ -1482,6 +1558,20 @@ def main():
 
     state = BotState()
     state.paper_trading = session_config.paper_trading
+
+    # L2.5: warm-start the conviction integrator from its last snapshot so a
+    # mid-session restart doesn't reset the book to zero (the NVDA-restart
+    # lesson). If the snapshot is stale/absent, load() returns False and the
+    # book stays cold — the first few ticks re-warm it, and stale=True keeps it
+    # from driving the gate until warmed (see run_regime_classification).
+    if _REGIME_ENGINE == "L2" and _L2_OK:
+        try:
+            ok = _l2_integ.load(_L2_STATE_PATH, now_utc().timestamp())
+            logger.info("L2.5 integrator book %s (engine=%s)",
+                        "reloaded from snapshot" if ok else "cold-start",
+                        _REGIME_ENGINE)
+        except Exception as e:
+            logger.warning("L2.5 book load failed (%s) — cold-start", e)
 
     # Pre-fetch macro data
     logger.info("Fetching macro data...")
