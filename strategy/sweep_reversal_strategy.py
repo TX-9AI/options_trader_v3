@@ -1,5 +1,17 @@
 """
 strategy/sweep_reversal_strategy.py — Post-liquidity-sweep reversal for options.
+v3.2 — 2026-07-21 — ORB-OWNERSHIP GATE (hardcoded). A sweep may fire ONLY after
+        the ORB has released its claim on price. While the ORB owns price —
+        inside the range awaiting a break (WAITING_FOR_BREAK), broken out and
+        awaiting/at retest (ARMED_LONG/SHORT), a position open (OPEN_LONG/SHORT),
+        or the range failed back inside (INVALIDATED/close_inside) — the sweep
+        is blocked. Released = retest went stale (INVALIDATED/timeout), price ran
+        past the 50%% level (INVALIDATED/runaway), EXPIRED, or past the 11:00 ET
+        cutoff. Replaces the old broke_high/broke_low check, which let a sweep
+        fire the instant a break REGISTERED — i.e. while the ORB was still ARMED
+        and awaiting its retest — the exact double-ownership this forbids.
+        (CVX 2026-07-21 09:55: sweep short fired with price inside the range.)
+        Method renamed _sweep_broke_orb -> _orb_released_price.
 v3.1 — 2026-07-13 — defect H rename only: NO_ENTRY_AFTER_ET -> ORB_NO_ENTRY_AFTER_ET.
         Same constant, same (11, 0) value, same behaviour. This file is precisely
         why the rename earns its keep: the 11:00 ORB cutoff is the ARM condition
@@ -42,7 +54,7 @@ from analysis.regime_classifier import RegimeState, Regime
 from analysis.volatility_engine import VolatilityState
 from analysis.structure_analyzer import StructureMap
 from analysis.liquidity_mapper import LiquidityMap, LiquiditySweep
-from analysis.orb_engine import get_orb_engine
+from analysis.orb_engine import get_orb_engine, ORBState
 from data.options_chain import OptionsChain
 from data.options_chain import get_chain_fetcher
 from data.macro_data import MacroSnapshot
@@ -115,14 +127,16 @@ class SweepReversalStrategy(BaseOptionsStrategy):
             logger.debug(f"Sweep too old: {liq_map.sweep_age_bars} bars")
             return None
 
-        # ── ORB-boundary gate ────────────────────────────────────────────────
-        # Before the ORB cutoff, only take sweeps that broke OUT of the opening
-        # range. Internal-range sweeps (chop) are the exact false positives that
-        # produced repeated same-direction entries inside the box.
-        if not self._sweep_broke_orb(sweep):
+        # ── ORB-ownership gate ───────────────────────────────────────────────
+        # While the ORB has a live claim on price (inside range, or broken out
+        # and awaiting/at retest), the ORB owns it — a sweep must NOT fire. A
+        # sweep is released only after the ORB gives price up: retest went stale
+        # (timeout), price ran past the 50% level (runaway), or past the 11:00 ET
+        # cutoff. See _orb_released_price.
+        if not self._orb_released_price(sweep):
             logger.debug(
-                f"Sweep blocked: {sweep.kind} @ {sweep.sweep_price:.2f} did not "
-                f"break the ORB boundary during the ORB window — deferring to ORB"
+                f"Sweep blocked: {sweep.kind} @ {sweep.sweep_price:.2f} — ORB still "
+                f"owns price (state={get_orb_engine().data.state}); deferring to ORB"
             )
             return None
 
@@ -330,32 +344,53 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         )
         return signal
 
-    def _sweep_broke_orb(self, sweep: LiquiditySweep) -> bool:
-        """Gate: may this sweep fire given ORB containment?
+    def _orb_released_price(self, sweep: LiquiditySweep) -> bool:
+        """Gate: has the ORB RELEASED its claim on price, so a sweep may fire?
 
-        A sweep reversal only arms after a GENUINE breakout — a 1-min candle
-        that CLOSED beyond the range (the same break that arms the ORB retest),
-        not a wick that pokes the boundary and closes back inside. That wick is
-        still 'in range, awaiting break' → no trade.
+        Rule (hardcoded, v3.2): while the ORB has a live claim on price, the ORB
+        owns it and a sweep must NOT fire — no double-dipping the same tape. The
+        ORB owns price when:
+          - price is still inside the range awaiting a break  (WAITING_FOR_BREAK)
+          - a break happened and it is awaiting/at retest      (ARMED_LONG / SHORT)
+          - a position is open on the ORB                      (OPEN_LONG / SHORT)
+          - the range failed back into itself                  (INVALIDATED,
+            invalidation_reason == 'close_inside') — the ORB reclaimed price; it
+            did NOT release it to a sweep.
 
-        - Past the 11:00 ET ORB cutoff (ORB_NO_ENTRY_AFTER_ET): always True — the
-          ORB window is over, sweep reversal is free to work any level.
-        - No established range for today: True (nothing to gate on).
-        - Otherwise: a high sweep needs a registered break HIGH (a 1-min close
-          above the ORB high); a low sweep needs a registered break LOW.
+        The ORB has RELEASED price — sweep may fire — only when:
+          - past the 11:00 ET ORB cutoff (ORB_NO_ENTRY_AFTER_ET): the ORB window
+            is over, sweep reversal is free to work any level.
+          - no established range for today (nothing to own).
+          - the retest went STALE (invalidation_reason == 'timeout'), or
+          - price RAN AWAY past the 50% level with no retest
+            (invalidation_reason == 'runaway'),
+          - or the ORB already EXPIRED.
+
+        NB: this replaces the old broke_high/broke_low check, which let a sweep
+        fire the instant a break REGISTERED — i.e. while the ORB was still ARMED
+        and awaiting its retest — exactly the overlap this rule forbids.
         """
         now = now_et()
         if (now.hour, now.minute) >= ORB_NO_ENTRY_AFTER_ET:
-            return True
+            return True   # ORB window closed — sweep works any level
 
         eng = get_orb_engine()
-        if eng.data.orb_high <= 0 or eng.data.orb_low <= 0:
-            return True   # no established range to gate against
+        d   = eng.data
+        if d.orb_high <= 0 or d.orb_low <= 0:
+            return True   # no established range to own price
 
-        if sweep.kind == "high_sweep":
-            return eng.broke_high
-        if sweep.kind == "low_sweep":
-            return eng.broke_low
+        # ORB still owns price → sweep blocked.
+        if d.state in (ORBState.WAITING_FOR_BREAK,
+                       ORBState.ARMED_LONG, ORBState.ARMED_SHORT,
+                       ORBState.OPEN_LONG, ORBState.OPEN_SHORT):
+            return False
+
+        # ORB gave price up ONLY via runaway or timeout. A close_inside means the
+        # ORB reclaimed the range — it did not release price to a sweep.
+        if d.state == ORBState.INVALIDATED:
+            return d.invalidation_reason in ("runaway", "timeout")
+
+        # EXPIRED (or any dormant terminal state) → released.
         return True
 
     def _confirm_bos(self, df_1m: Optional[pd.DataFrame],
