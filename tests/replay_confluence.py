@@ -16,6 +16,16 @@
 #       as-is; L2 report prints only when l2 fields are present (old logs
 #       reprint cleanly under --report-only). Layer-1 acceptance checks remain
 #       the sole exit-code authority; L2 is observational until L2 targets land.
+# v1.2 — 2026-07-21 — ADX-WARMUP BOOKMARK. Prepend up to --warm-sessions (default 5)
+#         prior sessions of the same symbol's 1m tape before resampling, so 5m/15m/1h
+#         carry enough history to warm ADX-14 / the 50-EMA from the target day's FIRST
+#         scored tick. Prior bars feed the engines but are never scored or logged (the
+#         tick loop starts at the target day's open). Fixes the replay-only defect where
+#         ADX stayed 0.0 until ~14:00 — trend-blind every morning — mislabeling genuine
+#         trend days as CHOP (AAPL 2026-07-21: true 5m ADX peaked 52, replay logged 0
+#         until 14:00). The LIVE engine was already warm (feed store retains 400 5m bars
+#         ≈ 5 days); this gives the replay the same reach-back. --warm-sessions 0 restores
+#         the old single-day behaviour.
 # v1.1 — 2026-07-11 — skip non-OHLC siblings in harvest folders (fleet_trades_*.csv,
 #         *_trades_*.db, daily_trades_*.json) that share data/harvest/<date>/ with the
 #         tape; load_ohlc returns None on a missing timestamp column. v1.0 crashed at
@@ -120,11 +130,78 @@ def dist(xs: List[float]) -> dict:
 
 
 # ── one symbol replay ─────────────────────────────────────────────────────────
-def replay_symbol(path: str, warmup: int, use_v13: bool) -> Tuple[List[dict], str]:
+def _prior_session_1m(path: str, sessions_back: int) -> Optional[pd.DataFrame]:
+    """v1.2 ADX-WARMUP BOOKMARK. Load up to `sessions_back` prior sessions of the
+    SAME symbol's 1-min tape and return them concatenated (ascending), so the
+    resampled 5m/15m/1h frames carry enough history to warm ADX-14 / the 50-EMA
+    from the target day's FIRST tick.
+
+    Why: the live engine reads a rolling multi-session window from the feed store
+    (5m retained 400 bars ≈ 5 days), so live ADX is warm at 09:30. The replay
+    resampled 5m from a SINGLE day-file, so its ADX stayed 0.0 until ~14:00 —
+    every replayed morning was trend-blind, and the diary mislabeled genuine
+    trend days as CHOP. This gives the replay the same reach-back the live store
+    already has. Prior bars WARM the engines; they are never scored or logged
+    (the tick loop still starts at the target day's open — see replay_symbol).
+
+    Layout: data/OHLC/<date>/<SYMBOL>_ohlc_<date>.csv. We walk sibling date
+    folders older than the target and collect this symbol's files. After-hours /
+    gaps are fine — ADX only needs continuous *bars*, not continuous *time*.
+    Missing prior days are skipped silently (a fresh deployment simply warms
+    less, exactly as live would after a cold store).
+    """
+    if sessions_back <= 0:
+        return None
+    day_dir  = os.path.dirname(os.path.abspath(path))
+    ohlc_dir = os.path.dirname(day_dir)                 # .../data/OHLC
+    this_date = os.path.basename(day_dir)
+    fname     = os.path.basename(path)
+    if not os.path.isdir(ohlc_dir):
+        return None
+    prior_dates = sorted(d for d in os.listdir(ohlc_dir)
+                         if os.path.isdir(os.path.join(ohlc_dir, d)) and d < this_date)
+    prior_dates = prior_dates[-sessions_back:]          # the N most-recent priors
+    frames = []
+    for d in prior_dates:
+        # match the same symbol regardless of the date embedded in the filename
+        cand = os.path.join(ohlc_dir, d, fname.replace(this_date, d))
+        if not os.path.isfile(cand):
+            # fall back to any *_ohlc_* for this symbol in that folder
+            stem = fname.split("_ohlc_")[0]
+            hits = [f for f in os.listdir(os.path.join(ohlc_dir, d))
+                    if f.upper().startswith(stem.upper() + "_OHLC_")]
+            if not hits:
+                continue
+            cand = os.path.join(ohlc_dir, d, hits[0])
+        df = load_ohlc(cand)
+        if df is not None and not df.empty:
+            frames.append(df)
+    if not frames:
+        return None
+    warm = pd.concat(frames).sort_index()
+    warm = warm[~warm.index.duplicated(keep="last")]
+    return warm
+
+
+def replay_symbol(path: str, warmup: int, use_v13: bool,
+                  warm_sessions: int = 5) -> Tuple[List[dict], str]:
     sym = sym_of(path)
-    df1m = load_ohlc(path)
-    if df1m is None or len(df1m) < warmup + 5:
+    df1m_today = load_ohlc(path)
+    if df1m_today is None or len(df1m_today) < warmup + 5:
         return [], sym
+
+    # v1.2: prepend prior-session 1m so resampled frames warm ADX/EMA from the
+    # open. score_start marks the target day's first bar — only bars at/after it
+    # are scored and logged; everything before is warmup context only.
+    prior = _prior_session_1m(path, warm_sessions)
+    if prior is not None:
+        prior = prior[prior.index < df1m_today.index[0]]     # strictly before today
+        df1m = pd.concat([prior, df1m_today]).sort_index()
+        df1m = df1m[~df1m.index.duplicated(keep="last")]
+    else:
+        df1m = df1m_today
+    score_start = df1m_today.index[0]
+
     d5, d15, d1h = resample(df1m, "5min"), resample(df1m, "15min"), resample(df1m, "1h")
 
     volE, trE, stE, lqE = (get_volatility_engine(), get_trend_engine(),
@@ -135,8 +212,13 @@ def replay_symbol(path: str, warmup: int, use_v13: bool) -> Tuple[List[dict], st
 
     recs: List[dict] = []
     idx1m = df1m.index
-    for i in range(warmup, len(df1m)):
+    # start at the target day's open (or `warmup` bars in, whichever is later) so
+    # the warmup context feeds the engines but is never scored/logged.
+    start_i = max(warmup, idx1m.searchsorted(score_start))
+    for i in range(start_i, len(df1m)):
         t = idx1m[i]
+        if t < score_start:
+            continue
         price = float(df1m["close"].iloc[i])
         # as-of slices (only bars that had closed by t)
         s5  = d5[d5.index <= t]
@@ -326,6 +408,10 @@ def main():
     ap = argparse.ArgumentParser(description="Layer-1 confluence replay over DXFeed OHLC")
     ap.add_argument("paths", nargs="*", help="CSV files or a data/OHLC/<date>/ directory")
     ap.add_argument("--warmup", type=int, default=20, help="skip first N 1-min bars")
+    ap.add_argument("--warm-sessions", type=int, default=5, dest="warm_sessions",
+                    help="prior sessions of same-symbol 1m to prepend so ADX/EMA warm "
+                         "from the open (0 = old single-day behaviour). Default 5 "
+                         "matches the live feed store's 5m retention (~5 days).")
     ap.add_argument("--jsonl", default=None, help="dump per-tick records to this JSONL")
     ap.add_argument("--no-v13", action="store_true", help="skip the v1.3 comparison label")
     ap.add_argument("--report-only", default=None, metavar="JSONL",
@@ -355,7 +441,8 @@ def main():
     paths = gather_paths(args.paths)
     all_recs: List[dict] = []
     for p in paths:
-        recs, sym = replay_symbol(p, args.warmup, use_v13=not args.no_v13)
+        recs, sym = replay_symbol(p, args.warmup, use_v13=not args.no_v13,
+                                  warm_sessions=args.warm_sessions)
         print(f"  replayed {sym:6} {len(recs):4d} ticks  ({os.path.basename(p)})")
         all_recs += recs
 
