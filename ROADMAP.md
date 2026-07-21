@@ -144,27 +144,70 @@ empirical campaign.**
   distribution). *To fully close:* let it run and confirm the jsonl captures a
   full session across the fleet; optionally add an EOD-conductor collection
   phase once volume justifies (deliberately not wired yet).
-- ⬜ **L3.2 — Define the gate matrix (Phase 2).** Replace identity-only dispatch
+- ⬜ **L3.2 — Missed-trade / rejection ledger (recall) (Phase 3.1b) — NOT STARTED.**
+  L3.1 measures **precision** (of trades taken, which were good?). This step
+  measures **recall** (of trades we *should* have taken, how many did we miss?) —
+  the other half of calibration, and invisible without it. A tuned bar that
+  raises win-rate-on-taken while silently discarding most of the edge looks like
+  progress and isn't; this is the guard against that. Two false-negative classes,
+  kept distinct:
+  - **(a) Threshold near-miss** — a setup fully *formed* but a gate *declined* it
+    (conviction below the bar, sizing reject, ORB retest just outside tolerance).
+    L3.1 already emits the raw events (`scored` below-B REJECTs, `disposition`,
+    `retest_check`); this step is the layer *on top* that consolidates them.
+  - **(b) Coverage gap** — *no* setup formed at all, yet the market did the thing
+    a strategy exists to catch (a clean range the condor never engaged; a decisive
+    break no ORB armed on). Not in L3.1 at all — found by scanning each strategy's
+    target market-condition and asking "was a live setup present during it?"
+  *The deliverable* = `analysis/rejection_ledger.py` + an EOD summary artifact
+  (`reports/rejection_summary_<date>.jsonl` + human digest) that, per strategy per
+  session, records every near-miss with: strategy, timestamp, the setup state at
+  decision, the **exact failing gate/clause**, the conviction/score if any, and —
+  the piece that makes it calibration-grade — the **forward outcome**: what price
+  did over the next N bars / to the setup's would-be stop and target, so each
+  rejection is labeled *dodged-a-loss* vs *missed-a-winner*. Reuses the same
+  as-of replay machinery as `replay_confluence.py` (no look-ahead: outcomes are
+  computed only from bars *after* the decision bar). Log-only, drives nothing.
+  *To close:* build against `signal_journal` events + the store tape; prove the
+  forward-outcome join is leak-free on a known session; confirm both classes (a)
+  and (b) populate across a fleet session. **Gated on L3.1 data flowing; not
+  gated on L2 freeze** (it observes the *current* ruleset — see caveat below).
+  ⚠️ **Ruleset-relative:** a near-miss is only meaningful against a *fixed*
+  ruleset. While strategy gates are still changing (e.g. the sweep ORB-ownership
+  gate, sweep v3.2), a rejection logged today may not be one next week. Before L1
+  truths freeze this ledger is a **gap-finder** (surfaces gross coverage holes and
+  obviously-mis-set bars); *after* L2.6 freeze it becomes **calibration-grade**
+  recall input to L3.4. Tag every ledger row with the ruleset/version hash so
+  pre-freeze and post-freeze rows are never pooled.
+- ⬜ **L3.3 — Define the gate matrix (Phase 2).** Replace identity-only dispatch
   with `fires iff regime ∈ permissive AND C ≥ bar(trade_type)`. Provisional
   bars encode binary-vs-nuanced (ORB/sweep low ~0.40; condor ~0.65; butterfly
   ~0.70 — all placeholders). *To close:* write the permissive×bar table into
   dispatch behind a flag, still in paper. **Gated on L2 frozen (L2.6).**
-- ⬜ **L3.3 — Calibrate bars from ROI (Phase 3 — the 3–6 week campaign).** Paper
-  runs gates wide open (~0.20 floor fleet-wide); bucket **fee-adjusted** ROI by
-  conviction decile per trade type; place each bar at the lowest bucket whose
-  *marginal* expectancy ≥ 0 (not cumulative). Min ~40 trades/bucket. *To close:*
-  the fleet generates the distribution over weeks; needs L3.1 data flowing +
-  the circularity split (fit sessions ≠ acceptance sessions).
-- ⬜ **L3.4 — Circularity + statistics guards.** Fee/slippage-adjusted P&L only;
+- ⬜ **L3.4 — Calibrate bars from ROI + recall (Phase 3 — the 3–6 week campaign).**
+  Paper runs gates wide open (~0.20 floor fleet-wide); bucket **fee-adjusted** ROI
+  by conviction decile per trade type; place each bar at the lowest bucket whose
+  *marginal* expectancy ≥ 0 (not cumulative). Min ~40 trades/bucket. **The L3.2
+  rejection ledger enters here as the recall axis:** a candidate bar is judged not
+  only by the expectancy of trades it *admits* (precision, from L3.1) but by the
+  expectancy of the near-misses it *excludes* (recall, from L3.2). Lowering a bar
+  is only justified when the newly-admitted bucket's *marginal* expectancy ≥ 0 in
+  BOTH the taken-trade curve and the missed-trade forward outcomes — otherwise the
+  bar is discarding positive-expectancy setups (recall loss) or admitting noise
+  (precision loss). *To close:* the fleet generates the distribution over weeks;
+  needs L3.1 + L3.2 data flowing + the circularity split (fit sessions ≠
+  acceptance sessions).
+- ⬜ **L3.5 — Circularity + statistics guards.** Fee/slippage-adjusted P&L only;
   haircut 0DTE spread slippage; split tape so bars are never fit on the sessions
-  used to tune L1 truths; pooled-fleet curve + per-symbol sanity check. *To
-  close:* enforce the holdout in the bucketer.
-- ⬜ **L3.5 — Live descent, safely (Phase 3.5).** Go live with each bar one
+  used to tune L1 truths; pooled-fleet curve + per-symbol sanity check. The L3.2
+  ledger's forward outcomes are held to the *same* leak-free / holdout discipline
+  as taken-trade P&L. *To close:* enforce the holdout in the bucketer.
+- ⬜ **L3.6 — Live descent, safely (Phase 3.5).** Go live with each bar one
   bucket ABOVE its paper crossing, descend one notch per review window, watch
   the newly-admitted bucket's realized expectancy, raise back on the first
   negative read. *To close:* requires the tiny-account live shakedown already
   gating the fill-confirmation work, then a bar to descend.
-- ⬜ **L3.6 — Wire live + delete UNKNOWN + keep calibrated (Phase 4).** Replace
+- ⬜ **L3.7 — Wire live + delete UNKNOWN + keep calibrated (Phase 4).** Replace
   the classify path and dispatch gate; grep the fleet tooling (status.py,
   query.py, alerts) and delete UNKNOWN from the enum; keep the data-fault
   no-trade. Recalibrate on a rolling window (monthly, or after any L1 truth
@@ -173,9 +216,10 @@ empirical campaign.**
 
 **Layer-3 DONE means (end state):** every trade type carries an empirically-
 placed conviction bar in every permissive regime, the classifier never
-abstains, and "no trade" is either a data fault or the honest verdict of the
-bars — never a dead spot. **Remaining: L3.2–L3.6 (all of it). L3.1 is started
-and log-only.**
+abstains, "no trade" is either a data fault or the honest verdict of the bars —
+never a dead spot — and every bar is defensible on **both** axes: the trades it
+admits are positive-expectancy (precision) and the trades it excludes are not
+(recall). **Remaining: L3.2–L3.7 (all of it). L3.1 is started and log-only.**
 
 ---
 
@@ -187,14 +231,17 @@ L1.6 + L1.7 (labeled TREND/SWEEP/pin/breakout tape)   <- calendar time + label_d
         |__ LAYER 1 DONE
              |__ L2.4 calibrate priors -> L2.5 shadow live -> L2.6 FREEZE weights
                   |__ LAYER 2 DONE  (+ the clean 2-week baseline)
-                       |__ L3.2 gate matrix -> L3.3 ROI campaign (3-6 wk paper)
-                            -> L3.4 guards -> L3.5 live descent -> L3.6 wire live
+                       |__ L3.3 gate matrix -> L3.4 ROI+recall campaign (3-6 wk paper)
+                            -> L3.5 guards -> L3.6 live descent -> L3.7 wire live
                                  |__ LAYER 3 DONE = the vision
 ```
 
 Two things run *in parallel* and don't block the path:
-- **L3.1 instrumentation** is already logging — every session from Monday is
-  calibration-grade data banked ahead of the L3.3 campaign.
+- **L3.1 instrumentation + L3.2 rejection ledger** are both log-only and both
+  bank calibration-grade data ahead of the L3.4 campaign — L3.1 the taken-trade
+  (precision) side, L3.2 the missed-trade (recall) side. Neither is gated on the
+  L2 freeze to *run*; both are ruleset-relative, so their rows are version-tagged
+  and only pooled for calibration after L2.6.
 - **The sweep-precursor observer** (`shadow-observer.service`, live on the QQQ
   paper box since 2026-07-18, stage 1) is banking velocity-primitive data to
   validate against `data/OHLC/` before its scorers (stage 2) are ever trusted —
@@ -206,12 +253,17 @@ Two things run *in parallel* and don't block the path:
 ## Risks worth re-stating
 
 1. **Removing UNKNOWN shifts all safety onto the bars.** Stay in paper through
-   L3.3. (The fleet already is.)
-2. **Circularity is the quiet killer.** L3.4's holdout is not optional; neither
+   L3.4. (The fleet already is.)
+2. **Circularity is the quiet killer.** L3.5's holdout is not optional; neither
    is L1's (fit the flat cut and the bars on different sessions than you accept
-   on).
-3. **Cold-start labels are noise by design** (argmax of near-zero convictions at
+   on). The L3.2 ledger's forward outcomes are held to the same discipline —
+   outcomes computed only from post-decision bars, never look-ahead.
+3. **Precision without recall is a mirage.** Tuning bars on taken-trades alone
+   (L3.1) can raise win-rate while silently shedding most of the edge. L3.2 is
+   the counterweight; a bar is not "calibrated" until it is defended on both
+   axes. This is *why* L3.2 exists as its own step and not a footnote to L3.4.
+4. **Cold-start labels are noise by design** (argmax of near-zero convictions at
    9:31). Harmless only because bars gate trades and the ORB lockout covers the
    commit window — preserve both.
-4. **Non-stationarity.** A bar placed in a low-VIX month drifts. L3.6's
+5. **Non-stationarity.** A bar placed in a low-VIX month drifts. L3.7's
    recalibration cadence is architecture, not maintenance.
