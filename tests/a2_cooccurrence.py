@@ -1,4 +1,7 @@
-# options_trader_v3/tests/a2_cooccurrence.py — v1.0
+# options_trader_v3/tests/a2_cooccurrence.py — v1.1
+# v1.1 — 2026-07-22 — auto-discovery of the replay jsonl (validate_regime.sh
+#        v2.1 consolidated products to ~/day_trader_pro/reports/; the old
+#        data/harvest/<date>/ path is legacy). Prints what it loaded.
 """
 A2 co-occurrence analyzer — what actually happens when TRENDING and RANGING
 are both strong (>0.5) on the same tick.
@@ -22,9 +25,9 @@ Answers three questions:
      trend is running under it".
 
 Usage:
-    python -m tests.a2_cooccurrence reports/replay_2026-07-17.jsonl
-    python -m tests.a2_cooccurrence r1.jsonl r2.jsonl --horizons 10,20,30
-    python -m tests.a2_cooccurrence *.jsonl --min-move 0.0005
+    python -m tests.a2_cooccurrence                      # auto-discovers all sessions
+    python -m tests.a2_cooccurrence --horizons 10,20,30
+    python -m tests.a2_cooccurrence <explicit.jsonl> ... # override discovery
 
 Notes:
   - Records are 1-min bars in time order, so a horizon of N ~= N minutes.
@@ -45,6 +48,15 @@ import sys
 from collections import defaultdict
 from typing import Dict, List, Optional
 
+# Search order for the replay tick logs. validate_regime.sh v2.1 consolidated
+# all products under reports/; earlier layouts are kept as fallbacks so this
+# keeps working across layout changes instead of silently finding nothing.
+SEARCH_PATHS = [
+    "~/day_trader_pro/reports/regime_replay_*.jsonl",
+    "~/day_trader_pro/data/harvest/*/regime_replay_*.jsonl",   # legacy
+    "~/day_trader_pro/reports/*/regime_replay_*.jsonl",
+]
+
 TRENDING_BULL = "TRENDING_BULL"
 TRENDING_BEAR = "TRENDING_BEAR"
 RANGING = "RANGING"
@@ -52,18 +64,36 @@ STRONG = 0.5
 
 
 # ── loading ──────────────────────────────────────────────────────────────────
+def discover() -> List[str]:
+    """Find replay jsonl files without hardcoding one layout."""
+    import os
+    for pat in SEARCH_PATHS:
+        hits = sorted(glob.glob(os.path.expanduser(pat)))
+        if hits:
+            return hits
+    return []
+
+
 def load(paths: List[str]) -> List[dict]:
-    recs = []
+    import os
+    recs, loaded = [], []
     for pat in paths:
-        for path in sorted(glob.glob(pat)) or [pat]:
+        for path in sorted(glob.glob(os.path.expanduser(pat))) or [pat]:
             try:
                 with open(path) as fh:
+                    n0 = len(recs)
                     for line in fh:
                         line = line.strip()
                         if line:
                             recs.append(json.loads(line))
+                    loaded.append((os.path.basename(path), len(recs) - n0))
             except FileNotFoundError:
                 print(f"  ! not found: {path}", file=sys.stderr)
+    if loaded:
+        print(f"loaded {len(loaded)} file(s):")
+        for name, n in loaded:
+            print(f"   {name:<34} {n:>7d} ticks")
+        print()
     return recs
 
 
@@ -139,7 +169,8 @@ def summarize(vals: List[float]) -> str:
 
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description="A2 co-occurrence + HTF-conditioned drift")
-    ap.add_argument("jsonl", nargs="+", help="replay jsonl file(s); globs ok")
+    ap.add_argument("jsonl", nargs="*",
+                    help="replay jsonl file(s); globs ok. Omit to auto-discover.")
     ap.add_argument("--horizons", default="10,20,30",
                     help="forward horizons in bars/minutes (default 10,20,30)")
     ap.add_argument("--min-move", type=float, default=0.0,
@@ -147,7 +178,15 @@ def main(argv: List[str]) -> int:
     args = ap.parse_args(argv[1:])
     horizons = [int(h) for h in args.horizons.split(",") if h.strip()]
 
-    recs = load(args.jsonl)
+    paths = args.jsonl or discover()
+    if not paths:
+        print("No replay jsonl found. Looked in:")
+        for p in SEARCH_PATHS:
+            print(f"   {p}")
+        print("\nPass an explicit path if your layout differs.")
+        return 2
+
+    recs = load(paths)
     if not recs:
         print("no records loaded")
         return 2
