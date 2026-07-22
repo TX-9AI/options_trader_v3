@@ -1,4 +1,10 @@
-# options_trader_v3/tests/ramp_calibration.py — v1.0
+# options_trader_v3/tests/ramp_calibration.py — v1.1
+# v1.1 — 2026-07-22 — CURRENT bounds now read the LIVE module constants (which
+#        honour OT_RC_* overrides) instead of hardcoded defaults, so a run with
+#        dials set no longer misreports its own bounds or raises a false
+#        'hi bound too low'. Terms whose bounds are NOT simple module constants
+#        (adx_s lo is derived from the constructor; align_val is a max() of two
+#        sources) are now marked DERIVED and give no suggestion.
 """
 Ramp calibration — find WHICH scoring term is saturating and where its ramp
 bounds should actually sit, fitted to observed tape instead of priors.
@@ -41,13 +47,33 @@ SEARCH_PATHS = [
 
 # (label, regime-breakdown key, input field, scored field, current lo, current hi,
 #  higher_input_means_higher_score)
-TERMS = [
-    ("TRENDING adx_s      (soft-necessary)", "TRENDING", "adx",          "adx_s",   10.0, 35.0, True),
-    ("TRENDING align_val  (corroborator)",   "TRENDING", "align_frac",   "align_val", 0.0,  1.0, True),
-    ("RANGING  flat_s     (soft-necessary)", "RANGING",  "angle",        "flat_s",  12.0, 20.0, False),
-    ("RANGING  room_s     (soft-necessary)", "RANGING",  "bb_width_pct", "room_s",   0.05, 0.20, True),
-    ("RANGING  osc_s      (corroborator)",   "RANGING",  "crossings",    "osc_s",    2.0,  5.0, True),
-]
+# Live bounds come from the module, so OT_RC_* overrides are reflected.
+try:
+    from analysis import regime_confluence as _RC
+except Exception:                                    # standalone use
+    _RC = None
+
+
+def _live(name: str, fallback: float):
+    return getattr(_RC, name, fallback) if _RC else fallback
+
+
+# (label, regime, input field, scored field, lo, hi, ascending, tunable)
+# lo/hi = None means the bound is DERIVED, not a simple module constant.
+def _terms():
+    cut, soft = _live("FLAT_ANGLE_CUT_DEG", 20.0), _live("FLAT_ANGLE_SOFT_DEG", 8.0)
+    return [
+        ("TRENDING adx_s      (soft-necessary)", "TRENDING", "adx", "adx_s",
+         None, _live("ADX_STRONG_SOLO", 35.0), True, "hi only (lo = adx_trend-5, constructor)"),
+        ("TRENDING align_val  (corroborator)", "TRENDING", "align_frac", "align_val",
+         None, None, True, "DERIVED: max(align_frac, ramp(adx,...)) - two sources"),
+        ("RANGING  flat_s     (soft-necessary)", "RANGING", "angle", "flat_s",
+         cut - soft, cut, False, "conditional sample: only ticks past the flat veto"),
+        ("RANGING  room_s     (soft-necessary)", "RANGING", "bb_width_pct", "room_s",
+         _live("RANGE_ROOM_LO", 0.05), _live("RANGE_ROOM_HI", 0.20), True, ""),
+        ("RANGING  osc_s      (corroborator)", "RANGING", "crossings", "osc_s",
+         _live("OSC_CROSS_LO", 2.0), _live("OSC_CROSS_HI", 5.0), True, ""),
+    ]
 
 
 def discover() -> List[str]:
@@ -140,7 +166,7 @@ def main(argv: List[str]) -> int:
     print("A term pegged at 1.0 on most scored ticks is a SWITCH, not a dial.")
     print("=" * 78)
 
-    for label, regime, in_key, out_key, cur_lo, cur_hi, ascending in TERMS:
+    for label, regime, in_key, out_key, cur_lo, cur_hi, ascending, caveat in _terms():
         ins, outs = collect(recs, regime, in_key, out_key)
         if not outs:
             print(f"\n{label}\n   (no data)")
@@ -156,7 +182,9 @@ def main(argv: List[str]) -> int:
               f"pegged 0.0: {100.0*peg0/n:5.1f}%   "
               f"graded in between: {100.0*mid/n:5.1f}%")
 
-        if ins:
+        if caveat:
+            print(f"   NOTE         {caveat}")
+        if ins and cur_lo is not None and cur_hi is not None:
             ps = {p: pctile(ins, p) for p in (5, 25, 50, 75, 90, 95, 99)}
             print(f"   INPUT {in_key:<13} p5{fmt(ps[5])}  p25{fmt(ps[25])}  "
                   f"p50{fmt(ps[50])}  p75{fmt(ps[75])}  p90{fmt(ps[90])}  "
@@ -171,10 +199,14 @@ def main(argv: List[str]) -> int:
                 s_lo, s_hi = pctile(ins, 100 - args.hi_pct), pctile(ins, 100 - args.lo_pct)
             print(f"   SUGGESTED    lo={s_lo:<7.2f}(p{args.lo_pct:.0f})   "
                   f"hi={s_hi:<7.2f}(p{args.hi_pct:.0f})", end="")
-            if r_hi is not None and r_hi < 60:
-                print("   <-- hi bound is too low; term maxes out on ordinary tape")
+            if r_hi is not None and r_hi < 60 and peg1 / n > 0.40:
+                print("   <-- hi bound too low AND term is pegging; widen it")
             else:
                 print()
+        elif ins:
+            ps2 = {p: pctile(ins, p) for p in (25, 50, 95)}
+            print(f"   INPUT {in_key:<13} p25{fmt(ps2[25])}  p50{fmt(ps2[50])}  "
+                  f"p95{fmt(ps2[95])}   (no bound suggestion - see NOTE)")
 
     print("\n" + "=" * 78)
     print("Reading this: a term with <25% 'graded in between' is behaving as a")
