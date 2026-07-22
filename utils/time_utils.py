@@ -34,6 +34,10 @@ NO_ENTRY    = dtime(*GLOBAL_NO_ENTRY_ET)   # global 0DTE cutoff — from config
 ORB_END     = dtime(9, 35)   # ORB defined by 9:30–9:35 candle
 
 
+# v3.8 — 2026-07-22 — is_hard_close_time() now opens the flatten window at
+# FLATTEN_WINDOW_OPEN (15:40 ET), five minutes before the 15:45 cross, so the
+# mark-limit phase has time to fill before the order is forced marketable.
+
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -70,10 +74,27 @@ def is_rth() -> bool:
     return RTH_OPEN <= t < RTH_CLOSE
 
 
+# v3.8: flatten window opens 5 min before the hard cross so the mark-limit
+# phase has time to work. Falls back to HARD_CLOSE if config is older.
+try:
+    from config import FLATTEN_WINDOW_OPEN_ET as _FWO
+    FLATTEN_WINDOW_OPEN = dtime(*_FWO)
+except Exception:
+    FLATTEN_WINDOW_OPEN = HARD_CLOSE
+
+
 def is_hard_close_time() -> bool:
-    """True if it's time to close all positions (≥ 15:45 ET)."""
+    """True if the end-of-day flatten window is open (≥ 15:40 ET).
+
+    v3.8: the window now OPENS FIVE MINUTES EARLIER than the hard close itself.
+    15:40-15:44 the flatten posts mark-limits (re-priced each tick) so a
+    position can close without paying the spread; at 15:45 it crosses and the
+    position closes unconditionally. Opening at 15:45 would have left zero time
+    for the limit phase — the escalation would never fire before the bell. The
+    cross-over instant is still HARD_CLOSE (15:45); see
+    execution/limit_ladder.hard_close_order_mode."""
     now = now_et()
-    return now.time() >= HARD_CLOSE
+    return now.time() >= FLATTEN_WINDOW_OPEN
 
 
 def is_past_entry_cutoff() -> bool:
