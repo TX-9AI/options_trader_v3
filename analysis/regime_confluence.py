@@ -1,4 +1,28 @@
 # analysis/regime_confluence.py — options_trader_v3
+# v1.2 — 2026-07-22 — RAMP DE-SATURATION. Two changes, one behavioural.
+#         (a) All 14 ramp PRIOR bounds are now env-overridable via OT_RC_<NAME>
+#             (helper _envf), so calibration is a config change with instant
+#             rollback rather than a code edit. No behavioural delta by itself.
+#         (b) BEHAVIOURAL: room_s and osc_s bounds re-fitted from tape and
+#             promoted to defaults —
+#               RANGE_ROOM_LO 0.05 -> 0.17,  RANGE_ROOM_HI 0.20 -> 1.00
+#               OSC_CROSS_LO  2.0  -> 4.0,   OSC_CROSS_HI  5.0  -> 10.0
+#             Both terms were behaving as SWITCHES, not dials: room_s was
+#             pegged at 1.0 on 72.7%% of scored ticks (hi bound sat at input
+#             p27), osc_s on 70.5%% (hi at p30). RANGING therefore saturated
+#             every day (p90 = 1.0) and collided with TRENDING.
+#             Fitted on 60,341 ticks across 6 sessions (2026-07-14/15/16/17/
+#             20/21; 07-13 excluded — ADX-starved, no warm-up). The pool
+#             independently re-derives these same bounds (room_s p25/p95 =
+#             0.16/1.00, osc_s 4/10), i.e. convergence, not a one-day fit.
+#             Result: room_s 15.8%% -> 66.2%% graded, osc_s 22.5%% -> 60.0%%,
+#             RANGING p90 1.0 -> 0.476, A2 violations 14.4%% -> 4.3%% of ticks.
+#             NOTE OSC_CROSS_* is shared with _compression, which reads FEW
+#             crossings as a coil — the crossings axis is a see-saw, so this
+#             also lifts COMPRESSION (p90 0.65 -> 0.879). Expected, watched.
+#         Unchanged and still unfitted: flat_s (conditional sample — only
+#         ticks past the flat veto), adx_s / align_val (offline HTF starvation,
+#         align_frac never exceeds 0.67 in replay — blocked on L1.9 bookmark).
 # v1.1 — 2026-07-12 — FIX silent config-import failure. The guarded import
 #         requested SWEEP_ACCEPT_CLOSES from config, but it lives in
 #         analysis/regime_classifier.py; the whole block threw, the except
@@ -96,10 +120,10 @@ FLAT_ANGLE_SOFT_DEG  = _envf("FLAT_ANGLE_SOFT_DEG", 8.0)    # full flat credit a
 RANGE_WINDOW_BARS    = 25     # angle + crossings window (matches tape study)
 ADX_STRONG_SOLO      = _envf("ADX_STRONG_SOLO", 35.0)   # ADX above which strength carries a trend solo
 SWEEP_HALFLIFE_BARS  = 3.0    # sweep evidence half-life, absent follow-through
-OSC_CROSS_LO         = _envf("OSC_CROSS_LO", 2.0)    # crossings ramp lo (few = pin/coil)
-OSC_CROSS_HI         = _envf("OSC_CROSS_HI", 5.0)    # crossings ramp hi (many = two-sided rotation)
-RANGE_ROOM_LO        = _envf("RANGE_ROOM_LO", 0.05)   # RANGING "room to oscillate": below this width, not ranging
-RANGE_ROOM_HI        = _envf("RANGE_ROOM_HI", 0.20)   #   … at/above this width, full room (= BB_WIDTH_COMPRESSION_PCT)
+OSC_CROSS_LO         = _envf("OSC_CROSS_LO", 4.0)    # crossings ramp lo (few = pin/coil)
+OSC_CROSS_HI         = _envf("OSC_CROSS_HI", 10.0)    # crossings ramp hi (many = two-sided rotation)
+RANGE_ROOM_LO        = _envf("RANGE_ROOM_LO", 0.17)   # RANGING "room to oscillate": below this width, not ranging
+RANGE_ROOM_HI        = _envf("RANGE_ROOM_HI", 1.00)   #   … at/above this width, full room (= BB_WIDTH_COMPRESSION_PCT)
 BREAKOUT_ADX_LO      = _envf("BREAKOUT_ADX_LO", 38.0)   # momentum-carry ramp: inside-band forgiven from here
 BREAKOUT_ADX_HI      = _envf("BREAKOUT_ADX_HI", 50.0)   #   … to here (fully forgiven)
 EXPAND_RATIO_LO      = _envf("EXPAND_RATIO_LO", 1.0)    # atr_current/atr_avg_20 expansion ramp
