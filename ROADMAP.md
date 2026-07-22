@@ -74,11 +74,47 @@ labeled tape.**
   --rebuild` re-scores history once it lands. *Blocks honest closure of the
   TRENDING Tier-B row via the daily diary.*
 
+- ✅ **L1.10 — Ramp de-saturation (scores were switches, not dials).** Audit of
+  60,341 ticks found the scorer's ramp bounds set for far narrower tape than the
+  fleet actually trades: `room_s` pegged at 1.0 on 72.7% of scored ticks (hi
+  bound at input p27), `osc_s` on 70.5% (hi at p30). RANGING therefore hit
+  p90 = 1.0 every session and tied with TRENDING on 14–25% of ticks, leaving the
+  L2 argmax to break those ties on integration speed (τ_up 40s vs 780s) rather
+  than evidence. *Closed by:* (a) `regime_confluence.py` v1.2 — all 14 ramp
+  bounds env-overridable via `OT_RC_<NAME>`, so calibration is a config change
+  with instant rollback; (b) `room_s` and `osc_s` re-fitted from tape and
+  promoted to defaults (`RANGE_ROOM_LO` 0.05→0.17, `RANGE_ROOM_HI` 0.20→1.00,
+  `OSC_CROSS_LO` 2→4, `OSC_CROSS_HI` 5→10). Fitted on 6 sessions
+  (07-14/15/16/17/20/21; **07-13 excluded — ADX-starved, no warm-up**), and the
+  pool independently re-derives the same bounds — convergence, not a one-day fit.
+  *Result:* `room_s` 15.8%→66.2% graded, `osc_s` 22.5%→60.0%, RANGING p90
+  1.0→0.476, **A2 violations 14.4%→4.3% of ticks** (−71% to −79%, consistent on
+  every session). New tooling: `tests/ramp_calibration.py` (per-term saturation +
+  input percentiles + suggested bounds) and `tests/a2_cooccurrence.py` (A2
+  tie-break audit + HTF-conditioned forward drift with a RANGE_ONLY control);
+  `day_trader_pro/devtools.sh` v1.17 item 52 runs the latter.
+  *Two findings recorded, not yet actioned:* **(i)** `OSC_CROSS_*` is shared with
+  `_compression` (few crossings = coil), so the crossings axis is a see-saw —
+  widening it also lifts COMPRESSION (p90 0.65→0.879); it is now the term to
+  watch. **(ii)** The residual 4.3% is **not** saturation — it is genuine
+  cross-horizon co-occurrence (TRENDING reads 1d/1h/15m/5m, RANGING reads a
+  25-bar 1-minute window), so A2's premise of same-horizon mutual exclusivity is
+  itself mis-specified. Re-specifying A2 is a REGIME_TRUTHS decision, not a
+  calibration one.
+- ⬜ **L1.11 — Fit the remaining ramps (`flat_s`, `adx_s`, `align_val`).** Left
+  deliberately untouched by L1.10. `flat_s` is a conditional sample (only ticks
+  past the flat veto) so its measured distribution is the wrong population.
+  `adx_s`/`align_val` cannot be fitted from replay at all: `align_frac` never
+  exceeds 0.67 across the pool, the offline HTF-starvation signature. **Gated on
+  L1.9 (bookmark)** or on fitting from live `feed_store.db` depth instead.
+
 **Layer-1 DONE means:** on ≥ 10 sessions × 29 symbols of labeled tape, every
 Tier-B row passes, the flat cut is frozen on multi-day base rates with the
 holdout honored, no 15-s chatter, and every displacement has a nameable truth.
-**Remaining: L1.6, L1.7 (TREND+SWEEP+pin+breakout tape), L1.9. All gated on
-calendar time + labeling — no code blocker except the bookmark.**
+**Remaining: L1.6, L1.7 (TREND+SWEEP+pin+breakout tape), L1.9, L1.11. All gated
+on calendar time + labeling — no code blocker except the bookmark. L1.10 (ramp
+de-saturation) is DONE and its tooling (`ramp_calibration.py`) also supplies the
+by-label distribution L1.6 needs.**
 
 ---
 
@@ -107,26 +143,40 @@ and live-wiring remain.**
   constants want the same multi-day distributions the flat cut does.
   **Gated on Layer 1 being DONE** (calibrating L2 on an uncalibrated L1 is
   circular).
-- ⬜ **L2.5 — Wire L2 into the live loop as in-process shadow (Phase 0.2).**
-  Currently NO live-loop path touches the integrator (verified). *To close:*
-  run it in-process on the ALWAYS_ON boxes against the live v1.3 classifier,
-  both reading the shared store; log both labels + the full conviction vector +
-  stale flag per tick; warm-start from session bars at 9:30–9:35 (the ORB
-  lockout covers the commit window). Observe-only — still drives no trade.
-  *NOTE:* the `shadow-observer.service` now live on the QQQ paper box
-  (2026-07-18) is a **different** shadow subsystem — it runs the velocity
-  primitives + sweep-precursor scorers, **not** the conviction integrator. It
-  does not advance L2.5; it advances the separate sweep-precursor track (see
-  the parallel list below). L2.5 still needs the integrator itself wired in.
+- ✅ **L2.5 — L2 wired into the live loop (shipped 2026-07-21, `main.py` v4.0).**
+  Shipped **wider than the original spec below**: this entry called for an
+  observe-only in-process shadow that "drives no trade", but what deployed makes
+  the integrator's committed label the **live trade gate** — `primary_regime`
+  and `conviction` are overridden by L2, replacing the v1.3 classifier's raw
+  argmax. Driver was a real defect: v1.3 dropped to UNKNOWN mid-trend at avg
+  ADX ≈ 29, a hard no-trade gate firing during the strongest conditions; the
+  integrator holds a regime through single-tick evidence drops (θ_hold
+  hysteresis) and never emits UNKNOWN. **The conviction NUMBER is still
+  observe-only** — gates run wide open, conviction logged not gated, L3 tunes
+  bars later; paper P&L is the arbiter. v1.3 still runs and populates
+  RegimeState's rich fields. Book persisted per box
+  (`data/integrator_state.json`), warm-loaded at boot.
+  **Rollback: `OT_REGIME_ENGINE=v13`.**
+  *Sequencing note:* this landed **ahead of L2.4** (prior calibration), so the
+  live label is currently driven by uncalibrated priors. That inverts the
+  roadmap's own L2.4→L2.5→L2.6 order and is worth closing deliberately.
+  *Consequence for L1 work:* because L2 labels now gate trades, any L1 scoring
+  change (e.g. `regime_confluence.py` v1.2 ramp de-saturation) is a **live
+  trading behaviour change**, not an analysis-layer one.
+  *NOTE:* the `shadow-observer.service` on the QQQ paper box (2026-07-18) is a
+  **different** shadow subsystem — velocity primitives + sweep-precursor
+  scorers, not the conviction integrator. It advances the separate
+  sweep-precursor track.
 - ⬜ **L2.6 — Freeze the L2 weights as a stable baseline.** The pitchfork and any
   new conviction dimension can only be measured against a *frozen* L2. *To
   close:* a clean ~2-week hands-off production window (the one starting Monday
   2026-07-18) with L2 calibrated and unchanged. **This is the real gate for
   everything downstream of L2.**
 
-**Layer-2 DONE means:** priors calibrated on real distributions, L2 shadow-
-running live and logging, weights frozen against a clean baseline. **Remaining:
-L2.4, L2.5, L2.6 — all gated on Layer 1 finishing first.**
+**Layer-2 DONE means:** priors calibrated on real distributions, L2 running live
+and logging, weights frozen against a clean baseline. **Remaining: L2.4, L2.6.
+L2.5 is DONE (2026-07-21) but shipped ahead of L2.4, so the live gate currently
+runs on uncalibrated priors — closing L2.4 is now the priority, not optional.**
 
 ---
 
