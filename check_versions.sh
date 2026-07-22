@@ -1,4 +1,9 @@
 #!/bin/bash
+# v3.2 — 2026-07-22 — ORB geometry-gate fingerprints (setup_scorer v1.4).
+#         Pins that the ORB grades via _grade_orb (liquidity-in-path A/B only)
+#         and that _orb_quality is GONE — a stale file would silently restore
+#         the regime/VWAP/macro-weighted ORB score that could veto a confirmed
+#         break. Absence-check on _orb_quality is inverted (see below).
 # v3.1 — 2026-07-22 — CANARY GAP CLOSED (audit defect U). Before this the
 #         newest fingerprint was dated 2026-07-18: a stale sync of ANY file
 #         shipped 07-20 → 07-22 (orb v3.9, sweep v3.2, main v4.0/v4.1,
@@ -130,6 +135,19 @@ check "execution/limit_ladder.py"        "def paper_fill_credit"        "v1.3 si
 check "main.py"                          "paper_fill_credit"            "v4.1 condor leg paper credit uses the shared authority"
 check "strategy/condor_roll.py"          "paper_fill_credit"            "v3.8 rolled vertical uses the shared authority"
 check "config.py"                        "OT_PAPER_SLIPPAGE_PCT\", \"0.0\"" "paper friction default 0.0 (books the mark)"
+
+# ── ORB geometry gate (setup_scorer v1.4, 2026-07-22) ────────────────────
+check "risk/setup_scorer.py"             "_grade_orb"                   "v1.4 ORB graded by geometry gate (liquidity-in-path A/B only)"
+check "risk/setup_scorer.py"             "_pools_in_path"               "v1.4 ORB A/B selector = unswept pool between entry and TP"
+# ABSENCE check: _orb_quality must be GONE from executable code. A stale sync
+# that restores it re-introduces the regime/VWAP/macro-weighted ORB score. We
+# grep only for a CALL (self._orb_quality(), def _orb_quality) — the string
+# survives in the v1.4 changelog prose, which is fine.
+if grep -qE "def _orb_quality|self\._orb_quality\(" risk/setup_scorer.py 2>/dev/null; then
+    echo "  \u2717 STALE:   _orb_quality is BACK in setup_scorer.py — ORB weighted score restored (expected DELETED)"
+else
+    echo "  \u2713 PRESENT: _orb_quality deleted from code (ORB is a geometry gate)"
+fi
 
 # ── 2026-07-17/18 day-zero fingerprints (trend v3.1 + VWAP + condor + continuation) ──
 check "analysis/trend_engine.py"         '"5m": 0.35'                   "trend v3.1 intraday-primary tf_weights (dead-4h fix)"

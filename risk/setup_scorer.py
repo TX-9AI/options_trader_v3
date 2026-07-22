@@ -1,5 +1,26 @@
 """
 risk/setup_scorer.py — Scores and grades options trade signals A/B.
+v1.4 — 2026-07-22 — ORB IS A GEOMETRY GATE, NOT A WEIGHTED SCORE. The ORB
+        was being run through the same 5-dimension weighted sum as every
+        other strategy (regime_conviction, orb_quality, vwap_alignment,
+        liquidity_clear, macro_context). That was wrong for this trade by
+        design: the ORB is regime-AGNOSTIC (it is deliberately not regime-
+        gated at dispatch) yet regime_conviction was 20%% of its grade; VWAP
+        and macro have no bearing on a mechanically-confirmed break+retest;
+        and orb_quality was a confluence-COUNT proxy (0.2*n) that never
+        measured the geometry its docstring claimed. Net effect: the A/B
+        grade of an ORB was regime conviction in costume, and liquidity-in-
+        path could VETO a confirmed setup by dragging the weighted total
+        under the bar.
+        NOW: the ORB short-circuits BEFORE the weighted machinery. A
+        confirmed ORB ALWAYS trades. The ONLY grade input is whether an
+        unswept liquidity pool sits between the breakout and the 100%% TP:
+          - clear path  -> A (1.5x size)
+          - pool in path -> B (1.0x size)
+        Liquidity can downgrade A->B; it can NEVER veto. No regime, no VWAP,
+        no macro, no confluence count, no brief nudge, no session modifier
+        touch the ORB grade. _orb_quality is DELETED. The 5-dimension path is
+        unchanged for SweepReversal / Butterfly / Condor / default.
 v1.3 — 2026-07-18 — SIGNAL JOURNAL (ROADMAP Phase 3.1 instrumentation, log-only):
         every scored signal — including below-B REJECTS — emits one `scored`
         event to analysis/signal_journal with the full breakdown, thresholds,
@@ -80,15 +101,13 @@ class SetupScore:
 # ─── Strategy-specific scoring profiles ──────────────────────────────────────
 
 STRATEGY_PROFILES = {
+    # ORB IS NOT SCORED HERE (v1.4). It short-circuits to _grade_orb before the
+    # weighted sum: a confirmed ORB always trades, graded A/B on liquidity-in-
+    # path ONLY. This profile is retained for reference/telemetry but these
+    # weights are DEAD for the ORB — do not re-point score() at them.
     "ORBStrategy": {
-        "score_weights": {
-            "regime_conviction":    0.20,
-            "orb_quality":          0.30,   # Break clarity, retest quality
-            "vwap_alignment":       0.15,
-            "liquidity_clear":      0.20,
-            "macro_context":        0.15,   # Fed day is a boost here
-        },
-        "grade_a": 0.78,
+        "score_weights": {},   # unused — see _grade_orb
+        "grade_a": 0.78,       # retained for any legacy reader; not applied
         "grade_b": 0.55,
     },
     "SweepReversal": {
@@ -176,15 +195,22 @@ class SetupScorer:
         grade_a   = profile["grade_a"]
         grade_b   = profile["grade_b"]
 
+        # ── ORB: geometry gate, not a weighted score (v1.4) ───────────────────
+        # A confirmed ORB break+retest ALWAYS trades — the ORB state machine
+        # already validated the geometry (body/wick rules) before this signal
+        # existed, and the trade is regime-agnostic by design. The ONLY grade
+        # input is liquidity in the path to the 100%% TP: clear -> A, pool in
+        # the way -> B. Never a veto. Nothing else (regime/VWAP/macro/session/
+        # brief) touches it. Returns here, before the 5-dimension machinery.
+        if name == "ORBStrategy":
+            return self._grade_orb(signal, liq_map, regime, vol_state, macro)
+
         # ── 1. Regime Conviction ──────────────────────────────────────────────
         reg_score = regime.conviction
         breakdown["regime_conviction"] = round(reg_score, 3)
 
         # ── 2. Strategy-specific quality score ───────────────────────────────
-        if name == "ORBStrategy":
-            quality_score = self._orb_quality(signal, regime, vol_state)
-            breakdown["orb_quality"] = round(quality_score, 3)
-        elif name == "SweepReversal":
+        if name == "SweepReversal":
             quality_score = self._sweep_quality(signal, liq_map, regime)
             breakdown["sweep_quality"] = round(quality_score, 3)
         elif name == "ButterflyStrategy":
@@ -208,19 +234,13 @@ class SetupScorer:
         breakdown["vwap_alignment"] = round(vwap_score, 3)
 
         # ── 4. Liquidity path clear ───────────────────────────────────────────
+        # (ORB never reaches here — it is graded by _grade_orb and returns
+        # above. This weighted liquidity dimension is for sweep/condor/default;
+        # it reuses the same path test but as a graded drag, not an A/B pick.)
         liq_score = 1.0
         if not signal.is_butterfly:
-            pools_blocking = [
-                p for p in liq_map.pools
-                if not p.swept and (
-                    (signal.direction == "long"  and p.kind == "high" and
-                     signal.underlying_entry < p.price < signal.underlying_target) or
-                    (signal.direction == "short" and p.kind == "low" and
-                     signal.underlying_target < p.price < signal.underlying_entry)
-                )
-            ]
-            liq_score -= len(pools_blocking) * 0.25
-            liq_score  = max(liq_score, 0.0)
+            pools_blocking = self._pools_in_path(signal, liq_map)
+            liq_score = max(1.0 - len(pools_blocking) * 0.25, 0.0)
         breakdown["liquidity_clear"] = round(liq_score, 3)
 
         # ── 5. Macro context ──────────────────────────────────────────────────
@@ -322,39 +342,67 @@ class SetupScorer:
         except Exception:
             pass
 
-    def _orb_quality(self, signal: OptionsSignal,
-                      regime: RegimeState,
-                      vol_state: VolatilityState) -> float:
+    def _grade_orb(self, signal: OptionsSignal,
+                   liq_map:   LiquidityMap,
+                   regime:    RegimeState,
+                   vol_state: VolatilityState,
+                   macro) -> Optional["SetupScore"]:
+        """The WHOLE ORB grade (v1.4). A confirmed ORB always trades; the only
+        question is size.
+
+        A  — no unswept liquidity pool between the breakout and the 100%% TP.
+        B  — a pool sits in that path (the target may not be cleanly
+             reachable), so the same setup trades at base size.
+
+        There is no REJECT branch here: a confirmed ORB is never a no-trade on
+        quality grounds. (Session/RTH/cutoff gating lives in session_guard, not
+        here.) Regime, VWAP, macro, confluence count and the brief nudge are
+        deliberately absent — this trade is geometry, validated upstream by the
+        ORB state machine, plus one liquidity modifier.
         """
-        ORB quality: confluence count, regime alignment, liquidity context.
+        pools_blocking = self._pools_in_path(signal, liq_map)
+        grade = "A" if not pools_blocking else "B"
+        multiplier = GRADE_SIZE_MULTIPLIER[grade]
 
-        Grade penalties:
-          - Unnamed clusters in path (flagged in signal.notes): -0.15 each
-            → results in grade dropping one letter at the boundary
-          - Named level IS the break catalyst: +0.20 (Rule 1 fired)
-        """
-        base = min(len(signal.confluence_factors) * 0.2, 0.8)
+        breakdown = {
+            "orb_geometry": "confirmed",          # the gate the state machine passed
+            "pools_in_path": len(pools_blocking),
+            "liquidity_path": "clear" if grade == "A" else "pool_in_path",
+        }
 
-        # NOTE: Fed-day is intentionally NOT boosted here. It is applied once,
-        # in the macro_context scoring dimension (see score()). Boosting it
-        # again in orb_quality double-counted the effect. orb_quality measures
-        # confluence/regime/liquidity only.
+        logger.info(
+            f"ORB grade: {grade} ({'clear path' if grade=='A' else ''}"
+            f"{len(pools_blocking)} pool(s) in path) mult={multiplier}x"
+        )
+        # Journal it like any other scored signal (REJECT path is unreachable
+        # for the ORB, so grade is always A or B here). total is reported as
+        # the multiplier for a stable numeric field; there is no weighted sum.
+        self._journal_scored(signal, regime, vol_state, macro,
+                             float(multiplier), grade, breakdown,
+                             grade_a=None, grade_b=None,
+                             session=current_session_label())
+        return SetupScore(
+            grade=grade,
+            score=round(float(multiplier), 3),
+            size_multiplier=multiplier,
+            breakdown=breakdown,
+        )
 
-        # Rule 1 boost: break through named level is the highest-quality ORB
-        if "named level" in " ".join(signal.confluence_factors).lower() and \
-           "sweep catalyst" in " ".join(signal.confluence_factors).lower():
-            base = min(base + 0.20, 1.0)
-
-        # Unnamed clusters in path (Rule 2 partial — not blocked, but penalized)
-        notes = signal.notes or ""
-        if "unnamed liq cluster" in notes:
-            try:
-                n = int(notes.split("unnamed liq cluster")[0].strip().split()[-1])
-            except (ValueError, IndexError):
-                n = 1
-            base = max(base - 0.15 * n, 0.0)
-
-        return base
+    @staticmethod
+    def _pools_in_path(signal, liq_map) -> list:
+        """Unswept pools between entry and the 100%% TP, in the trade direction.
+        A long is blocked by an unswept HIGH between entry and target; a short
+        by an unswept LOW. This is the same path test the old dimension-4
+        used — now it selects A vs B instead of subtracting a weighted drag."""
+        return [
+            p for p in liq_map.pools
+            if not p.swept and (
+                (signal.direction == "long"  and p.kind == "high" and
+                 signal.underlying_entry < p.price < signal.underlying_target) or
+                (signal.direction == "short" and p.kind == "low" and
+                 signal.underlying_target < p.price < signal.underlying_entry)
+            )
+        ]
 
     def _sweep_quality(self, signal: OptionsSignal,
                         liq_map: LiquidityMap,
