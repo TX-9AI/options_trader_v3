@@ -237,6 +237,11 @@ TIMEZONE                    = "US/Eastern"
 RTH_OPEN_ET                 = (9, 30)
 RTH_CLOSE_ET                = (16, 0)
 HARD_CLOSE_ET               = (15, 45)
+# v3.8: the end-of-day flatten OPENS here and posts mark-limits (re-priced each
+# ~15s tick) so positions can close without paying the spread; at HARD_CLOSE_ET
+# it crosses unconditionally. An unfilled 0DTE at the bell is an expiry (and an
+# assignment on a short leg), not an overnight hold — so the cross is absolute.
+FLATTEN_WINDOW_OPEN_ET      = (15, 40)
 ORB_NO_ENTRY_AFTER_ET       = (11, 0)   # ORB-SCOPED: ORB entries valid until 11:00 ET.
                                         #   Also the ARM condition for sweep reversal.
 GLOBAL_NO_ENTRY_ET          = (14, 0)   # GLOBAL: no new 0DTE entries after 14:00 ET,
