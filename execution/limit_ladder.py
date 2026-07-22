@@ -1,5 +1,14 @@
 """
 execution/limit_ladder.py — Mid-anchored limit pricing for entries and exits.
+v1.3 — 2026-07-22 — SINGLE PAPER-PRICING AUTHORITY (audit defect T). Paper
+        friction was split: singles/butterflies booked the bare mark (v1.2)
+        while condor legs and rolled verticals still applied a 1% haircut in
+        their own call sites. Both credit and debit paper fills now route
+        through this module and honour ONE knob
+        (config.PAPER_FILL_SLIPPAGE_PCT, default 0.0) applied AGAINST the
+        trade. New: paper_fill_credit() — the credit-side twin of
+        paper_fill_price(). Read at CALL time so the knob is monkeypatchable
+        and env changes need no restart of this module.
 v1.2 — 2026-07-22 — hard-close escalation: 15:40 mark-limits -> 15:45 MARKET.
 v1.1 — 2026-07-22 — simplified to MARK-REPRICING (no synthetic tick-walk).
 
@@ -104,6 +113,23 @@ def limit_at_mark(mark: float,
     return round(px, 2)
 
 
+def _paper_friction() -> float:
+    """config.PAPER_FILL_SLIPPAGE_PCT, read at CALL time, clamped to >= 0.
+
+    Imported inside the function on purpose: this module stays a pure pricing
+    primitive at import time (no config dependency to break a cold import),
+    and a call-time read means a monkeypatched or re-loaded config takes
+    effect immediately. Any failure degrades to 0.0 — the frictionless mark,
+    which is the documented default anyway.
+    """
+    try:
+        from config import PAPER_FILL_SLIPPAGE_PCT as _pct
+        pct = float(_pct)
+        return pct if pct > 0.0 else 0.0
+    except Exception:
+        return 0.0
+
+
 def paper_fill_price(mark: float,
                      cap: Optional[float] = None,
                      floor: Optional[float] = None) -> float:
@@ -119,5 +145,37 @@ def paper_fill_price(mark: float,
     fill if the mark keeps running away. So paper is now honest about PRICE but
     still optimistic about FILL RATE — the residual gap to model later is
     no-fill risk, not slippage.
+
+    v1.3: honours config.PAPER_FILL_SLIPPAGE_PCT (default 0.0 = book the
+    mark). Non-zero pays MORE on a debit — friction always runs against the
+    trade. Use it to stress paper against measured live fill quality.
     """
-    return limit_at_mark(mark, cap=cap, floor=floor)
+    return limit_at_mark(float(mark) * (1.0 + _paper_friction()),
+                         cap=cap, floor=floor)
+
+
+def paper_fill_credit(mark: float,
+                      cap: Optional[float] = None,
+                      floor: Optional[float] = None) -> float:
+    """The CREDIT paper books — the credit-side twin of paper_fill_price.
+
+    v1.3: condor legs and rolled verticals receive premium rather than pay it,
+    so friction runs the other way: a non-zero knob means RECEIVING LESS than
+    the mark. At the default 0.0 this books the mark, matching the mid-credit
+    limit live actually posts.
+
+    Before v1.3 these two paths applied the haircut inline in main.py and
+    condor_roll.py while singles/butterflies did not — the friction model was
+    split across strategies. It is one authority now.
+
+    NOTE the precision difference from paper_fill_price: credits are booked to
+    4dp, not rounded to a postable 2dp tick. A condor credit feeds max-loss
+    and risk-free-roll arithmetic where the extra precision matters, and the
+    pre-v1.3 call sites booked 4dp — preserved deliberately.
+    """
+    px = float(mark) * (1.0 - _paper_friction())
+    if cap is not None:
+        px = min(px, float(cap))
+    if floor is not None:
+        px = max(px, float(floor))
+    return round(px, 4)

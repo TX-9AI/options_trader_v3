@@ -1,5 +1,11 @@
 """
 strategy/condor_roll.py — Broken-wing roll of a live iron condor.
+v3.8 — 2026-07-22 — paper roll credit routed through limit_ladder
+        .paper_fill_credit (audit defect T): the rolled vertical applied
+        PAPER_FILL_SLIPPAGE_PCT inline, one of the two credit paths that kept
+        a haircut after entry_engine v3.8 dropped it for debits. One authority,
+        one knob (default 0.0 = book the mark). Same 4dp precision as before;
+        no live-path change.
 v3.7 — 2026-07-15 — ROLL IS REAL (audit defect P). Step 1 (close old untested
         vertical): both modes route through place_exit_order and book the
         FillResult's ACTUAL fill price — the old code booked plan.close_cost
@@ -297,8 +303,10 @@ def _execute_roll(pos_mgr, tested: dict, untested: dict,
                     f"{roll_qty}/{contracts} filled — structure quantities "
                     f"are mismatched; booking the filled size")
         else:
-            from config import PAPER_FILL_SLIPPAGE_PCT
-            roll_credit_fill = round(plan.roll_credit * (1 - PAPER_FILL_SLIPPAGE_PCT), 4)
+            # v3.8: one paper-pricing authority for every path. Default 0.0
+            # books the mark; a non-zero knob reduces the credit received.
+            from execution.limit_ladder import paper_fill_credit
+            roll_credit_fill = paper_fill_credit(plan.roll_credit)
             roll_order_id    = "PAPER"
 
         new_width  = abs(plan.new_short_strike - plan.new_long_strike)

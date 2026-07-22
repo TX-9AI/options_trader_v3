@@ -14,7 +14,13 @@ confirm_order_fill (execution/order_confirm.py) against a scripted broker:
      working_order_id set (page + reconcile-adopt safety net).
   6. Fill lands during the cancel race → booked (race resolved to truth).
   7. Butterfly basis math: lower + upper − 2·center from per-leg fills.
-  8. Paper condor credit applies PAPER_FILL_SLIPPAGE_PCT against the trade.
+  8. Paper condor CREDIT routes through limit_ladder.paper_fill_credit and
+     applies PAPER_FILL_SLIPPAGE_PCT against the trade (receives LESS).
+ 14. Paper friction is UNIFORM across every paper path (defect T, 2026-07-22):
+     at the 0.0 default every path books the bare mark; at a non-zero knob
+     every path degrades together, debits paying more and credits receiving
+     less. This replaces the pre-v3.8 assertion that singles were hardcoded to
+     mark*1.01 — that stopped being true when live moved to mark-limits.
 
 Run: PYTHONPATH=. pytest tests/test_entry_fill_confirmation.py -v
 """
@@ -30,6 +36,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tastytrade.order import OrderStatus  # noqa: E402
 
 import config as cfg                                          # noqa: E402
+from execution.limit_ladder import (                           # noqa: E402
+    paper_fill_price, paper_fill_credit,
+)
 from execution.order_confirm import (                          # noqa: E402
     confirm_order_fill, net_from_fills, EntryFill,
 )
@@ -169,15 +178,16 @@ def test_butterfly_basis():
     assert net == pytest.approx(2.00 + 0.80 - 2 * 1.20)   # 0.40 debit basis
 
 
-# 8 — paper condor fills mirror live friction (defect R)
+# 8 — paper condor credit applies friction against the trade (defect R/T)
+#     v2: exercises the REAL helper instead of re-doing the arithmetic inline.
+#     The old version asserted round(1.50*0.99, 4) == 1.485, which tested
+#     Python, not the system — it would have passed even after the call site
+#     stopped applying the knob (which is exactly what happened).
 def test_paper_condor_credit_applies_slippage(monkeypatch):
     monkeypatch.setattr(cfg, "PAPER_FILL_SLIPPAGE_PCT", 0.01, raising=False)
-    net_credit = 1.50
-    fill_credit = round(net_credit * (1 - cfg.PAPER_FILL_SLIPPAGE_PCT), 4)
-    assert fill_credit == pytest.approx(1.485)   # credit received is REDUCED
-    # and the debit direction pays MORE (matches _paper_fill_single):
-    debit = 0.90 * (1 + cfg.PAPER_FILL_SLIPPAGE_PCT)
-    assert debit == pytest.approx(0.909)
+    assert paper_fill_credit(1.50) == pytest.approx(1.485)  # credit REDUCED
+    assert paper_fill_price(0.90) == pytest.approx(0.91)    # debit pays MORE
+                                                            # (2dp postable tick)
 
 
 # ═══ O parts 2+3 — single-leg readback and the butterfly rebuild ═════════════
@@ -315,14 +325,45 @@ def test_butterfly_partial_books_filled_size_no_replace(monkeypatch):
     assert len(broker.placed) == 1           # partial → position, not a re-place
 
 
-# 14 — paper duplicates live shape: slippage against the trade, full qty, one pass
-def test_paper_entries_mirror_live_friction(monkeypatch):
+# 14 — PAPER FRICTION IS UNIFORM (defect T, 2026-07-22)
+#
+#   Supersedes the pre-v3.8 assertion that a paper single booked mark*1.01.
+#   That encoded a MARKET-order world: live crossed the spread, so paper had
+#   to pay a haircut to stay honest. Live now posts a LIMIT AT THE MARK
+#   (limit_ladder v1.2) and either fills there or does not fill at all, so a
+#   markup would make paper PESSIMISTIC on price while staying optimistic on
+#   FILL RATE — the wrong error in the wrong direction. Booking the mark is
+#   the honest default; no-fill risk is the residual, and it cannot be
+#   modelled as a price haircut.
+#
+#   What must hold instead, and what this test pins:
+#     (a) at the 0.0 DEFAULT every paper path books the bare mark, and
+#     (b) at a non-zero knob every path degrades TOGETHER — debits pay more,
+#         credits receive less — so no strategy is quietly cheaper to trade in
+#         paper than another. (a) is the policy; (b) is what makes the knob a
+#         usable stress lever once the live shakedown measures real fill
+#         quality.
+def test_paper_entries_book_the_mark_by_default(monkeypatch):
+    monkeypatch.setattr(cfg, "PAPER_FILL_SLIPPAGE_PCT", 0.0, raising=False)
+    monkeypatch.setattr(ee, "get_trade_logger", lambda: None)
+    eng = EntryEngine(paper_trading=True)
+
+    p, oid, q = eng._place_single_leg(single_signal(mark=2.00), 2)
+    assert p == pytest.approx(2.00) and q == 2       # the mark, not the ask
+    p, oid, q = eng._place_butterfly(fly_signal(net_debit=0.90), 3)
+    assert p == pytest.approx(0.90) and q == 3
+    assert paper_fill_credit(1.50) == pytest.approx(1.50)   # credits too
+
+
+def test_paper_friction_knob_applies_to_every_path(monkeypatch):
     monkeypatch.setattr(cfg, "PAPER_FILL_SLIPPAGE_PCT", 0.01, raising=False)
-    monkeypatch.setattr(ee, "PAPER_FILL_SLIPPAGE_PCT", 0.01, raising=False)
     monkeypatch.setattr(ee, "get_trade_logger", lambda: None)
     eng = EntryEngine(paper_trading=True)
 
     p, oid, q = eng._place_single_leg(single_signal(mark=2.00), 2)
     assert p == pytest.approx(2.02) and q == 2       # debit pays MORE
     p, oid, q = eng._place_butterfly(fly_signal(net_debit=0.90), 3)
-    assert p == pytest.approx(0.909) and q == 3      # debit pays MORE
+    assert p == pytest.approx(0.91) and q == 3       # debit pays MORE (2dp)
+    assert paper_fill_credit(1.50) == pytest.approx(1.485)  # credit gets LESS
+    # the condor leg and the rolled vertical share this helper, so the knob
+    # can no longer reach one strategy and miss another.

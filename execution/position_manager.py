@@ -1,5 +1,10 @@
 """
 execution/position_manager.py — Manages the single open options position.
+v3.9 — 2026-07-22 — remove the dead PAPER_FILL_SLIPPAGE_PCT import (audit
+        defect T). This module has never priced a paper fill — entry pricing
+        lives in entry_engine/main and exit pricing in exit_engine, both now
+        via execution/limit_ladder. The unused import falsely implied this
+        file was a third friction call site. Import-only change.
 v3.8 — 2026-07-15 — thread df_5m to exit_engine.evaluate() so trails can
         anchor to 5-minute FVGs (exit_engine v3.8 runner refinements). 1m is
         untouched and remains the structure-stop/BOS timeframe.
@@ -67,7 +72,7 @@ from execution.exit_engine import get_exit_engine, ExitDecision
 from data.tasty_client import get_client, TastyClientError
 from risk.risk_manager import get_risk_manager
 from notifications.alert_manager import get_alert_manager
-from config import PAPER_TRADING, PAPER_FILL_SLIPPAGE_PCT, CONTRACT_MULTIPLIER
+from config import PAPER_TRADING, CONTRACT_MULTIPLIER
 
 logger = logging.getLogger(__name__)
 

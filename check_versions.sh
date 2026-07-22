@@ -1,4 +1,14 @@
 #!/bin/bash
+# v3.1 — 2026-07-22 — CANARY GAP CLOSED (audit defect U). Before this the
+#         newest fingerprint was dated 2026-07-18: a stale sync of ANY file
+#         shipped 07-20 → 07-22 (orb v3.9, sweep v3.2, main v4.0/v4.1,
+#         regime_confluence v1.2, the whole limit_ladder execution change,
+#         status v1.12) passed this check silently — the exact failure mode
+#         this script exists to catch, and the one that caused the 07-16
+#         unmanaged-position incident. Adds 16 fingerprints covering every
+#         post-07-18 change, and pins the two VALUES (not just the names)
+#         that a stale file would revert: the de-saturated ramp bound and the
+#         paper-friction default.
 # v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
 #         mapping optimization (single shared TastyTrade candle feed). No
 #         logic change in this file.
@@ -80,6 +90,46 @@ check "database/trade_logger.py"         'COALESCE(paper_trade,1)'      "v3.7 mo
 check "strategy/condor_roll.py"          "ROLL IS REAL"                 "v3.7 roll places a real order (defect P)"
 check "config.py"                        "SWEEP_POST_TARGET_TRAIL"      "v2.0 runner refinements in config"
 check "execution/position_manager.py"    "df_5m"                        "v3.8 5m FVG trail anchor threaded"
+
+# ══ 2026-07-20 → 07-22 fingerprints ══════════════════════════════
+# Everything below post-dates the day-zero block. A box that misses any ONE of
+# these is running a materially different engine from the control checkout and
+# the parity invariant is broken — re-sync before trusting a session's data.
+
+# ORB v3.9 (2026-07-20) — stale-retest timeout on REAL bars, and re-arming
+check "analysis/orb_engine.py"           "_rearm"                       "v3.9 timeout re-arms (not terminal) — SMH missed-short fix"
+check "analysis/orb_engine.py"           "bars_since_break"             "v3.9 timeout counts deduped 1m bars, not 15s loop ticks"
+
+# status v1.12 (2026-07-20) — daily-loss banner reads the LIVE unit env
+check "status.py"                        "get_runtime_env"              "v1.12 loss-limit read via runtime env (false \$200 HALT fix)"
+
+# main v4.0 / L2.5 (2026-07-21) — the Layer-2 label drives live trading
+check "main.py"                          "OT_REGIME_ENGINE"             "v4.0 L2 committed label drives regime (+v13 rollback)"
+check "main.py"                          "ConvictionIntegrator"         "v4.0 integrator wired into the live loop"
+check "main.py"                          "integrator_state.json"        "v4.0 conviction book persisted per box"
+
+# sweep v3.2 (2026-07-21) — ORB-ownership gate
+check "strategy/sweep_reversal_strategy.py" "_orb_released_price"       "v3.2 sweep blocked until the ORB releases price"
+
+# regime_confluence v1.2 (2026-07-22) — ramp de-saturation. PIN THE VALUES:
+# a stale file keeps the constant NAMES and silently reverts the bounds, which
+# is invisible to a name-only check and would re-saturate RANGING.
+check "analysis/regime_confluence.py"    "RANGE_ROOM_LO\", 0.17"        "v1.2 room_s lower bound de-saturated (0.05 -> 0.17)"
+check "analysis/regime_confluence.py"    "OSC_CROSS_HI\", 10.0"         "v1.2 osc_s upper bound de-saturated (5 -> 10)"
+check "analysis/regime_confluence.py"    "_envf"                        "v1.2 all 14 ramp bounds env-overridable (OT_RC_*)"
+
+# limit_ladder (2026-07-22) — the mark-limit execution policy
+check "execution/limit_ladder.py"        "hard_close_order_mode"        "limit ladder present: 15:40 mark-limit -> 15:45 MARKET"
+check "execution/entry_engine.py"        "limit_at_mark"                "v3.9 entries post a LIMIT at the mark (was MARKET)"
+check "execution/exit_engine.py"         "limit_at_mark"                "closes post at the mark, re-priced each tick"
+check "config.py"                        "FLATTEN_WINDOW_OPEN_ET"       "flatten window opens 15:40 (config + time_utils)"
+check "utils/time_utils.py"              "FLATTEN_WINDOW_OPEN"          "v3.8 is_hard_close_time() opens at 15:40"
+
+# paper-friction unification (2026-07-22, audit defect T) — one authority
+check "execution/limit_ladder.py"        "def paper_fill_credit"        "v1.3 single paper-pricing authority (credit side)"
+check "main.py"                          "paper_fill_credit"            "v4.1 condor leg paper credit uses the shared authority"
+check "strategy/condor_roll.py"          "paper_fill_credit"            "v3.8 rolled vertical uses the shared authority"
+check "config.py"                        "OT_PAPER_SLIPPAGE_PCT\", \"0.0\"" "paper friction default 0.0 (books the mark)"
 
 # ── 2026-07-17/18 day-zero fingerprints (trend v3.1 + VWAP + condor + continuation) ──
 check "analysis/trend_engine.py"         '"5m": 0.35'                   "trend v3.1 intraday-primary tf_weights (dead-4h fix)"

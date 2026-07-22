@@ -1,5 +1,19 @@
 """
-config.py — options_trader v3.3
+config.py — options_trader v3.9
+v3.9 — 2026-07-22 — PAPER FRICTION UNIFIED (audit defect T). Default
+        PAPER_FILL_SLIPPAGE_PCT 0.01 -> 0.0, and the knob is now applied by
+        ONE authority (execution/limit_ladder) across every paper path —
+        single, butterfly, condor leg, and rolled vertical. Rationale: under
+        the mark-limit policy (limit_ladder v1.2) live posts AT the mark and
+        either fills there or does not fill, so a markup made paper
+        PESSIMISTIC on price while still optimistic on fill rate. Booking the
+        mark everywhere is the honest default; the residual paper->live gap is
+        no-fill risk. The knob survives as a UNIFORM stress lever: set
+        OT_PAPER_SLIPPAGE_PCT to the fill quality measured in the live
+        shakedown and every paper path degrades together.
+        Also folds in the un-bumped changes that shipped under the stale v3.3
+        header (audit defect U): FLATTEN_WINDOW_OPEN_ET (15,40) 2026-07-22,
+        CONDOR_TRIGGER_APPROACH 2026-07-17, runner-refinement knobs v2.0.
 v3.3 — 2026-07-13 — CUTOFF DISAMBIGUATION (defect H). Two constants named so
         similarly they were confused for one rule are now named for their scope,
         and the global cutoff is no longer hardcoded outside config.
@@ -447,13 +461,25 @@ ORDER_BLOCK_LOOKBACK        = 20
 
 LIMIT_RETRY_SECONDS         = 30
 LIMIT_IMPROVE_TICKS         = 1
-# v1.9 (audit defect R): paper fills now model live friction instead of the
-# frictionless exact-mid fill. Applied AGAINST the trade on every paper entry:
-# debits pay (1+pct)·mid, credits receive (1−pct)·mid — condor legs included
-# (they previously ignored this knob entirely). Default 1%: modest, but paper
-# stops structurally flattering live. Set OT_PAPER_SLIPPAGE_PCT=0.0 to restore
-# the old frictionless fills for apples-to-apples comparison with history.
-PAPER_FILL_SLIPPAGE_PCT     = float(os.environ.get("OT_PAPER_SLIPPAGE_PCT", "0.01"))
+# PAPER FILL FRICTION — v3.9 (2026-07-22), default 0.0.
+# Applied AGAINST the trade, uniformly, by execution/limit_ladder (the single
+# paper-pricing authority): debits pay (1+pct)·mark, credits receive
+# (1−pct)·mark. Every paper path honours it — single leg, butterfly, condor
+# leg, rolled vertical.
+#
+# WHY THE DEFAULT IS ZERO: live no longer sends market orders. Under the
+# mark-limit policy (limit_ladder v1.2) live posts AT the mark and either
+# fills there or does not fill at all, so a markup would make paper
+# PESSIMISTIC on price while remaining optimistic on FILL RATE. The honest
+# residual gap is no-fill risk, not slippage — and no-fill risk cannot be
+# modelled as a price haircut.
+#
+# WHEN TO RAISE IT: after the tiny-account live shakedown measures real
+# mark-limit fill quality, set OT_PAPER_SLIPPAGE_PCT to that number and every
+# paper path degrades together — one lever, fleet-wide, no code change.
+# (Pre-2026-07-22 paper history was booked at 0.01; set that value to compare
+# like for like.)
+PAPER_FILL_SLIPPAGE_PCT     = float(os.environ.get("OT_PAPER_SLIPPAGE_PCT", "0.0"))
 
 # ─── TASTYTRADE API ───────────────────────────────────────────────────────────
 

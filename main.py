@@ -1,5 +1,13 @@
 """
-main.py — options_trader v4.0
+main.py — options_trader v4.1
+v4.1 — 2026-07-22 — PAPER CONDOR CREDIT via the shared authority (audit
+        defect T). The condor leg paper fill applied PAPER_FILL_SLIPPAGE_PCT
+        inline while single-leg and butterfly entries had moved to booking the
+        bare mark (entry_engine v3.8), so paper friction differed BY STRATEGY.
+        It now calls execution/limit_ladder.paper_fill_credit(), the one
+        paper-pricing authority, which honours the same knob for every path
+        (default 0.0 = book the mark, matching the mid-credit limit live
+        actually posts). No live-path change.
 v4.0 — 2026-07-21 — L2.5: LIVE regime now driven by the Layer-2 conviction
         integrator's committed label (Layer-1 confluence evidence → integrator),
         replacing the v1.3 boolean classifier's raw argmax as the trade gate.
@@ -538,11 +546,16 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState):
             logger.error(f"Condor leg order failed: {e}")
             return
     else:
-        # ── PAPER mirrors live friction (v3.7, defect R): a live mid-credit
-        # limit rarely fills at exact mid — model it as receiving slightly
-        # less than mid, governed by the same knob as every other paper fill.
-        from config import PAPER_FILL_SLIPPAGE_PCT
-        fill_credit = round(net_credit * (1 - PAPER_FILL_SLIPPAGE_PCT), 4)
+        # ── PAPER books what the live mid-credit limit posts (v4.1). Routed
+        # through limit_ladder.paper_fill_credit — the SINGLE paper-pricing
+        # authority — so condor legs, rolled verticals, singles and butterflies
+        # all degrade together under one knob (PAPER_FILL_SLIPPAGE_PCT,
+        # default 0.0 = the mark). Before v4.1 this haircut was applied here
+        # inline while entry_engine v3.8 had stopped applying it — paper
+        # friction differed by strategy, which made cross-strategy paper P&L
+        # non-comparable.
+        from execution.limit_ladder import paper_fill_credit
+        fill_credit = paper_fill_credit(net_credit)
         order_id    = "PAPER"
 
     is_leg1  = "Leg 1" in signal.setup_type

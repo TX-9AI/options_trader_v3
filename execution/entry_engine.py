@@ -1,5 +1,13 @@
 """
 execution/entry_engine.py — Options order placement via TastyTrade SDK.
+v3.9 — 2026-07-22 — DOC TRUTH + shared paper authority (audit defect T).
+        v3.8 said paper "books the MARK", which was true only because the
+        knob was being ignored here while condor legs still applied it. Paper
+        debit fills still route through limit_ladder.paper_fill_price — no
+        call-site change — but that helper (v1.3) now honours
+        PAPER_FILL_SLIPPAGE_PCT for every path uniformly, default 0.0 = the
+        mark. So the v3.8 behaviour is the DEFAULT, not a hardcode, and the
+        knob is a fleet-wide stress lever again.
 v3.8 — 2026-07-22 — MARK-LIMIT ENTRIES. Single-leg entry was a MARKET order
         (paid the ask while the signal was scored on the mark). It now posts a
         LIMIT at the mark and lets it sit; unfilled orders are cancelled by
@@ -47,7 +55,8 @@ Order types:
     ONE retry improved by LIMIT_IMPROVE_TICKS. Never pays worse than
     mid + 1 tick; never places attempt 2 while attempt 1 might still fill.
 
-Paper mode: simulates fill at mark ± PAPER_FILL_SLIPPAGE_PCT, no real order.
+Paper mode: books limit_ladder.paper_fill_price (the mark by default;
+mark ± PAPER_FILL_SLIPPAGE_PCT when the stress knob is set). No real order.
 """
 
 import logging
