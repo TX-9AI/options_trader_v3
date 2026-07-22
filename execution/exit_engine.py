@@ -222,7 +222,9 @@ from config import (
     CONTINUATION_EXHAUST_EXT_ATR, CONTINUATION_EXHAUST_MIN_GAIN,
     CONTINUATION_EXHAUST_TRAIL_LOCK
 )
-from utils.time_utils import is_hard_close_time, minutes_since, now_utc, fmt_et_short
+from utils.time_utils import (is_hard_close_time, minutes_since, now_utc,
+                              fmt_et_short, now_et)
+from execution.limit_ladder import limit_at_mark, hard_close_order_mode
 
 logger = logging.getLogger(__name__)
 
@@ -1442,7 +1444,8 @@ class ExitEngine:
                                                  record.get("_live_exit_last_order_id"))
 
         if placed is None:
-            placed = self._submit_live_close(record, remaining, mark_price)
+            placed = self._submit_live_close(record, remaining, mark_price,
+                                             reason=reason)
             if placed is None:
                 self._alert_live_exit_once(
                     trade_id, "submit",
@@ -1593,7 +1596,8 @@ class ExitEngine:
     # ── Order construction / submission (live only) ──────────────────────────
 
     def _submit_live_close(self, record: TradeRecord, contracts: int,
-                           mark_price: Optional[float]) -> Optional["object"]:
+                           mark_price: Optional[float],
+                           reason: str = "") -> Optional["object"]:
         """Order SUBMISSION only (no fill confirmation) — returns the broker
         PlacedOrder (carrying .id for polling) on submit success, else None.
         Submission is not a fill; only _confirm_and_book_live_exit may book.
@@ -1603,19 +1607,28 @@ class ExitEngine:
         through to _close_single_leg, which SELL_TO_CLOSEd only the short
         symbol (wrong action for a short, long leg orphaned at the broker).
         """
+        # v3.8: MARK-LIMIT policy. Closes post AT THE MARK and are re-priced to
+        # a fresh mark on every retry tick — we never pay the spread. The ONE
+        # exception is the end-of-day flatten: from 15:45 ET the position MUST
+        # close (an unfilled 0DTE at the bell is an expiry / assignment, not an
+        # overnight hold), so force_market crosses. 15:40-15:44 still tries the
+        # mark. See execution/limit_ladder.py.
+        force_market = ("hard_close" in (reason or "").lower()
+                        and hard_close_order_mode(now_et()) == "market")
         try:
             session = get_session()
             account = get_account()
             if bool(record.get("is_butterfly", False)):
                 return self._close_butterfly(session, account, record,
-                                             contracts, mark_price)
+                                             contracts, mark_price, force_market)
             is_vertical = (bool(record.get("is_condor_leg"))
                            or record.get("strategy") == "IronCondorStrategy"
                            or (record.get("short_symbol") and record.get("long_symbol")))
             if is_vertical:
                 return self._close_vertical(session, account, record,
-                                            contracts, mark_price)
-            return self._close_single_leg(session, account, record, contracts)
+                                            contracts, mark_price, force_market)
+            return self._close_single_leg(session, account, record, contracts,
+                                          mark_price, force_market)
         except Exception as e:
             logger.error(f"Live close submit failed for {record['trade_id'][:8]}: {e}")
             return None
@@ -1643,7 +1656,17 @@ class ExitEngine:
             return None
         return placed
 
-    def _close_single_leg(self, session, account, record, contracts):
+    def _close_single_leg(self, session, account, record, contracts,
+                          mark_price: Optional[float] = None,
+                          force_market: bool = False):
+        """v3.8: posts a LIMIT AT THE MARK, not a market order.
+
+        A single-leg market order paid the touch on every exit — combined with
+        the market-order ENTRY that was ~25% of premium round-trip on a $0.20
+        0DTE with a $0.05 spread, larger than the edge being traded. We now post
+        at the mark and let the retry loop re-price against a fresh mark each
+        tick, which chases a falling contract instead of parking at a stale
+        price. force_market crosses, and is set ONLY by the 15:45 flatten."""
         symbol = record.get("option_symbol", "")
         if not symbol:
             logger.error("Cannot close: no option_symbol in record")
@@ -1657,15 +1680,33 @@ class ExitEngine:
             action          = action,
             quantity        = contracts,
         )
+        if force_market or mark_price is None or mark_price <= 0:
+            # 15:45 flatten, or no mark to price against — cross and be done.
+            order = NewOrder(
+                time_in_force = OrderTimeInForce.DAY,
+                order_type    = OrderType.MARKET,   # single-leg market is accepted
+                legs          = [leg],
+            )
+            why = "hard-close cross" if force_market else "no mark"
+            return self._place(session, account, order,
+                               f"Single-leg close (MARKET — {why})")
+        tick  = self._tick_for(record)
+        limit = self._round_to_tick(limit_at_mark(mark_price, floor=tick), record)
+        # SDK signed convention: SELL_TO_CLOSE receives a CREDIT (positive);
+        # BUY_TO_CLOSE on an adopted short PAYS a debit (negative).
+        signed = limit if action == OrderAction.SELL_TO_CLOSE else -limit
         order = NewOrder(
             time_in_force = OrderTimeInForce.DAY,
-            order_type    = OrderType.MARKET,   # single-leg market is accepted
+            order_type    = OrderType.LIMIT,
+            price         = Decimal(str(signed)),
             legs          = [leg],
         )
-        return self._place(session, account, order, "Single-leg close")
+        return self._place(session, account, order,
+                           f"Single-leg close (LIMIT @ mark {limit:.2f})")
 
     def _close_vertical(self, session, account, record, contracts,
-                        mark_price: Optional[float]):
+                        mark_price: Optional[float],
+                        force_market: bool = False):
         """Close a condor-leg vertical as ONE 2-leg spread order: BUY_TO_CLOSE
         the short strike, SELL_TO_CLOSE the long strike. tastytrade rejects
         MARKET on spreads, so this is a marketable LIMIT: debit capped at the
@@ -1682,11 +1723,21 @@ class ExitEngine:
             logger.error("Cannot close vertical: missing short/long symbols")
             return None
         width  = float(record.get("spread_width") or 0.0)
-        buffer = float(getattr(_cfg, "LIVE_CLOSE_LIMIT_BUFFER", 0.10))
-        if mark_price is not None and mark_price >= 0:
-            limit = mark_price + buffer
-            if width > 0:
-                limit = min(limit, width)
+        # v3.8: post AT THE MARK (was mark + a fixed $0.10 buffer, i.e. paying
+        # up on every close). tastytrade rejects MARKET on spreads, so the
+        # 15:45 "market order" for a vertical is a maximally-marketable limit:
+        # the debit capped at the spread WIDTH, which a vertical can never
+        # exceed — guaranteed to fill, bounded, and safe.
+        if force_market:
+            if width <= 0:
+                logger.error("Hard-close vertical: no spread_width to bound the "
+                             "cross — cannot price")
+                return None
+            limit = width
+        elif mark_price is not None and mark_price >= 0:
+            limit = limit_at_mark(mark_price,
+                                  cap=(width if width > 0 else None),
+                                  floor=self._tick_for(record))
         elif width > 0:
             limit = width   # max possible value of the vertical — bounded marketable
         else:
@@ -1705,10 +1756,13 @@ class ExitEngine:
             price         = Decimal(str(-limit)),   # negative = DEBIT paid to close
             legs          = legs,
         )
-        return self._place(session, account, order, "Vertical close")
+        return self._place(session, account, order,
+                           f"Vertical close ({'MARKET-equiv @ width' if force_market else 'LIMIT @ mark'} "
+                           f"{limit:.2f})")
 
     def _close_butterfly(self, session, account, record, contracts,
-                         mark_price: Optional[float]):
+                         mark_price: Optional[float],
+                         force_market: bool = False):
         """Close a long butterfly (sell wings, buy back the 2x short body) as
         one 3-leg order. v3.5: MARKET → marketable LIMIT (tastytrade rejects
         MARKET on spreads — the old market order would have failed every tick).
@@ -1721,13 +1775,20 @@ class ExitEngine:
         if not all([lower_sym, center_sym, upper_sym]):
             logger.error("Cannot close butterfly: missing leg symbols")
             return None
-        if mark_price is None or mark_price < 0:
+        tick = self._tick_for(record)
+        # v3.8: post AT THE MARK (was mark - a fixed $0.10 buffer — selling the
+        # fly cheap on every close). At 15:45 the flatten must complete and
+        # tastytrade rejects MARKET on spreads, so the cross is a limit at ONE
+        # TICK of credit: the lowest price we can ask, hence maximally
+        # marketable for a sale.
+        if force_market:
+            limit = self._round_to_tick(tick, record)
+        elif mark_price is None or mark_price < 0:
             logger.warning("Butterfly close: no mark to price the limit — "
                            "declining this pass, will retry with a fresh mark")
             return None
-        buffer = float(getattr(_cfg, "LIVE_CLOSE_LIMIT_BUFFER", 0.10))
-        limit  = self._round_to_tick(max(mark_price - buffer, self._tick_for(record)),
-                                     record)
+        else:
+            limit = self._round_to_tick(limit_at_mark(mark_price, floor=tick), record)
         legs = [
             Leg(instrument_type=InstrumentType.EQUITY_OPTION,
                 symbol=lower_sym,  action=OrderAction.SELL_TO_CLOSE, quantity=contracts),
@@ -1742,7 +1803,9 @@ class ExitEngine:
             price         = Decimal(str(limit)),   # positive = CREDIT received
             legs          = legs,
         )
-        return self._place(session, account, order, "Butterfly close")
+        return self._place(session, account, order,
+                           f"Butterfly close ({'MARKET-equiv @ 1 tick' if force_market else 'LIMIT @ mark'} "
+                           f"{limit:.2f})")
 
     # ── Fill readback ─────────────────────────────────────────────────────────
 

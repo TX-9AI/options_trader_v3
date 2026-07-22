@@ -1,5 +1,13 @@
 """
 execution/entry_engine.py — Options order placement via TastyTrade SDK.
+v3.8 — 2026-07-22 — MARK-LIMIT ENTRIES. Single-leg entry was a MARKET order
+        (paid the ask while the signal was scored on the mark). It now posts a
+        LIMIT at the mark and lets it sit; unfilled orders are cancelled by
+        confirm_order_fill and the strategy re-signals next tick against a
+        fresh mark. Paper fills book the MARK for both single-leg and
+        butterfly (was mark * (1 + PAPER_FILL_SLIPPAGE_PCT)) so paper and live
+        trade on the same principle — the residual gap is no-fill risk, not
+        slippage.
 v3.7 — 2026-07-15 — ENTRY FILL-CONFIRMATION (audit defect O, parts 2+3).
         Records are written ONLY for broker-confirmed fills at the broker's
         actual fill price, for the quantity that actually filled — never on
@@ -54,6 +62,7 @@ from tastytrade.order import (
 )
 
 from execution.order_confirm import confirm_order_fill
+from execution.limit_ladder import limit_at_mark, paper_fill_price
 
 from strategy.base_strategy import OptionsSignal
 from risk.setup_scorer import SetupScore
@@ -202,9 +211,25 @@ class EntryEngine:
                 action          = OrderAction.BUY_TO_OPEN,
                 quantity        = contracts,
             )
+            # v3.8: MARK-LIMIT ENTRY (was MARKET). A market entry paid the ask
+            # while the signal that justified the trade was scored on the mark —
+            # on a $0.20 0DTE with a $0.05 spread that is ~12% of premium before
+            # the position even moves. We post AT THE MARK and let it sit. An
+            # entry that does not fill costs NOTHING: confirm_order_fill cancels
+            # and we walk away, and the strategy re-signals next tick against a
+            # FRESH mark (that re-anchoring is what tracks a moving market —
+            # there is no stale resting order). Debit paid -> price NEGATIVE per
+            # the SDK signed convention.
+            mid = float(signal.entry_premium or 0.0)
+            if mid <= 0:
+                logger.warning("Single-leg entry: no mark to price the limit — "
+                               "skipping this pass")
+                return None, "", 0
+            limit = limit_at_mark(mid, floor=0.01)
             order = NewOrder(
                 time_in_force = OrderTimeInForce.DAY,
-                order_type    = OrderType.MARKET,
+                order_type    = OrderType.LIMIT,
+                price         = Decimal(str(-limit)),   # - = DEBIT paid to open
                 legs          = [leg],
             )
             response = account.place_order(session, order, dry_run=False)
@@ -213,7 +238,8 @@ class EntryEngine:
                 return None, "", 0
 
             fill = confirm_order_fill(session, account, response.order,
-                                      [(symbol, 1, +1)], what="single-leg entry")
+                                      [(symbol, 1, +1)],
+                                      what=f"single-leg entry (LIMIT @ mark {limit:.2f})")
             if not fill.filled or fill.net_price is None:
                 self._page_if_working(fill, "single-leg entry")
                 logger.warning(f"Single-leg entry NOT filled ({fill.detail})")
@@ -313,12 +339,21 @@ class EntryEngine:
 
     def _paper_fill_single(self, signal: OptionsSignal,
                            contracts: int) -> Tuple[float, str, int]:
-        fill_price = signal.entry_premium * (1 + PAPER_FILL_SLIPPAGE_PCT)
+        """v3.8: books the MARK, matching the live mark-limit entry.
+
+        Was mark * (1 + PAPER_FILL_SLIPPAGE_PCT) — modelling the market order
+        that live no longer sends. Under the mark-limit policy live either
+        fills AT the mark or does not fill at all, so a slippage markup would
+        now make paper PESSIMISTIC on price while still being optimistic on
+        fill rate. The honest residual gap is no-fill risk, not slippage; see
+        execution/limit_ladder.paper_fill_price."""
+        fill_price = paper_fill_price(float(signal.entry_premium or 0.0), floor=0.01)
         return fill_price, f"PAPER-{uuid.uuid4().hex[:8].upper()}", contracts
 
     def _paper_fill_butterfly(self, signal: OptionsSignal,
                               contracts: int) -> Tuple[float, str, int]:
-        fill_price = signal.net_debit * (1 + PAPER_FILL_SLIPPAGE_PCT)
+        """v3.8: books the MARK — see _paper_fill_single."""
+        fill_price = paper_fill_price(float(signal.net_debit or 0.0), floor=0.01)
         return fill_price, f"PAPER-BF-{uuid.uuid4().hex[:8].upper()}", contracts
 
 
