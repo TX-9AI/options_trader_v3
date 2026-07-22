@@ -34,6 +34,8 @@
 # effects at import. Importable and testable in isolation ( __main__ smoke test ).
 
 from __future__ import annotations
+
+import os as _os
 import math
 import logging
 from dataclasses import dataclass, field
@@ -78,22 +80,33 @@ REGIMES = (TRENDING_BULL, TRENDING_BEAR, RANGING,
            BREAKOUT_VOLATILE, COMPRESSION, SWEEP_REVERSAL)
 
 # ── Calibration knobs (ALL PRIOR — recalibrate from candle-logger tape) ───────
-FLAT_ANGLE_CUT_DEG   = 20.0   # RANGING/COMPRESSION hard veto: ≥ ⇒ center not flat
-FLAT_ANGLE_SOFT_DEG  = 8.0    # full flat credit at (CUT − SOFT) = 12°
+# --- env-tunable PRIOR bounds -------------------------------------------------
+# v3.1: every ramp bound below is overridable via OT_RC_<NAME> so calibration is
+# a config change (instant rollback, no deploy) rather than a code edit. Defaults
+# are UNCHANGED, so importing this module with no env set is behaviour-identical.
+def _envf(name: str, default: float) -> float:
+    try:
+        return float(_os.environ.get("OT_RC_" + name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+FLAT_ANGLE_CUT_DEG   = _envf("FLAT_ANGLE_CUT_DEG", 20.0)   # RANGING/COMPRESSION hard veto: ≥ ⇒ center not flat
+FLAT_ANGLE_SOFT_DEG  = _envf("FLAT_ANGLE_SOFT_DEG", 8.0)    # full flat credit at (CUT − SOFT) = 12°
 RANGE_WINDOW_BARS    = 25     # angle + crossings window (matches tape study)
-ADX_STRONG_SOLO      = 35.0   # ADX above which strength carries a trend solo
+ADX_STRONG_SOLO      = _envf("ADX_STRONG_SOLO", 35.0)   # ADX above which strength carries a trend solo
 SWEEP_HALFLIFE_BARS  = 3.0    # sweep evidence half-life, absent follow-through
-OSC_CROSS_LO         = 2.0    # crossings ramp lo (few = pin/coil)
-OSC_CROSS_HI         = 5.0    # crossings ramp hi (many = two-sided rotation)
-RANGE_ROOM_LO        = 0.05   # RANGING "room to oscillate": below this width, not ranging
-RANGE_ROOM_HI        = 0.20   #   … at/above this width, full room (= BB_WIDTH_COMPRESSION_PCT)
-BREAKOUT_ADX_LO      = 38.0   # momentum-carry ramp: inside-band forgiven from here
-BREAKOUT_ADX_HI      = 50.0   #   … to here (fully forgiven)
-EXPAND_RATIO_LO      = 1.0    # atr_current/atr_avg_20 expansion ramp
-EXPAND_RATIO_HI      = 1.5
-SWEEP_REJ_LO         = 0.002  # rejection_pct → strength ramp
-SWEEP_REJ_HI         = 0.008
-COMPRESS_WIDTH_SPAN  = 0.15   # narrowness ramp span below BB_WIDTH_COMPRESSION_PCT
+OSC_CROSS_LO         = _envf("OSC_CROSS_LO", 2.0)    # crossings ramp lo (few = pin/coil)
+OSC_CROSS_HI         = _envf("OSC_CROSS_HI", 5.0)    # crossings ramp hi (many = two-sided rotation)
+RANGE_ROOM_LO        = _envf("RANGE_ROOM_LO", 0.05)   # RANGING "room to oscillate": below this width, not ranging
+RANGE_ROOM_HI        = _envf("RANGE_ROOM_HI", 0.20)   #   … at/above this width, full room (= BB_WIDTH_COMPRESSION_PCT)
+BREAKOUT_ADX_LO      = _envf("BREAKOUT_ADX_LO", 38.0)   # momentum-carry ramp: inside-band forgiven from here
+BREAKOUT_ADX_HI      = _envf("BREAKOUT_ADX_HI", 50.0)   #   … to here (fully forgiven)
+EXPAND_RATIO_LO      = _envf("EXPAND_RATIO_LO", 1.0)    # atr_current/atr_avg_20 expansion ramp
+EXPAND_RATIO_HI      = _envf("EXPAND_RATIO_HI", 1.5)
+SWEEP_REJ_LO         = _envf("SWEEP_REJ_LO", 0.002)  # rejection_pct → strength ramp
+SWEEP_REJ_HI         = _envf("SWEEP_REJ_HI", 0.008)
+COMPRESS_WIDTH_SPAN  = _envf("COMPRESS_WIDTH_SPAN", 0.15)   # narrowness ramp span below BB_WIDTH_COMPRESSION_PCT
 
 # Corroborator weights (PRIOR; each block sums to 1.0).
 W_TREND_ALIGN, W_TREND_MOM   = 0.65, 0.35
