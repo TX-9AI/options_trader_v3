@@ -961,6 +961,66 @@ resets to this deploy.
 
 ---
 
+### X. ✅ RESOLVED 2026-07-23 — Condor legs round-tripped from ~+25% to −25% with no way to keep a gain
+Forensic postmortem of 46 unique condor legs (07-07 → 07-22). **Every stopped
+leg was GREEN FIRST** — median peak +24.2% (pre-fix) / +31.4% (post) using
+`min_premium_seen`; essentially none were never-green. They reached ~+25%,
+reversed, and hit the −25% stop. Cause: **nothing existed between entry and the
+$0.05 nickel close** (≈96% decay). The condor was the only strategy with no
+ratchet, while directional trades all have FVG trails. Meanwhile the stop sat
+~2–3 ticks away (median credit $1.16 → stop $0.29) — 4× closer than the target.
+**Resolved (`exit_engine` v4.1):** ratcheting stop — +20% → breakeven, +40% →
+lock +20%, tightens only. Plus a **time-gated** take-profit at 25% that fires
+ONLY after `CONDOR_ENTRY_CUTOFF_ET` and ONLY when the opposite side is not open
+(`_condor_sibling_open`). The gating is load-bearing: **a take-profit before the
+cutoff would structurally guarantee the condor never forms**, because the move
+that makes side one profitable IS the move that carries price to the far band to
+trigger side two. Backtest, 18 standalone legs: TP@25% turned −$242.77 into
+−$8.43; on 28 condor legs a TP was WORSE at every level, confirming a condor leg
+must never be closed on profit — the only reason to close one is the roll.
+A ≥10-minute min-hold gates the TP as a quote-noise filter (a +25% mark move on
+a nickel-wide 0DTE spread can be one tick). Also `risk_manager` v1.4: verticals
+now sized at the **full** grade budget (18 of 46 legs never got a second side,
+so half-sizing chronically under-sized a structure that never existed), and
+`iron_condor` v3.2: leg 2 **pauses** on a non-RANGING tick instead of cancelling.
+
+### Y. ✅ RESOLVED 2026-07-23 — Condor window opened before Bollinger was computable
+`CONDOR_ENTRY_START_ET` was `(11, 0)`, but BB needs `BB_PERIOD`(20) 5-minute
+bars — the first valid `bb_middle` is ~11:05 ET (verified on the 07-22 tape).
+`decide()` falls back to `mid = current_price` when `bb_middle == 0`, so for the
+first ten minutes of the window strikes and triggers were computed with **no
+volatility reference at all**. Resolved: window opens **11:11**, clearing 11:05
+with margin and removing the fallback path.
+
+### Z. ⚠️ OPEN 2026-07-23 — `fleet_trades_<date>.json` contains trades from OTHER dates
+The consolidated rollups are not date-clean. Deduping by `trade_id` collapsed
+143 apparent condor legs to **46 unique**; **61%** sat in a file whose date did
+not match their `entry_time`. `fleet_trades_2026-07-13.json` contains only
+trades from 07-07 → 07-10 — nothing from 07-13. `fleet_trades_2026-07-15.json`
+is truncated (2 KB, no condor legs) though that date's DB holds 41.
+**Consequence:** any analysis bucketed by filename is wrong. Always dedupe by
+`trade_id` and bucket by `entry_time[:10]`. Suspect `consolidate_trades.py` does
+not filter by date, or the harvested box DBs were stale. Clean post-fix data
+should come from the per-symbol `trades.db` on the boxes, pulled directly.
+**Unfixed — day_trader_pro side.**
+
+### AA. ⚠️ OPEN 2026-07-23 — Condor legs fired both sides one tick apart; mechanism unexplained
+Every dual-sided condor from 07-07 → 07-17 opened both legs **15 seconds apart
+at an identical `underlying_entry`** (IWM on four separate days, plus AVGO, JPM,
+NFLX, TSLA, XOM, AAPL, PLTR). I hypothesised circularity — a trigger measured
+against a strike that is itself placed relative to current price — but **reading
+the code disproved it**: `_select_by_band` anchors strikes to `bb_upper`/
+`bb_lower`, and the triggers anchor to `bb_middle`. The geometry is not
+circular, and the trigger algebra says both sides cannot satisfy simultaneously
+while `short_put < short_call`. **No validated explanation yet.** Note there are
+ZERO two-sided condors after 07-17, so it is unknown whether this survived the
+07-17 rich-trigger deploy — the post-fix sample is 7 legs. Entry logic was
+deliberately left UNCHANGED in the v2 build rather than rewritten on a
+disproven hypothesis. Defect Y removes one contributing hole (the
+`current_price` fallback). Watch for recurrence in the six-day test.
+
+---
+
 ## File structure — every file, and what it currently does
 
 **Legend:** ✅ live in the trading loop · 🧪 dev/analysis only · ⚙️ ops/deploy · 📄 docs · ⚠️ defective or unwired
@@ -1023,7 +1083,7 @@ resets to this deploy.
 | `orb_strategy.py` ✅ | Turns a confirmed ORB engine state into a signal: strike selection, liquidity-path check (**blocks on a named pool in the path with no extra confluence**), target adjustment, confluence notes. |
 | `sweep_reversal_strategy.py` ✅ | **v3.2 (2026-07-21) — ORB-OWNERSHIP GATE:** a sweep fires only after the ORB *releases* price (stale/runaway/EXPIRED/past 11:00) — not while a break is merely armed/open/failed-inside. Post-sweep reversal. Delta-band strike selection scaled inversely to reversal strength. ATR-aware recovery window. |
 | `continuation_strategy.py` ✅ | **NEW 2026-07-18.** Trend-continuation on pullback to the BB midline. Trending-regime-gated (a stingy label is the signal). Low-bar entry (momentum resumption); exhaustion-based exit owns the risk. Two paths: runaway-ORB **handoff** (looser) + **standalone** (stricter). Debit directional. Paper-first. |
-| `iron_condor_strategy.py` ✅ | **v3.1 header (stale — defect U); logic current through 2026-07-17:** premium-rich band-approach triggers — each side fires only when price travels `CONDOR_TRIGGER_APPROACH` (0.65) of the way from the BB midline to ITS short strike, so it sells one rich side, not two cheap ones at mid-channel. Roll gets first refusal (main.py runs `check_and_execute_roll` BEFORE the 25% per-leg stop). Legged condor, **BB-anchored strikes, zero delta**. Plan state machine + per-leg price triggers. **v3.1 restored an import missing since the file's first commit** — masked on the fleet by Python 3.14's lazy annotations (PEP 649); on any ≤3.13 interpreter the module raised `NameError` at import and killed `main.py`. Verified 3.12 vs 3.14 A/B. |
+| `iron_condor_strategy.py` ✅ | **v3.2 (2026-07-23).** Leg 2 PAUSES on a non-RANGING tick instead of cancelling (the plan stays alive; leg 2 fires when regime returns AND price is at the far band). Window opens 11:11 (defect Y). Logic otherwise current through 2026-07-17: premium-rich band-approach triggers — each side fires only when price travels `CONDOR_TRIGGER_APPROACH` (0.65) of the way from the BB midline to ITS short strike, so it sells one rich side, not two cheap ones at mid-channel. Roll gets first refusal (main.py runs `check_and_execute_roll` BEFORE the 25% per-leg stop). Legged condor, **BB-anchored strikes, zero delta**. Plan state machine + per-leg price triggers. **v3.1 restored an import missing since the file's first commit** — masked on the fleet by Python 3.14's lazy annotations (PEP 649); on any ≤3.13 interpreter the module raised `NameError` at import and killed `main.py`. Verified 3.12 vs 3.14 A/B. |
 | `condor_roll.py` ✅ | **v3.7.** Broken-wing roll. Close of the old untested vertical books the CONFIRMED fill; the rolled vertical is a REAL fill-confirmed signed-credit order (was a DB-only fiction in live); risk-free re-checked against actual fills. |
 | `butterfly_strategy.py` ✅ | **v3.1.** Debit butterfly centered on the **GEX pin**. Gated on PINNING + proximity + noon–14:00 + one-per-session. |
 
