@@ -1,4 +1,7 @@
 #!/bin/bash
+# v3.6 — 2026-07-23 — chain-archival fingerprints. A stale sync silently stops
+#         archiving option chains, and chains cannot be backfilled — every
+#         un-archived session is a permanent hole in the dataset.
 # v3.5 — 2026-07-23 — condor v2 fingerprints (exit_engine v4.1, risk v1.4,
 #         iron_condor v3.2, 11:11 gate). A stale sync silently restores the
 #         un-ratcheted stop (every stopped leg round-tripped from ~+25% to
@@ -168,6 +171,9 @@ check "execution/exit_engine.py"         "_condor_ratchet"              "v4.1 co
 check "execution/exit_engine.py"         "_condor_sibling_open"         "v4.1 TP fires only on a STANDALONE, never a condor leg"
 check "execution/exit_engine.py"         "condor_tp pnl="               "v4.1 time-gated take-profit exit reason"
 check "risk/risk_manager.py"             "leg_budget"                   "v1.4 condor vertical sized at FULL budget (was half)"
+check "analysis/chain_snapshot.py"       "def snapshot"                 "chain archival module present (full 0DTE chain -> .jsonl.gz)"
+check "analysis/chain_snapshot.py"       "vega"                         "chain archival keeps gamma+vega (signal_journal drops them)"
+check "main.py"                          "chain_snapshot import snapshot" "v4.2 chain archival wired into the every-tick GEX block"
 check "strategy/iron_condor_strategy.py" "Leg 2 PAUSED"                 "v3.2 leg 2 pauses on non-RANGING (was CANCELLED)"
 # ABSENCE: the half-size budget must be gone
 if grep -q "half_budget" risk/risk_manager.py 2>/dev/null; then

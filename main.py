@@ -1,5 +1,17 @@
 """
-main.py — options_trader v4.1
+main.py — options_trader v4.2
+v4.2 — 2026-07-23 — FULL OPTION-CHAIN ARCHIVAL (analysis/chain_snapshot.py).
+        The bot already fetched the complete 0DTE chain every ~15s tick — bid,
+        ask, mark, delta, gamma, theta, vega, IV, OI, volume on every strike,
+        ~23,000 full-chain snapshots per fleet-day — and discarded all of it
+        except the one selected contract in the signal_journal `scored` event
+        (which drops gamma and vega besides). Chains are NOT reconstructible
+        after the session: unlike the 1-min tape or deterministic swing pivots,
+        a quote for a strike nobody selected is gone permanently at 16:00.
+        Now archived to data/chain_snapshots/<date>/<SYM>.jsonl.gz on a
+        wall-clock cadence (OT_CHAIN_SNAPSHOT_MIN, default 5). Log-only, gates
+        nothing, adds NO fetch. Makes any future strike-selection rule
+        retroactively testable instead of a live experiment.
 v4.1 — 2026-07-22 — PAPER CONDOR CREDIT via the shared authority (audit
         defect T). The condor leg paper fill applied PAPER_FILL_SLIPPAGE_PCT
         inline while single-leg and butterfly entries had moved to booking the
@@ -1056,6 +1068,25 @@ def main_loop(state: BotState):
                 if _gex_chain:
                     ctx["gex"]   = _compute_gex(_gex_chain, ctx["price"])
                     ctx["chain"] = _gex_chain
+                    # v4.2: archive the FULL chain on a wall-clock cadence.
+                    # LOG-ONLY and NO extra market-data load — it serializes the
+                    # object we already hold. Hooked here rather than in
+                    # attempt_new_entry because this block runs EVERY tick
+                    # regardless of entry eligibility, so snapshots continue
+                    # while halted, while a position is open, and outside the
+                    # condor window. Option chains are unrecoverable after
+                    # 16:00; nothing else in the system archives them.
+                    try:
+                        from analysis.chain_snapshot import snapshot as _chain_snap
+                        _r = ctx.get("regime")
+                        _chain_snap(
+                            _gex_chain,
+                            underlying_price=ctx.get("price"),
+                            regime=getattr(_r, "primary_regime", None)
+                                   if _r is not None else None,
+                        )
+                    except Exception:
+                        pass          # never let archival touch the loop
             except Exception as _gex_err:
                 logger.warning(f"GEX tick fetch failed: {_gex_err}")
 
