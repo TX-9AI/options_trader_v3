@@ -1,5 +1,11 @@
 """
 strategy/iron_condor_strategy.py — Legged Iron Condor for RANGING regime.
+v3.2 — 2026-07-23 — LEG 2 PAUSES INSTEAD OF CANCELLING on a non-RANGING tick,
+        and its short strike is RE-DERIVED from the CURRENT bands at fire time
+        rather than the value frozen at plan time. Rationale: if price wanders
+        for 40 minutes the plan-time strike is stale, so the second side would
+        not actually be premium-rich when it fires. The strike should be a
+        consequence of where the band is NOW.
 v3.1 — 2026-07-12 — FIX missing import (latent since v1.0, 2026-06-30):
         OptionContract/OptionsChain were referenced in CondorPlan's dataclass
         annotations and in method signatures but never imported. Python 3.14's
@@ -376,12 +382,15 @@ class IronCondorStrategy(BaseOptionsStrategy):
                 self._plan = None
                 return None
             elif plan.state == CondorState.LEG1_FILLED:
-                # Leg 1 is already live — keep it. Cancel only Leg 2.
-                logger.info(
-                    f"Condor Leg 2 CANCELLED: regime flipped to "
-                    f"{regime.primary_regime} — Leg 1 remains open"
+                # v3.2 (2026-07-23): PAUSE, do not cancel. Leg 2 must not FILL
+                # into a trending regime, but the plan stays alive — if regime
+                # returns to RANGING and price is at the far band, Leg 2 fires.
+                # (Previously this set COMPLETE, permanently killing the
+                # structure on a single non-RANGING tick.)
+                logger.debug(
+                    f"Condor Leg 2 PAUSED: regime {regime.primary_regime} "
+                    f"!= RANGING — plan held, Leg 1 remains open"
                 )
-                plan.state = CondorState.COMPLETE  # Mark as done adding legs
                 return None
 
         now_et = datetime.now(ET)
