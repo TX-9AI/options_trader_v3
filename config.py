@@ -560,6 +560,13 @@ class SessionConfig:
 # ─── CONTINUATION (trend-pullback) exhaustion exit ────────────────────────────
 # Exhaustion detection for the trend-continuation runner. Extension tightens the
 # trail; momentum divergence exits. All env-tunable for paper-phase calibration.
+# Continuation stop. 2026-07-22: 0.40 -> 0.25 per user directive. The 40%
+# blanket floor (MAX_LOSS_PCT) is a DISASTER backstop sized for trades whose
+# primary stop is structural; the continuation trade's primary stop is the
+# REGIME FLIP, which fires long before a 40% premium bleed. A 40% floor was
+# therefore dead weight that only ever paid out on a gap. 25% keeps the
+# backstop meaningful without letting a dead thesis bleed.
+CONTINUATION_STOP_LOSS_PCT      = float(os.environ.get("OT_CONT_STOP_PCT", "0.25"))
 CONTINUATION_EXHAUST_EXT_ATR    = float(os.environ.get("OT_CONT_EXT_ATR", "2.0"))   # ATRs from midline = "stretched"
 CONTINUATION_EXHAUST_MIN_GAIN   = float(os.environ.get("OT_CONT_MIN_GAIN", "0.15")) # only manage exhaustion past +15%
 CONTINUATION_EXHAUST_TRAIL_LOCK = float(os.environ.get("OT_CONT_TRAIL_LOCK", "0.85"))# extension tightens trail to 85% of premium

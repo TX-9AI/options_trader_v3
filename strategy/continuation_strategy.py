@@ -1,5 +1,8 @@
 """
 strategy/continuation_strategy.py — Trend-continuation on pullback.
+v1.2 — 2026-07-22 — stop backstop 40%% -> 25%% (CONTINUATION_STOP_LOSS_PCT now
+        lives in config, env OT_CONT_STOP_PCT). Paired with exit_engine v4.0:
+        5m-anchored trail + theta-bleed enabled for this strategy.
 v1.1 — 2026-07-22 — UNBLOCKED (defect W). This strategy could NEVER fire.
         It read `getattr(trend, "momentum", "")`, but momentum lives on
         TrendVote (per-timeframe) and was never aggregated onto TrendState —
@@ -78,7 +81,9 @@ logger = logging.getLogger(__name__)
 CONTINUATION_CONV_FLOOR      = 0.45   # min regime conviction to consider the trade
 CONTINUATION_MIDLINE_ATR     = 0.35   # "at the midline": |price-mid| <= this * ATR
 CONTINUATION_MAX_PULLBACK_R  = 0.60   # pullback deeper than this frac of the leg = trend broken, skip
-CONTINUATION_STOP_LOSS_PCT   = 0.40   # matches MAX_LOSS_PCT; regime-flip is the primary exit
+# v1.2 (2026-07-22): sourced from config (env OT_CONT_STOP_PCT), tightened
+# 0.40 -> 0.25. Regime-flip remains the PRIMARY exit; this is the backstop.
+from config import CONTINUATION_STOP_LOSS_PCT   # 0.25 default
 CONTINUATION_TP_PCT          = 1.0    # nominal; runner is exhaustion-trailed, not TP-capped
 CONTINUATION_HANDOFF_CONV_RELAX = 0.10  # handoff path lowers the conviction floor by this
 

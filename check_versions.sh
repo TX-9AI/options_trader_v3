@@ -1,4 +1,7 @@
 #!/bin/bash
+# v3.4 — 2026-07-22 — continuation EXIT-rework fingerprints (exit_engine v4.0):
+#         5m-anchored trail, theta-bleed enabled, 25%% backstop. A stale file
+#         silently reverts to 1m tripwire trails and NO theta protection.
 # v3.3 — 2026-07-22 — continuation-unblock fingerprints (defect W). Pins that
 #         TrendState surfaces primary_momentum and that the strategy READS it
 #         — a stale sync of either file silently re-blocks the trade forever
@@ -148,6 +151,9 @@ check "risk/setup_scorer.py"             "_pools_in_path"               "v1.4 OR
 # ── trend continuation unblocked (defect W, 2026-07-22) ──────────────────
 check "analysis/trend_engine.py"         "primary_momentum"             "v3.2 TrendState surfaces primary_momentum (5m vote)"
 check "strategy/continuation_strategy.py" "primary_momentum"            "v1.1 continuation READS primary_momentum (was silently \"\")"
+check "config.py"                        "OT_CONT_STOP_PCT"             "continuation backstop 25%% (was blanket 40%%)"
+check "execution/exit_engine.py"         "CONTINUATION_STOP_LOSS_PCT"   "v4.0 continuation floor uses its own pct, not MAX_LOSS_PCT"
+check "execution/exit_engine.py"         "_fvg_frame(df_1m, df_5m),"    "v4.0 continuation trail anchors to 5m FVGs"
 # ABSENCE: "STEADY" is a phantom — trend_engine emits ACCELERATING/DECELERATING/
 # FLAT only. Its return means a stale continuation_strategy.py is back.
 if grep -qE 'momentum in \("ACCELERATING", "STEADY"\)' strategy/continuation_strategy.py 2>/dev/null; then

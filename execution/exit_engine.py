@@ -1,5 +1,24 @@
 """
 execution/exit_engine.py — Strategy-aware exit logic for all options positions.
+v4.0 — 2026-07-22 — CONTINUATION EXIT REWORK (user directive). Three changes,
+        all scoped to _evaluate_continuation — no other strategy touched:
+        (a) TRAIL ANCHORS TO 5m FVGs. It was passing df_1m straight into
+            _update_fvg_trail, bypassing the _fvg_frame() helper that ORB and
+            sweep have used since v3.8. 1m gaps on a trend-continuation runner
+            are noise-tight tripwires; 5m gaps are structurally meaningful and
+            naturally wider. Now routed through _fvg_frame(df_1m, df_5m), so
+            it also inherits the graceful 1m fallback when 5m is thin.
+        (b) THETA-BLEED ENABLED. _theta_bleed had exactly ONE call site
+            (_evaluate_orb) — continuation had NO theta protection at all, so
+            a stalled winner decayed untouched toward the floor. Now called,
+            with its existing four gates unchanged: >=THETA_MIN_GAIN_PCT gain,
+            below the FVG_TRAIL_ARM_PCT trail ceiling, past the
+            THETA_MIN_HOLD_MIN 20-minute blackout, and projected calendar-day
+            decay >= the gain. Placed AFTER exhaustion so the smarter signal
+            (momentum divergence) gets first refusal in the narrow overlap;
+            theta only catches the genuinely STALLED case.
+        (c) BACKSTOP 40%% -> 25%% via CONTINUATION_STOP_LOSS_PCT. The floor
+            fallback no longer borrows the blanket MAX_LOSS_PCT.
 v3.8 — 2026-07-15 — RUNNER REFINEMENTS (all config/env-tunable; see config
         v2.0). Goals: let winners run harder, keep the loss unit deliberate,
         give 0DTE gamma room to breathe.
@@ -220,7 +239,7 @@ from config import (
     MAX_LOSS_PCT, POST_TARGET_TRAIL_LOCK_PCT, FVG_FLOOR_MAX_LOCK_PCT,
     USE_5M_FVG_TRAIL, SWEEP_POST_TARGET_TRAIL,
     CONTINUATION_EXHAUST_EXT_ATR, CONTINUATION_EXHAUST_MIN_GAIN,
-    CONTINUATION_EXHAUST_TRAIL_LOCK
+    CONTINUATION_EXHAUST_TRAIL_LOCK, CONTINUATION_STOP_LOSS_PCT
 )
 from utils.time_utils import (is_hard_close_time, minutes_since, now_utc,
                               fmt_et_short, now_et)
@@ -1203,8 +1222,11 @@ class ExitEngine:
             decision.exit_reason = f"regime_flip ({regime})"
             return decision
 
-        # 3. HARD FLOOR — 40% premium loss (disaster backstop beneath regime-flip)
-        stop_prem = record.get("stop_premium", 0.0) or (entry_prem * (1 - MAX_LOSS_PCT))
+        # 3. HARD FLOOR — 25% premium loss (v4.0; was the blanket 40%).
+        #    Disaster backstop only: regime-flip above is the real stop and
+        #    normally fires first. Existing rows keep the stop_premium written
+        #    at entry; the fallback is the continuation-specific pct.
+        stop_prem = record.get("stop_premium", 0.0) or (entry_prem * (1 - CONTINUATION_STOP_LOSS_PCT))
         if stop_prem > 0 and current_premium <= stop_prem:
             decision.should_exit = True
             floor_pct = 1 - (stop_prem / entry_prem) if entry_prem > 0 else MAX_LOSS_PCT
@@ -1242,10 +1264,25 @@ class ExitEngine:
                     self._trail_stops[trade_id] = new_trail
                     decision.new_trail_stop = new_trail
 
-        # 4. STANDARD RUNNER TRAIL — arms on the resumption gain, then owns the
+        # 4. THETA BLEED (v4.0) — the stalled-winner exit. Four gates live
+        #    inside _theta_bleed and are unchanged, including the 20-MINUTE
+        #    MIN-HOLD blackout the user asked for. Its active window is a gain
+        #    in [THETA_MIN_GAIN_PCT, FVG_TRAIL_ARM_PCT) with the trail not yet
+        #    armed — i.e. a small winner going nowhere while the clock eats it.
+        #    Sits AFTER exhaustion on purpose: where the two windows overlap, a
+        #    momentum divergence is the more informative reason to leave, and
+        #    it gives the L3 ledger the better exit_reason.
+        if self._theta_bleed(record, current_premium, pnl_pct):
+            decision.should_exit = True
+            decision.exit_reason = f"theta_bleed pnl={pnl_pct:.1%}"
+            return decision
+
+        # 5. STANDARD RUNNER TRAIL — arms on the resumption gain, then owns the
         #    trade (this is also what silences theta via the v1.5 trail ceiling).
+        #    v4.0: anchored to 5m FVGs via _fvg_frame (was raw df_1m).
         trail_stop = self._update_fvg_trail(trade_id, current_premium, record,
-                                            df_1m, direction)
+                                            self._fvg_frame(df_1m, df_5m),
+                                            direction)
         if trail_stop is not None:
             decision.new_trail_stop = max(decision.new_trail_stop or 0.0, trail_stop)
             if current_premium <= trail_stop:
