@@ -1,5 +1,15 @@
 """
 execution/exit_engine.py — Strategy-aware exit logic for all options positions.
+v4.1 — 2026-07-23 — CONDOR LEG MANAGEMENT v2 (user directive, data-driven).
+        (a) RATCHETING STOP: +20% -> breakeven, +40% -> lock +20%, tightens only.
+        (b) TIME-GATED TP at 25%, ONLY after CONDOR_ENTRY_CUTOFF_ET and ONLY
+            when the opposite side is not open. Backtest, 18 standalone legs:
+            TP@25% turned -$242.77 into -$8.43; on 28 condor legs a TP was WORSE
+            at every level, confirming a condor leg must never be closed on
+            profit — the only reason to close one is the roll.
+        (c) Min-hold before TP: a quote-noise filter, not a structure mechanism.
+        Nickel close, 15:45 hard close and the direction-aware regime exit are
+        UNCHANGED (that regime exit has fired 0 times in 143 legs).
 v4.0 — 2026-07-22 — CONTINUATION EXIT REWORK (user directive). Three changes,
         all scoped to _evaluate_continuation — no other strategy touched:
         (a) TRAIL ANCHORS TO 5m FVGs. It was passing df_1m straight into
@@ -434,6 +444,7 @@ class ExitEngine:
     def __init__(self, paper_trading: bool = PAPER_TRADING):
         self.paper_trading  = paper_trading
         self._trail_stops:  dict = {}
+        self._condor_ratchet: dict = {}   # v4.1 condor ratcheting stop
         self._exhaust_state: dict = {}   # per-trade {ext, mom} for continuation divergence
         self._trail_active: dict = {}
         self._bos_trackers: dict = {}   # trade_id \u2192 BOSTracker (sweep only)
@@ -983,6 +994,44 @@ class ExitEngine:
 
     # \u2500\u2500\u2500 Shared Helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
+    def _condor_sibling_open(self, record) -> bool:
+        """True if the OPPOSITE side of this symbol's condor is also open.
+
+        The user's deconfliction rule used as a STATE CHECK: one leg open =
+        standalone (take-profit applies); both open = a real condor (hold for
+        the roll — the only reason to close one is the roll). Needs no
+        look-ahead; structure state is knowable at every instant.
+        On any error, returns True (treat as condor = do NOT take profit),
+        because wrongly TPing a condor leg is the costlier mistake.
+        """
+        try:
+            from database.trade_logger import get_trade_logger
+            tl = get_trade_logger()
+            if tl is None:
+                return False
+            me = record.get("option_side", "")
+            for t in tl.get_open_trades():
+                if (t.get("is_condor_leg")
+                        and t.get("symbol") == record.get("symbol")
+                        and t.get("trade_id") != record.get("trade_id")
+                        and t.get("option_side") and t.get("option_side") != me):
+                    return True
+            return False
+        except Exception:
+            return True
+
+    @staticmethod
+    def _held_minutes(record) -> float:
+        try:
+            et = record.get("entry_time")
+            if not et:
+                return 0.0
+            t = datetime.fromisoformat(str(et).replace("Z", "+00:00"))
+            now = datetime.now(t.tzinfo) if t.tzinfo else datetime.now()
+            return (now - t).total_seconds() / 60.0
+        except Exception:
+            return 0.0
+
     def _evaluate_condor_leg(self, record: TradeRecord,
                               current_premium: float,
                               regime: Optional[str] = None) -> ExitDecision:
@@ -999,7 +1048,11 @@ class ExitEngine:
 
         Exits: hard close, adverse regime flip, 25% stop, $0.05 nickel close.
         """
-        from config import CONDOR_NICKEL_CLOSE, CONDOR_STOP_LOSS_PCT
+        from config import (CONDOR_NICKEL_CLOSE, CONDOR_STOP_LOSS_PCT,
+                            CONDOR_RATCHET_BE_AT, CONDOR_RATCHET_LOCK_AT,
+                            CONDOR_RATCHET_LOCK_PCT, CONDOR_TP_PCT,
+                            CONDOR_TP_MIN_HOLD_MIN, CONDOR_ENTRY_CUTOFF_ET)
+        from utils.time_utils import ET
 
         decision    = ExitDecision()
         trade_id    = record["trade_id"]
@@ -1038,11 +1091,43 @@ class ExitEngine:
                     f"(pnl={pnl_pct:.1%}) — holding, Leg 2 will be cancelled by strategy"
                 )
 
-        stop_level = entry_prem * (1 + CONDOR_STOP_LOSS_PCT)
+        # ── RATCHETING STOP (v4.1) ────────────────────────────────────────
+        # Every stopped leg in the 07-07..07-22 sample was GREEN FIRST (median
+        # peak +24% pre-fix / +31% post) then round-tripped into the -25% stop.
+        # Nothing existed between entry and the $0.05 nickel close to keep any
+        # of it. This moves the STOP and never closes the leg, so the position
+        # stays alive to reach the far band and complete the structure.
+        base_stop  = entry_prem * (1 + CONDOR_STOP_LOSS_PCT)
+        stop_level = base_stop
+        tier = ""
+        if pnl_pct >= CONDOR_RATCHET_LOCK_AT:
+            stop_level = min(stop_level, entry_prem * (1 - CONDOR_RATCHET_LOCK_PCT))
+            tier = f" [locked +{CONDOR_RATCHET_LOCK_PCT:.0%}]"
+        elif pnl_pct >= CONDOR_RATCHET_BE_AT:
+            stop_level = min(stop_level, entry_prem)
+            tier = " [breakeven]"
+        prev = self._condor_ratchet.get(trade_id)
+        if prev is not None:
+            stop_level = min(stop_level, prev)      # ratchet only ever tightens
+        self._condor_ratchet[trade_id] = stop_level
+
         if current_premium >= stop_level:
             decision.should_exit = True
-            decision.exit_reason = f"condor_stop pnl={pnl_pct:.1%}"
+            decision.exit_reason = f"condor_stop pnl={pnl_pct:.1%}{tier}"
             return decision
+
+        # ── TIME-GATED TAKE PROFIT (v4.1) ─────────────────────────────────
+        # ONLY after the entry cutoff (structure definitively dead) and ONLY on
+        # a standalone. A TP before the cutoff would guarantee the condor never
+        # forms: the move that makes side one profitable IS the move that
+        # carries price to the far band to trigger side two.
+        if pnl_pct >= CONDOR_TP_PCT and not self._condor_sibling_open(record):
+            now_et = datetime.now(ET)
+            if ((now_et.hour, now_et.minute) >= CONDOR_ENTRY_CUTOFF_ET
+                    and self._held_minutes(record) >= CONDOR_TP_MIN_HOLD_MIN):
+                decision.should_exit = True
+                decision.exit_reason = f"condor_tp pnl={pnl_pct:.1%} (standalone, post-cutoff)"
+                return decision
 
         if current_premium <= CONDOR_NICKEL_CLOSE:
             decision.should_exit = True
