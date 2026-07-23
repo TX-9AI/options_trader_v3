@@ -1,5 +1,29 @@
 """
 strategy/continuation_strategy.py — Trend-continuation on pullback.
+v1.1 — 2026-07-22 — UNBLOCKED (defect W). This strategy could NEVER fire.
+        It read `getattr(trend, "momentum", "")`, but momentum lives on
+        TrendVote (per-timeframe) and was never aggregated onto TrendState —
+        the object main.py actually passes in. So momentum was ALWAYS "",
+        and BOTH paths dead-ended before ever reaching strike selection:
+          standalone: "" != "ACCELERATING"          -> return None, every tick
+          handoff:    "" not in (ACCELERATING,...)  -> return None, every tick
+        Every gate above it (trending regime, conviction floor, midline
+        proximity, pullback depth) could pass perfectly and the trade still
+        died here. The getattr default swallowed the missing attribute, so it
+        threw no error and logged nothing — it looked exactly like "conditions
+        never set up". Live from 2026-07-18 deploy to this fix: ZERO fires
+        fleet-wide, by construction.
+        FIX: read trend.primary_momentum (trend_engine v3.2 surfaces it from
+        the 5m vote, same as primary_adx).
+        ALSO: the resumption vocabulary was wrong. This checked for "STEADY",
+        which trend_engine NEVER emits — its values are ACCELERATING /
+        DECELERATING / FLAT. "STEADY" was a phantom, so even correctly wired
+        the handoff path would have been stricter than designed. The intent
+        ("handoff accepts steady, standalone demands acceleration") now maps
+        onto the REAL vocabulary: handoff accepts ACCELERATING or FLAT (i.e.
+        not actively decelerating against us); standalone demands
+        ACCELERATING. "" (no 5m vote) blocks BOTH — unknown is never a green
+        light.
 
 v1.0 — 2026-07-18 — The trend-native trade the trend_engine v3.1 fix enables.
         Fires ONLY when regime is trending (a high bar now that direction
@@ -28,6 +52,12 @@ DESIGN (per spec, options_trader_v3 continuation-trade decisions):
              self-sourced trend+pullback+resumption). handoff flag toggles it.
 
 SAFETY: this module is inert until wired in AND enabled. main.py registers it
+NOTE (v1.1): earlier text here described a CONTINUATION_ENABLED flag
+(default False, "ships dark"). No such flag was ever defined or checked
+anywhere in the repo — the strategy dispatches live from main.py
+Priority 2.5. The claim was stale doc, not a real gate; what actually
+kept it dark was the momentum defect above. Left here so nobody goes
+hunting for a flag that does not exist. Historical text follows:
 behind CONTINUATION_ENABLED (default False) so it ships dark and is proven in
 paper/backtest before it can affect live dispatch.
 """
@@ -108,12 +138,22 @@ class ContinuationStrategy(BaseOptionsStrategy):
         # Resumption is intentionally easy — protection lives in the exit. We
         # require the trend engine's momentum to be re-asserting in the trend
         # direction (not still decelerating against us).
-        momentum = getattr(trend, "momentum", "") or ""
-        resuming = momentum in ("ACCELERATING", "STEADY")
-        # standalone path is stricter: demand ACCELERATING specifically
-        if not is_handoff and momentum != "ACCELERATING":
-            return None
-        if not resuming:
+        # v1.1: primary_momentum (5m vote, surfaced by trend_engine v3.2).
+        # NOT `trend.momentum` — that attribute does not exist on TrendState
+        # and getattr silently returned "", hard-blocking this trade forever.
+        momentum = getattr(trend, "primary_momentum", "") or ""
+        if not momentum:
+            return None          # no 5m vote this tick — unknown is not a green light
+        # Real vocabulary: ACCELERATING / DECELERATING / FLAT.
+        #   standalone -> must be ACCELERATING (self-sourced, so demand thrust)
+        #   handoff    -> ACCELERATING or FLAT (the runaway ORB already proved
+        #                 directional force; we only need "not decelerating
+        #                 against us"). FLAT is what the old code meant by the
+        #                 phantom value "STEADY".
+        if is_handoff:
+            if momentum not in ("ACCELERATING", "FLAT"):
+                return None
+        elif momentum != "ACCELERATING":
             return None
 
         # direction agreement between regime and trend engine (cheap sanity)

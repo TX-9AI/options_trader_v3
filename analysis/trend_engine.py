@@ -2,6 +2,16 @@
 analysis/trend_engine.py — Trend detection via EMA stacks, ADX, momentum.
 Operates on 5m, 15m, and 1H timeframes for multi-TF trend alignment.
 v1.0 — original release
+v3.2 — 2026-07-22 — SURFACE primary_momentum ON TrendState (defect W).
+        momentum was computed per-timeframe on TrendVote but NEVER aggregated
+        onto TrendState, the object handed to the strategies. Any consumer
+        doing getattr(trend, "momentum", "") silently got "" — no
+        AttributeError, no log — which hard-blocked the trend continuation
+        trade on every tick since it shipped 2026-07-18 (see
+        continuation_strategy v1.1). Now surfaced from the 5m vote, exactly
+        as primary_adx already is, for the same reason: 5m is the timeframe
+        this bot actually trades. Default "" means "no 5m vote this tick" and
+        consumers MUST treat it as no-trade, not as neutral.
 v1.1 — 2026-06-30 — primary_adx now sourced from the 5m timeframe instead
         of 1H. This is a 0DTE intraday bot trading off ORB/butterfly setups
         on 5-min structure — 1H ADX lags the actual session move and was
@@ -57,6 +67,9 @@ class TrendState:
     is_bullish:        bool  = False
     is_bearish:        bool  = False
     primary_adx:       float = 0.0    # ADX from the 5m TF — matches the bot's trading timeframe
+    primary_momentum:  str   = ""     # v3.2: momentum from the 5m TF — ACCELERATING /
+                                      # DECELERATING / FLAT. "" = no 5m vote this tick;
+                                      # consumers must treat "" as NO-TRADE, not neutral.
 
 
 class TrendEngine:
@@ -164,6 +177,7 @@ class TrendEngine:
         weighted_bear  = 0.0
         total_weight   = 0.0
         primary_adx    = 0.0
+        primary_momentum = ""
 
         for tf, weight in tf_weights.items():
             df = data.get(tf)
@@ -180,6 +194,9 @@ class TrendEngine:
             # structure), not 1H which lags the live session by hours.
             if tf == "5m":
                 primary_adx = vote.adx
+                # v3.2: momentum rides along with ADX off the SAME 5m vote —
+                # the strategies need the aggregate, not per-TF votes.
+                primary_momentum = vote.momentum
 
             if vote.direction == "BULLISH":
                 weighted_bull += weight * vote.conviction
@@ -190,7 +207,8 @@ class TrendEngine:
             else:
                 total_weight += weight * 0.5  # Neutral still counts as weight
 
-        state.primary_adx = primary_adx
+        state.primary_adx      = primary_adx
+        state.primary_momentum = primary_momentum
 
         # Overall direction from weighted votes
         if total_weight > 0:

@@ -1,4 +1,9 @@
 #!/bin/bash
+# v3.3 — 2026-07-22 — continuation-unblock fingerprints (defect W). Pins that
+#         TrendState surfaces primary_momentum and that the strategy READS it
+#         — a stale sync of either file silently re-blocks the trade forever
+#         with no error and no log, which is exactly how it hid for 4 days.
+#         Also an ABSENCE check on the phantom "STEADY" value.
 # v3.2 — 2026-07-22 — ORB geometry-gate fingerprints (setup_scorer v1.4).
 #         Pins that the ORB grades via _grade_orb (liquidity-in-path A/B only)
 #         and that _orb_quality is GONE — a stale file would silently restore
@@ -139,6 +144,17 @@ check "config.py"                        "OT_PAPER_SLIPPAGE_PCT\", \"0.0\"" "pap
 # ── ORB geometry gate (setup_scorer v1.4, 2026-07-22) ────────────────────
 check "risk/setup_scorer.py"             "_grade_orb"                   "v1.4 ORB graded by geometry gate (liquidity-in-path A/B only)"
 check "risk/setup_scorer.py"             "_pools_in_path"               "v1.4 ORB A/B selector = unswept pool between entry and TP"
+
+# ── trend continuation unblocked (defect W, 2026-07-22) ──────────────────
+check "analysis/trend_engine.py"         "primary_momentum"             "v3.2 TrendState surfaces primary_momentum (5m vote)"
+check "strategy/continuation_strategy.py" "primary_momentum"            "v1.1 continuation READS primary_momentum (was silently \"\")"
+# ABSENCE: "STEADY" is a phantom — trend_engine emits ACCELERATING/DECELERATING/
+# FLAT only. Its return means a stale continuation_strategy.py is back.
+if grep -qE 'momentum in \("ACCELERATING", "STEADY"\)' strategy/continuation_strategy.py 2>/dev/null; then
+    echo "  \u2717 STALE:   continuation_strategy uses phantom STEADY value — pre-v1.1 file restored"
+else
+    echo "  \u2713 PRESENT: continuation momentum vocabulary is ACCELERATING/FLAT (no phantom STEADY)"
+fi
 # ABSENCE check: _orb_quality must be GONE from executable code. A stale sync
 # that restores it re-introduces the regime/VWAP/macro-weighted ORB score. We
 # grep only for a CALL (self._orb_quality(), def _orb_quality) — the string
