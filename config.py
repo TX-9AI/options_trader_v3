@@ -336,8 +336,31 @@ CONDOR_PROXIMITY_STRIKES    = 2      # (legacy) strikes inside the short — sup
 CONDOR_TRIGGER_APPROACH     = float(os.environ.get("OT_CONDOR_TRIGGER_APPROACH", "0.65"))
                                      # (2 strikes = 10pt on SPX, $2 on QQQ — scales naturally)
 CONDOR_STOP_LOSS_PCT        = 0.25   # Exit if spread value rises to 125% of credit received
+# ── Condor leg management, v2 (2026-07-23) ────────────────────────────────
+# A RATCHET IS NOT A TAKE-PROFIT. A TP closes the position and so structurally
+# guarantees the condor never forms: the move that makes side one profitable IS
+# the move that carries price to the far band and triggers side two. So before
+# the entry cutoff we only ever move the STOP and leave the leg open.
+CONDOR_RATCHET_BE_AT        = float(os.environ.get("OT_CONDOR_RATCHET_BE", "0.20"))   # +20% -> stop to breakeven
+CONDOR_RATCHET_LOCK_AT      = float(os.environ.get("OT_CONDOR_RATCHET_LOCK_AT", "0.40"))
+CONDOR_RATCHET_LOCK_PCT     = float(os.environ.get("OT_CONDOR_RATCHET_LOCK_PCT", "0.20"))
+# Hard TP applies ONLY after CONDOR_ENTRY_CUTOFF_ET, when no second leg can
+# fire and the structure is definitively dead. Backtest on 18 standalone legs:
+# TP@25% turned -$242.77 into -$8.43; 30% was +$14 better = noise; 40%/50% worse.
+CONDOR_TP_PCT               = float(os.environ.get("OT_CONDOR_TP_PCT", "0.25"))
+# Min hold before the TP is even evaluated — a QUOTE-NOISE filter, not a
+# structure mechanism. On a 0DTE spread with a nickel-wide bid/ask a +25% mark
+# move can be one tick of noise. Kept modest (10m, not theta's 20m) because
+# price moving away from the short strike is a legitimate fast gain (delta).
+CONDOR_TP_MIN_HOLD_MIN      = float(os.environ.get("OT_CONDOR_TP_MIN_HOLD", "10"))
 CONDOR_NICKEL_CLOSE         = 0.05   # Close leg when spread value decays to $0.05
-CONDOR_ENTRY_START_ET       = (11, 0)   # No condor entries before 11 AM (after ORB window closes)
+# 2026-07-23: 11:00 -> 11:11. Bollinger needs BB_PERIOD(20) 5-minute bars, so
+# the first valid bb_middle is ~11:05 ET (verified on the 07-22 tape). The old
+# 11:00 open meant the first ten minutes of the condor window ran with
+# bb_middle == 0, and decide() falls back to `mid = current_price` in that case
+# — i.e. strikes and triggers computed with NO volatility reference at all.
+# 11:11 clears 11:05 with margin and removes that fallback path entirely.
+CONDOR_ENTRY_START_ET       = (11, 11)  # No condor entries before 11:11 (BB must be valid)
 CONDOR_ENTRY_CUTOFF_ET      = (14, 0)   # Standard entry cutoff
 
 # ─── EXIT MANAGEMENT ──────────────────────────────────────────────────────────
