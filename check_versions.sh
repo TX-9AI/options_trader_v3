@@ -1,4 +1,9 @@
 #!/bin/bash
+# v3.5 — 2026-07-23 — condor v2 fingerprints (exit_engine v4.1, risk v1.4,
+#         iron_condor v3.2, 11:11 gate). A stale sync silently restores the
+#         un-ratcheted stop (every stopped leg round-tripped from ~+25% to
+#         -25%), the half-size verticals, the leg-2 CANCEL, or the 11:00 window
+#         that runs on a bb_middle=current_price fallback.
 # v3.4 — 2026-07-22 — continuation EXIT-rework fingerprints (exit_engine v4.0):
 #         5m-anchored trail, theta-bleed enabled, 25%% backstop. A stale file
 #         silently reverts to 1m tripwire trails and NO theta protection.
@@ -154,6 +159,22 @@ check "strategy/continuation_strategy.py" "primary_momentum"            "v1.1 co
 check "config.py"                        "OT_CONT_STOP_PCT"             "continuation backstop 25%% (was blanket 40%%)"
 check "execution/exit_engine.py"         "CONTINUATION_STOP_LOSS_PCT"   "v4.0 continuation floor uses its own pct, not MAX_LOSS_PCT"
 check "execution/exit_engine.py"         "_fvg_frame(df_1m, df_5m),"    "v4.0 continuation trail anchors to 5m FVGs"
+
+# ── condor v2 (2026-07-23) ────────────────────────────────────────────────
+check "config.py"                        "(11, 11)"                     "condor window opens 11:11 (BB valid; no current_price fallback)"
+check "config.py"                        "OT_CONDOR_RATCHET_BE"         "condor ratchet knobs present"
+check "config.py"                        "OT_CONDOR_TP_PCT"             "condor time-gated TP knob present"
+check "execution/exit_engine.py"         "_condor_ratchet"              "v4.1 condor ratcheting stop (BE at +20%, lock +20% at +40%)"
+check "execution/exit_engine.py"         "_condor_sibling_open"         "v4.1 TP fires only on a STANDALONE, never a condor leg"
+check "execution/exit_engine.py"         "condor_tp pnl="               "v4.1 time-gated take-profit exit reason"
+check "risk/risk_manager.py"             "leg_budget"                   "v1.4 condor vertical sized at FULL budget (was half)"
+check "strategy/iron_condor_strategy.py" "Leg 2 PAUSED"                 "v3.2 leg 2 pauses on non-RANGING (was CANCELLED)"
+# ABSENCE: the half-size budget must be gone
+if grep -q "half_budget" risk/risk_manager.py 2>/dev/null; then
+    echo "  \u2717 STALE:   risk_manager still half-sizes condor verticals (expected FULL budget)"
+else
+    echo "  \u2713 PRESENT: condor verticals sized at full budget (no half_budget)"
+fi
 # ABSENCE: "STEADY" is a phantom — trend_engine emits ACCELERATING/DECELERATING/
 # FLAT only. Its return means a stale continuation_strategy.py is back.
 if grep -qE 'momentum in \("ACCELERATING", "STEADY"\)' strategy/continuation_strategy.py 2>/dev/null; then
