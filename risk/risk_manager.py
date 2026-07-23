@@ -27,6 +27,8 @@ v1.4 — 2026-07-02 — (a) regime reassessment after EVERY losing trade (not ju
         (seeded from today's closed trades so it survives restarts) and halt
         NEW entries when day P&L <= -DAILY_LOSS_LIMIT_USD. Wins offset losses —
         a green day keeps trading. Open positions still exit normally.
+v1.4 — 2026-07-23 — compute_condor_leg_size() now sizes each vertical at the
+        FULL grade budget (was half). See the method docstring.
 v1.3 — 2026-07-02 — add compute_condor_leg_size(): sizes ONE condor vertical
         at HALF the grade budget (each side gets half), against the spread
         max-loss = (width - credit) x 100. Enables two independent verticals.
@@ -210,10 +212,19 @@ class RiskManager:
 
     def compute_condor_leg_size(self, spread_width: float, credit: float,
                                  grade: str = "B") -> SizingResult:
-        """Size ONE condor vertical (credit spread) at HALF the grade budget.
+        """Size ONE condor vertical (credit spread) at the FULL grade budget.
 
-        Each side of the condor is budgeted independently at half of the normal
-        per-trade risk, so a B-grade $1000 trade becomes two $500 verticals.
+        v1.4 (2026-07-23, user directive): was HALF. Each vertical is now sized
+        as a standalone position, because that is what it usually IS — 18 of 46
+        legs in the 07-07..07-22 sample never got a second side, so half-sizing
+        chronically under-sized a structure that never existed.
+
+        When both sides DO fill, the two verticals cannot both reach max loss
+        at expiry (price can only be at one extreme), so the notional is less
+        risky than 2x suggests. Caveat, stated honestly: a 25% stop that closes
+        the tested side breaks that offset — 5 of 14 condor symbol-days in the
+        sample had BOTH sides stopped on a whipsaw. Accepted with the ratcheting
+        stop (exit_engine v4.1) as mitigation.
         Max loss per contract for a credit spread = (width - credit) x 100.
         """
         result = SizingResult(grade=grade)
@@ -225,14 +236,15 @@ class RiskManager:
             return result
 
         grade_mult  = GRADE_SIZE_MULTIPLIER.get(grade, 1.0)
-        half_budget = self._risk_per_trade * grade_mult * 0.5
+        # v1.4: FULL budget per vertical (was * 0.5)
+        leg_budget = self._risk_per_trade * grade_mult
 
-        count = int(half_budget // max_loss_per_contract)
+        count = int(leg_budget // max_loss_per_contract)
         if count < 1:
             result.allowed       = False
             result.reject_reason = (
                 f"insufficient_capital: vertical max_loss="
-                f"${max_loss_per_contract:.0f} > half_budget=${half_budget:.0f}"
+                f"${max_loss_per_contract:.0f} > leg_budget=${leg_budget:.0f}"
             )
             return result
 
