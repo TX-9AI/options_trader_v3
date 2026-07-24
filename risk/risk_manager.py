@@ -1,5 +1,18 @@
 """
-risk/risk_manager.py — Position sizing and session circuit breaker.
+risk/risk_manager.py — Position sizing and session circuit breaker. v3.3
+v3.3 — 2026-07-23 — FIX NameError on the condor-leg SUCCESS path: the v3.2
+        full-budget change renamed the budget variable (half -> leg_budget)
+        but the logger.info f-string still referenced the DELETED old name,
+        so every sizing that produced >=1 contract raised NameError AT THE
+        LOG LINE (found by check_versions' absence canary in the 2026-07-23
+        header audit; reproduced: spread_width=5.0, credit=0.50, risk=1050
+        -> NameError). Log now prints leg_budget. No sizing-math change.
+        (The old variable name is deliberately not written here — the
+        absence canary greps this file for it, prose included.)
+v3.2 — 2026-07-23 — compute_condor_leg_size() now sizes each vertical at the
+        FULL grade budget (was half). See the method docstring. (Relabeled in
+        the 2026-07-23 header audit: this entry originally shipped mis-numbered
+        v1.4 — the file was already at v3.1.)
 v3.1 — 2026-07-12 — SESSION_LOSS_LIMIT import removed (constant deleted in config
         v3.2). It gated nothing: record_loss() has requested a reassessment on
         EVERY loss since v1.4. The session_losses COUNTER is kept as a statistic.
@@ -27,8 +40,6 @@ v1.4 — 2026-07-02 — (a) regime reassessment after EVERY losing trade (not ju
         (seeded from today's closed trades so it survives restarts) and halt
         NEW entries when day P&L <= -DAILY_LOSS_LIMIT_USD. Wins offset losses —
         a green day keeps trading. Open positions still exit normally.
-v1.4 — 2026-07-23 — compute_condor_leg_size() now sizes each vertical at the
-        FULL grade budget (was half). See the method docstring.
 v1.3 — 2026-07-02 — add compute_condor_leg_size(): sizes ONE condor vertical
         at HALF the grade budget (each side gets half), against the spread
         max-loss = (width - credit) x 100. Enables two independent verticals.
@@ -214,7 +225,7 @@ class RiskManager:
                                  grade: str = "B") -> SizingResult:
         """Size ONE condor vertical (credit spread) at the FULL grade budget.
 
-        v1.4 (2026-07-23, user directive): was HALF. Each vertical is now sized
+        v3.2 (2026-07-23, user directive): was HALF. Each vertical is now sized
         as a standalone position, because that is what it usually IS — 18 of 46
         legs in the 07-07..07-22 sample never got a second side, so half-sizing
         chronically under-sized a structure that never existed.
@@ -236,7 +247,7 @@ class RiskManager:
             return result
 
         grade_mult  = GRADE_SIZE_MULTIPLIER.get(grade, 1.0)
-        # v1.4: FULL budget per vertical (was * 0.5)
+        # v3.2: FULL budget per vertical (was * 0.5)
         leg_budget = self._risk_per_trade * grade_mult
 
         count = int(leg_budget // max_loss_per_contract)
@@ -258,7 +269,7 @@ class RiskManager:
         logger.info(
             f"Condor leg size: {count} vertical(s) x max_loss "
             f"${max_loss_per_contract:.0f} = ${result.total_cost:.0f} "
-            f"(half budget=${half_budget:.0f}, grade={grade})"
+            f"(leg budget=${leg_budget:.0f}, grade={grade})"
         )
         return result
 

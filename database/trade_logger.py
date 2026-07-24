@@ -1,5 +1,5 @@
 """
-database/trade_logger.py — Options trade logging (SQLite).
+database/trade_logger.py — Options trade logging (SQLite). v3.8
 v3.1 — 2026-07-12 — F5 FIX (exit-reason integrity): new trail_stop column
         (schema + migration) + update_trail_stop(). The trail is now persisted
         separately; stop_premium is the immutable entry-time -25% floor.

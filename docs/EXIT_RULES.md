@@ -1,7 +1,13 @@
 # EXIT RULES — every way every trade closes, and what it's set at
 
-Extracted from the running code (`exit_engine.py` v3.8, `base_strategy.py`,
-`config.py` v2.0), 2026-07-15 — **updated for the runner refinements** (all
+Extracted from the running code (`exit_engine.py` **v4.1**, `base_strategy.py`,
+`config.py` v3.9), 2026-07-15, **last synced 2026-07-23** — covers the runner
+refinements (v3.8), the 2026-07-22 **mark-limit closes** (exits post a limit AT
+the mark, re-anchored every retry tick; EOD flatten escalates 15:40 mark-limit →
+15:45 MARKET), the **continuation exit rework** (v4.0: 5m-anchored FVG trail,
+theta-bleed enabled after exhaustion, backstop 40%→25% via
+`CONTINUATION_STOP_LOSS_PCT`), and **condor leg management v2** (v4.1: ratcheting
+stop, time-gated TP@25%). Original v3.8 note (all
 env-tunable for paper A/B): directional floor 25%→**40%** (`OT_MAX_LOSS_PCT`);
 trails anchor to **5-minute FVGs** (`OT_USE_5M_FVG_TRAIL`); FVG floors clamped
 to ≤ **90% of current** (`OT_FVG_FLOOR_MAX_LOCK_PCT`); post-target fallback
@@ -26,7 +32,7 @@ Each exit is tagged by its role in the design:
 
 | Exit | Trigger | Value | Tag |
 |---|---|---|---|
-| Hard close | Time ≥ 15:45 ET | flatten_all retries every tick to 16:00, pages on failure | ⏰ |
+| Hard close | **15:40 ET mark-limit flatten → 15:45 ET MARKET escalation** (`limit_ladder.hard_close_order_mode`, 2026-07-22) | flatten_all retries every tick to 16:00, pages on failure | ⏰ |
 
 ---
 
@@ -61,10 +67,25 @@ FVG floor hit, structure break, or theta about to eat a stalled small gain.
 | # | Exit | Trigger | Set at | Tag |
 |---|---|---|---|---|
 | 1 | Hard close | 15:45 ET | — | ⏰ |
-| 2 | **Adverse regime flip** | direction-aware: call spread exits on TRENDING_BULL / BREAKOUT_VOLATILE; put spread on TRENDING_BEAR / BREAKOUT_VOLATILE. A FAVORABLE flip holds (Leg 2 gets cancelled by the strategy instead) | regime engine | 🛑 (thesis death, pre-emptive) |
-| 3 | **Condor stop** | spread value ≥ credit × **1.25** (`CONDOR_STOP_LOSS_PCT = 0.25`) | −25% of credit received | 🛑 |
-| 4 | **Nickel close** | spread value ≤ **$0.05** (`CONDOR_NICKEL_CLOSE`) | ~all the credit captured; closes to free margin and kill tail risk | 🎯 |
+| 2 | **Adverse regime flip** | direction-aware: call spread exits on TRENDING_BULL / BREAKOUT_VOLATILE; put spread on TRENDING_BEAR / BREAKOUT_VOLATILE. A FAVORABLE flip holds (Leg 2 **pauses** — `iron_condor` v3.2; it fires when RANGING returns AND price is at the far band). Note: fired **0 times in 143 legs** to date | regime engine | 🛑 (thesis death, pre-emptive) |
+| 3 | **Ratcheting stop** (v4.1) | tightens only: at **+20%** gain → stop moves to **breakeven**; at **+40%** → stop locks **+20%**. Base floor before any ratchet: spread value ≥ credit × **1.25** (`CONDOR_STOP_LOSS_PCT = 0.25`, −25% of credit) | ends the ~+25%→−25% round-trip | 🛑→📉 |
+| 4 | **Time-gated TP @ 25%** (v4.1) | ONLY after `CONDOR_ENTRY_CUTOFF_ET`, ONLY when the opposite side is **not open** (a condor leg is never closed on profit — the only reason to close one is the roll), min-hold quote-noise gate | backtest: turned −$242.77 into −$8.43 on 18 standalone legs | 🎯 |
+| 5 | **Nickel close** | spread value ≤ **$0.05** (`CONDOR_NICKEL_CLOSE`) | ~all the credit captured; closes to free margin and kill tail risk | 🎯 |
 | — | **Broken-wing roll** | not an exit: when one side is tested and rolling the untested side makes it risk-free, the untested vertical closes (books its P&L) and re-opens rolled. Final form — no further adjustments | strategy | — |
+
+## Trend Continuation (debit directional — NEW 2026-07-18, exits reworked v4.0)
+
+| # | Exit | Trigger | Set at | Tag |
+|---|---|---|---|---|
+| 1 | Hard close | 15:45 ET | — | ⏰ |
+| 2 | **Regime flip** | regime no longer trending **in our direction** — thesis death, the primary smart stop | regime engine | 🛑 |
+| 3 | **Backstop −25%** | premium ≤ entry × **0.75** (`CONTINUATION_STOP_LOSS_PCT`, v4.0 — no longer borrows `MAX_LOSS_PCT`) | disaster floor | 🛑 |
+| 4 | **Exhaustion (two-stage)** | *only past +15% gain* (`CONTINUATION_EXHAUST_MIN_GAIN`). **Extension**: ≥ 2·ATR from the BB midline → tighten trail to **85%** (does NOT exit). **Divergence**: new favourable extreme on weaker 5-bar momentum → **exit** | detect a spent move | 📉 |
+| 5 | **Theta bleed** (v4.0) | placed AFTER exhaustion (the smarter signal gets first refusal): held ≥ 20 min · gain ≥ +10% · below the trail ceiling · projected calendar-day decay ≥ gain | a stalled winner no longer decays to the floor | 📉 |
+| 6 | **Runner trail** | FVG trail **anchored to 5m gaps** via `_fvg_frame` (v4.0; graceful 1m fallback); once armed it owns the trade and silences theta | let it run | 📉 |
+
+Prefers live `vol_state`/`trend` threaded from `main.py`; falls back to recomputing
+midline/ROC from `df_5m` (restart recovery, adopted) — degrades precision, never raises.
 
 ## Debit Butterfly
 
@@ -93,9 +114,12 @@ manage").
 
 ## The design, confirmed by the tags
 
-Count the profit-side exits: across all five strategies there are exactly
-**three 🎯 hard take-profits** — sweep's +100%, the condor nickel close, and
-the butterfly's 20%-of-max — and two of those (nickel, butterfly) exist
+Count the profit-side exits: across all six strategies there are exactly
+**four 🎯 hard take-profits** — sweep's +100% (default-replaced by the
+post-target trail since v3.8, `SWEEP_POST_TARGET_TRAIL`), the condor nickel
+close, the v4.1 time-gated condor TP@25% (a standalone-leg salvage, never on a
+formed condor), and the butterfly's 20%-of-max — and two of those (nickel,
+butterfly) exist
 because *holding* a nearly-max-profit 0DTE credit/pin structure is pure tail
 risk for pennies. Everything else that books a profit is 📉 **give-back
 triggered**: trails that only ratchet up, FVG floors, BOS, the impulsive-origin

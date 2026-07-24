@@ -14,7 +14,7 @@ label for what is *running today* is neither v2 nor v3:
 | **v1** | Boolean gates, permissive | Fired into hostile tape. Sold into uptrends. Got faked out. |
 | **v2** | Boolean gates + an `UNKNOWN` regime with **hard veto** | Over-corrected. Most of RTH classified `UNKNOWN`; the veto skipped clean trending setups; **the trade sample starved the very analysis loop meant to fix it.** |
 | **v2.5** (to 2026-07-21) | v2's cascade, but `UNKNOWN`'s **veto power removed for the ORB** | Sample restored. The safety was removed before the replacement was built. |
-| **v3-label — RUNNING NOW** (main.py v4.0, 2026-07-21) | **L1 confluence → L2 conviction integrator's committed label** drives `primary_regime`. `UNKNOWN` is gone from live emission (indecision = a low conviction number on a best-fit label). **The conviction NUMBER is still observe-only — gates run wide open.** | The v3 *label* machinery is live; the v3 *bars* (L3) are not. Rollback: `OT_REGIME_ENGINE=v13`. |
+| **v3-label — RUNNING NOW** (landed main.py v4.0, 2026-07-21; `main.py` now v4.2) | **L1 confluence → L2 conviction integrator's committed label** drives `primary_regime`. `UNKNOWN` is gone from live emission (indecision = a low conviction number on a best-fit label). **The conviction NUMBER is still observe-only — gates run wide open.** | The v3 *label* machinery is live; the v3 *bars* (L3) are not. Rollback: `OT_REGIME_ENGINE=v13`. |
 | **v3 — TARGET** | Weighted confluence → per-regime conviction → `fires iff regime ∈ permissive AND C ≥ bar(trade_type)` | Bars placed empirically at the marginal fee-adjusted-ROI zero crossing. |
 
 **State it plainly (updated 2026-07-22):** the regime *label* is now the v3 spine (L1→L2, see
@@ -78,12 +78,16 @@ tape with the bot that traded it — pull + `check_versions.sh` on control right
 is `~/options-trader-v3`.
 
 **Also activated this pass (2026-07-18):** the shadow observer, **on the live QQQ paper box**
+(→ **superseded 2026-07-22: rolled out fleet-wide, all 29 boxes** — still zero new DXFeed
+subscriptions, each observer reads its own box's shared store)
 (the real fleet instance, `OT_INSTRUMENT=QQQ`, `~/options-trader`) — **not a separate QQQ-TEST
 instance.** This is deliberate and is the whole point of the one-producer/many-readers design:
 the observer opens **no DXFeed of its own**, it reads the shared store that the QQQ box's own
 `candle-feed.service` already fills. One feed, two readers (bot + observer) — no 11th
-subscription. Installed as `shadow-observer.service` with `shadow-start`/`shadow-stop` timers
-(09:00 / 16:30 ET, Mon–Fri), env supplied via a `.d/env.conf` drop-in copied from
+subscription. Installed as `shadow-observer.service` — **enabled at boot since 2026-07-22; the original
+`shadow-start`/`shadow-stop` timers (09:00 / 16:30 ET) are RETIRED**: edge-triggered timers
+fire while the overnight-stopped boxes are off (which is why the observer collected exactly
+one session ever); the service self-gates on RTH instead. Env supplied via a `.d/env.conf` drop-in copied from
 `optionsbot.service` (secrets never leave the box), running **stage 1 (primitives measure-only)**.
 Smoke-tested clean; dormant until Monday 09:00 ET. Stays at stage 1 for several sessions
 (velocity verification against `data/OHLC/`) before stage 2 is considered.
@@ -333,11 +337,15 @@ nothing.
 
 The condor is **the only strategy allowed two concurrent positions** (its two verticals). Each
 vertical is a fully tracked position — managed, exited, and P&L'd independently with
-credit-spread math — and each is sized at **half the grade budget**. Wings are narrow (5 points
-SPX / $5 QQQ), which is what makes half-budget sizing affordable. Legged entry:
-`DECIDED → LEG1_FILLED → COMPLETE`; a pending leg is cancelled if the regime flips away from
-RANGING, but a filled leg is never cancelled. Exit per leg: 25% stop (spread value at 125% of
-credit) or a $0.05 nickel close. Regime-flip exit is **direction-aware** — a call spread only
+credit-spread math — and each is sized at the **full grade budget** (`risk_manager` v3.2, 2026-07-23 — half-budget
+retired: 18 of 46 legs never got a second side, so half-sizing chronically under-sized a
+structure that never existed). Wings are narrow (5 points SPX / $5 QQQ). Legged entry:
+`DECIDED → LEG1_FILLED → COMPLETE`; a pending leg **PAUSES** if the regime flips away from
+RANGING (`iron_condor` v3.2, 2026-07-23 — the plan stays alive; leg 2 fires when regime
+returns AND price is at the far band); a filled leg is never cancelled. Exit per leg
+(`exit_engine` v4.1, 2026-07-23): **ratcheting stop** (+20% → breakeven, +40% → lock +20%,
+tightens only), **time-gated TP at 25%** (only after the entry cutoff, only when the sibling
+side is not open, min-hold quote-noise gate), or a $0.05 nickel close. Regime-flip exit is **direction-aware** — a call spread only
 exits on a bullish flip; a bearish flip is favorable, so it holds.
 
 ### Broken-Wing Roll
@@ -396,9 +404,10 @@ half. Evaluated every tick, first match wins:
 |---|---|---|---|
 | 1 | Hard close | 15:45 ET | Time |
 | 2 | **Regime flip** | Regime no longer trending **in our direction** | **Thesis death — the primary stop** |
-| 3 | **−40% floor** | `premium ≤ entry × 0.60` (`MAX_LOSS_PCT`) | Disaster backstop |
+| 3 | **−25% backstop** | `premium ≤ entry × 0.75` (`CONTINUATION_STOP_LOSS_PCT`, `exit_engine` v4.0 — no longer borrows the blanket `MAX_LOSS_PCT`) | Disaster backstop |
 | 4 | **Exhaustion (two-stage)** | *Only past +15% gain.* **Extension:** price ≥ 2·ATR from the midline → **tighten trail to 85%** (does *not* exit — a strong trend can stay stretched). **Divergence:** new favourable price extreme on **weaker** 5-bar momentum → **exit** | **Detect a spent move** |
-| 5 | Runner trail | Standard FVG trail; once armed it owns the trade (and silences theta via the v1.5 trail ceiling) | Let it run |
+| 5 | **Theta bleed** (`exit_engine` v4.0) | placed AFTER exhaustion: held ≥ 20 min · gain ≥ +10% · below the trail ceiling · projected calendar-day decay ≥ gain | A stalled winner no longer decays untouched toward the floor |
+| 6 | Runner trail | FVG trail **anchored to 5m gaps** via `_fvg_frame` (v4.0; graceful 1m fallback); once armed it owns the trade and silences theta | Let it run |
 
 The distinction from a normal stop: a stop asks *"was I proven wrong?"* (that is #2/#3).
 Exhaustion asks *"is the move **tired**, even while still technically going my way?"* — which is
@@ -416,7 +425,7 @@ snapshot — it only degrades precision. The `vol_state`/`trend` kwargs were add
 specifically to avoid the 2026-07-16 signature-mismatch crash-loop; every existing strategy
 routes byte-identically with them present (regression-checked).
 
-### Mark-limit execution (2026-07-22, `execution/limit_ladder.py` v1.2) — never cross the spread
+### Mark-limit execution (2026-07-22, `execution/limit_ladder.py` v1.2, now v1.3) — never cross the spread
 
 Before this, single-leg entries **and** exits were MARKET orders and spread closes used a fixed
 $0.10 buffer past mark — on a $0.20 0DTE contract with a $0.05 spread that is ~25% of premium
@@ -909,6 +918,14 @@ Three loose ends from the limit-ladder pass, found in audit:
 3. **Dead import:** `position_manager.py` imports `PAPER_FILL_SLIPPAGE_PCT` and never uses it.
 
 ### U. ⚠️ NEW 2026-07-22 — Version-header discipline broke on the 07-17→07-22 passes
+
+> **Update 2026-07-23 (full-repo header audit):** every title re-synced to its newest
+> changelog entry (`main` v4.2, `exit_engine` v4.1, `config` v3.9 verified current;
+> `trend_engine` v3.2, `market_data` v3.2, `trade_logger` v3.8, `structure_analyzer` v3.0
+> titles added). Mis-numbered entries relabeled: `risk_manager` v1.4→**v3.2**,
+> `butterfly_strategy` v1.4→**v3.2**, `status.py` duplicate v1.12→**v1.13**;
+> `configure.sh` title v1.5→**v2.0**; `validate_regime.sh` v2.0→**v2.2** (retired
+> `data/harvest` paths removed). Manifest re-synced. `check_versions.sh` v3.7 records the sweep.
 The repo standard is "bump the header on every change." Violations found:
 - `config.py` — header still **v3.3 (07-13)**; `FLATTEN_WINDOW_OPEN_ET` (07-22),
   `CONDOR_TRIGGER_APPROACH` (07-17), the RC env plumbing, and the v2.0 runner knobs all landed
@@ -979,7 +996,7 @@ trigger side two. Backtest, 18 standalone legs: TP@25% turned −$242.77 into
 −$8.43; on 28 condor legs a TP was WORSE at every level, confirming a condor leg
 must never be closed on profit — the only reason to close one is the roll.
 A ≥10-minute min-hold gates the TP as a quote-noise filter (a +25% mark move on
-a nickel-wide 0DTE spread can be one tick). Also `risk_manager` v1.4: verticals
+a nickel-wide 0DTE spread can be one tick). Also `risk_manager` v3.2 (relabeled from a mis-numbered v1.4): verticals
 now sized at the **full** grade budget (18 of 46 legs never got a second side,
 so half-sizing chronically under-sized a structure that never existed), and
 `iron_condor` v3.2: leg 2 **pauses** on a non-RANGING tick instead of cancelling.
@@ -1029,13 +1046,13 @@ disproven hypothesis. Defect Y removes one contributing hole (the
 
 | File | Purpose |
 |---|---|
-| `main.py` ✅ | **v4.0 (2026-07-21).** **L2.5: the L1 confluence → L2 integrator committed label drives `primary_regime`/`conviction` live** (v1.3 still computed for rich fields; rollback `OT_REGIME_ENGINE=v13`; conviction number observe-only). The bot. 15s loop: analyze → classify regime → dispatch strategy → score → size → enter; manages open positions, runs the BWB roll check, enforces the daily-loss halt, writes `orb_state.json` each tick. Holds the `UNKNOWN` hard gate and the ORB un-gate exception. Condor legs log `abs(short-strike delta)` as `setup_score` (calibration waypoint; see Iron Condor). **v3.7: live condor legs book ONLY broker-confirmed fills (`order_confirm`); v3.6: phantom P&L recovery + 10-min reconcile cadence with 15:45/15:50/15:57 wind-down sweeps; v3.8: threads `df_5m` into position management for the 5m FVG trail anchor; v3.9: signal-journal dispositions (fired/sizing_rejected/invalid) + condor plan/leg conviction events — log-only, Phase 3.1.** |
-| `config.py` ✅ | **v3.3 header (stale — see defect U); content current through 2026-07-22** (`FLATTEN_WINDOW_OPEN_ET`, `CONDOR_TRIGGER_APPROACH`, runner v2.0 knobs, RC fallbacks). Every tunable parameter + credential accessors (env-only, never in source). `PAPER_TRADING` defaults `True`. |
+| `main.py` ✅ | **v4.2 (2026-07-23).** v4.2: full option-chain archival — `analysis/chain_snapshot.py` wired into the every-tick GEX block (5-min cadence, gzipped JSONL, log-only). v4.0 (2026-07-21): **L2.5: the L1 confluence → L2 integrator committed label drives `primary_regime`/`conviction` live** (v1.3 still computed for rich fields; rollback `OT_REGIME_ENGINE=v13`; conviction number observe-only). The bot. 15s loop: analyze → classify regime → dispatch strategy → score → size → enter; manages open positions, runs the BWB roll check, enforces the daily-loss halt, writes `orb_state.json` each tick. Holds the `UNKNOWN` hard gate and the ORB un-gate exception. Condor legs log `abs(short-strike delta)` as `setup_score` (calibration waypoint; see Iron Condor). **v3.7: live condor legs book ONLY broker-confirmed fills (`order_confirm`); v3.6: phantom P&L recovery + 10-min reconcile cadence with 15:45/15:50/15:57 wind-down sweeps; v3.8: threads `df_5m` into position management for the 5m FVG trail anchor; v3.9: signal-journal dispositions (fired/sizing_rejected/invalid) + condor plan/leg conviction events — log-only, Phase 3.1.** |
+| `config.py` ✅ | **v3.9 (2026-07-22 — header re-synced, defect U closed for this file)** (`FLATTEN_WINDOW_OPEN_ET`, `CONDOR_TRIGGER_APPROACH`, runner v2.0 knobs, RC fallbacks). Every tunable parameter + credential accessors (env-only, never in source). `PAPER_TRADING` defaults `True`. |
 | `README.md` 📄 | This file. Current state, not aspiration. |
 | `ROADMAP.md` 📄 | **Build status lives here.** v2→v3 reconciliation, honest distance-to-vision, Phases 0–4, and the named risks. |
 | `CHANGELOG.md` 📄 | v3.0 purge changelog (fork point, changed-file table, verification status). |
 | `requirements.txt` ⚙️ | tastytrade, httpx, anyio, pandas, numpy, pytz. **No market-data dependency** — sqlite3 is stdlib. |
-| `status.py` 🧪 | **v1.12 (2026-07-20).** Daily-loss banner reads the limit via the runtime-env chain (fixes the false '$200 LIMIT HIT' SSH-env display bug). Live snapshot: ORB state/range/latches, regime, GEX pin, open position, daily-loss banner. Reads `orb_state.json` as authoritative. |
+| `status.py` 🧪 | **v1.13 (2026-07-20; relabeled 2026-07-23 — the entry had duplicated the 2026-07-06 v1.12).** Daily-loss banner reads the limit via the runtime-env chain (fixes the false '$200 LIMIT HIT' SSH-env display bug). Live snapshot: ORB state/range/latches, regime, GEX pin, open position, daily-loss banner. Reads `orb_state.json` as authoritative. |
 | `query.py` 🧪 | **v3.4.** Performance dashboard against `trades.db` — W/L, R, grades, exit reasons. None-guards a NULL `setup_score` (condor legs) so the open-position view can't crash on `:.2f`. |
 | `debug_status.py` 🧪 | Verbose diagnostic for `status.py` instrument/env resolution. |
 | `eod_summary.py` ⚙️ | Per-box EOD P&L writer (~15:50 ET, own timer). Emits `pnl_today.json` for control-side harvest. |
@@ -1070,7 +1087,7 @@ disproven hypothesis. Defect Y removes one contributing hole (the
 | `regime_classifier.py` ✅ | **v1.3 — the LIVE classifier.** Memoryless boolean cascade, first-match-wins. Emits one label + a post-hoc conviction number that currently gates nothing. |
 | `regime_confluence.py` ✅ | **v1.2 (2026-07-22) — LAYER 1 of v3 (canonical, sole), LIVE since main.py v4.0.** Ramp de-saturation: all 14 bounds env-overridable (`OT_RC_<NAME>`); `room_s`/`osc_s` re-fitted from a 6-session 60k-tick pool and promoted to defaults (A2 co-occurrence 14.4%→4.3%). Instantaneous graded per-regime evidence (`hard_veto × soft_necessary × Σ corroborators`), implementing `REGIME_TRUTHS.md` v0.2. v1.1 fixed a silent config-import failure (a wrong-home constant threw the whole guarded block; every constant ran on fallbacks). Feeds the L1 replay and the L2 integrator via `tests/replay_confluence.py` v2.0. **Live-loop path shipped 2026-07-21 (main.py v4.0).** |
 | `conviction_integrator.py` ✅ | **v2.0 — LAYER 2, LIVE since 2026-07-21: its committed label IS the trading regime** (the conviction number is still observe-only). Leaky per-regime conviction: rises on agreement, decays on disagreement with decay resistance scaled by banked conviction; **always-argmax emission** with θ_hold/displacement hysteresis — no `UNKNOWN`; `stale` (data gap/unwarmed) is the only hard no-trade marker. dt-aware, snapshot/replay warm start, embedded validation suite. **All thresholds are PRIORS pending tape calibration.** |
-| `trend_engine.py` ✅ | EMA stacks, **ADX from the 5m timeframe**, momentum, timeframe alignment count. |
+| `trend_engine.py` ✅ | **v3.2 (2026-07-22 — surfaces `primary_momentum` on `TrendState`, the defect-W unblock).** EMA stacks, **ADX from the 5m timeframe**, momentum, timeframe alignment count. |
 | `volatility_engine.py` ✅ | Bollinger Bands, VWAP, ATR, expansion/contraction state. Feeds condor strikes and regime evidence. |
 | `structure_analyzer.py` ✅ | Swings, HH/HL/LH/LL sequence, S/R zones, **FVGs** (which the trail parks against). |
 | `liquidity_mapper.py` ✅ | Maps named pools (PDH/PDL, equal highs/lows, session H/L). Feeds the sweep definition and the ORB's `liquidity_clear` score. |
@@ -1084,17 +1101,17 @@ disproven hypothesis. Defect Y removes one contributing hole (the
 | `sweep_reversal_strategy.py` ✅ | **v3.2 (2026-07-21) — ORB-OWNERSHIP GATE:** a sweep fires only after the ORB *releases* price (stale/runaway/EXPIRED/past 11:00) — not while a break is merely armed/open/failed-inside. Post-sweep reversal. Delta-band strike selection scaled inversely to reversal strength. ATR-aware recovery window. |
 | `continuation_strategy.py` ✅ | **NEW 2026-07-18.** Trend-continuation on pullback to the BB midline. Trending-regime-gated (a stingy label is the signal). Low-bar entry (momentum resumption); exhaustion-based exit owns the risk. Two paths: runaway-ORB **handoff** (looser) + **standalone** (stricter). Debit directional. Paper-first. |
 | `iron_condor_strategy.py` ✅ | **v3.2 (2026-07-23).** Leg 2 PAUSES on a non-RANGING tick instead of cancelling (the plan stays alive; leg 2 fires when regime returns AND price is at the far band). Window opens 11:11 (defect Y). Logic otherwise current through 2026-07-17: premium-rich band-approach triggers — each side fires only when price travels `CONDOR_TRIGGER_APPROACH` (0.65) of the way from the BB midline to ITS short strike, so it sells one rich side, not two cheap ones at mid-channel. Roll gets first refusal (main.py runs `check_and_execute_roll` BEFORE the 25% per-leg stop). Legged condor, **BB-anchored strikes, zero delta**. Plan state machine + per-leg price triggers. **v3.1 restored an import missing since the file's first commit** — masked on the fleet by Python 3.14's lazy annotations (PEP 649); on any ≤3.13 interpreter the module raised `NameError` at import and killed `main.py`. Verified 3.12 vs 3.14 A/B. |
-| `condor_roll.py` ✅ | **v3.7.** Broken-wing roll. Close of the old untested vertical books the CONFIRMED fill; the rolled vertical is a REAL fill-confirmed signed-credit order (was a DB-only fiction in live); risk-free re-checked against actual fills. |
-| `butterfly_strategy.py` ✅ | **v3.1.** Debit butterfly centered on the **GEX pin**. Gated on PINNING + proximity + noon–14:00 + one-per-session. |
+| `condor_roll.py` ✅ | **v3.8.** Broken-wing roll. Close of the old untested vertical books the CONFIRMED fill; the rolled vertical is a REAL fill-confirmed signed-credit order (was a DB-only fiction in live); risk-free re-checked against actual fills. |
+| `butterfly_strategy.py` ✅ | **v3.2 (2026-07-14 discount gate, relabeled 2026-07-23 from a mis-numbered v1.4).** Debit butterfly centered on the **GEX pin**. Gated on PINNING + proximity + noon–14:00 + one-per-session + net debit ≤ `BUTTERFLY_MAX_DEBIT_PCT_WIDTH` × wing width (≈ min 2:1 RR). |
 
 ### `execution/` — orders and exits
 
 | File | Purpose |
 |---|---|
-| `entry_engine.py` ✅ | **v3.8 (2026-07-22) — MARK-LIMIT ENTRIES:** single-leg opens post a limit at the mark, re-priced each tick, never crossing the spread; paper books the same mark (no slippage markup — defect R superseded for singles/butterflies). Places the opening order. Writes the `TradeRecord`, including `underlying_stop` — **the impulsive candle's wick, which the exit engine reads back.** |
-| `exit_engine.py` ✅ | **v3.8 + 2026-07-22 mark-limit closes (header un-bumped — defect U):** exits post a limit AT the mark, re-anchored every retry tick (chases a falling market; `LIVE_CLOSE_LIMIT_BUFFER` retired); EOD flatten escalates 15:40 mark-limit → 15:45 MARKET. All exits, routed per strategy (ORB floor/structure/theta/trails · Sweep BOS · butterfly/condor premium + regime-flip · adopted generic). **v3.4/v3.5: FillResult contract — paper simulates at the mark in one pass; live books only broker-confirmed fills at the real net fill price, with bounded polling, partial-fill weighting, idempotent order resume, 2-leg vertical closes, and signed marketable-limit pricing. v3.8: runner refinements — 40% premium floor (butterfly stays 25%), 5m-anchored FVG trails, 0.75 post-target fallback, sweep post-target trail replaces the +100% hard TP, MFE/MAE telemetry (see `docs/EXIT_RULES.md`). NEW 2026-07-18: `_evaluate_continuation` — exhaustion exit (regime-flip primary · 40% floor · extension-from-midline tightens trail · momentum divergence exits), prefers live `vol_state`/`trend` with `df_5m` fallback so it never raises on a missing snapshot.** |
-| `position_manager.py` ✅ | **v3.8.** Owns the single open position (the condor's two verticals are the sole exception). **`_execute_exit` books ONLY on `FillResult.confirmed` at the actual fill price — an unconfirmed close leaves the row OPEN for the 15:45→16:00 retry loop (anti-orphan invariant).** Trail updates write `trail_stop`, never `stop_premium`. **v3.8: threads `df_5m` through to `exit_engine.evaluate()` (5m FVG trail anchor). NEW 2026-07-18: also threads optional `vol_state`/`trend` (defaults preserve every existing caller — avoids the 2026-07-16 signature-mismatch crash) for the continuation exhaustion exit.** |
-| `limit_ladder.py` ✅ | **v1.2 (2026-07-22) — NEW.** Mid-anchored limit pricing for entries and exits: `limit_at_mark` (cap/floor-bounded), `paper_fill_price` (paper books what live would post), `hard_close_order_mode` (15:40 limit / 15:45 market escalation). The policy: never cross the spread; re-post at the fresh mark every tick. |
+| `entry_engine.py` ✅ | **v3.9 (2026-07-22) — MARK-LIMIT ENTRIES (v3.8):** single-leg opens post a limit at the mark, re-priced each tick, never crossing the spread; paper books the same mark (no slippage markup — defect R superseded for singles/butterflies). Places the opening order. Writes the `TradeRecord`, including `underlying_stop` — **the impulsive candle's wick, which the exit engine reads back.** |
+| `exit_engine.py` ✅ | **v4.1 (2026-07-23).** v4.1: condor leg management v2 — ratcheting stop (+20%→BE, +40%→lock +20%), time-gated TP@25% (post-cutoff, sibling closed, min-hold). v4.0 (2026-07-22): continuation exit rework — 5m-anchored FVG trail via `_fvg_frame`, theta-bleed enabled (after exhaustion), backstop 40%→25% (`CONTINUATION_STOP_LOSS_PCT`). Mark-limit closes (2026-07-22): exits post a limit AT the mark, re-anchored every retry tick (chases a falling market; `LIVE_CLOSE_LIMIT_BUFFER` retired); EOD flatten escalates 15:40 mark-limit → 15:45 MARKET. All exits, routed per strategy (ORB floor/structure/theta/trails · Sweep BOS · butterfly/condor premium + regime-flip · adopted generic). **v3.4/v3.5: FillResult contract — paper simulates at the mark in one pass; live books only broker-confirmed fills at the real net fill price, with bounded polling, partial-fill weighting, idempotent order resume, 2-leg vertical closes, and signed marketable-limit pricing. v3.8: runner refinements — 40% premium floor (butterfly stays 25%), 5m-anchored FVG trails, 0.75 post-target fallback, sweep post-target trail replaces the +100% hard TP, MFE/MAE telemetry (see `docs/EXIT_RULES.md`). NEW 2026-07-18: `_evaluate_continuation` — exhaustion exit (regime-flip primary · 40% floor · extension-from-midline tightens trail · momentum divergence exits), prefers live `vol_state`/`trend` with `df_5m` fallback so it never raises on a missing snapshot.** |
+| `position_manager.py` ✅ | **v3.9 (2026-07-22 — dead `PAPER_FILL_SLIPPAGE_PCT` import removed, defect T).** Owns the single open position (the condor's two verticals are the sole exception). **`_execute_exit` books ONLY on `FillResult.confirmed` at the actual fill price — an unconfirmed close leaves the row OPEN for the 15:45→16:00 retry loop (anti-orphan invariant).** Trail updates write `trail_stop`, never `stop_premium`. **v3.8: threads `df_5m` through to `exit_engine.evaluate()` (5m FVG trail anchor). NEW 2026-07-18: also threads optional `vol_state`/`trend` (defaults preserve every existing caller — avoids the 2026-07-16 signature-mismatch crash) for the continuation exhaustion exit.** |
+| `limit_ladder.py` ✅ | **v1.3 (2026-07-22) — NEW; v1.3 = the ONE paper-pricing authority (`paper_fill_credit`, knob default 0.0).** Mid-anchored limit pricing for entries and exits: `limit_at_mark` (cap/floor-bounded), `paper_fill_price` (paper books what live would post), `hard_close_order_mode` (15:40 limit / 15:45 market escalation). The policy: never cross the spread; re-post at the fresh mark every tick. |
 | `broker_reconcile.py` ✅ | **v3.6, LIVE-only, auto-enables with LIVE mode.** Adopt / keep / phantom-close against the broker at startup + intraday (10-min cadence + 15:45/15:50/15:57 wind-down sweeps). **Phantom P&L recovery: a manually-closed position books its real fill from order history instead of a flagged $0.00.** Paper never reconciles. |
 
 ### `risk/` — sizing and gates
@@ -1102,7 +1119,7 @@ disproven hypothesis. Defect Y removes one contributing hole (the
 | File | Purpose |
 |---|---|
 | `setup_scorer.py` ✅ | **v1.4 (2026-07-22).** The ORB is now a GEOMETRY GATE, not a weighted score: it short-circuits to `_grade_orb` — a confirmed ORB always trades, graded **A (clear path, 1.5x) / B (unswept pool between entry and 100%% TP, 1.0x)** on liquidity ONLY; regime/VWAP/macro/confluence-count removed from the ORB path (defect V). All other strategies still score across 5 weighted dimensions per strategy → **Grade A (1.5×) / B (1.0×) / no trade.** There is no Grade C. **v1.3: emits a `scored` journal event for every scored signal, below-B REJECTs included (Phase 3.1 counterfactual capture).** |
-| `risk_manager.py` ✅ | **v3.1.** Contract sizing, half-budget condor legs, reassess-after-every-loss, and the **net daily-loss halt** (DB-seeded, restart-proof). |
+| `risk_manager.py` ✅ | **v3.3 (2026-07-23).** v3.3: fixed a NameError on the condor-leg sizing success path (stale `half_budget` reference in the log f-string — every successful sizing crashed). Contract sizing, **full-budget condor legs** (half-budget retired — relabeled from a mis-numbered v1.4), reassess-after-every-loss, and the **net daily-loss halt** (DB-seeded, restart-proof). |
 | `session_guard.py` ✅ | **v3.1.** RTH · **9:35 opening-range lockout (universal floor)** · 15:45 hard close · 14:00 entry cutoff · VIX-crisis lockout. |
 
 ### `data/` — one producer, many readers
@@ -1110,7 +1127,7 @@ disproven hypothesis. Defect Y removes one contributing hole (the
 | File | Purpose |
 |---|---|
 | `candle_feed.py` ✅ | **v3.8. THE single DXFeed producer per box.** Owns the box's only `DXLinkStreamer` subscription (its symbol across 1m/5m/15m/1h/1d + VIX) → SQLite (WAL) + heartbeat. **No other process may open a stream.** |
-| `market_data.py` ✅ | Pure store **reader**. `fetch_candles`/`fetch_quote`/`fetch_all_candles` keep the v2 contract byte-for-byte, which is why nothing downstream changed. Fails loud on a stale heartbeat. |
+| `market_data.py` ✅ | **v3.2.** Pure store **reader**. `fetch_candles`/`fetch_quote`/`fetch_all_candles` keep the v2 contract byte-for-byte, which is why nothing downstream changed. Fails loud on a stale heartbeat. |
 | `data_cache.py` ✅ | Per-timeframe cache over the reader. A refresh failing past 3× the staleness ceiling returns `None` — a dead feed can't hide behind an aging frame. |
 | `options_chain.py` ✅ | 0DTE chain from the TastyTrade SDK: strikes, greeks, marks, delta-band selection. |
 | `gex_data.py` ✅ | **GEX computed live from that chain** (gamma × OI × 100 × spot, puts negated). Derives call wall, put wall, pin, flip, environment, ORB bias. No scraping. |
@@ -1176,7 +1193,7 @@ brokerage subscription (one producer, many readers). Running stage 1, timers arm
 | `replay_confluence.py` 🧪 | **v2.0 — the v3 workhorse.** Replays `regime_confluence` over harvested DXFeed 1-min tape — AND feeds each symbol-session's evidence through a fresh `ConvictionIntegrator`: every JSONL tick carries an `l2` object, the report gains a LAYER-2 section (emitted distribution, **label switches vs L1-argmax flips** — the churn metric — stale%). `--report-only <jsonl>` reprints a saved run without re-scoring (merged from the control-box local mod that never reached GitHub). CLI/exit codes unchanged; L1 acceptance remains the sole exit-code authority. |
 | `regime_diary.py` 🧪 | **v1.1.** Rolling one-entry-per-date diary (upsert by date, JSONL + md). v1.1 adds an L2 line — emitted dominance, switches vs L1 flips, stale% — when the day's log carries `l2`; pre-v2.0 logs digest unchanged. Tape-only, never reads trades. |
 | `regime_backfill.py` 🧪 | **v1.0.** Disk-driven catch-up: replays + diaries every harvest date that has `*_OHLC_*.csv` tape but no diary row. `--rebuild` re-scores all dated tape (retro-fills L2 after a threshold change). |
-| `validate_regime.sh` ⚙️ | **v2.0 — the single entrypoint** for the manual regime workflow on 1-REPORTER (devtools 40–44 are thin wrappers): run today / a date / `--report` / `--diary` / `--backfill [--rebuild]`. Auto-bootstraps checkout + venv; `git pull --ff-only` per run. The executing copy lives at `~/validate_regime.sh` on control — sync it manually when this file changes. |
+| `validate_regime.sh` ⚙️ | **v2.2 — the single entrypoint** for the manual regime workflow on 1-REPORTER (devtools **42–46** are thin wrappers): run today / a date / `--report` / `--diary` / `--backfill [--rebuild]`. Auto-bootstraps checkout + venv; `git pull --ff-only` per run. **The executing copy IS the repo checkout** (`~/options-trader-v3/validate_regime.sh`) — the loose `~/validate_regime.sh` copy was retired in the 2026-07-23 repoint (devtools v1.21+, nightly_regime v1.4, install_regime_timer v1.2 all point at the repo). |
 | `replay_classifier.py` 🧪 | Replays the live v1.3 classifier over logged tape (built for the sweep-definition correction). |
 | `test_orb_retest_v33.py` 🧪 | **NEW.** Locks the MU 2026-07-10 reference: 09:48 is not a break · 09:49 is · stop = impulsive wick low · 09:50 retest fires · a body closing inside disarms · runaway doesn't re-arm. 10/10. |
 | `test_regime_gate.py` 🧪 | State-transition pressure test on the `UNKNOWN` gate + reassessment throttle. |

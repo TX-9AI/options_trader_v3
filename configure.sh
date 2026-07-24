@@ -3,7 +3,7 @@
 #         mapping optimization (single shared TastyTrade candle feed). No
 #         logic change in this file.
 # ============================================================
-#  options_trader v1.5  —  Live Configuration Manager
+#  options_trader v2.0  —  Live Configuration Manager
 #  v1.0 — original release
 #  v1.1 — 2026-06-27 — replaced SMS/Twilio with Telegram
 #  v1.2 — 2026-06-27 — swapped menu order: Telegram now 4, TT credentials now 5

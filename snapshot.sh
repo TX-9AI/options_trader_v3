@@ -7,7 +7,6 @@
 #  v1.2 — current
 #  v1.0 — original (hardcoded bot names, replaced)
 #  v1.1 — 2026-06-27 — fully dynamic, no hardcoded bot names
-#  v1.1 — 2026-06-27 — fully dynamic, no hardcoded bot names
 #  v1.2 — 2026-06-27 — skip deploy dirs, fix IP fetch method
 #
 #  Usage:

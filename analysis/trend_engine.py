@@ -1,5 +1,5 @@
 """
-analysis/trend_engine.py — Trend detection via EMA stacks, ADX, momentum.
+analysis/trend_engine.py — Trend detection via EMA stacks, ADX, momentum. v3.2
 Operates on 5m, 15m, and 1H timeframes for multi-TF trend alignment.
 v1.0 — original release
 v3.2 — 2026-07-22 — SURFACE primary_momentum ON TrendState (defect W).

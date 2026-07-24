@@ -1,6 +1,8 @@
 """
-status.py — Live bot status snapshot.
-v1.12 — 2026-07-20 — daily-loss banner reads the limit from the LIVE unit env
+status.py — Live bot status snapshot. v1.13
+v1.13 — 2026-07-20 — daily-loss banner (relabeled in the 2026-07-23 header
+        audit — this entry duplicated the existing v1.12 of 2026-07-06)
+        reads the limit from the LIVE unit env
         (get_runtime_env, same as Risk) instead of `from config import
         DAILY_LOSS_LIMIT_USD`, which resolved in the status process's own env
         where OT_RISK_USD is absent — so it fell back to $200 and printed a
@@ -91,7 +93,7 @@ RISK_PER_TRADE = get_runtime_env("OT_RISK_USD", "200")
 
 # Daily loss limit, resolved the same way config.py resolves it — but against
 # the LIVE unit environment (like RISK_PER_TRADE above), NOT this SSH process's
-# os.environ. v1.12 fix: `from config import DAILY_LOSS_LIMIT_USD` resolved in
+# os.environ. v1.13 fix (2026-07-20): `from config import DAILY_LOSS_LIMIT_USD` resolved in
 # the status process, where OT_RISK_USD is absent, so it silently fell back to
 # $200 and printed a false "DAILY LOSS LIMIT HIT" banner while the bot itself
 # (systemd env) was correctly enforcing the risk-coupled limit. Fallback chain
@@ -482,7 +484,7 @@ def main():
         worst  = s["worst"]  or 0
         wr     = wins / total * 100 if total else 0
         cb_warning = ""
-        # v1.12: use DAILY_LOSS_LIMIT (live unit env, top of file) — NOT
+        # v1.13: use DAILY_LOSS_LIMIT (live unit env, top of file) — NOT
         # `from config import DAILY_LOSS_LIMIT_USD`, which resolved against this
         # process's env and falsely reported $200 / a phantom halt.
         if pnl <= -DAILY_LOSS_LIMIT:

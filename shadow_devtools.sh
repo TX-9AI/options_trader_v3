@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# shadow_devtools.sh v1.1 — operator menu for the SHADOW subsystem (live on the QQQ paper box).
+# shadow_devtools.sh v1.2 — operator menu for the SHADOW subsystem (live on the QQQ paper box).
 # Run from anywhere: the script self-locates its repo (defect D remainder —
+# v1.2 — 2026-07-23 — shadow-start/shadow-stop timers RETIRED (2026-07-22,
+#        fleet-wide): edge-triggered timers fired while overnight-stopped boxes
+#        were off; the observer is now enable-at-boot and self-gates on RTH.
+#        Item 10 and the banner label them retired — 'disabled' is HEALTHY.
 # the v1.0 hardcoded $HOME/options-trader hard-exited on any other checkout,
 # e.g. the control box's ~/options-trader-v3). Mirrors observer.py's
 # REPO_ROOT derivation so script and service always agree on the tree.
@@ -28,7 +32,7 @@ pause() { read -rp $'\n[enter] '; }
 status() {
   echo "── SHADOW status ──────────────────────────────"
   echo "observer : $(systemctl is-active $OBS 2>/dev/null)  (stage $(cur_stage))"
-  echo "start tmr: $(systemctl is-enabled shadow-start.timer 2>/dev/null)  |  stop tmr: $(systemctl is-enabled shadow-stop.timer 2>/dev/null)"
+  echo "timers (RETIRED 07-22, disabled=healthy): start $(systemctl is-enabled shadow-start.timer 2>/dev/null) | stop $(systemctl is-enabled shadow-stop.timer 2>/dev/null)"
   echo -n "today log: "
   if [ -f "$SHADOW_DIR/"*.jsonl ] 2>/dev/null; then
     f=$(ls "$SHADOW_DIR"/*.jsonl 2>/dev/null | head -1)
@@ -88,7 +92,7 @@ MENU
     7) toggle_stage; pause ;;
     8) echo "Ctrl-C to exit tail"; journalctl -u $OBS -f --no-pager ;;
     9) verify_isolation; pause ;;
-    10) echo "start:"; systemctl list-timers shadow-start.timer --no-pager 2>/dev/null | head -2
+    10) echo "start (RETIRED 2026-07-22 — disabled is the healthy state):"; systemctl list-timers shadow-start.timer --no-pager 2>/dev/null | head -2
         echo "stop:";  systemctl list-timers shadow-stop.timer  --no-pager 2>/dev/null | head -2; pause ;;
     0) exit 0 ;;
     *) ;;

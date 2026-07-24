@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# validate_regime.sh — v2.0 — Layer-1 regime ops on 1-REPORTER (control box, no trading).
+# validate_regime.sh — v2.2 — Layer-1 regime ops on 1-REPORTER (control box, no trading).
 # v2.1 — 2026-07-14 — LAYOUT CONSOLIDATION: tape from ohlc/<date>/ (new
 #        lowercase _ohlc_ names, legacy _OHLC_ accepted), replay jsonl + diary
 #        under reports/. Logic unchanged.
+# v2.2 — 2026-07-23 — DOC SYNC (header audit, no logic change): title synced to
+#        the newest entry; removed the two RETIRED data/harvest paths from the
+#        Data block (layout consolidated to ohlc/ + reports/ in v2.1;
+#        migrate_data_layout.sh rmdir'd data/harvest — never recreate it).
 #
 # Single entrypoint for the MANUAL regime-validation workflow. Inert code library
 # (~/options-trader-v3) + read-only replay over harvest's OHLC tape. No systemd, no
@@ -11,8 +15,6 @@
 # Data (authoritative, per day_trader_pro/harvest.py):
 #     ~/day_trader_pro/ohlc/<date>/<SYM>_ohlc_<date>.csv               (tape in)
 #     ~/day_trader_pro/reports/  — replay jsonl + rolling diary        (products out)
-#     ~/day_trader_pro/data/harvest/<date>/regime_replay_<date>.jsonl   (tick log out)
-#     ~/day_trader_pro/data/regime_diary.{jsonl,md}                     (rolling diary)
 #
 # Subcommands:
 #     ./validate_regime.sh                 # run TODAY: pull, replay, append diary

@@ -1,10 +1,11 @@
 """
-strategy/butterfly_strategy.py — Debit butterfly for RANGING/COMPRESSION regimes.
+strategy/butterfly_strategy.py — Debit butterfly for RANGING/COMPRESSION regimes. v3.2
 v3.0 — original release
 v3.1 — 2026-07-12 — DOC SYNC (no logic change): the header described
         BUTTERFLY_ENTRY_CUTOFF_ET as a "hard exit at 2:00 PM". It is an ENTRY
         cutoff only and is not consulted by exit_engine at all. Corrected.
-v1.4 — 2026-07-14 — DISCOUNT GATE: net_debit ≤ BUTTERFLY_MAX_DEBIT_PCT_WIDTH ×
+v3.2 — 2026-07-14 — DISCOUNT GATE (relabeled in the 2026-07-23 header audit —
+        shipped mis-numbered v1.4 after v3.1 already existed): net_debit ≤ BUTTERFLY_MAX_DEBIT_PCT_WIDTH ×
         wing width (config, prior 0.33 ≈ min 2:1 RR). Encodes the operator's
         thesis — enter the pin-centered tent while price is still a walk away
         and the fly is cheap — as the risk:reward stated directly, instead of

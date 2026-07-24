@@ -1,5 +1,5 @@
 """
-analysis/structure_analyzer.py — Market structure analysis.
+analysis/structure_analyzer.py — Market structure analysis. v3.0
 Swing highs/lows, S/R levels, Fair Value Gaps, order blocks,
 and HH/HL vs LH/LL sequence detection.
 v1.0 — original release

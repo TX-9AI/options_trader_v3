@@ -1,8 +1,17 @@
 #!/bin/bash
+# v3.7 — 2026-07-23 — HEADER-AUDIT LABEL CORRECTIONS (no canary logic change):
+#         risk_manager's 2026-07-23 full-budget entry relabeled v1.4 -> v3.2
+#         (the file was already at v3.1); butterfly's 2026-07-14 discount gate
+#         v1.4 -> v3.2; status.py's duplicated v1.12 (2026-07-20) -> v1.13.
+#         Prose references below updated to match. Fingerprints unchanged.
+#         BONUS CATCH: the half_budget absence canary was legitimately RED —
+#         risk_manager's success-path log still referenced the deleted
+#         half_budget variable (NameError on every successful condor-leg
+#         sizing). Fixed as risk_manager v3.3; canary now green.
 # v3.6 — 2026-07-23 — chain-archival fingerprints. A stale sync silently stops
 #         archiving option chains, and chains cannot be backfilled — every
 #         un-archived session is a permanent hole in the dataset.
-# v3.5 — 2026-07-23 — condor v2 fingerprints (exit_engine v4.1, risk v1.4,
+# v3.5 — 2026-07-23 — condor v2 fingerprints (exit_engine v4.1, risk v3.2,
 #         iron_condor v3.2, 11:11 gate). A stale sync silently restores the
 #         un-ratcheted stop (every stopped leg round-tripped from ~+25% to
 #         -25%), the half-size verticals, the leg-2 CANCEL, or the 11:00 window
@@ -24,7 +33,7 @@
 #         newest fingerprint was dated 2026-07-18: a stale sync of ANY file
 #         shipped 07-20 → 07-22 (orb v3.9, sweep v3.2, main v4.0/v4.1,
 #         regime_confluence v1.2, the whole limit_ladder execution change,
-#         status v1.12) passed this check silently — the exact failure mode
+#         status v1.13) passed this check silently — the exact failure mode
 #         this script exists to catch, and the one that caused the 07-16
 #         unmanaged-position incident. Adds 16 fingerprints covering every
 #         post-07-18 change, and pins the two VALUES (not just the names)
@@ -170,7 +179,7 @@ check "config.py"                        "OT_CONDOR_TP_PCT"             "condor 
 check "execution/exit_engine.py"         "_condor_ratchet"              "v4.1 condor ratcheting stop (BE at +20%, lock +20% at +40%)"
 check "execution/exit_engine.py"         "_condor_sibling_open"         "v4.1 TP fires only on a STANDALONE, never a condor leg"
 check "execution/exit_engine.py"         "condor_tp pnl="               "v4.1 time-gated take-profit exit reason"
-check "risk/risk_manager.py"             "leg_budget"                   "v1.4 condor vertical sized at FULL budget (was half)"
+check "risk/risk_manager.py"             "leg_budget"                   "v3.2 condor vertical sized at FULL budget (was half)"
 check "analysis/chain_snapshot.py"       "def snapshot"                 "chain archival module present (full 0DTE chain -> .jsonl.gz)"
 check "analysis/chain_snapshot.py"       "vega"                         "chain archival keeps gamma+vega (signal_journal drops them)"
 check "main.py"                          "chain_snapshot import snapshot" "v4.2 chain archival wired into the every-tick GEX block"

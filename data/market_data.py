@@ -1,6 +1,6 @@
 """
 options_trader_v3/data/market_data.py — Underlying price data (candles + live
-quote). v3.0
+quote). v3.2
 
 Candle history:    shared TastyTrade/DXFeed store (written by candle_feed.py —
                    the ONLY DXFeed subscription on the box)
