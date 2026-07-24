@@ -130,10 +130,11 @@ class ORBStrategy(BaseOptionsStrategy):
 
         if liq_result["path_clear"]:
             self._add_confluence(signal, "Liquidity path clear to target")
-        elif liq_result["unnamed_in_path"] > 0:
+        if liq_result["unnamed_in_path"] > 0:
+            # metric only — equal-H/L clusters are logged, NOT penalized (low quality).
             signal.notes += (
                 f" | {liq_result['unnamed_in_path']} unnamed liq cluster(s) in path"
-                f" — grade reduced"
+                f" (logged, no grade impact)"
             )
 
         if liq_result.get("target_adjusted"):
@@ -250,8 +251,11 @@ class ORBStrategy(BaseOptionsStrategy):
                 (direction == "short" and target_100 < pool_price < current_price)
             )
             if in_full_path and not is_named:
+                # v-obs: equal-H/L (unnamed) clusters are LOW QUALITY and no longer
+                # penalize the ORB — they do NOT flip path_clear. We still COUNT them
+                # (metric only) so we can later study whether they matter at scale.
+                # Only NAMED pools (PDH/PDL/session) affect path_clear / grade.
                 result["unnamed_in_path"] += 1
-                result["path_clear"]       = False
 
             adj_zone_long  = (direction == "long"  and
                               target_100 < pool_price < target_100 + orb_width * BEYOND_TP_ADJUSTMENT_WIDTHS)
