@@ -1,5 +1,12 @@
 # ROADMAP.md — options_trader v3: boolean regime gates → conviction-bar gating
 
+**v2.2 — 2026-07-23 — P5 STRIKE & EXPECTED-MOVE COUNTERFACTUAL HARNESS added**,
+with its gating validator (`tests/chain_reconstruction_check.py` v1.0) already
+built and testable. Records the finding that chain snapshots are NOT harvested
+off the boxes — the archive currently accumulates on 29 machines with no copy
+on control, and an option chain is the one dataset in this system that cannot
+be reconstructed after the fact.
+
 **v2.1 — 2026-07-23 — PREDICTIVE PUNCH LIST folded in.** Adds §PARALLEL /
 PREDICTIVE TRACKS (P1–P4, from the 2026-07-23 audit-session deliverable-3 punch
 list, operator-accepted); annotates L3.4 with its first landed tooling
@@ -376,9 +383,93 @@ critical path.
   rides the pitchfork build on the tester fork; same isolation and weight-0
   rules.
 
+- ⬜ **P5 — Strike & expected-move counterfactual harness.**
+
+  *What it is for.* Answering, from evidence rather than intuition, whether our
+  strike selection has been optimal: are we buying the right amount of gamma
+  leverage per dollar of risk, and is the strike distance calibrated to the
+  expected move the chain was actually pricing at entry? Two questions fall
+  out of the same dataset:
+  (a) **the counterfactual grid** — reprice every strike we did NOT take across
+  the archived snapshots and produce a P&L surface over strike distance for
+  each real trade; and
+  (b) **realized ÷ priced EM** — the ATM straddle is the market's session
+  expected move, so every trade gets a ratio of what actually happened to what
+  was priced when we entered. Consistently >1 means we are systematically
+  under-strike and paying for delta we do not need; <1 means cheap OTM strikes
+  are bleeding us. That ratio, not intuition, is what "dialling in the expected
+  move" actually means.
+  Both become *conditioning dimensions* for L3.4's tables — strike distance in
+  EM units is a cell to calibrate, not a separate backtest to overfit.
+
+  *What it needs — in order.*
+  1. **A harvest step for `data/chain_snapshots/`.** `harvest.py` pulls the
+     OHLC CSV and `trades.db` only. The chain archive is accumulating on all
+     29 boxes with NO copy on control — and unlike the tape or the pivots, a
+     quote for an unselected strike is gone permanently at 16:00. This is a
+     data-loss exposure as much as an analysis blocker: any box rebuilt from
+     scratch takes that symbol's archive with it. ~1.4 MB/box/day gzipped
+     (~40 MB/day fleet).
+  2. **Archive depth.** Archival began 2026-07-23. A week minimum before the
+     validator says anything; weeks before the harness does.
+  3. **The gating validator — BUILT 2026-07-23:**
+     `tests/chain_reconstruction_check.py` v1.0. The engines decide every 15 s;
+     the archive samples every 5 min. So the harness must reconstruct premium
+     between snapshots via the previous snapshot's own greeks
+     (`P̂ = P₀ + δ·ΔS + ½γ·ΔS² + θ·Δt`, calendar-day theta). Every snapshot is
+     both a prediction input and the answer key for the one before it, so the
+     question is answerable with data already on disk. Verdict metric is the
+     inside-spread rate — an error smaller than the half-spread is one we could
+     not have traded around. Stratified by moneyness, hour and |ΔS|, because a
+     pass confined to ±1% of spot is still a **usable** pass: that is where
+     strike selection happens. Its diagnostic `+vega·ΔIV` column attributes
+     residual error — if adding future IV collapses it, the missing piece is an
+     IV-path model, NOT more cadence.
+  4. **`ChainReplay`, a drop-in.** `tests/backtest_harness.py` v1.0 already
+     drives the real engines and already isolates its one modelled input behind
+     a single interface — `PremiumModel.price(S, K, vix, ts, call)`, four call
+     sites. A `ChainReplay` with that signature, reading archived quotes with
+     real bid/ask, converts the harness from "relative, not fill-accurate" to
+     evidence. The harness also already parameterises strike `K`: feed it a
+     grid instead of one value and the counterfactual surface falls out of
+     machinery we already trust.
+  5. **Exit replay.** The harness resolves a structure stop on the underlying;
+     it does not run the real `exit_engine`. Every exit we care about (trail,
+     ratchet, theta gate, −25%/−40% floors) is *premium-relative*, so a
+     different strike arms its trail at a different time. Until exits replay
+     against the reconstructed premium series, "same exit timestamp, different
+     strike" is a crude lower bound and must be labelled as one.
+
+  *When to integrate.* Steps 1–2 can start immediately (both are plumbing).
+  Step 3 runs as soon as ~a week of archive exists and **gates everything
+  after it**: PASS → build `ChainReplay`; PARTIAL → build it with the grid
+  restricted to the validated moneyness band, stated in the harness header;
+  FAIL → fix the input first (IV-path model or two-tier archival: full chain
+  at 5 min plus an ATM±K window every tick) rather than writing a harness on
+  a foundation that cannot carry it. Steps 4–5 are **L2.6-gated like every
+  other conviction-affecting change**, and their output feeds L3 dial
+  optimisation only under L3.5's fit/acceptance holdout.
+
+  *The risk that matters.* A strike grid × dial grid × regime buckets over a
+  few weeks of tape will manufacture spurious optima with near-certainty — the
+  search space grows far faster than the sample. Pre-register what is being
+  tested before looking, keep the holdout sacred, and treat any "optimal
+  strike" that appears in fewer than L3.4's `--min-n` samples as noise. A rich
+  dataset explored carelessly is a more convincing source of wrong answers
+  than no dataset at all.
+
+  *Scope limit, stated up front.* Per-trade counterfactuals only. A different
+  strike changes sizing, which changes the daily-loss-breaker state, which
+  changes which later trades exist — whole-session counterfactuals compound and
+  we will not claim them. Depth of book is not archived either, so far-OTM
+  strikes will always flatter themselves slightly.
+
 **Sequencing note:** P3 phase 1 and P1(a) are the only genuinely ungated items
 here — both are log-only/offline and both feed `conditional_tables.py` more
-dimensions while the baseline window runs. Everything that *gates or nudges a
+dimensions while the baseline window runs. P5 steps 1–3 join them: harvesting
+the chain archive and running the reconstruction validator change nothing about
+how the fleet trades, and step 1 is time-critical in a way the rest are not —
+every unharvested session is a permanent hole if a box is ever rebuilt. Everything that *gates or nudges a
 trade* waits for L2.6, same as the pitchfork.
 
 ## Risks worth re-stating
