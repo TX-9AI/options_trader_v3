@@ -1,5 +1,14 @@
 # ROADMAP.md — options_trader v3: boolean regime gates → conviction-bar gating
 
+**v2.3 — 2026-07-24 — TRADE CONSTRUCTION track added** as the fourth season, gated
+on the Layer-3 freeze. The L1→L2→L3 spine is the regime/timing engine (whether & when
+a trade fires); it never addressed trade *construction* — strike distance, contract
+count, moneyness, expiry. TC.1 states the first construction goal: gamma-led directional
+strike selection (let gamma do the work via more/cheaper OTM contracts, balanced against
+the move actually reaching the gamma-acceleration zone). Gated on L3 because construction
+changes can only be measured against a stable entry decision. See the TRADE CONSTRUCTION
+section.
+
 **v2.2 — 2026-07-23 — P5 STRIKE & EXPECTED-MOVE COUNTERFACTUAL HARNESS added**,
 with its gating validator (`tests/chain_reconstruction_check.py` v1.0) already
 built and testable. Records the finding that chain snapshots are NOT harvested
@@ -312,7 +321,10 @@ L1.6 + L1.7 (labeled TREND/SWEEP/pin/breakout tape)   <- calendar time + label_d
                   |__ LAYER 2 DONE  (+ the clean 2-week baseline)
                        |__ L3.3 gate matrix -> L3.4 ROI+recall campaign (3-6 wk paper)
                             -> L3.5 guards -> L3.6 live descent -> L3.7 wire live
-                                 |__ LAYER 3 DONE = the vision
+                                 |__ LAYER 3 DONE = the regime/timing engine
+                                      |__ TRADE CONSTRUCTION opens (TC.1 gamma-led
+                                          strike selection, etc.) — mechanics tuned
+                                          against the frozen L3 baseline
 ```
 
 Two things run *in parallel* and don't block the path:
@@ -330,6 +342,95 @@ Two things run *in parallel* and don't block the path:
 - **The pitchfork** (see README §PLANNED) is gated on **L2.6** (frozen weights),
   not on all of L3 — it enters as a new conviction dimension the moment L2 is a
   stable baseline.
+
+## TRADE CONSTRUCTION — the fourth season (opens AFTER the Layer-3 freeze)
+
+**Status: NOT STARTED, and deliberately gated.** The L1→L2→L3 spine is the
+*regime & timing* engine — it decides WHETHER a trade fires and at what conviction
+bar. It says nothing about WHAT the trade is: strike distance, contract count,
+moneyness, expiry, how the Greeks are expected to behave. Those are as large a P&L
+lever as the entry gate, and they have had no season.
+
+**Why gated on the L3 freeze (not concurrent):** a construction change (further OTM,
+more contracts, different expiry) can only be measured against a *stable entry
+decision*. While the conviction bars are still moving (L3), a mechanics change and a
+gate change are confounded — you cannot attribute the P&L delta. Freeze L3 first;
+then same-entries / different-construction produces a clean, attributable signal. Same
+circularity discipline as every layer gating on the one beneath it.
+
+- ⬜ **TC.1 — Gamma-led directional strike selection.** GOAL (operator, 2026-07-24):
+  on directional trades, let **gamma do the bulk of the work** — buy further-OTM,
+  cheaper contracts so the same capital buys MORE contracts and more gamma leverage,
+  and let gamma acceleration drive the P&L as the underlying moves.
+  **The constraint that makes it non-trivial:** the further OTM you go, the cheaper the
+  contract *and the lower its gamma at current spot* — so there is a point where the
+  contracts are cheap but gamma is so low the move never reaches the zone where gamma
+  turns on. **Cheap is worthless if gamma never reaches it.** There is an optimal
+  distance: far enough OTM to maximize contract count and gamma leverage, close enough
+  that the *expected move actually reaches* the gamma-acceleration zone.
+  *This is a calibration question with a real answer* — "what moneyness / delta
+  maximizes gamma-driven P&L given the expected move." Measurable: the signal already
+  carries `expected_move` (ATM-straddle EM) and `expected_move_mult`; bucket
+  directional-trade realized P&L by **strike-distance-vs-EM** and find where gamma
+  actually pays. The P5 strike/EM counterfactual harness (v2.2, already landed) is the
+  right tool to seed this offline before any live change.
+  **DONE means:** directional strike distance is placed empirically at the moneyness
+  that maximizes gamma-driven expectancy for the measured expected move — not a fixed
+  delta guess — with the cheap-but-unreachable failure mode explicitly ruled out by the
+  data.
+
+- ⬜ **TC.2 — Exit & stop construction (stop trigger, target ratio, trail capture).**
+  The exit *mechanism* is built (mark-limit ladder, urgent-vs-patient, 15:40→15:45
+  hard-close cross — deployed 2026-07-24). What's NOT tuned is the *construction*: where
+  the stop sits, how it relates to the target, how much of the peak the trail captures.
+  Three known goals, all deferred here until the season opens:
+  - **Stop-trigger vs realized fill latency.** The directional stop currently triggers
+    at −40% (room to breathe). Operator note (2026-07-24): once we see how much the
+    mark-limit ladder's fill *latency* costs on a fast move, the trigger may need to move
+    earlier — 35% or even back to 25% — to buy the ladder room. Calibrate the trigger
+    against measured ladder fill-latency, don't guess it.
+  - **Sweep stop/target asymmetry** (evidence in OBSERVATIONS.md, 2026-07-24): sweeps win
+    ~75% but lose money — stop is wide (~−40%) while winners book ~+25%, so a normal loss
+    outweighs a normal win. The fix is a construction change to the sweep stop/target
+    ratio. Deferred here; evidence stays in OBSERVATIONS until confirmed at larger n.
+  - **Trail-stop giveback** (evidence in OBSERVATIONS.md, 2026-07-24): winners reach
+    ~+60% MFE but are booked ~+25% (giveback ~34%). Tune the trail to capture more of the
+    peak. Construction goal; evidence in OBSERVATIONS.
+  - **Exit-MECHANISM bake-off (which exit protects capital best) — operator goal,
+    2026-07-24.** Distinct from the parameter-tuning above: this asks which exit
+    *philosophy* should govern a trade at all. Three candidates to compare:
+    **break-of-structure**, **trailing stop**, and **5-minute fair-value-gap (FVG)**
+    exit. Hypothesis: no single winner — the best exit is **regime-dependent** (BoS likely
+    best in trending continuation; trailing best on parabolic/momentum runs; 5-min FVG
+    best on mean-reversion / sweep setups). So the study's output is **"which mechanism
+    per regime,"** NOT a flat overall winner (a blended winner can be 2nd-best in every
+    individual regime). METHOD — must be **counterfactual on identical entries**: take the
+    same entry and replay all three exit rules against the *same* post-entry price path
+    (what would BoS have exited at, vs the trail, vs the FVG fill), the way the P5 harness
+    does strike/EM counterfactuals. Comparing trades that historically *used* each exit is
+    invalid — that measures entry luck, not exit quality. LIKELY NEEDS AN OBSERVABILITY
+    PRECURSOR (log-only, can start pre-freeze like L3.1/L3.2): the counterfactual needs
+    the structure swing-points and the FVG zones *as they were at entry* recorded on the
+    trade — OHLC tape gives the price path, but FVG zones and BoS levels may not be logged
+    yet (same capture pattern as tonight's ADX / level-strength additions). OUTPUT feeds
+    back into which exit is assigned per strategy/regime.
+  **DONE means:** stop trigger, target ratio, and trail are each placed empirically —
+  the stop against realized fill latency, the sweep stop/target against its win/loss
+  magnitude, the trail against MFE-capture — not on fixed-percent guesses; AND the exit
+  mechanism (BoS / trailing / FVG) is assigned per regime by the counterfactual bake-off,
+  not by default. Measured against the frozen L3 baseline so entry and exit changes aren't
+  confounded.
+
+- ⬜ **TC.3+ — (reserved)** other construction levers as they're named: contract sizing
+  vs conviction, expiry selection, spread vs single-leg by regime. Each follows the same
+  rule — one stated goal, one DONE-means, measured against the frozen L3 baseline.
+
+**Trade-Construction DONE means:** every directional trade is *built* (strike, size,
+expiry) at the empirically-best construction for its signal, the same way L3 makes every
+trade *gated* at the empirically-best bar. Regime decides whether and when; construction
+decides what. Both empirical, both frozen only after their own campaign.
+
+---
 
 ## PARALLEL / PREDICTIVE TRACKS — the 2026-07-23 punch list (P1–P4)
 
