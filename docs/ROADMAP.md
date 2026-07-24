@@ -1,5 +1,15 @@
 # ROADMAP.md — options_trader v3: boolean regime gates → conviction-bar gating
 
+**v2.1 — 2026-07-23 — PREDICTIVE PUNCH LIST folded in.** Adds §PARALLEL /
+PREDICTIVE TRACKS (P1–P4, from the 2026-07-23 audit-session deliverable-3 punch
+list, operator-accepted); annotates L3.4 with its first landed tooling
+(`tests/conditional_tables.py` v1.0 — conditional P(win)/fee-adjusted-expectancy
+cells with Wilson intervals, trades-DB mode live, journal mode awaiting the
+jsonl harvest). Stale references cleaned: shadow observer is FLEET-WIDE (all 29
+boxes) since 2026-07-22 with the start/stop timers retired (enable-at-boot), not
+"QQQ box only"; A2 co-occurrence is devtools item **47** post-v1.18 renumber,
+not 52.
+
 **v2.0 — 2026-07-18 — CHECKLIST REWRITE.** Supersedes the v1.0 prose plan
 (2026-07-10). Same destination, same four phases, now as a tracked checklist:
 every step is marked ✅ DONE / 🔄 IN PROGRESS / ⬜ NOT STARTED, done steps keep a
@@ -92,7 +102,8 @@ labeled tape.**
   every session). New tooling: `tests/ramp_calibration.py` (per-term saturation +
   input percentiles + suggested bounds) and `tests/a2_cooccurrence.py` (A2
   tie-break audit + HTF-conditioned forward drift with a RANGE_ONLY control);
-  `day_trader_pro/devtools.sh` v1.17 item 52 runs the latter.
+  `day_trader_pro/devtools.sh` item **47** runs the latter (renumbered from 52
+  in dtp v1.18).
   *Two findings recorded, not yet actioned:* **(i)** `OSC_CROSS_*` is shared with
   `_compression` (few crossings = coil), so the crossings axis is a see-saw —
   widening it also lifts COMPRESSION (p90 0.65→0.879); it is now the term to
@@ -163,8 +174,9 @@ and live-wiring remain.**
   *Consequence for L1 work:* because L2 labels now gate trades, any L1 scoring
   change (e.g. `regime_confluence.py` v1.2 ramp de-saturation) is a **live
   trading behaviour change**, not an analysis-layer one.
-  *NOTE:* the `shadow-observer.service` on the QQQ paper box (2026-07-18) is a
-  **different** shadow subsystem — velocity primitives + sweep-precursor
+  *NOTE:* the `shadow-observer.service` (2026-07-18 on the QQQ paper box;
+  **fleet-wide, all 29 boxes, enable-at-boot since 2026-07-22** — the
+  start/stop timers are retired) is a **different** shadow subsystem — velocity primitives + sweep-precursor
   scorers, not the conviction integrator. It advances the separate
   sweep-precursor track.
 - ⬜ **L2.6 — Freeze the L2 weights as a stable baseline.** The pitchfork and any
@@ -247,6 +259,16 @@ empirical campaign.**
   (precision loss). *To close:* the fleet generates the distribution over weeks;
   needs L3.1 + L3.2 data flowing + the circularity split (fit sessions ≠
   acceptance sessions).
+  ✅ **First tooling landed 2026-07-23:** `tests/conditional_tables.py` v1.0 —
+  offline, control-server, stdlib-only. Trades mode (live tonight) bins closed
+  trades from `~/day_trader_pro/trades/<date>/` by regime × strategy × grade ×
+  direction × time bucket × VIX band × condor-leg, emitting P(win) with
+  **Wilson 95% intervals**, fee-adjusted expectancy (`CT_FEES_RT_PER_CONTRACT`),
+  and sample counts (`--min-n` suppression on crosses). Journal mode (the
+  REJECT/counterfactual side) activates automatically once
+  `data/signal_journal/` is harvested off-box. ⚠️ It is the *bucketer*, not the
+  campaign: the L3.5 fit/acceptance holdout split is **not yet enforced in it**,
+  and cells are only decision-grade after L2.6 pools post-freeze rows.
 - ⬜ **L3.5 — Circularity + statistics guards.** Fee/slippage-adjusted P&L only;
   haircut 0DTE spread slippage; split tape so bars are never fit on the sessions
   used to tune L1 truths; pooled-fleet curve + per-symbol sanity check. The L3.2
@@ -292,13 +314,72 @@ Two things run *in parallel* and don't block the path:
   (precision) side, L3.2 the missed-trade (recall) side. Neither is gated on the
   L2 freeze to *run*; both are ruleset-relative, so their rows are version-tagged
   and only pooled for calibration after L2.6.
-- **The sweep-precursor observer** (`shadow-observer.service`, live on the QQQ
-  paper box since 2026-07-18, stage 1) is banking velocity-primitive data to
-  validate against `data/OHLC/` before its scorers (stage 2) are ever trusted —
-  the sweep-reversal precursor track, independent of the L1→L2→L3 spine.
+- **The sweep-precursor observer** (`shadow-observer.service`, stage 1 —
+  live on QQQ since 2026-07-18, **fleet-wide across all 29 boxes since
+  2026-07-22**, enable-at-boot, timers retired) is banking velocity-primitive
+  data at 29× the original sample rate, to validate against `data/OHLC/`
+  before its scorers (stage 2, →P2) are ever trusted — the sweep-reversal
+  precursor track, independent of the L1→L2→L3 spine.
 - **The pitchfork** (see README §PLANNED) is gated on **L2.6** (frozen weights),
   not on all of L3 — it enters as a new conviction dimension the moment L2 is a
   stable baseline.
+
+## PARALLEL / PREDICTIVE TRACKS — the 2026-07-23 punch list (P1–P4)
+
+Origin: the 2026-07-23 audit-session deliverable 3 ("better than a coin flip"),
+operator-accepted in full. Framing that governs all four: unconditional next-move
+direction stays ≈50/50; the beatable game is **conditional** — find the slices
+where the distribution measurably isn't a coin flip and only be present there.
+None of these block the L1→L2→L3 critical path; every one of them follows the
+pitchfork rule — **ship at weight 0 (log-only / shadow), calibrate to realized
+edge, a weight of 0 stays allowed.** Item #6 of the original six (conditional
+tables) is already landed under L3.4; item #1 (close the L3 loop) *is* the
+critical path.
+
+- ⬜ **P1 — Consume the chain archive dynamically.** `chain_snapshot.py` v1.0
+  (main v4.2, 2026-07-23) archives the full 0DTE chain every ~5 min — greeks,
+  IV, OI, volume per strike — but the live loop uses only *static* GEX. The
+  forward-looking derivatives are unconsumed: intraday **GEX-profile delta**
+  (dealers repositioning before price moves), **volume-vs-OI** at strikes (new
+  positioning vs unwinds), **IV-skew shift**, charm/vanna pressure into the
+  close. *To close (staged):* (a) offline notebook/report over accumulated
+  snapshots — ungated, start when ~2 weeks of archive exists; (b) any live
+  scoring dimension enters weight-0 shadow only, **gated on L2.6** like every
+  new conviction dimension. Nothing new to collect — the archive is already
+  landing.
+- ⬜ **P2 — Shadow observer stage 2 (sweep-precursor scorers).** Stage 1 is
+  fleet-wide (29× sample since 2026-07-22). Stage 2 turns validated velocity
+  primitives into *anticipatory* sweep scoring — predicting the sweep before
+  the reclaim completes, instead of confirming it after. *To close:* stage-1
+  primitives validated against `data/OHLC/` per the original plan; scorers run
+  observe-only (`scores:[]` → populated, still trading nothing); graduation
+  into the sweep strategy's conviction is **gated on L2.6**.
+- ⬜ **P3 — Cross-symbol context broadcast (SPX/QQQ → the fleet).** The two
+  ALWAYS_ON boxes already compute index regime + conviction all session; the
+  single-name boxes never see it. Push it via the **`brief_flags.json`
+  delivery pattern that already exists** (setup_scorer v1.2 precedent).
+  Phase 1 is **log-only**: journal the index-alignment context on every
+  `scored` event so `conditional_tables.py` grows an index-confluence
+  dimension for free — an ORB fired *with* index trend vs *against* it is
+  exactly the kind of conditional cell this campaign exists to find. *To
+  close (phase 1):* control-side writer + one journaled field; ungated. Any
+  nudge/gate use: **gated on L2.6 + a table cell that earns it.**
+- ⬜ **P4 — HTF zone memory + pitchfork rejection counts.** Extends the
+  existing pitchfork plan (README §PLANNED, gated on **L2.6**): the
+  LiquidityMapper's zones gain a **multi-day memory with a per-zone HTF
+  rejection/touch count**, carried as a zone-strength attribute. That
+  attribute is simultaneously (a) a conviction dimension for the pitchfork
+  experiment, (b) the "zone collision" input the ranked ORB-handoff dispatch
+  wants, and (c) **the substrate for the rejection-fade trade** (sell
+  premium-rich credit against a level firmly rejected N× on the HTF —
+  conviction scales with N). One data structure, three consumers. *To close:*
+  rides the pitchfork build on the tester fork; same isolation and weight-0
+  rules.
+
+**Sequencing note:** P3 phase 1 and P1(a) are the only genuinely ungated items
+here — both are log-only/offline and both feed `conditional_tables.py` more
+dimensions while the baseline window runs. Everything that *gates or nudges a
+trade* waits for L2.6, same as the pitchfork.
 
 ## Risks worth re-stating
 
