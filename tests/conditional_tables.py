@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
 """
-tests/conditional_tables.py — v1.0 — Conditional-probability tables from the
+tests/conditional_tables.py — v1.1 — Conditional-probability tables from the
         fleet's own record: P(win), fee-adjusted expectancy, and sample counts
         per conditioning cell. The empirical substrate for placing the L3
         conviction bars (ROADMAP Phase 3): a bar belongs at the fee-adjusted-ROI
         zero crossing of exactly these cells.
+v1.1 — 2026-07-23 — CONDUCTOR MODE. Adds --quiet: prints ONE headline line to
+        stdout (the reports are still written in full to disk), so
+        eod_conductor.py can capture it the same way it captures the excursion
+        headline. The headline is deliberately honest — it names the best cell
+        ONLY when that cell's Wilson 95% lower bound clears 50%, and the worst
+        ONLY when its upper bound falls below 50%; otherwise it says no cell has
+        separated from chance yet. Early sessions will say exactly that, and
+        that is the correct output, not a failure. Also --min-n now applies to
+        headline eligibility, and exit code is 0 whenever the report was written
+        (an empty-but-valid day is not an error) so a quiet night can never mark
+        the EOD chain as failed.
 v1.0 — 2026-07-23 — initial. OFFLINE, control-server, stdlib-only (sqlite3 +
         json). Reads what already lands on 1-REPORTER; touches NO bot code and
         does not disturb the frozen baseline window.
@@ -36,6 +47,7 @@ v1.0 — 2026-07-23 — initial. OFFLINE, control-server, stdlib-only (sqlite3 +
           python3 -m tests.conditional_tables                      # all dates on disk
           python3 -m tests.conditional_tables --since 2026-07-20   # window
           python3 -m tests.conditional_tables --date 2026-07-22    # one day
+          python3 -m tests.conditional_tables --quiet              # headline only
           CT_FEES_RT_PER_CONTRACT=1.30 python3 -m tests.conditional_tables
         Output: reports/conditional_tables_<first>_<last>.txt (+ .jsonl cells)
         under --reports-dir (default ~/day_trader_pro/reports).
@@ -243,6 +255,36 @@ def fmt_cell(key, c: Cell) -> str:
             f"[{lo:4.0%},{hi:4.0%}]  E[net]=${exp:8.2f}  Σ=${c.pnl:9.2f}")
 
 
+def build_headline(dates, rows, tables, min_n):
+    """One honest line. Names a cell ONLY when its Wilson 95% interval clears
+    50% — otherwise it reports that nothing has separated from chance, which is
+    the expected (and correct) answer for the first weeks of sample."""
+    base = f"CT: {len(rows)} closed trades / {len(dates)} session(s)"
+    best = worst = None
+    for g in TRADE_GROUPINGS:
+        for key, c in tables[g].items():
+            if c.n < min_n:
+                continue
+            p = c.wins / c.n
+            lo, hi = wilson(p, c.n)
+            exp = c.pnl / c.n
+            label = " × ".join(key)
+            if lo > 0.50 and (best is None or exp > best[0]):
+                best = (exp, f"{label} n={c.n} P(win)={p:.0%} [{lo:.0%},{hi:.0%}] "
+                             f"E=${exp:,.2f}")
+            if hi < 0.50 and (worst is None or exp < worst[0]):
+                worst = (exp, f"{label} n={c.n} P(win)={p:.0%} [{lo:.0%},{hi:.0%}] "
+                              f"E=${exp:,.2f}")
+    parts = [base]
+    if best:
+        parts.append(f"best: {best[1]}")
+    if worst:
+        parts.append(f"worst: {worst[1]}")
+    if not best and not worst:
+        parts.append(f"no cell separated from chance yet (min-n={min_n})")
+    return " · ".join(parts)
+
+
 def write_report(out_txt, out_jsonl, dates, rows, tables,
                  journal_stats, min_n):
     lines = []
@@ -335,14 +377,18 @@ def main():
     ap.add_argument("--reports-dir",  default=REPORTS_DIR_DEFAULT)
     ap.add_argument("--min-n", type=int, default=5,
                     help="suppress cross-table cells below this sample count")
+    ap.add_argument("--quiet", action="store_true",
+                    help="print ONLY the headline line (reports still written) "
+                         "— this is how eod_conductor.py calls it")
     args = ap.parse_args()
 
     dates = discover_dates(args.trades_root, args.journal_root,
                            args.since, args.date)
     if not dates:
-        print("no dated folders found under "
-              f"{args.trades_root} or {args.journal_root}")
-        return 1
+        # Not an error: a fresh install or a holiday has no dated folders, and
+        # the conductor must never be marked failed by a quiet night.
+        print(f"CT: no dated folders yet under {args.trades_root}")
+        return 0
 
     rows = load_trades(args.trades_root, dates)
     tables = build_trade_tables(rows)
@@ -353,8 +399,13 @@ def main():
     out_jsonl = os.path.join(args.reports_dir, stem + ".jsonl")
     text = write_report(out_txt, out_jsonl, dates, rows, tables,
                         journal_stats, args.min_n)
-    print(text)
-    print(f"written: {out_txt}\nwritten: {out_jsonl}")
+    headline = build_headline(dates, rows, tables, args.min_n)
+    if args.quiet:
+        print(headline)
+    else:
+        print(text)
+        print(headline)
+        print(f"written: {out_txt}\nwritten: {out_jsonl}")
     return 0
 
 
