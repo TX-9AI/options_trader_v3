@@ -45,6 +45,8 @@ Ported from crypto_trader SweepReversalStrategy and adapted for 0DTE options:
 - Stop: 25% of premium paid
 - TP: 100% of premium at first target; trailing stop at 50%
 """
+# v-obs2 (2026-07-24) — stamps swept_level_name + level_strength (0..1, named+touch_count) onto the sweep signal so the trade record captures level conviction.
+
 
 import logging
 from typing import Optional
@@ -200,6 +202,13 @@ class SweepReversalStrategy(BaseOptionsStrategy):
             tp_pct           = 1.0,
         )
 
+
+        # v-obs: capture what KIND of level was swept, for sweep postmortems.
+        # Named PDH/PDL/session = high conviction; equal-H/L = low. Value, not bool.
+        _lvl_name = getattr(sweep, "swept_named_level", "") or ""
+        _touches  = getattr(getattr(sweep, "pool", None), "touch_count", 0) or 0
+        signal.swept_level_name = _lvl_name
+        signal.level_strength   = min(1.0, (0.6 if _lvl_name else 0.2) + min(_touches, 4) * 0.1)
         # ── Confluence ────────────────────────────────────────────────────────
         self._add_confluence(signal,
             f"Low sweep confirmed ({sweep.rejection_pct:.1%} rejection)"
@@ -294,6 +303,12 @@ class SweepReversalStrategy(BaseOptionsStrategy):
             stop_loss_pct    = MAX_LOSS_PCT,
             tp_pct           = 1.0,
         )
+
+        # v-obs: capture swept-level kind for sweep postmortems (see long path).
+        _lvl_name = getattr(sweep, "swept_named_level", "") or ""
+        _touches  = getattr(getattr(sweep, "pool", None), "touch_count", 0) or 0
+        signal.swept_level_name = _lvl_name
+        signal.level_strength   = min(1.0, (0.6 if _lvl_name else 0.2) + min(_touches, 4) * 0.1)
 
         # ── Confluence ────────────────────────────────────────────────────────
         self._add_confluence(signal,

@@ -10,6 +10,8 @@ v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         shared TastyTrade candle feed — see data/candle_feed.py). No logic
         change in this file.
 """
+# v-obs2 (2026-07-24) — OptionsSignal carries swept_level_name + level_strength for sweep level postmortems.
+
 # v-obs (2026-07-24) — OptionsSignal carries adx_at_signal + flat_angle_deg so entry records can store the regime context the tape-analysis needs.
 
 
@@ -89,6 +91,8 @@ class OptionsSignal:
     regime:         str   = ""
     adx_at_signal:  float = 0.0    # v-obs: ADX at entry, for tape-context analysis
     flat_angle_deg: float = 0.0    # v-obs: flat-angle at entry (0 if unavailable)
+    swept_level_name: str = ""     # v-obs: name of swept level (PDH/PDL/session) — '' if equal-H/L
+    level_strength:   float = 0.0  # v-obs: 0..1 conviction of the swept level (named+touches)
     vix_at_signal:  float = 0.0
     is_fed_day:     bool  = False
     notes:          str   = ""

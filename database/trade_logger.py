@@ -51,6 +51,8 @@ v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         shared TastyTrade candle feed — see data/candle_feed.py). No logic
         change in this file.
 """
+# v-obs2 (2026-07-24) — trades table also captures swept_level_name + level_strength (what KIND of liquidity level a sweep fired against — named PDH/PDL/session vs equal-H/L). Sweep postmortems: does level conviction predict outcome? Auto-migrates.
+
 # v-obs (2026-07-24) — trades table now captures adx_at_entry, regime_conviction, flat_angle_deg (regime context at entry, for tape-fingerprint analysis). Auto-migrates existing dbs via ALTER TABLE. Observability only — no trade-mechanics change.
 
 
@@ -134,6 +136,8 @@ class TradeLogger:
         adx_at_entry      REAL DEFAULT 0.0,
         regime_conviction REAL DEFAULT 0.0,
         flat_angle_deg    REAL DEFAULT 0.0,
+        swept_level_name  TEXT DEFAULT '',
+        level_strength    REAL DEFAULT 0.0,
         is_fed_day        INTEGER DEFAULT 0,
         status            TEXT DEFAULT 'open',
         exit_reason       TEXT,
@@ -204,6 +208,8 @@ class TradeLogger:
             ("adx_at_entry",      "REAL DEFAULT 0.0"),   # v-obs: regime context at entry
             ("regime_conviction", "REAL DEFAULT 0.0"),
             ("flat_angle_deg",    "REAL DEFAULT 0.0"),
+            ("swept_level_name",  "TEXT DEFAULT ''"),   # v-obs: swept level kind (sweep postmortems)
+            ("level_strength",    "REAL DEFAULT 0.0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {definition}")
