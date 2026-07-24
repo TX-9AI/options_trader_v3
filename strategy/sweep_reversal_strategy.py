@@ -228,6 +228,8 @@ class SweepReversalStrategy(BaseOptionsStrategy):
             return None
 
         signal.conviction = regime.conviction
+        signal.adx_at_signal = regime.adx
+        signal.flat_angle_deg = getattr(regime, 'flat_angle_deg', 0.0) or 0.0
 
         # ── Strike selection: 0.20 delta OTM call ────────────────────────────
         target_delta = _sweep_target_delta(regime.conviction)
@@ -321,6 +323,8 @@ class SweepReversalStrategy(BaseOptionsStrategy):
             return None
 
         signal.conviction = regime.conviction
+        signal.adx_at_signal = regime.adx
+        signal.flat_angle_deg = getattr(regime, 'flat_angle_deg', 0.0) or 0.0
 
         # ── Strike selection: 0.20 delta OTM put ─────────────────────────────
         target_delta = _sweep_target_delta(regime.conviction)

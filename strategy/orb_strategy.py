@@ -149,6 +149,8 @@ class ORBStrategy(BaseOptionsStrategy):
             signal.conviction += FED_DAY_ORB_BOOST
 
         signal.conviction += regime.conviction * 0.7
+        signal.adx_at_signal = regime.adx
+        signal.flat_angle_deg = getattr(regime, 'flat_angle_deg', 0.0) or 0.0
 
         if len(signal.confluence_factors) < 2:
             logger.info("ORB: insufficient confluence — no signal")

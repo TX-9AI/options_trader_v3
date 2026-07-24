@@ -192,6 +192,8 @@ class ContinuationStrategy(BaseOptionsStrategy):
         # conviction: inherit regime conviction (trending is the whole thesis),
         # small bump for a clean midline tag + momentum re-assertion.
         signal.conviction = regime.conviction
+        signal.adx_at_signal = regime.adx
+        signal.flat_angle_deg = getattr(regime, 'flat_angle_deg', 0.0) or 0.0
         self._add_confluence(signal, f"Trending regime ({signal.regime}) conv={regime.conviction:.2f}")
         self._add_confluence(signal, f"Pullback to BB midline ({mid:.2f}), price {current_price:.2f}")
         self._add_confluence(signal, f"Momentum {momentum} (resumption)")

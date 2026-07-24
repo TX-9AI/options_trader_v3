@@ -268,6 +268,8 @@ class ButterflyStrategy(BaseOptionsStrategy):
             self._add_confluence(signal, "Below VWAP — bearish lean")
 
         signal.conviction = regime.conviction * 0.7
+        signal.adx_at_signal = regime.adx
+        signal.flat_angle_deg = getattr(regime, 'flat_angle_deg', 0.0) or 0.0
 
         # ── Mark as fired for today ───────────────────────────────────────────
         self._fired_today = True

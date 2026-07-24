@@ -10,6 +10,8 @@ v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         shared TastyTrade candle feed — see data/candle_feed.py). No logic
         change in this file.
 """
+# v-obs (2026-07-24) — OptionsSignal carries adx_at_signal + flat_angle_deg so entry records can store the regime context the tape-analysis needs.
+
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -85,6 +87,8 @@ class OptionsSignal:
 
     # ── Context ──────────────────────────────────────────────────────
     regime:         str   = ""
+    adx_at_signal:  float = 0.0    # v-obs: ADX at entry, for tape-context analysis
+    flat_angle_deg: float = 0.0    # v-obs: flat-angle at entry (0 if unavailable)
     vix_at_signal:  float = 0.0
     is_fed_day:     bool  = False
     notes:          str   = ""

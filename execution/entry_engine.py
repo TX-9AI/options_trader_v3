@@ -58,6 +58,8 @@ Order types:
 Paper mode: books limit_ladder.paper_fill_price (the mark by default;
 mark ± PAPER_FILL_SLIPPAGE_PCT when the stress knob is set). No real order.
 """
+# v-obs (2026-07-24) — directional entry record now stores adx_at_entry / regime_conviction / flat_angle_deg from the signal.
+
 
 import logging
 import time
@@ -163,6 +165,9 @@ class EntryEngine:
             underlying_target = signal.underlying_target,
             regime            = signal.regime,
             vix_at_entry      = signal.vix_at_signal,
+            adx_at_entry      = getattr(signal, 'adx_at_signal', 0.0),
+            regime_conviction = getattr(signal, 'conviction', 0.0),
+            flat_angle_deg    = getattr(signal, 'flat_angle_deg', 0.0),
             is_fed_day        = signal.is_fed_day,
             order_id          = order_id,
             paper_trade       = 1 if self.paper_trading else 0,

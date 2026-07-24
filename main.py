@@ -171,6 +171,8 @@ Run modes:
   python main.py            — interactive startup (prompts instrument, risk $, paper/live)
   python main.py --service  — non-interactive for systemd
 """
+# v-obs (2026-07-24) — condor leg entry record now stores adx_at_entry / regime_conviction / flat_angle_deg (from signal, falling back to state.current_regime).
+
 
 import logging
 import logging.handlers
@@ -611,6 +613,11 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState):
         underlying_entry = getattr(signal, "underlying_entry", 0.0),
         regime           = "RANGING",
         vix_at_entry     = getattr(signal, "vix_at_signal", 0.0),
+        adx_at_entry      = getattr(signal, "adx_at_signal", 0.0)
+                            or (state.current_regime.adx if state.current_regime else 0.0),
+        regime_conviction = getattr(signal, "conviction", 0.0)
+                            or (state.current_regime.conviction if state.current_regime else 0.0),
+        flat_angle_deg    = getattr(signal, "flat_angle_deg", 0.0),
         is_condor_leg    = 1,
         condor_leg_num   = 1 if is_leg1 else 2,
         is_broken_wing   = 0,
