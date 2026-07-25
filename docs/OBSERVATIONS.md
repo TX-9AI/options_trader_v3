@@ -27,6 +27,19 @@ here survives even when the thread that found it is gone.
 ## 2026-07-24 (eve) — Sweep washout: what's the fingerprint? (three dead ends + one live lead)
 **STATUS: HYPOTHESIS** (level-conviction lead is the strongest; capture shipped, awaiting data)
 
+> **UPDATE 2026-07-24 (late) — TAPE/REGIME FINGERPRINT CONFIRMED-NEGATIVE.** The warm
+> `--rebuild` backfill finished (ADX bookmark working — every day 07-14→07-24 now reads
+> [DIRECTIONAL] not [CHOP], with real TREND dominance 26–39% that cold-start had hidden).
+> With the engine's OWN logged flat-angle (trustworthy, not my miscalibrated
+> reconstruction), the diary shows **the flat-angle does NOT separate good from washout
+> sweep days**: 07-15 GOOD (6/8) had p90 **29.1°** — the HIGHEST — while washouts 07-22
+> (0/2) and 07-24 (2/7) sat at 26.3° / 26.0°, i.e. slightly LOWER. All four cluster in a
+> tight 26–29° band. 07-24 was also the MOST ranging recent day (RANG 30%) and still a
+> washout. So directional character (trend / flat-angle / chop) is ruled OUT as the sweep
+> discriminator — good and washout days look the same at the regime level. This
+> STRENGTHENS the level-quality lead below: the difference must live somewhere the regime
+> diary can't see — i.e. WHAT the sweep reached for, not what kind of day it was.
+
 Tried to find what separated a GOOD sweep day (07-15: 6/8, +881) from a WASHOUT
 (07-24: 2/7, −1687), same symbol AVGO, both current-engine. Measured off raw OHLC:
 
@@ -69,6 +82,42 @@ boolean, so a future sweep gate could threshold on level_strength.
 **To close:** accumulate current-engine sweeps with level_strength logged; check
 win-rate / expectancy by level_strength bucket. If equal-H/L sweeps are the losers,
 the fix is a level_strength floor on the sweep gate (L3).
+
+---
+
+## 2026-07-24 (eve) — Sweep confirmation is real but the RECLAIM test is loose
+**STATUS: HYPOTHESIS / watch** (candidate tightening identified; confirm against Monday
+data before changing — do NOT fix now).
+
+Answered "does the sweep wait for rejection confirmation, or anticipate it?" — it
+**waits**, correctly. `sweep_reversal_strategy.py:125` hard-gates on `sweep.confirmed`;
+`confirmed=True` is only set when `reclaimed and rejection_pct >= 0.002`
+(`liquidity_mapper.py` ~430). The v1.3 fix already killed the old "penetration =
+sweep" bug. So entry is confirmation-based, not anticipatory — the conservative,
+correct design. Not front-running.
+
+**BUT the reclaim test is weak** (`liquidity_mapper.py:425-426`):
+`reclaimed = closes[i] <= pool.price or any(closes[k] <= pool.price for k in window)`
+— satisfied by a **single close back inside the level anywhere in the rejection
+window**. It does NOT require the reclaim to HOLD (the docstring says "close back inside
+AND hold" but the code only checks that *at least one* close dipped back in).
+`closes_beyond` (how many closes ACCEPTED through the level) is recorded but does NOT
+gate confirmation. So a sweep can "confirm" on one close ticking back inside, then
+continue straight through on the next candle — a **failed rejection dressed as a
+confirmed one.** On a grind-through (washout) day this is exactly what produces the
+−40% MAE / barely-green pattern: momentary dip inside → "confirmed" → continuation runs
+it over.
+
+**Compounds with the level-quality lead:** on a weak equal-H/L level, a one-close
+reclaim is especially likely to be noise that doesn't hold — weak level + loose reclaim
+stack.
+
+**Candidate tightening (deferred, testable):** require `closes_beyond == 0` after the
+reclaim, or require the reclaim to hold N candles, so a sweep only confirms if the
+rejection actually STUCK. **Test first, don't just apply:** now that trades capture
+level context, check whether losing sweeps have higher `closes_beyond` than winners once
+Monday-forward data accumulates. If yes, tighten the reclaim; if not, leave it. This is
+mapper logic (affects what fires) — tester-first when the time comes.
 
 ---
 
