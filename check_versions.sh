@@ -1,4 +1,8 @@
 #!/bin/bash
+# v4.1 — 2026-07-27 — +3 canaries: trade_readiness v1.1 staged picks, main
+#         v4.4, tests/readiness_digest.py (conductor phase-9 target).
+# v4.0 — 2026-07-27 — +6 canaries: trade_readiness v1.0 engine + main v4.3
+#         every-tick hook (LOG-ONLY readiness workstream).
 # v3.9 — 2026-07-27 — +1 canary: regime_confluence v1.3.1 compression
 #         containment veto (the A3 squeeze-break fix the A/B pool surfaced).
 # v3.8 — 2026-07-27 — CONFLUENCE EXCAVATION CANARIES. Adds 11 presence checks
@@ -178,6 +182,19 @@ check "analysis/regime_confluence.py"    "def midline_balance"          "v1.3 re
 check "analysis/regime_confluence.py"    "def momentum_val"             "v1.3 shared momentum mapper (no-vote earns no credit)"
 check "analysis/regime_confluence.py"    "soft_necessary=\[narrow_s\]"   "v1.3 compression tightness stays NECESSARY (not a corroborator)"
 check "analysis/regime_confluence.py"    "veto_inside"                  "v1.3.1 compression containment veto (A3 squeeze-break fix)"
+
+# trade readiness v1.0 / main v4.3 (2026-07-27) — LOG-ONLY readiness engine.
+# The absence half matters: a stale main.py sync silently drops the hook and
+# the journal just stops growing readiness rows with no error anywhere.
+check "analysis/trade_readiness.py"      "TradeReadinessEngine"         "v1.0 trade readiness engine present"
+check "analysis/trade_readiness.py"      "readiness_would_fire"         "v1.0 would-fire observation event"
+check "analysis/trade_readiness.py"      "TR_DEARM_SLOPE"               "v1.0 slope de-arm knob (falling confluence disarms)"
+check "analysis/trade_readiness.py"      "0.5 \*\* (dt / TR_SLOPE_HALFLIFE_S)" "v1.0 dt-aware slope EMA (wall-clock, no tick counters)"
+check "main.py"                          "_readiness.assess_all(ctx, regime)" "v4.3 readiness hooked in the every-tick block"
+check "main.py"                          "main.py — options_trader v4.4" "v4.4 main header current (staged picks wired)"
+check "analysis/trade_readiness.py"      "readiness_staged_pick"        "v1.1 staged-pick journaling (calm-vs-spike experiment)"
+check "analysis/trade_readiness.py"      "TR_CONV_HALFLIFE_S"           "v1.1 smoothed-conviction EMA knob"
+check "tests/readiness_digest.py"        "readiness_digest_"            "v1.0 nightly digest tool present (conductor phase 9 target)"
 
 # ABSENCE checks — these four terms must be GONE from the whole file. Unlike the
 # _orb_quality canary we can grep the bare token, because v1.3's changelog was

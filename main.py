@@ -1,5 +1,25 @@
 """
-main.py — options_trader v4.2
+main.py — options_trader v4.4
+v4.4 — 2026-07-27 — READINESS STAGED PICKS (trade_readiness v1.1, LOG-ONLY):
+        while ARMED, continuation/sweep now journal the contract they WOULD
+        select via the live selector on SMOOTHED conviction — the calm-vs-
+        spike strike experiment. Constructor passes contract_ctx. No entry
+        path touched.
+v4.3 — 2026-07-27 — TRADE READINESS wired in (LOG-ONLY). New
+        analysis/trade_readiness.py evaluates every strategy's pre-trigger
+        confluence as a graded readiness R in [0,1] each ~15s tick, with a
+        dt-aware slope (R/minute) and a DORMANT->STAGING->ARMED machine that
+        journals transitions, heartbeats, and readiness_would_fire moments.
+        Gates NOTHING — no fire decision changes anywhere; guarded import
+        (loop byte-identical without it), assess errors swallowed. Hooked in
+        the every-tick block beside the chain snapshot, deliberately BEFORE
+        the has_open_position branch so observation continues while halted or
+        holding. ORB exempt (mechanical by directive). This is the sight-
+        picture groundwork: where the market IS (instant geometry), where
+        it's BEEN (L2 conviction), where it's HEADING (slope on the lowest
+        timeframe). Log-only per the pitchfork weight-0 precedent so it rides
+        inside the frozen-baseline window; its journal rows calibrate the
+        bars that will eventually gate.
 v4.2 — 2026-07-23 — FULL OPTION-CHAIN ARCHIVAL (analysis/chain_snapshot.py).
         The bot already fetched the complete 0DTE chain every ~15s tick — bid,
         ask, mark, delta, gamma, theta, vega, IV, OI, volume on every strike,
@@ -268,6 +288,16 @@ try:
     from analysis import signal_journal as _sigj
 except Exception:
     _sigj = None
+
+# v4.3 — trade readiness engine (LOG-ONLY, gates nothing). Guarded the same
+# way: the trading loop is byte-identical if the import fails. Emits through
+# the signal journal; with no journal it still tracks state silently (harmless).
+try:
+    from analysis.trade_readiness import TradeReadinessEngine as _TRE
+    _readiness = _TRE(emit=(_sigj.journal if _sigj is not None else None),
+                      contract_ctx=(_sigj.contract_ctx if _sigj is not None else None))
+except Exception:
+    _readiness = None
 
 from strategy.orb_strategy import ORBStrategy
 from strategy.sweep_reversal_strategy import SweepReversalStrategy
@@ -1116,6 +1146,14 @@ def main_loop(state: BotState):
                         pass          # never let archival touch the loop
             except Exception as _gex_err:
                 logger.warning(f"GEX tick fetch failed: {_gex_err}")
+
+            # ── v4.3: TRADE READINESS (log-only) — every tick, like the chain
+            # snapshot: it must keep observing while halted, while a position
+            # is open, and outside any entry window, because the record of the
+            # confluence RISING AND FALLING is the point. Gates nothing; the
+            # engine swallows its own failures; the loop cannot be touched.
+            if _readiness is not None:
+                _readiness.assess_all(ctx, regime)
 
             # ── Manage open position ──────────────────────────────────────
             if pos_mgr.has_open_position():

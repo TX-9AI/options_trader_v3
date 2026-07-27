@@ -194,6 +194,41 @@ hard no-trade marker. The book persists per box (`data/integrator_state.json`), 
 boot. **The conviction NUMBER is observe-only** — logged, not gated; L3 places the bars later.
 Rollback: `OT_REGIME_ENGINE=v13`.
 
+## Trade readiness (v4.4 / engine v1.1, 2026-07-27 — LOG-ONLY, gates nothing)
+
+**v1.1 staged picks:** while ARMED, continuation/sweep journal the contract they
+WOULD select — via the live `select_sweep_strike` selector on a SMOOTHED
+conviction (wall-clock EMA, `OT_TR_CONV_HALFLIFE_S=90`) instead of the
+instantaneous spike — as `readiness_staged_pick` rows. When the real trigger
+fires, the journal holds calm-pick vs spike-pick side by side and the chain
+archive prices the difference. **Nightly automation (zero manual steps):**
+dtp `harvest` v0.5.0 pulls each box's `data/signal_journal/<date>/<SYM>.jsonl`
+into the control journal root (lighting up conductor phase 8's journal tables —
+the 07-18 deferral closed), and conductor v1.6.0 **phase 9 READINESS** runs
+`tests/readiness_digest.py --quiet` (states, R distribution, would-fire counts,
+arm episodes, staged-pick stats, anticipation lead-times) into
+`reports/readiness_digest_<date>.{txt,jsonl}` with a 🧭 Telegram headline.
+Safe to deploy ahead of the fleet: an empty journal prints an honest headline
+and returns 0.
+
+`analysis/trade_readiness.py` v1.0 + the `main.py` v4.3 every-tick hook. Each
+strategy's pre-trigger confluence is a graded readiness **R ∈ [0,1]** (same
+three-tier `_combine` grammar as L1, living at strategy level where tradability
+context is legal), with a **dt-aware slope** (R/minute, wall-clock EMA — no
+per-evaluate counters) and a **DORMANT → STAGING → ARMED** machine that
+journals transitions, 60s heartbeats while active, and `readiness_would_fire`
+moments. The last gate stays binary — the point is that the bit is the LAST
+place information collapses: level AND slope AND state, so a wick-flicker
+(same level, collapsing slope) de-arms instead of firing. Strategies covered:
+continuation, sweep, condor call/put sides (the approach fraction the condor
+trigger computes and then collapses at 0.65 is kept graded here), butterfly.
+ORB exempt (mechanical by directive). Knobs `OT_TR_*` (stage 0.35 / arm 0.55 /
+fire 0.70 / de-arm slope −0.15/min), all PRIOR — calibrate from the readiness
+journal. Log-only per the pitchfork weight-0 precedent, so it rides inside the
+frozen-baseline window; it does not validate L1, it records what L1 believes,
+per strategy, per tick. Restart resets the in-memory tracks (journals as a
+DORMANT reset — itself evidence).
+
 `regime_confluence.py` **v1.3.1 (2026-07-27)**: adds the COMPRESSION containment hard
 veto (close beyond the band edge zeroes the coil) — an A3 squeeze-break collision the
 A/B pool surfaced on XOM 07-22, latent since v1.0 but only exposed once BREAKOUT could
