@@ -171,6 +171,8 @@ Run modes:
   python main.py            — interactive startup (prompts instrument, risk $, paper/live)
   python main.py --service  — non-interactive for systemd
 """
+# v-runaway-fix (2026-07-24) — runaway ORB reroute — hands to CONTINUATION (with-trend on pullback) FIRST, not sweep; post-runaway sweep gated to NAMED levels only. Fixes afternoon-giveback: runaway momentum was being faded by sweep reversal.
+
 # v-obs (2026-07-24) — condor leg entry record now stores adx_at_entry / regime_conviction / flat_angle_deg (from signal, falling back to state.current_regime).
 
 
@@ -734,9 +736,47 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
             signal = orb_sig
             get_orb_engine().mark_triggered()
 
-    # Priority 2: Sweep Reversal
+    # ── Post-runaway routing (v-runaway-fix 2026-07-24) ───────────────────────
+    # A RUNAWAY ORB (broke the range and ran to 50% TP with no retest) is a
+    # MOMENTUM/TREND event, not an exhaustion. It must hand off to CONTINUATION
+    # (enter WITH the move on a pullback), NOT to sweep reversal (which fades the
+    # move and gets run over — the afternoon-giveback pattern). Sweep only runs
+    # AFTER continuation has no setup, and then ONLY against a NAMED level
+    # (PDH/PDL/session) — a reversal off a weak equal-H/L at the end of a strong
+    # push is exactly the low-quality sweep that bled last week.
+    _is_runaway = getattr(orb, "invalidation_reason", "") == "runaway"
+
+    # Priority 2 (was sweep): Trend Continuation.
+    # The runaway proved directional force, so it gets FIRST refusal on the
+    # pullback via the looser handoff gate — even if the regime label has since
+    # flipped to SWEEP_REVERSAL/BREAKOUT (a runaway commonly flips it). The
+    # standalone (stricter) path still requires a trending label.
+    if signal is None and (
+            _is_runaway
+            or regime.primary_regime in (Regime.TRENDING_BULL, Regime.TRENDING_BEAR)):
+        cont_sig = _continuation_strategy.generate_signal(
+            regime        = regime,
+            vol_state     = ctx["vol"],
+            trend         = ctx["trend"],
+            chain         = chain,
+            current_price = ctx["price"],
+            is_handoff    = _is_runaway,   # runaway ORB -> looser handoff gate
+            handoff_direction = getattr(orb, "break_direction", "") if _is_runaway else "",
+            macro         = macro,
+        )
+        if cont_sig:
+            if _is_runaway:
+                cont_sig.setup_type = cont_sig.setup_type or "trend_continuation_handoff"
+                logger.info("[continuation] ORB-runaway HANDOFF -> trend continuation")
+            signal = cont_sig
+
+    # Priority 2.5 (was 2): Sweep Reversal.
+    # After a runaway, sweep is the FALLBACK (continuation had no pullback setup)
+    # and is gated to NAMED levels only — a runaway that then sweeps a real pool
+    # and rejects is a legitimate reversal; a runaway that pokes an equal-H/L is
+    # not. Non-runaway sweeps are unchanged (fire as before on the SWEEP label).
     if signal is None and regime.primary_regime == Regime.SWEEP_REVERSAL:
-        signal = _sweep_strategy.generate_signal(
+        sweep_sig = _sweep_strategy.generate_signal(
             regime        = regime,
             vol_state     = ctx["vol"],
             structure     = ctx["structure"],
@@ -746,32 +786,12 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
             df_1m         = ctx.get("df_1m"),
             current_price = ctx["price"]
         )
-
-    # Priority 2.5: Trend Continuation (pullback to BB midline in a trend).
-    # RANKED per the dispatch spec. Trending is a HIGH bar for the classifier,
-    # so a trending label is trusted; a RUNAWAY ORB is one of the strongest
-    # trend confirmations (strong push -> pullback -> next leg is textbook
-    # trend behaviour), so the runaway HANDOFF gets first refusal and runs the
-    # LOOSER gate (is_handoff=True — the runaway already proved directional
-    # force). If there was no runaway, the STANDALONE (stricter) path is tried.
-    # Both require a trending regime; if not trending, continuation is silent
-    # and sweep/butterfly/condor below handle it as before.
-    if signal is None and regime.primary_regime in (Regime.TRENDING_BULL, Regime.TRENDING_BEAR):
-        _is_runaway = getattr(orb, "invalidation_reason", "") == "runaway"
-        cont_sig = _continuation_strategy.generate_signal(
-            regime        = regime,
-            vol_state     = ctx["vol"],
-            trend         = ctx["trend"],
-            chain         = chain,
-            current_price = ctx["price"],
-            is_handoff    = _is_runaway,   # runaway ORB -> looser handoff gate
-            macro         = macro,
-        )
-        if cont_sig:
-            if _is_runaway:
-                cont_sig.setup_type = cont_sig.setup_type or "trend_continuation_handoff"
-                logger.info("[continuation] ORB-runaway HANDOFF -> trend continuation")
-            signal = cont_sig
+        if sweep_sig is not None and _is_runaway and not getattr(sweep_sig, "swept_level_name", ""):
+            # post-runaway sweep on an UNNAMED (equal-H/L) level — refuse it.
+            logger.info("[sweep] post-runaway sweep on unnamed level — BLOCKED "
+                        "(runaway hands to continuation; sweep only on named levels)")
+            sweep_sig = None
+        signal = sweep_sig
 
     # Priority 3: Butterfly (Ranging/Compression — requires GEX PINNING)
     # Fed days allowed — bot reaction time is faster and more systematic

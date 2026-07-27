@@ -64,6 +64,8 @@ hunting for a flag that does not exist. Historical text follows:
 behind CONTINUATION_ENABLED (default False) so it ships dark and is proven in
 paper/backtest before it can affect live dispatch.
 """
+# v-runaway-fix (2026-07-24) — accepts runaway handoff_direction so it can enter on a flipped-off-trending label; conviction floor steps aside when the runaway (not the label) is the directional evidence.
+
 
 from __future__ import annotations
 
@@ -102,6 +104,7 @@ class ContinuationStrategy(BaseOptionsStrategy):
                         chain,
                         current_price: float,
                         is_handoff: bool = False,
+                        handoff_direction: str = "",
                         macro=None) -> Optional[OptionsSignal]:
         """
         Return an OptionsSignal if a trend-continuation pullback entry sets up,
@@ -113,13 +116,26 @@ class ContinuationStrategy(BaseOptionsStrategy):
             direction, option_side = "long", "call"
         elif rgm == Regime.TRENDING_BEAR:
             direction, option_side = "short", "put"
+        elif is_handoff and handoff_direction in ("long", "short"):
+            # v-runaway-fix: a runaway ORB proved directional force even if the
+            # regime LABEL has since flipped (commonly to SWEEP_REVERSAL/BREAKOUT).
+            # Trust the runaway's direction for the handoff entry. Non-handoff
+            # (standalone) continuation still requires a trending label.
+            direction   = handoff_direction
+            option_side = "call" if direction == "long" else "put"
         else:
-            return None  # not trending → this trade does not exist
+            return None  # not trending and no runaway handoff → trade does not exist
 
         conv_floor = CONTINUATION_CONV_FLOOR
         if is_handoff:
             conv_floor -= CONTINUATION_HANDOFF_CONV_RELAX  # runaway vouched for direction
-        if regime.conviction < conv_floor:
+        # v-runaway-fix: when the handoff is driving direction because the label
+        # FLIPPED off trending (rgm not TRENDING_*), regime.conviction is the
+        # conviction of the NEW label (e.g. sweep), not the trend — applying it
+        # would wrongly kill the handoff. The runaway IS the directional evidence;
+        # skip the floor in that specific case. A still-trending handoff keeps it.
+        _label_trending = rgm in (Regime.TRENDING_BULL, Regime.TRENDING_BEAR)
+        if _label_trending and regime.conviction < conv_floor:
             return None
 
         # ── 2. LEVEL: price must have pulled back TO the BB midline ─────────
