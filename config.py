@@ -1,5 +1,19 @@
 """
-config.py — options_trader v3.9
+config.py — options_trader v4.0
+v4.0 — 2026-07-27 — SWEEP STRIKE FLOOR. SWEEP_DELTA_STRONG 0.08 -> 0.12,
+        paired unchanged with SWEEP_DELTA_WEAK 0.30. The inverse-delta
+        scaling in strategy/sweep_reversal_strategy.py:_sweep_target_delta
+        maps max conviction to the STRONG endpoint, so the highest-conviction
+        sweeps were buying the FURTHEST-OTM contracts. On 2026-07-27 a 0.62
+        conviction resolved to a 0.16 delta and bought a PLTR $122 put ~6%
+        OTM, where gamma could not reach it inside the holding window. The
+        endpoints now read: max conviction -> 0.12 delta (leveraged but
+        REACHABLE), low conviction -> 0.30 (near-ATM), linear between.
+        SEPARATE DEFECT, SEPARATE FIX: the same trade also had a bad ENTRY
+        because analysis/regime_confluence.py _sweep could not see trend at
+        all (fixed in regime_confluence v1.3). These are deliberately not
+        bundled — bundling them would make post-freeze sweep P&L
+        unattributable between strike selection and entry quality.
 v3.9 — 2026-07-22 — PAPER FRICTION UNIFIED (audit defect T). Default
         PAPER_FILL_SLIPPAGE_PCT 0.01 -> 0.0, and the knob is now applied by
         ONE authority (execution/limit_ladder) across every paper path —
@@ -290,7 +304,7 @@ ORB_STRIKE_DELTA_BIAS       = "lower"
 # Sweep OTM strike delta scales INVERSELY with reversal strength (conviction):
 # a strong snap-back can carry a far-OTM (low-delta) strike ITM for max leverage;
 # a weak move needs a nearer, higher-delta strike to actually participate.
-SWEEP_DELTA_STRONG          = 0.08   # conviction -> 1.0 : far-OTM, max leverage
+SWEEP_DELTA_STRONG          = 0.12   # conviction -> 1.0 : leveraged but REACHABLE
 SWEEP_DELTA_WEAK            = 0.30   # conviction -> 0.0 : near-ATM, participation
 SWEEP_DELTA_TOLERANCE       = 0.04   # acceptable band around the target delta
 SWEEP_MIN_REJECTION_PCT     = 0.003
