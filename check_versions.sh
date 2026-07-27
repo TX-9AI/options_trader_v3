@@ -1,4 +1,14 @@
 #!/bin/bash
+# v3.8 — 2026-07-27 — CONFLUENCE EXCAVATION CANARIES. Adds 11 presence checks
+#         and 4 ABSENCE checks for regime_confluence v1.3, plus 2 VALUE-pinned
+#         checks for the config v4.0 sweep strike floor. The absence loop is the
+#         load-bearing half: v1.3 was mostly about REMOVING terms (two constant
+#         corroborators, two fabricated no-window fallbacks), and a stale sync
+#         that restores them keeps every constant NAME intact while silently
+#         reverting the behaviour. The v1.3 changelog was deliberately written
+#         WITHOUT naming those four identifiers so these bare-token greps stay
+#         honest — the changelog-prose trap has re-tripped absence canaries twice
+#         (_orb_quality, then again during this pass before it shipped).
 # v3.7 — 2026-07-23 — HEADER-AUDIT LABEL CORRECTIONS (no canary logic change):
 #         risk_manager's 2026-07-23 full-budget entry relabeled v1.4 -> v3.2
 #         (the file was already at v3.1); butterfly's 2026-07-14 discount gate
@@ -147,6 +157,40 @@ check "strategy/sweep_reversal_strategy.py" "_orb_released_price"       "v3.2 sw
 check "analysis/regime_confluence.py"    "RANGE_ROOM_LO\", 0.17"        "v1.2 room_s lower bound de-saturated (0.05 -> 0.17)"
 check "analysis/regime_confluence.py"    "OSC_CROSS_HI\", 10.0"         "v1.2 osc_s upper bound de-saturated (5 -> 10)"
 check "analysis/regime_confluence.py"    "_envf"                        "v1.2 all 14 ramp bounds env-overridable (OT_RC_*)"
+
+# regime_confluence v1.3 (2026-07-27) — confluence excavation. PIN THE VALUES
+# and the ABSENCES. A stale sync keeps constant NAMES while reverting values, so
+# weights are value-pinned; and since this pass was mostly about REMOVING terms,
+# absence is the load-bearing check. The v1.3 changelog deliberately does not
+# spell the removed identifiers, so bare-token greps below are safe (the
+# changelog-prose trap has re-tripped absence canaries twice).
+check "analysis/regime_confluence.py"    "v1.3 — 2026-07-27"            "v1.3 confluence excavation header present"
+check "analysis/regime_confluence.py"    "def _sweep(self, liq_map, trend_state=None)"  "v1.3 _sweep receives trend_state (PLTR blindness fix)"
+check "analysis/regime_confluence.py"    "trend_opp = 1.0 - (opp_adx \* opp_mom)"  "v1.3 sweep trend-opposition suppressor live"
+check "analysis/regime_confluence.py"    "W_SWEEP_REJQ, W_SWEEP_EXH = 0.45, 0.55"  "v1.3 sweep weights pinned (rejq 0.45 / exhaustion 0.55)"
+check "analysis/regime_confluence.py"    "W_RANGE_OSC, W_RANGE_BAL = 0.55, 0.45"   "v1.3 ranging weights pinned (osc 0.55 / balance 0.45)"
+check "analysis/regime_confluence.py"    "W_COMP_STORED, W_COMP_ATR, W_COMP_SQZ = 0.45, 0.35, 0.20"  "v1.3 compression weights pinned"
+check "analysis/regime_confluence.py"    "W_BRK_EXPAND, W_BRK_CLEAR, W_BRK_MOM = 0.40, 0.30, 0.30"   "v1.3 breakout weights pinned"
+check "analysis/regime_confluence.py"    "COMP_OSC_LO"                  "v1.3 crossings axis decoupled ranging/compression"
+check "analysis/regime_confluence.py"    "def midline_balance"          "v1.3 real range-balance corroborator exists"
+check "analysis/regime_confluence.py"    "def momentum_val"             "v1.3 shared momentum mapper (no-vote earns no credit)"
+check "analysis/regime_confluence.py"    "soft_necessary=\[narrow_s\]"   "v1.3 compression tightness stays NECESSARY (not a corroborator)"
+
+# ABSENCE checks — these four terms must be GONE from the whole file. Unlike the
+# _orb_quality canary we can grep the bare token, because v1.3's changelog was
+# written to describe them without naming them.
+for _tok in W_RANGE_BASE W_COMP_BASE quiet_fallback vol_only_fallback; do
+    if grep -q "$_tok" analysis/regime_confluence.py 2>/dev/null; then
+        echo "  \u2717 STALE:   $_tok is BACK in regime_confluence.py — a constant corroborator or fabricated fallback was restored (expected DELETED)"
+    else
+        echo "  \u2713 PRESENT: $_tok deleted (v1.3 excavation held)"
+    fi
+done
+
+# config v4.0 (2026-07-27) — sweep strike floor. VALUE-pinned: the number IS the
+# fix, and a name-only check passes happily on the reverted 0.08.
+check "config.py"                        "SWEEP_DELTA_STRONG          = 0.12"  "v4.0 sweep strike floor 0.08 -> 0.12 (reachable strikes)"
+check "config.py"                        "SWEEP_DELTA_WEAK            = 0.30"  "v4.0 sweep weak endpoint unchanged at 0.30"
 
 # limit_ladder (2026-07-22) — the mark-limit execution policy
 check "execution/limit_ladder.py"        "hard_close_order_mode"        "limit ladder present: 15:40 mark-limit -> 15:45 MARKET"

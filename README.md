@@ -45,6 +45,14 @@ v2 gating.
 > **SINCE DAY ZERO (2026-07-20 → 07-22) — everything below in this section is now historical; these landed after it:**
 > - **2026-07-20:** `orb_engine` **v3.9** — stale-retest timeout restored *correctly*: real 1m bars (deduped on candle ts, break candle excluded, fires on the 13th post-break bar), and expiry **re-arms** instead of terminating (the SMH missed-short fix; the old timeout counted 15-s loop ticks as bars and died in ~3 min). `status.py` **v1.12** — daily-loss banner reads the limit via the runtime env chain (the false "$200 LIMIT HIT" display bug).
 > - **2026-07-21:** `main.py` **v4.0** — **L2.5 live**: the L1→L2 committed label now drives `primary_regime` (see §Regime engine). `sweep_reversal_strategy` **v3.2** — **ORB-ownership gate**: a sweep may fire only after the ORB has *released* price (stale/runaway/EXPIRED/past 11:00), not merely after a break registered (CVX 07-21 09:55 double-ownership fix).
+> - **2026-07-27 (excavation deploy):** `regime_confluence` **v1.3** (all four non-`_trending`
+>   scorers rebuilt as accumulating evidence; `_sweep` gains `trend_state`), `config` **v4.0**
+>   (`SWEEP_DELTA_STRONG` 0.12), `REGIME_TRUTHS` **v0.3**, `check_versions` **v3.8**.
+>   **Consequence:** this changes the L1 score DISTRIBUTION, not just its labels — every
+>   downstream threshold calibrated against the old shape (setup grade bars,
+>   `CONTINUATION_CONV_FLOOR`, `_sweep_target_delta` endpoints, condor regime self-gating)
+>   is now calibrated against a distribution that no longer exists. **The frozen-baseline
+>   window resets to this deploy**, and the L1 knob freeze moves out one week.
 > - **2026-07-22 (one fleet deploy, commit `3530b3c` era, 8 files):** `regime_confluence` **v1.2** ramp de-saturation promoted to defaults **and, riding the same push, the mark-limit execution workstream** — new `execution/limit_ladder.py` v1.2, `entry_engine` v3.8 (mark-limit entries), mark-limit exit closes in `exit_engine`, `FLATTEN_WINDOW_OPEN_ET=(15,40)` in config + `time_utils`. **Consequence:** label-gated regime metrics stay attributable to v1.2; P&L / fill-dependent stats are confounded by both changes. The ~2-week frozen-baseline window gets **one week added to its back end** to preserve a clean stretch.
 
 
@@ -174,7 +182,7 @@ is finally flawless and stays untouched until any addition is proven inert on th
 
 ---
 
-## Regime engine (running since 2026-07-21: L1 `regime_confluence.py` v1.2 → L2 `conviction_integrator.py` v2.0, wired in `main.py` v4.0)
+## Regime engine (running since 2026-07-21: L1 `regime_confluence.py` v1.3 → L2 `conviction_integrator.py` v2.0, wired in `main.py` v4.0)
 
 **The live label is the Layer-2 committed label.** Every tick, `regime_confluence.evidence()`
 (hard_veto × soft_necessary × Σ corroborators, per REGIME_TRUTHS) feeds the leaky conviction
@@ -185,6 +193,22 @@ strongest conditions). **`UNKNOWN` is never emitted live**; `stale` (data fault)
 hard no-trade marker. The book persists per box (`data/integrator_state.json`), warm-loaded at
 boot. **The conviction NUMBER is observe-only** — logged, not gated; L3 places the bars later.
 Rollback: `OT_REGIME_ENGINE=v13`.
+
+`regime_confluence.py` **v1.3 (2026-07-27, CONFLUENCE EXCAVATION)**: four of the five
+scorers were Boolean gates wearing confluence clothing — `_breakout` and `_sweep` passed
+an EMPTY corroborator list (so `_combine` defaulted their sum term to 1.0 and nothing
+accumulated), while `_ranging` and `_compression` each carried a constant-1.0
+corroborator worth 40% / 30% of their "confluence". All four rebuilt so evidence
+actually accumulates; `_trending` was already real and is untouched; ORB is not scored
+here at all. `_sweep` now RECEIVES `trend_state` — it previously could not see trend,
+which on 2026-07-27 let a lone level-rejection score 0.62 and short PLTR into a +7.2%
+uptrend for −27.8%. The `OSC_CROSS_*` crossings axis is now decoupled per scorer.
+Weights are **design-derived, not tape-fitted** (each block states the minimum evidence
+set that should just barely score); pool calibration is the next pass, so treat the
+current weights as honest priors. See `docs/REGIME_TRUTHS.md` v0.3 for the role table.
+Paired with `config.py` **v4.0** (`SWEEP_DELTA_STRONG` 0.08 → 0.12 — the same PLTR trade
+also bought a strike gamma could not reach; deliberately a SEPARATE commit so post-freeze
+sweep P&L stays attributable between entry quality and strike selection).
 
 `regime_confluence.py` **v1.2 (2026-07-22, ramp de-saturation)**: all 14 ramp bounds
 env-overridable (`OT_RC_<NAME>`); `room_s`/`osc_s` re-fitted from 60,341 ticks over 6 sessions

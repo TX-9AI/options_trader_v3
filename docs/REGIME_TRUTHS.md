@@ -1,13 +1,48 @@
 # REGIME_TRUTHS.md — Layer 1 (Regime Confluence) definitional truth audit
 
-**v0.2 — 2026-07-11 — Definitional only; all thresholds PRIOR.** Companion to
-`analysis/regime_confluence.py` v1.0 (this document's implementation; smoke-verified,
+**v0.3 — 2026-07-27 — Definitional only; all thresholds PRIOR.** Companion to
+`analysis/regime_confluence.py` v1.3 (this document's implementation; smoke-verified,
 tape-unvalidated).
 Written against **v3 HEAD `49d7af8`** (engines + `regime_classifier.py` v1.3) and the
 off-repo reference `conviction_integrator.py` v1.0 (`EvidenceAdapter`, built vs
 `ef76b4a`/v1.2 — every field it reads was re-verified present at `49d7af8`).
 
 Changelog:
+- **v0.3** — **CONFLUENCE EXCAVATION** (sync with `regime_confluence.py` v1.3).
+  Four of the five scorers did not implement the §0 grammar they claimed. Two
+  (`BREAKOUT_VOLATILE`, `SWEEP_REVERSAL`) had an **empty corroborator sum**, so
+  `_combine` defaulted that term to 1.0 and the score was vetoes × dampers with
+  nothing accumulating. Two (`RANGING`, `COMPRESSION`) carried a **constant 1.0
+  corroborator** — a fixed contribution that never varied with evidence, which
+  is a Boolean gate's flat base, not a degree of agreement. Role changes:
+
+  | regime | factor | v0.2 role | v0.3 role | why |
+  |---|---|---|---|---|
+  | SWEEP | rejection strength | ◐ soft-necessary | ✚ corroborator (merged) | weak rejection ⇒ weakly *supported*, not partly *invalid* |
+  | SWEEP | **trend opposition** | *(absent)* | ◐ soft-necessary | the matrix's `direction (reject dir)` cell, finally implemented |
+  | SWEEP | level quality (pool touches) | *(absent)* | ✚ merged into rejection quality | correlated with depth; merging avoids double-count |
+  | SWEEP | trend deceleration | *(absent)* | ✚ corroborator (largest) | a reversal's thesis IS that the prior move is spent |
+  | BREAKOUT | ATR expansion | ◐ soft-necessary | ✚ corroborator | directional regime ⇒ compensatory (§0 asymmetry) |
+  | BREAKOUT | band clearance, momentum | *(absent)* | ✚ corroborators | breakout *strength* must accumulate |
+  | RANGING | base constant | ✚ corroborator (1.0) | **deleted** | a constant is not evidence |
+  | RANGING | midline balance | *(absent)* | ✚ corroborator | rotation must be two-sided, not merely frequent |
+  | COMPRESSION | base constant | ✚ corroborator (1.0) | **deleted** | a constant is not evidence |
+  | COMPRESSION | ATR contraction depth | *(absent)* | ✚ corroborator | contraction *depth* must accumulate |
+  | COMPRESSION | narrowness | ◐ soft-necessary | ◐ **unchanged** | premium regime ⇒ mass stays in vetoes (§0 asymmetry) |
+
+  The last row is the load-bearing one: **the re-slotting rule is not universal.**
+  §0's failure-cost asymmetry decides it per regime — directional regimes keep
+  corroborators compensatory because the expensive error is *missing* the move;
+  premium regimes keep mass in necessary conditions because the expensive error
+  is *claiming* the regime. Promoting narrowness was tried and reverted when it
+  let COMPRESSION score 0.25 on wide-band RANGE tape.
+  Also: the `OSC_CROSS_*` bounds are **decoupled** per scorer (RANGING reads many
+  crossings as rotation, COMPRESSION reads few as a coil — one axis, opposite
+  ends, so any calibration of one silently moved the other), and the two
+  no-window fallbacks that fabricated a score are deleted in favour of `None`.
+  **Weights are design-derived, not tape-fitted** — each block states the minimum
+  evidence set that should just barely score and solves for it. Pool calibration
+  is the next pass.
 - **v0.2** — RANGING gains a **`room_s` soft-necessary** on `bb_width_pct` (a range
   needs room to oscillate; as the container squeezes, range-ness hands off to
   COMPRESSION on the same width axis). Discriminator matrix + calibration table
@@ -244,8 +279,26 @@ COMPRESSION and BREAKOUT together.
 | ⛔ HARD VETO | LOCATION — named zone swept | `recent_sweep.swept_named_level` non-empty | — |
 | ⛔ HARD VETO | REJECTION — reclaimed | `recent_sweep.reclaimed == True` | — |
 | ⛔ HARD VETO | non-acceptance | `recent_sweep.closes_beyond < SWEEP_ACCEPT_CLOSES` | <2 |
-| ◐ SOFT-NECESSARY | rejection strength | `ramp(rejection_pct, 0.002, 0.008)` | 0.002/0.008 |
+| ◐ SOFT-NECESSARY | **trend opposition** (v0.3) | `1 − ramp(primary_adx,20,35)·opp_mom` when the reversal direction fights `overall_direction`; else 1 | 20/35 |
 | ◐ SOFT-NECESSARY | age-decay | `0.5 ** (sweep_age_bars / SWEEP_HALFLIFE_BARS)` | half-life 3 bars |
+| ✚ CORROBORATOR | rejection quality (v0.3) | `0.60·ramp(rejection_pct,0.002,0.008) + 0.40·ramp(pool.touch_count,2,5)` | w = 0.45 |
+| ✚ CORROBORATOR | trend exhaustion (v0.3) | `primary_momentum` DECELERATING 1.0 / FLAT 0.5 / ACCELERATING 0.0 / no-vote 0.0 | w = 0.55 |
+
+**Direction is definitional and was missing (v0.3).** The discriminator matrix
+below has always carried a `direction — (reject dir)` cell for SWEEP, but the
+implementation never received `trend_state` at all: `_sweep(self, liq_map)` was
+structurally incapable of seeing a trend. On 2026-07-27 that let a lone
+level-rejection score 0.62 and short a name trending +7.2% on the day. The
+opposition term is **multiplicative** precisely so a strong accelerating trend
+can zero the regime outright, and `opp_mom` weights it by whether that opposing
+trend is ACCELERATING (1.0 — full suppression) or DECELERATING (0.25 — barely
+suppresses, because a decelerating opposing trend is the exhaustion being traded).
+
+**Level quality is matched, not read.** `LiquiditySweep` carries no strength
+field; the swept pool is matched back through `LiquidityMap.pools` by
+`pool_price`. A `getattr(sweep, "level_strength", 0.0)` would have returned 0.0
+forever with no error and no log — the same silent-attribute failure that
+hard-blocked the continuation trade (see `trend_engine` v3.2, defect W).
 
 **The sweep truth triple (definitional, closed — v1.1):** LOCATION + PENETRATION +
 REJECTION. All three are hard vetoes no other regime touches — its specialism made

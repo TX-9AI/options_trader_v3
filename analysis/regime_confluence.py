@@ -1,4 +1,54 @@
 # analysis/regime_confluence.py — options_trader_v3
+# v1.3 — 2026-07-27 — CONFLUENCE EXCAVATION. Four of the five scorers were
+#         Boolean gates wearing confluence clothing. Rebuilt as true
+#         accumulating evidence. ORB is not scored here and is untouched;
+#         _trending is unchanged and remains the reference implementation.
+#         (a) CONSTANT CORROBORATORS KILLED. The ranging base-weight term, the
+#             compression base-weight term, and the vol-only fallback's 0.5
+#             pair were all weighted against a fixed 1.0 that never varied with
+#             evidence — a Boolean gate's flat base pretending to be agreement.
+#             All three removed. (Their identifiers are deliberately NOT spelled
+#             here: check_versions greps bare tokens to prove they are gone, and
+#             changelog prose has re-tripped absence canaries twice before.)
+#         (b) EMPTY CORROBORATOR BLOCKS FILLED. _breakout and _sweep both
+#             passed corroborators=[], so _combine defaulted their sum term to
+#             1.0 and the score was PURELY vetoes x dampers. Nothing
+#             accumulated. Both now carry real weighted evidence.
+#         (c) RE-SLOTTING (the substantive change). rej_pct (_sweep) and
+#             expand_s (_breakout) were already graded but sat in
+#             soft_necessary, which asserts "this setup is partially INVALID".
+#             That is the wrong claim: weak rejection means weakly SUPPORTED,
+#             not partly invalid. Both promoted to corroborators. narrow_s
+#             (_compression) likewise. Expect the score DISTRIBUTION to move
+#             in both directions — a term that multiplied the whole score by
+#             0.6 now contributes its weight additively.
+#         (d) _sweep IS NO LONGER TREND-BLIND. Signature gains trend_state.
+#             2026-07-27 a box shorted PLTR into a +7.2% uptrend at conviction
+#             0.62 and lost 27.8%: _sweep could not see trend at all. A
+#             trend-opposition soft-necessary now collapses a reversal that
+#             fights a strong ACCELERATING trend to ~0. REGIME_TRUTHS.md's
+#             discriminator matrix always listed "direction (reject dir)" for
+#             SWEEP; it was never implemented. This implements it.
+#         (e) OSC_CROSS_* DECOUPLED. _ranging (many crossings = rotation) and
+#             _compression (few = coil) read OPPOSITE ENDS OF ONE AXIS, so a
+#             dial moved for one see-sawed the other — measured on 2026-07-22,
+#             COMPRESSION p90 0.65 -> 0.879 purely as a side effect of the
+#             osc_s move for RANGING. Each scorer now has its own bounds,
+#             DEFAULTED TO THE SHARED VALUE so the split itself is a no-op.
+#             OSC_CROSS_LO/HI survive as the shared default and keep their
+#             OT_RC_ env names; per-scorer overrides are OT_RC_RANGE_OSC_* and
+#             OT_RC_COMP_OSC_*.
+#         (f) FABRICATED FALLBACKS DELETED. The ranging no-window branch (a flat
+#             0.6 from a Boolean) and the compression vol-only branch both
+#             invented a score when the bar window was unavailable. Measured at
+#             0.1% of 100,281 ticks, so behaviourally negligible — but they are
+#             the exact lie being excavated. Both now return None. Unobservable
+#             is not the same as refuted, and the contract already carries None.
+#         WEIGHTS ARE DESIGN-DERIVED, NOT TAPE-FITTED. Each block below states
+#         the minimum evidence set that should just barely score, and the
+#         weights are solved so that set lands at the gate. They have NOT been
+#         calibrated against the 6-session pool — that is the next pass, and
+#         until it runs these are honest priors, not fitted values.
 # v1.2 — 2026-07-22 — RAMP DE-SATURATION. Two changes, one behavioural.
 #         (a) All 14 ramp PRIOR bounds are now env-overridable via OT_RC_<NAME>
 #             (helper _envf), so calibration is a config change with instant
@@ -132,10 +182,72 @@ SWEEP_REJ_LO         = _envf("SWEEP_REJ_LO", 0.002)  # rejection_pct → strengt
 SWEEP_REJ_HI         = _envf("SWEEP_REJ_HI", 0.008)
 COMPRESS_WIDTH_SPAN  = _envf("COMPRESS_WIDTH_SPAN", 0.15)   # narrowness ramp span below BB_WIDTH_COMPRESSION_PCT
 
-# Corroborator weights (PRIOR; each block sums to 1.0).
-W_TREND_ALIGN, W_TREND_MOM   = 0.65, 0.35
-W_RANGE_BASE,  W_RANGE_OSC   = 0.40, 0.60
-W_COMP_BASE, W_COMP_SQZ, W_COMP_STORED = 0.30, 0.35, 0.35
+# v1.3 — DECOUPLED crossings bounds. OSC_CROSS_* above remains the shared
+# default (and keeps its OT_RC_OSC_CROSS_* env names, so nothing that pins the
+# old values breaks). Each scorer now reads its OWN bound, defaulted to that
+# shared value, so this split is behaviour-identical until one is overridden.
+# Rationale: the two scorers read opposite ends of ONE axis, which made every
+# calibration of one an uncontrolled change to the other.
+RANGE_OSC_LO = _envf("RANGE_OSC_LO", OSC_CROSS_LO)
+RANGE_OSC_HI = _envf("RANGE_OSC_HI", OSC_CROSS_HI)
+COMP_OSC_LO  = _envf("COMP_OSC_LO",  OSC_CROSS_LO)
+COMP_OSC_HI  = _envf("COMP_OSC_HI",  OSC_CROSS_HI)
+
+# v1.3 — new PRIOR bounds for the rebuilt corroborators.
+SWEEP_OPP_ADX_LO     = _envf("SWEEP_OPP_ADX_LO", 20.0)   # opposing-trend suppression ramps in from here
+SWEEP_OPP_ADX_HI     = _envf("SWEEP_OPP_ADX_HI", 35.0)   #   … to full opposition here
+SWEEP_TOUCH_LO       = _envf("SWEEP_TOUCH_LO", 2.0)      # swept pool touch_count → level quality
+SWEEP_TOUCH_HI       = _envf("SWEEP_TOUCH_HI", 5.0)
+BREAKOUT_CLEAR_SPAN  = _envf("BREAKOUT_CLEAR_SPAN", 0.50)  # clearance beyond the band edge, in HALF-BAND units
+COMP_ATR_CONTRACT_LO = _envf("COMP_ATR_CONTRACT_LO", 0.60)  # atr_current/atr_avg_20 at/below → full contraction credit
+COMP_ATR_CONTRACT_HI = _envf("COMP_ATR_CONTRACT_HI", 1.00)  #   … at/above → no contraction credit
+
+# ── Corroborator weights (PRIOR; each block sums to 1.0) ──────────────────────
+# v1.3: every block below is DERIVED from a stated minimum-evidence rule rather
+# than picked. The rule for each is written above its weights, and the gate the
+# arithmetic is solved against is the Layer-3 B-grade bar (0.55). A block whose
+# weights are not traceable to such a statement is a guess.
+W_TREND_ALIGN, W_TREND_MOM   = 0.65, 0.35          # unchanged — reference impl
+
+# RANGING — "rotation alone is not a range; it must rotate EVENLY about the
+# center." osc alone 0.55 sits AT the bar and cannot clear it, so a lopsided
+# sawtooth that happens to cross often does not classify as range.
+W_RANGE_OSC, W_RANGE_BAL = 0.55, 0.45
+
+# COMPRESSION — "faded oscillation alone is not a coil." stored alone 0.45 sits
+# below the bar; stored + ATR contraction 0.80 clears it.
+#   narrow_s STAYS A SOFT-NECESSARY and is deliberately NOT promoted to a
+#   corroborator. The first cut of this rebuild did promote it, and the smoke
+#   test caught the consequence immediately: on wide-band RANGE tape,
+#   COMPRESSION scored 0.25 where it must score 0, because a corroborator at 0
+#   only costs its weight while a necessary condition at 0 kills the regime. A
+#   coil with a wide container is not a coil. REGIME_TRUTHS.md §0 predicts this
+#   exactly — premium regimes keep their mass in vetoes because the expensive
+#   error is CLAIMING the regime, whereas directional regimes keep corroborators
+#   compensatory because the expensive error is MISSING the move. That asymmetry
+#   is why expand_val IS promoted in _breakout and narrow_s is NOT here.
+#   The re-slotting rule is not universal; it is decided per regime by which
+#   error costs more.
+# squeeze_val is the one Boolean left in any corroborator block. It is real
+# evidence that varies with data (not a constant), and carries the least weight.
+W_COMP_STORED, W_COMP_ATR, W_COMP_SQZ = 0.45, 0.35, 0.20
+
+# BREAKOUT — "expansion alone is not a breakout." expansion alone 0.40 sits
+# below the bar; expansion + decisive clearance 0.70 clears it. ADX is
+# deliberately NOT a corroborator here: outside_s already consumes ADX as its
+# carry term, and scoring it twice inside one scorer is double-counting.
+W_BRK_EXPAND, W_BRK_CLEAR, W_BRK_MOM = 0.40, 0.30, 0.30
+
+# SWEEP — "a strong rejection at a good level, on its own, must NOT classify a
+# reversal." rejection quality alone 0.45 sits below the bar; it needs the trend
+# to be visibly spent. Rejection depth and level quality are MERGED into one
+# term because they are correlated (strong levels produce strong rejections) and
+# corroborators are defined as *independent* compensatory evidence — weighting
+# around a correlation double-counts it, merging does not. Deceleration carries
+# the larger weight because a reversal's entire thesis is that the prior move is
+# spent; the pre-v1.3 engine weighted it at zero.
+W_SWEEP_REJQ, W_SWEEP_EXH = 0.45, 0.55
+W_SWEEP_REJ_DEPTH, W_SWEEP_REJ_LEVEL = 0.60, 0.40   # internal split of rejection quality
 
 
 # ── Pure helpers ──────────────────────────────────────────────────────────────
@@ -185,6 +297,48 @@ def midline_crossings(closes: List[float]) -> int:
     resid = [closes[i] - (ybar + slope * (i - xbar)) for i in range(n)]
     return sum(1 for a, b in zip(resid, resid[1:])
                if a != 0 and b != 0 and (a > 0) != (b > 0))
+
+
+def momentum_val(mom: str) -> float:
+    """
+    5m momentum → corroborator value. v1.3.
+
+    NOTE THE "" CASE. trend_engine v3.2 surfaces primary_momentum with default
+    "" and its docstring is explicit that "" means NO 5m VOTE THIS TICK and
+    consumers MUST treat it as no-trade, not as neutral. Mapping "" to 0.5 would
+    hand every warm-up tick half a corroborator's worth of evidence it has not
+    earned — which is the same class of lie as a constant corroborator. It maps
+    to 0.0: no vote, no credit. This is NOT a veto; the other corroborators in
+    each block can still carry a setup, by design.
+    """
+    return {"ACCELERATING": 1.0, "FLAT": 0.5, "DECELERATING": 0.0, "": 0.0}.get(mom, 0.0)
+
+
+def midline_balance(closes: List[float]) -> float:
+    """
+    How EVENLY the window rotates about its own regression midline, in [0,1].
+    1.0 = residuals split 50/50 above/below; 0.0 = entirely one-sided.
+
+    Independent of crossing COUNT, which is the point: crossings measure how
+    often the tape rotates, balance measures whether the rotation is two-sided.
+    A drifting sawtooth can cross the midline often while sitting mostly on one
+    side of it — that is not a range, and counting crossings alone cannot tell.
+    This is the real variable that replaces the old ranging base-weight constant.
+    """
+    n = len(closes)
+    if n < 8:
+        return 0.0
+    xbar = (n - 1) / 2.0
+    ybar = sum(closes) / n
+    sxx = sum((i - xbar) ** 2 for i in range(n))
+    sxy = sum((i - xbar) * (closes[i] - ybar) for i in range(n))
+    slope = sxy / sxx if sxx > 0 else 0.0
+    resid = [closes[i] - (ybar + slope * (i - xbar)) for i in range(n)]
+    nz = [r for r in resid if r != 0]
+    if not nz:
+        return 0.0
+    above = sum(1 for r in nz if r > 0) / len(nz)
+    return max(0.0, min(1.0, 1.0 - abs(above - 0.5) * 2.0))
 
 
 def _combine(hard_vetoes: List[float],
@@ -278,25 +432,70 @@ class RegimeConfluenceScorer:
             return {TRENDING_BULL: 0.0, TRENDING_BEAR: trend_e}, bd
         return {TRENDING_BULL: 0.0, TRENDING_BEAR: 0.0}, bd
 
-    def _breakout(self, vol_state, trend_state) -> Tuple[Optional[float], dict]:
+    def _breakout(self, vol_state, trend_state, closes=None) -> Tuple[Optional[float], dict]:
+        """
+        v1.3 REBUILD. Pre-v1.3 this passed corroborators=[], so _combine
+        defaulted the sum term to 1.0 and the score was expand_s * outside_s —
+        two dampers and nothing accumulating. Breakout STRENGTH now accumulates.
+
+        `closes` is optional and used only for the clearance read; absent it,
+        clearance contributes 0 rather than being invented.
+        """
         if vol_state is None:
             return None, {"reason": "no vol_state"}
         adx        = getattr(trend_state, "primary_adx", 0.0) if trend_state else 0.0
+        mom        = getattr(trend_state, "primary_momentum", "") if trend_state else ""
         atr_cur    = getattr(vol_state, "atr_current", 0.0)
         atr_avg    = max(getattr(vol_state, "atr_avg_20", 0.0), 1e-3)
         is_exp     = getattr(vol_state, "is_expanding", False)
         price_vs_bb = getattr(vol_state, "price_vs_bb", "INSIDE")
 
         atr_ratio = atr_cur / atr_avg
-        expand_s  = ramp(atr_ratio, EXPAND_RATIO_LO, EXPAND_RATIO_HI) if is_exp \
-                    else ramp(atr_ratio, EXPAND_RATIO_LO + 0.1, EXPAND_RATIO_HI + 0.1) * 0.6
-        # momentum carry: current-ADX forgives a momentary inside-band print (Layer-1 legal)
+        # RE-SLOTTED v1.3: was a soft-necessary damper, now the primary
+        # corroborator. Expansion magnitude is evidence of breakout STRENGTH,
+        # not a statement that a weakly-expanding breakout is partly invalid.
+        expand_val = ramp(atr_ratio, EXPAND_RATIO_LO, EXPAND_RATIO_HI) if is_exp \
+                     else ramp(atr_ratio, EXPAND_RATIO_LO + 0.1, EXPAND_RATIO_HI + 0.1) * 0.6
+        # SOFT-NECESSARY (kept): a breakout must be outside the band, or else
+        # carried by ADX through a momentary inside-band print. This is a
+        # genuine necessary condition, so it stays multiplicative.
         outside_s = 1.0 if price_vs_bb != "INSIDE" else ramp(adx, BREAKOUT_ADX_LO, BREAKOUT_ADX_HI)
 
-        score = _combine(hard_vetoes=[], soft_necessary=[expand_s, outside_s], corroborators=[])
+        # NEW corroborator: how DECISIVELY the band edge was cleared, in
+        # half-band units so it is instrument-agnostic like every other input.
+        bb_up  = getattr(vol_state, "bb_upper", 0.0)
+        bb_lo  = getattr(vol_state, "bb_lower", 0.0)
+        bb_mid = getattr(vol_state, "bb_middle", 0.0)
+        clear_val = 0.0
+        clear_frac = None
+        px = closes[-1] if closes else None
+        half_band = max((bb_up - bb_lo) / 2.0, 1e-9)
+        if px is not None and bb_up > 0 and bb_lo > 0 and bb_up > bb_lo:
+            if px > bb_up:
+                clear_frac = (px - bb_up) / half_band
+            elif px < bb_lo:
+                clear_frac = (bb_lo - px) / half_band
+            else:
+                clear_frac = 0.0
+            clear_val = ramp(clear_frac, 0.0, BREAKOUT_CLEAR_SPAN)
+
+        mom_val = momentum_val(mom)
+
+        score = _combine(
+            hard_vetoes=[],
+            soft_necessary=[outside_s],
+            corroborators=[(W_BRK_EXPAND, expand_val),
+                           (W_BRK_CLEAR,  clear_val),
+                           (W_BRK_MOM,    mom_val)],
+        )
         bd = {"atr_ratio": round(atr_ratio, 3), "is_expanding": is_exp,
-              "expand_s": round(expand_s, 3), "price_vs_bb": price_vs_bb,
+              "expand_val": round(expand_val, 3), "price_vs_bb": price_vs_bb,
               "adx": round(adx, 2), "outside_s": round(outside_s, 3),
+              "bb_middle": round(bb_mid, 4),
+              "clear_frac": (None if clear_frac is None else round(clear_frac, 3)),
+              "clear_val": round(clear_val, 3),
+              "momentum": mom, "mom_val": mom_val,
+              "w": {"expand": W_BRK_EXPAND, "clear": W_BRK_CLEAR, "mom": W_BRK_MOM},
               "score": round(score, 3)}
         return score, bd
 
@@ -308,12 +507,23 @@ class RegimeConfluenceScorer:
         bb_state     = getattr(vol_state, "bb_state", "NORMAL")
         is_exp       = getattr(vol_state, "is_expanding", False)
 
-        narrow_s   = ramp(BB_WIDTH_COMPRESSION_PCT - bb_width_pct, 0.0, COMPRESS_WIDTH_SPAN)
+        # SOFT-NECESSARY (kept, deliberately — see the weight block). A coil
+        # with a wide container is not a coil; this must be able to kill the score.
+        narrow_s    = ramp(BB_WIDTH_COMPRESSION_PCT - bb_width_pct, 0.0, COMPRESS_WIDTH_SPAN)
         veto_notexp = 0.0 if (is_exp or atr_state == "EXPANDING") else 1.0
         squeeze_val = 1.0 if bb_state == "SQUEEZE" else 0.0
+        # NEW corroborator: ATR contraction DEPTH. Independent of band width —
+        # realized-range contraction and container width are related but
+        # distinct measures, and a coil shows both.
+        atr_cur_c   = getattr(vol_state, "atr_current", 0.0)
+        atr_avg_c   = max(getattr(vol_state, "atr_avg_20", 0.0), 1e-3)
+        atr_ratio_c = atr_cur_c / atr_avg_c
+        atr_contract_val = 1.0 - ramp(atr_ratio_c, COMP_ATR_CONTRACT_LO, COMP_ATR_CONTRACT_HI)
 
         bd = {"bb_width_pct": round(bb_width_pct, 3), "narrow_s": round(narrow_s, 3),
-              "atr_state": atr_state, "bb_state": bb_state, "veto_notexp": veto_notexp}
+              "atr_state": atr_state, "bb_state": bb_state, "veto_notexp": veto_notexp,
+              "atr_ratio": round(atr_ratio_c, 3),
+              "atr_contract_val": round(atr_contract_val, 3)}
 
         # Potential-energy read: flat center (veto) + tightening container + FADED
         # excursions (low crossings = energy stored, not released). Window path when
@@ -324,26 +534,31 @@ class RegimeConfluenceScorer:
             if ang is None:
                 return None, {**bd, "reason": "angle uncomputable"}
             veto_flat = 0.0 if ang >= FLAT_ANGLE_CUT_DEG else 1.0
-            osc_s = ramp(midline_crossings(w), OSC_CROSS_LO, OSC_CROSS_HI)
+            cross = midline_crossings(w)
+            osc_s = ramp(cross, COMP_OSC_LO, COMP_OSC_HI)   # v1.3: own bounds
             stored_val = 1.0 - osc_s          # few crossings ⇒ energy absorbed, not spent
             score = _combine(
                 hard_vetoes=[veto_flat, veto_notexp],
                 soft_necessary=[narrow_s],
-                corroborators=[(W_COMP_BASE, 1.0), (W_COMP_SQZ, squeeze_val),
-                               (W_COMP_STORED, stored_val)],
+                corroborators=[(W_COMP_STORED, stored_val),
+                               (W_COMP_ATR,    atr_contract_val),
+                               (W_COMP_SQZ,    squeeze_val)],
             )
             bd.update({"angle": round(ang, 2), "veto_flat": veto_flat,
-                       "crossings": midline_crossings(w), "osc_s": round(osc_s, 3),
+                       "crossings": cross, "osc_s": round(osc_s, 3),
                        "stored_val": round(stored_val, 3), "squeeze_val": squeeze_val,
+                       "w": {"stored": W_COMP_STORED, "atr": W_COMP_ATR,
+                             "sqz": W_COMP_SQZ},
                        "path": "window", "score": round(score, 3)})
             return score, bd
         else:
-            # vol-only fallback: no flat veto, no crossings; reduced ceiling.
-            score = _combine(hard_vetoes=[veto_notexp], soft_necessary=[narrow_s],
-                             corroborators=[(0.5, 1.0), (0.5, squeeze_val)]) * 0.7
-            bd.update({"squeeze_val": squeeze_val, "path": "vol_only_fallback",
-                       "score": round(score, 3)})
-            return score, bd
+            # v1.3: this fabricated branch is DELETED. It invented a score from
+            # (0.5, 1.0) — a constant — whenever the bar window was missing.
+            # Measured at ~0.1% of ticks, so removing it is behaviourally
+            # negligible, but a fabricated number is exactly what this pass
+            # exists to remove. Unobservable is not refuted: return None and let
+            # the integrator see an abstain, which the contract already supports.
+            return None, {**bd, "path": "no_window", "reason": "no bar window"}
 
     def _ranging(self, vol_state, trend_state, closes, atr) -> Tuple[Optional[float], dict]:
         adx     = getattr(trend_state, "primary_adx", 0.0) if trend_state else 0.0
@@ -361,24 +576,41 @@ class RegimeConfluenceScorer:
             bb_width_pct = getattr(vol_state, "bb_width_pct", 0.5) if vol_state else 0.5
             room_s = ramp(bb_width_pct, RANGE_ROOM_LO, RANGE_ROOM_HI)           # soft-necessary
             cross  = midline_crossings(w)
-            osc_s  = ramp(cross, OSC_CROSS_LO, OSC_CROSS_HI)                    # corroborator
+            osc_s  = ramp(cross, RANGE_OSC_LO, RANGE_OSC_HI)     # v1.3: own bounds
+            # v1.3: replaces the old ranging base-weight constant. Range QUALITY accumulates
+            # instead of sitting on a free 0.40 floor that never varied.
+            bal_val = midline_balance(w)
             score  = _combine(hard_vetoes=[1.0], soft_necessary=[flat_s, room_s],
-                              corroborators=[(W_RANGE_BASE, 1.0), (W_RANGE_OSC, osc_s)])
+                              corroborators=[(W_RANGE_OSC, osc_s),
+                                             (W_RANGE_BAL, bal_val)])
             bd = {"angle": round(ang, 2), "veto_flat": 1.0, "flat_s": round(flat_s, 3),
                   "bb_width_pct": round(bb_width_pct, 3), "room_s": round(room_s, 3),
                   "crossings": cross, "osc_s": round(osc_s, 3),
+                  "balance_val": round(bal_val, 3),
+                  "w": {"osc": W_RANGE_OSC, "bal": W_RANGE_BAL},
                   "path": "window", "score": round(score, 3)}
             return score, bd
         else:
-            # reduced-ceiling quiet-range fallback (cannot see energetic chop —
-            # that is exactly what the angle read adds when bars are present).
-            quiet = (adx < self.adx_range and not is_exp and pbb == "INSIDE")
-            score = 0.6 if quiet else 0.0
-            return score, {"path": "quiet_fallback", "adx": round(adx, 2),
-                           "is_expanding": is_exp, "price_vs_bb": pbb,
-                           "score": score}
+            # v1.3: this fabricated branch is DELETED. It returned a flat 0.6 from a
+            # three-way Boolean whenever the bar window was missing — a constant
+            # by another name, and blind to exactly the energetic chop the angle
+            # read exists to catch. ~0.1% of ticks. Abstain instead.
+            return None, {"path": "no_window", "reason": "no bar window",
+                          "adx": round(adx, 2), "is_expanding": is_exp,
+                          "price_vs_bb": pbb}
 
-    def _sweep(self, liq_map) -> Tuple[Optional[float], dict]:
+    def _sweep(self, liq_map, trend_state=None) -> Tuple[Optional[float], dict]:
+        """
+        v1.3 REBUILD — the scorer that caused the 2026-07-27 PLTR loss.
+
+        Pre-v1.3 this took only liq_map. It was STRUCTURALLY INCAPABLE of seeing
+        a trend, so a lone level-rejection scored 0.62 while the underlying ran
+        +7.2% on its SMA50, and the fleet bought a put into it. It also passed
+        corroborators=[], so nothing accumulated: the score was two dampers.
+
+        REGIME_TRUTHS.md's discriminator matrix has always carried a `direction
+        (reject dir)` cell for SWEEP. It was never implemented. It is now.
+        """
         if liq_map is None:
             return None, {"reason": "no liq_map"}
         sweep = getattr(liq_map, "recent_sweep", None)
@@ -388,20 +620,80 @@ class RegimeConfluenceScorer:
         named     = getattr(sweep, "swept_named_level", "")
         beyond    = getattr(sweep, "closes_beyond", 0)
         rej_pct   = getattr(sweep, "rejection_pct", 0.0)
+        kind      = getattr(sweep, "kind", "")
+        pool_px   = getattr(sweep, "pool_price", 0.0)
         age_bars  = getattr(liq_map, "sweep_age_bars", 999)
 
-        veto_loc    = 1.0 if named else 0.0
+        # -- hard vetoes (UNCHANGED — the closed sweep truth triple) -----------
+        veto_loc     = 1.0 if named else 0.0
         veto_reclaim = 1.0 if reclaimed else 0.0
         veto_accept  = 1.0 if beyond < SWEEP_ACCEPT_CLOSES else 0.0
-        strength   = ramp(rej_pct, SWEEP_REJ_LO, SWEEP_REJ_HI)               # soft-necessary
-        age_decay  = 0.5 ** (age_bars / SWEEP_HALFLIFE_BARS)                 # soft-necessary
-        score = _combine(hard_vetoes=[veto_loc, veto_reclaim, veto_accept],
-                         soft_necessary=[strength, age_decay], corroborators=[])
+
+        # -- reversal direction, derived from the side that was swept ----------
+        # high_sweep = highs taken and rejected DOWN  => the reversal is SHORT
+        # low_sweep  = lows taken and rejected UP     => the reversal is LONG
+        rev_dir = "SHORT" if kind == "high_sweep" else ("LONG" if kind == "low_sweep" else "")
+
+        # -- NEW soft-necessary: trend opposition ------------------------------
+        # A reversal that fights a strong, accelerating trend is not a reversal;
+        # it is a loss with a good story. Multiplicative so opposition can zero
+        # the score outright, which is the whole point.
+        adx  = getattr(trend_state, "primary_adx", 0.0) if trend_state else 0.0
+        direction = getattr(trend_state, "overall_direction", "NEUTRAL") if trend_state else "NEUTRAL"
+        mom  = getattr(trend_state, "primary_momentum", "") if trend_state else ""
+        opposed = (rev_dir == "SHORT" and direction == "BULLISH") or \
+                  (rev_dir == "LONG"  and direction == "BEARISH")
+        opp_adx = ramp(adx, SWEEP_OPP_ADX_LO, SWEEP_OPP_ADX_HI)
+        # An opposing trend that is DECELERATING is the exhaustion we are
+        # trading, so it barely suppresses. One that is ACCELERATING suppresses
+        # fully. "" (no 5m vote) leans cautious rather than neutral.
+        opp_mom = {"ACCELERATING": 1.0, "FLAT": 0.6, "DECELERATING": 0.25, "": 0.8}.get(mom, 0.8)
+        trend_opp = 1.0 - (opp_adx * opp_mom) if opposed else 1.0
+        trend_opp = max(0.0, min(1.0, trend_opp))
+
+        age_decay = 0.5 ** (age_bars / SWEEP_HALFLIFE_BARS)                  # soft-necessary
+
+        # -- corroborators (the exhaustion sea level) --------------------------
+        # (1) rejection quality — depth MERGED with level quality, because the
+        #     two are correlated and corroborators must be independent.
+        depth_val = ramp(rej_pct, SWEEP_REJ_LO, SWEEP_REJ_HI)   # RE-SLOTTED from soft-necessary
+        # Level quality from the swept pool's touch count. NOTE: LiquiditySweep
+        # carries NO level_strength field — it is matched back to the pool by
+        # price. A blind getattr(sweep, "level_strength", 0.0) would have
+        # returned 0.0 forever with no error and no log, which is the failure
+        # that hard-blocked the continuation trade (trend_engine v3.2, defect W).
+        touches = 0
+        for p in (getattr(liq_map, "pools", None) or []):
+            if abs(getattr(p, "price", 0.0) - pool_px) < 1e-9:
+                touches = getattr(p, "touch_count", 0)
+                break
+        level_val = ramp(float(touches), SWEEP_TOUCH_LO, SWEEP_TOUCH_HI)
+        rejq_val  = (W_SWEEP_REJ_DEPTH * depth_val) + (W_SWEEP_REJ_LEVEL * level_val)
+
+        # (2) trend exhaustion — the reversal thesis itself. "" earns nothing:
+        #     if we cannot see whether the move is spent, we have no evidence
+        #     that it is.
+        exh_val = {"DECELERATING": 1.0, "FLAT": 0.5, "ACCELERATING": 0.0, "": 0.0}.get(mom, 0.0)
+
+        score = _combine(
+            hard_vetoes=[veto_loc, veto_reclaim, veto_accept],
+            soft_necessary=[trend_opp, age_decay],
+            corroborators=[(W_SWEEP_REJQ, rejq_val), (W_SWEEP_EXH, exh_val)],
+        )
         bd = {"named": named, "reclaimed": reclaimed, "closes_beyond": beyond,
-              "rejection_pct": round(rej_pct, 4), "strength": round(strength, 3),
+              "kind": kind, "rev_dir": rev_dir,
+              "rejection_pct": round(rej_pct, 4), "depth_val": round(depth_val, 3),
+              "pool_price": round(pool_px, 4), "touch_count": touches,
+              "level_val": round(level_val, 3), "rejq_val": round(rejq_val, 3),
+              "trend_direction": direction, "adx": round(adx, 2),
+              "momentum": mom, "opposed": opposed,
+              "opp_adx": round(opp_adx, 3), "opp_mom": opp_mom,
+              "trend_opp": round(trend_opp, 3), "exh_val": exh_val,
               "age_bars": age_bars, "age_decay": round(age_decay, 3),
               "veto_loc": veto_loc, "veto_reclaim": veto_reclaim,
-              "veto_accept": veto_accept, "score": round(score, 3)}
+              "veto_accept": veto_accept,
+              "w": {"rejq": W_SWEEP_REJQ, "exh": W_SWEEP_EXH},
+              "score": round(score, 3)}
         return score, bd
 
     # -- public entry point -----------------------------------------------------
@@ -422,13 +714,13 @@ class RegimeConfluenceScorer:
         res.breakdown["TRENDING"] = tr_bd
 
         res.scores[BREAKOUT_VOLATILE], res.breakdown[BREAKOUT_VOLATILE] = \
-            self._breakout(vol_state, trend_state)
+            self._breakout(vol_state, trend_state, closes)       # v1.3: closes for clearance
         res.scores[RANGING], res.breakdown[RANGING] = \
             self._ranging(vol_state, trend_state, closes, atr)
         res.scores[COMPRESSION], res.breakdown[COMPRESSION] = \
             self._compression(vol_state, closes, atr)
         res.scores[SWEEP_REVERSAL], res.breakdown[SWEEP_REVERSAL] = \
-            self._sweep(liq_map)
+            self._sweep(liq_map, trend_state)                    # v1.3: trend_state wired in
 
         return res
 
@@ -494,13 +786,48 @@ if __name__ == "__main__":                     # pragma: no cover
     r3 = show("TREND_UP", vol_t, tr_t, st_up, lq_0, mk_closes("trend"), 0.6)
 
     # SWEEP: named zone, reclaimed, not accepted, fresh
-    lq_s = NS(recent_sweep=NS(reclaimed=True, swept_named_level="PDH",
-                              closes_beyond=0, rejection_pct=0.006), sweep_age_bars=1)
+    pool_pdh = NS(price=101.0, touch_count=4, name="PDH", is_named=True)
+    lq_s = NS(pools=[pool_pdh],
+              recent_sweep=NS(reclaimed=True, swept_named_level="PDH", kind="high_sweep",
+                              pool_price=101.0, closes_beyond=0, rejection_pct=0.006),
+              sweep_age_bars=1)
     r4 = show("SWEEP", vol_r, tr_r, st_n, lq_s, mk_closes("range"), 0.4)
+
+    # ---- v1.3 PROOFS: the sweep sea level ------------------------------------
+    # (A) THE PLTR COUNTER-EXAMPLE. Identical sweep evidence to r4, but the tape
+    #     is a strong ACCELERATING uptrend and the reversal is SHORT. Pre-v1.3
+    #     this scored 0.62 and the fleet bought a put into it.
+    tr_pltr = NS(primary_adx=42, aligned_timeframes=4, total_timeframes=4,
+                 overall_direction="BULLISH", is_bullish=True, primary_momentum="ACCELERATING",
+                 votes={"5m": NS(momentum="ACCELERATING")})
+    r5 = show("PLTR", vol_r, tr_pltr, st_n, lq_s, mk_closes("range"), 0.4)
+
+    # (B) GENUINE EXHAUSTION. Same sweep, same uptrend, but the move is spent.
+    tr_exh = NS(primary_adx=42, aligned_timeframes=4, total_timeframes=4,
+                overall_direction="BULLISH", is_bullish=True, primary_momentum="DECELERATING",
+                votes={"5m": NS(momentum="DECELERATING")})
+    r6 = show("EXHAUST", vol_r, tr_exh, st_n, lq_s, mk_closes("range"), 0.4)
+
+    print("\n-- SWEEP breakdowns (the sea level, visible) --")
+    for tag, r in (("PLTR   ", r5), ("EXHAUST", r6)):
+        b = r.breakdown[SWEEP_REVERSAL]
+        print(f"  {tag} opposed={b['opposed']} trend_opp={b['trend_opp']} "
+              f"rejq={b['rejq_val']} exh={b['exh_val']} -> {b['score']}")
 
     # sanity assertions
     assert r1.scores[RANGING] > r1.scores[COMPRESSION], "range should beat coil on range tape"
     assert r2.scores[COMPRESSION] > r2.scores[RANGING], "coil should beat range on coil tape"
     assert r3.scores[TRENDING_BULL] > 0.4 and r3.scores[RANGING] == 0.0, "trend up, range vetoed"
     assert r4.scores[SWEEP_REVERSAL] > 0.0, "fresh reclaimed named sweep should score"
-    print("\nsmoke test OK — RANGING/COMPRESSION separate on the crossings axis as designed")
+    # v1.3 — the excavation's load-bearing claims
+    assert r5.scores[SWEEP_REVERSAL] == 0.0, \
+        "PLTR: short reversal into a strong ACCELERATING uptrend must be zeroed"
+    assert r6.scores[SWEEP_REVERSAL] > r5.scores[SWEEP_REVERSAL], \
+        "a spent trend must score far above an accelerating one on identical sweep evidence"
+    assert r6.scores[SWEEP_REVERSAL] > 0.30, \
+        "genuine exhaustion at a well-touched named level must accumulate real score"
+    # no corroborator anywhere is a constant
+    for _r, _k in ((r1, RANGING), (r2, COMPRESSION), (r6, SWEEP_REVERSAL)):
+        assert "w" in _r.breakdown[_k], f"{_k} must publish its weights in bd"
+    print("\nsmoke test OK — crossings axis separates RANGING/COMPRESSION; "
+          "sweep is trend-aware and PLTR is structurally dead")
