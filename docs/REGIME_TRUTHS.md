@@ -1,6 +1,6 @@
 # REGIME_TRUTHS.md — Layer 1 (Regime Confluence) definitional truth audit
 
-**v0.3 — 2026-07-27 — Definitional only; all thresholds PRIOR.** Companion to
+**v0.4 — 2026-07-27 — Definitional only; all thresholds PRIOR.** Companion to
 `analysis/regime_confluence.py` v1.3 (this document's implementation; smoke-verified,
 tape-unvalidated).
 Written against **v3 HEAD `49d7af8`** (engines + `regime_classifier.py` v1.3) and the
@@ -8,6 +8,13 @@ off-repo reference `conviction_integrator.py` v1.0 (`EvidenceAdapter`, built vs
 `ef76b4a`/v1.2 — every field it reads was re-verified present at `49d7af8`).
 
 Changelog:
+- **v0.4** — COMPRESSION gains a **containment hard veto** (`price_vs_bb == INSIDE`),
+  surfaced by the v1.3 A/B pool: on squeeze-BREAK ticks (price closed beyond a narrow
+  band, ATR not yet expanded) COMPRESSION scored >0.5 while the honest BREAKOUT did too
+  — an A3 violation latent since v1.0 that never collided until breakout could
+  accumulate. Definitional, not tuning: compression's truth is flat center + tightening
+  container + **faded** excursions, and a close beyond the band edge is an unfaded
+  excursion — release, not storage. Sync with `regime_confluence.py` v1.3.1.
 - **v0.3** — **CONFLUENCE EXCAVATION** (sync with `regime_confluence.py` v1.3).
   Four of the five scorers did not implement the §0 grammar they claimed. Two
   (`BREAKOUT_VOLATILE`, `SWEEP_REVERSAL`) had an **empty corroborator sum**, so
@@ -240,6 +247,7 @@ Layer-1 definition:
 | role | factor | field / formula | PRIOR |
 |---|---|---|---|
 | ⛔ HARD VETO | flat value center | `flat_angle_deg(w25, atr) < FLAT_ANGLE_CUT_DEG` | 20° (shared w/ RANGING) |
+| ⛔ HARD VETO | containment (v0.4) | `price_vs_bb == "INSIDE"` — close beyond band edge ⇒ coil resolving | — |
 | ◐ SOFT-NECESSARY | bands narrow | `ramp(BB_WIDTH_COMPRESSION_PCT − bb_width_pct, 0, 0.15)` | 0.20 |
 | ◐ SOFT-NECESSARY | not expanding | `1.0 if atr_state∈{CONTRACTING,STABLE} and not is_expanding else 0.0` | — |
 | ✚ CORROBORATOR | squeeze state | `1.0 if bb_state == SQUEEZE else 0.0` | w=1.0 |

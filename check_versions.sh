@@ -1,4 +1,6 @@
 #!/bin/bash
+# v3.9 — 2026-07-27 — +1 canary: regime_confluence v1.3.1 compression
+#         containment veto (the A3 squeeze-break fix the A/B pool surfaced).
 # v3.8 — 2026-07-27 — CONFLUENCE EXCAVATION CANARIES. Adds 11 presence checks
 #         and 4 ABSENCE checks for regime_confluence v1.3, plus 2 VALUE-pinned
 #         checks for the config v4.0 sweep strike floor. The absence loop is the
@@ -175,6 +177,7 @@ check "analysis/regime_confluence.py"    "COMP_OSC_LO"                  "v1.3 cr
 check "analysis/regime_confluence.py"    "def midline_balance"          "v1.3 real range-balance corroborator exists"
 check "analysis/regime_confluence.py"    "def momentum_val"             "v1.3 shared momentum mapper (no-vote earns no credit)"
 check "analysis/regime_confluence.py"    "soft_necessary=\[narrow_s\]"   "v1.3 compression tightness stays NECESSARY (not a corroborator)"
+check "analysis/regime_confluence.py"    "veto_inside"                  "v1.3.1 compression containment veto (A3 squeeze-break fix)"
 
 # ABSENCE checks — these four terms must be GONE from the whole file. Unlike the
 # _orb_quality canary we can grep the bare token, because v1.3's changelog was

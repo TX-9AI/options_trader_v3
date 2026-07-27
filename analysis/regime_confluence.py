@@ -1,4 +1,15 @@
 # analysis/regime_confluence.py — options_trader_v3
+# v1.3.1 — 2026-07-27 — COMPRESSION CONTAINMENT VETO (A3 fix, found in the
+#         A/B pool). _compression gains hard veto veto_inside: price closed
+#         beyond the band edge zeroes the coil. Its own truth is flat center +
+#         tightening container + FADED excursions; a close outside the band is
+#         an unfaded excursion — release, not storage. Latent pre-v1.3
+#         (COMPRESSION scored >0.5 on squeeze-break ticks but old BREAKOUT
+#         could not accumulate, so A3 never collided); v1.3's honest breakout
+#         exposed it on XOM 2026-07-22 14:10-14:11 (COMP 0.572 with price
+#         BELOW_LOWER vs BRK 0.585 — two A3-violating ticks). Verified: those
+#         ticks now score COMP 0.0, XOM back to 5/5 acceptance, and the veto
+#         changes nothing on any tick where price is INSIDE.
 # v1.3 — 2026-07-27 — CONFLUENCE EXCAVATION. Four of the five scorers were
 #         Boolean gates wearing confluence clothing. Rebuilt as true
 #         accumulating evidence. ORB is not scored here and is untouched;
@@ -519,9 +530,22 @@ class RegimeConfluenceScorer:
         atr_avg_c   = max(getattr(vol_state, "atr_avg_20", 0.0), 1e-3)
         atr_ratio_c = atr_cur_c / atr_avg_c
         atr_contract_val = 1.0 - ramp(atr_ratio_c, COMP_ATR_CONTRACT_LO, COMP_ATR_CONTRACT_HI)
+        # v1.3.1 HARD VETO: the container must CONTAIN. A close beyond the band
+        # edge is an unfaded excursion — energy being RELEASED, the negation of
+        # compression's own truth (flat center + tightening container + FADED
+        # excursions). Latent in the old engine: COMPRESSION scored >0.5 on
+        # squeeze-BREAK ticks (price outside a narrow band, ATR not yet
+        # expanded) but never collided with anything because old BREAKOUT
+        # could not accumulate. v1.3's honest breakout exposed it as an A3
+        # violation (XOM 2026-07-22 14:10-14:11: COMP 0.572 with price
+        # BELOW_LOWER, BRK 0.585). Instantaneous, current-tick field —
+        # Layer-1 legal; a resumed squeeze re-passes next tick.
+        pbb_c = getattr(vol_state, "price_vs_bb", "INSIDE")
+        veto_inside = 1.0 if pbb_c == "INSIDE" else 0.0
 
         bd = {"bb_width_pct": round(bb_width_pct, 3), "narrow_s": round(narrow_s, 3),
               "atr_state": atr_state, "bb_state": bb_state, "veto_notexp": veto_notexp,
+              "price_vs_bb": pbb_c, "veto_inside": veto_inside,
               "atr_ratio": round(atr_ratio_c, 3),
               "atr_contract_val": round(atr_contract_val, 3)}
 
@@ -538,7 +562,7 @@ class RegimeConfluenceScorer:
             osc_s = ramp(cross, COMP_OSC_LO, COMP_OSC_HI)   # v1.3: own bounds
             stored_val = 1.0 - osc_s          # few crossings ⇒ energy absorbed, not spent
             score = _combine(
-                hard_vetoes=[veto_flat, veto_notexp],
+                hard_vetoes=[veto_flat, veto_notexp, veto_inside],
                 soft_necessary=[narrow_s],
                 corroborators=[(W_COMP_STORED, stored_val),
                                (W_COMP_ATR,    atr_contract_val),

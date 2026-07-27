@@ -194,6 +194,11 @@ hard no-trade marker. The book persists per box (`data/integrator_state.json`), 
 boot. **The conviction NUMBER is observe-only** — logged, not gated; L3 places the bars later.
 Rollback: `OT_REGIME_ENGINE=v13`.
 
+`regime_confluence.py` **v1.3.1 (2026-07-27)**: adds the COMPRESSION containment hard
+veto (close beyond the band edge zeroes the coil) — an A3 squeeze-break collision the
+A/B pool surfaced on XOM 07-22, latent since v1.0 but only exposed once BREAKOUT could
+accumulate. See `docs/REGIME_TRUTHS.md` v0.4.
+
 `regime_confluence.py` **v1.3 (2026-07-27, CONFLUENCE EXCAVATION)**: four of the five
 scorers were Boolean gates wearing confluence clothing — `_breakout` and `_sweep` passed
 an EMPTY corroborator list (so `_combine` defaulted their sum term to 1.0 and nothing
