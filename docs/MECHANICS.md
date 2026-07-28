@@ -1,0 +1,1045 @@
+# MECHANICS — how the system decides, sizes, and exits
+
+Current behaviour reference. Regime definitions (Layer 1), every exit path, the observability fields on the trade record, and the ORB regime/stop models.
+
+**Consolidated 2026-07-28.** Nothing was rewritten or summarised — each
+former file is preserved verbatim as a section below, so historical
+decisions stay on the record and fixes don't get quietly reverted.
+
+## Contents
+
+- **REGIME_TRUTHS.md — Layer 1 (Regime Confluence) definitional truth audit**  <sub>(was `docs/REGIME_TRUTHS.md`)</sub>
+- **EXIT RULES — every way every trade closes, and what it's set at**  <sub>(was `docs/EXIT_RULES.md`)</sub>
+- **Trade Record — Observability Fields**  <sub>(was `docs/TRADE_RECORD_FIELDS.md`)</sub>
+- **ORB Regime Un-Gate — v3.2 (2026-07-11)**  <sub>(was `docs/README_orb_regime_ungate_v3_2.md`)</sub>
+- **ORB Stop-Placement Rework — v3.1 (2026-07-11)**  <sub>(was `docs/README_orb_stop_rework_v3_1.md`)</sub>
+
+---
+
+
+<!-- ================= was: docs/REGIME_TRUTHS.md ================= -->
+
+##### REGIME_TRUTHS.md — Layer 1 (Regime Confluence) definitional truth audit
+
+**v0.4 — 2026-07-27 — Definitional only; all thresholds PRIOR.** Companion to
+`analysis/regime_confluence.py` v1.3 (this document's implementation; smoke-verified,
+tape-unvalidated).
+Written against **v3 HEAD `49d7af8`** (engines + `regime_classifier.py` v1.3) and the
+off-repo reference `conviction_integrator.py` v1.0 (`EvidenceAdapter`, built vs
+`ef76b4a`/v1.2 — every field it reads was re-verified present at `49d7af8`).
+
+Changelog:
+- **v0.4** — COMPRESSION gains a **containment hard veto** (`price_vs_bb == INSIDE`),
+  surfaced by the v1.3 A/B pool: on squeeze-BREAK ticks (price closed beyond a narrow
+  band, ATR not yet expanded) COMPRESSION scored >0.5 while the honest BREAKOUT did too
+  — an A3 violation latent since v1.0 that never collided until breakout could
+  accumulate. Definitional, not tuning: compression's truth is flat center + tightening
+  container + **faded** excursions, and a close beyond the band edge is an unfaded
+  excursion — release, not storage. Sync with `regime_confluence.py` v1.3.1.
+- **v0.3** — **CONFLUENCE EXCAVATION** (sync with `regime_confluence.py` v1.3).
+  Four of the five scorers did not implement the §0 grammar they claimed. Two
+  (`BREAKOUT_VOLATILE`, `SWEEP_REVERSAL`) had an **empty corroborator sum**, so
+  `_combine` defaulted that term to 1.0 and the score was vetoes × dampers with
+  nothing accumulating. Two (`RANGING`, `COMPRESSION`) carried a **constant 1.0
+  corroborator** — a fixed contribution that never varied with evidence, which
+  is a Boolean gate's flat base, not a degree of agreement. Role changes:
+
+  | regime | factor | v0.2 role | v0.3 role | why |
+  |---|---|---|---|---|
+  | SWEEP | rejection strength | ◐ soft-necessary | ✚ corroborator (merged) | weak rejection ⇒ weakly *supported*, not partly *invalid* |
+  | SWEEP | **trend opposition** | *(absent)* | ◐ soft-necessary | the matrix's `direction (reject dir)` cell, finally implemented |
+  | SWEEP | level quality (pool touches) | *(absent)* | ✚ merged into rejection quality | correlated with depth; merging avoids double-count |
+  | SWEEP | trend deceleration | *(absent)* | ✚ corroborator (largest) | a reversal's thesis IS that the prior move is spent |
+  | BREAKOUT | ATR expansion | ◐ soft-necessary | ✚ corroborator | directional regime ⇒ compensatory (§0 asymmetry) |
+  | BREAKOUT | band clearance, momentum | *(absent)* | ✚ corroborators | breakout *strength* must accumulate |
+  | RANGING | base constant | ✚ corroborator (1.0) | **deleted** | a constant is not evidence |
+  | RANGING | midline balance | *(absent)* | ✚ corroborator | rotation must be two-sided, not merely frequent |
+  | COMPRESSION | base constant | ✚ corroborator (1.0) | **deleted** | a constant is not evidence |
+  | COMPRESSION | ATR contraction depth | *(absent)* | ✚ corroborator | contraction *depth* must accumulate |
+  | COMPRESSION | narrowness | ◐ soft-necessary | ◐ **unchanged** | premium regime ⇒ mass stays in vetoes (§0 asymmetry) |
+
+  The last row is the load-bearing one: **the re-slotting rule is not universal.**
+  §0's failure-cost asymmetry decides it per regime — directional regimes keep
+  corroborators compensatory because the expensive error is *missing* the move;
+  premium regimes keep mass in necessary conditions because the expensive error
+  is *claiming* the regime. Promoting narrowness was tried and reverted when it
+  let COMPRESSION score 0.25 on wide-band RANGE tape.
+  Also: the `OSC_CROSS_*` bounds are **decoupled** per scorer (RANGING reads many
+  crossings as rotation, COMPRESSION reads few as a coil — one axis, opposite
+  ends, so any calibration of one silently moved the other), and the two
+  no-window fallbacks that fabricated a score are deleted in favour of `None`.
+  **Weights are design-derived, not tape-fitted** — each block states the minimum
+  evidence set that should just barely score and solves for it. Pool calibration
+  is the next pass.
+- **v0.2** — RANGING gains a **`room_s` soft-necessary** on `bb_width_pct` (a range
+  needs room to oscillate; as the container squeezes, range-ness hands off to
+  COMPRESSION on the same width axis). Discriminator matrix + calibration table
+  updated. Sync with `regime_confluence.py` v1.0.
+- **v0.1** — initial six-regime audit, three-tier factor grammar, discriminator
+  matrix, UNKNOWN disposition table.
+
+Scope: **Layer 1 only.** This document defines *what the tape is at this instant*
+per regime. It does not smooth, remember, count-over-N, or accumulate — that is
+Layer 2 (the conviction integrator). It does not reference strikes, premium,
+sizing, fills, or tradability — that is Layer 3. Where a truth *wants* persistence,
+it is written in its instantaneous form and the persistence is handed to Layer 2
+in a **[→L2]** margin note.
+
+---
+
+##### 0. The factor grammar (decisions #3 and #4, resolved)
+
+Every factor is sorted into exactly one of three roles. The per-regime score is:
+
+```
+score_R = ( ∏ hard_veto_i ∈ {0,1} )          # definitional gates — any 0 ⇒ regime impossible
+        × ( ∏ soft_necessary_j ∈ [0,1] )      # graded necessary conditions (ramps, not cliffs)
+        × ( Σ w_k · corroborator_k ),  Σ w_k = 1   # independent compensatory evidence
+```
+
+This is the brief's `(∏ vetoes) × (Σ wᵢfᵢ)` **taken literally**, with the middle
+term added: factors that are *necessary but graded* live outside the sum as soft
+multipliers, so the sum contains only genuinely compensatory evidence. The
+adapter's hand-rolled products (`expand_s * outside_s`, `max(align, ramp(adx))`)
+are exactly this pattern discovered ad hoc; here it is made explicit.
+
+**Why this shape and not a global product or global sum** (rationale — does NOT
+enter runtime code):
+
+- A global **product** makes every factor a quasi-veto; the score sits near 0
+  except in perfect windows and spikes rarely. Fed to the leaky integrator, a
+  mostly-zero signal reads as *disagreement*, conviction bleeds, and genuine
+  regimes fight to commit. It also depresses the evidence ceiling below the
+  ~0.85 the Layer-2 τ/θ constants were derived against.
+- A global **sum** lets a real veto (flat center in a trend) be out-voted by
+  agreeing corroborators — the disguised-trend failure that sells premium into a
+  move.
+- **Failure-cost asymmetry** decides the lean per regime: directional regimes
+  (BREAKOUT, TRENDING) keep corroborators *compensatory* — the expensive error is
+  *missing* the move (the 07-09 UNKNOWN disaster). Premium regimes (RANGING,
+  COMPRESSION) keep more of their mass in *hard vetoes* — the expensive error is
+  *claiming range during a disguised trend*. This asymmetry sorts the factors; it
+  is recorded here as design rationale and is **never** a runtime reference to any
+  trade type.
+
+**Role legend:** `⛔ HARD VETO` (∈{0,1}) · `◐ SOFT-NECESSARY` (∈[0,1], multiplies) ·
+`✚ CORROBORATOR` (∈[0,1], weighted-summed) · `[→L2]` persistence deferred to Layer 2.
+
+**Input vocabulary** (verified at HEAD; these are the only readable fields):
+`TrendState`: primary_adx, aligned_timeframes/total_timeframes, overall_direction,
+is_bullish/is_bearish · `TrendVote`: momentum {ACCELERATING/DECELERATING/FLAT} ·
+`VolatilityState`: atr_current, atr_avg_20, atr_state {EXPANDING/CONTRACTING/STABLE},
+bb_width_pct, bb_state {SQUEEZE/EXPANDING/NORMAL}, price_vs_bb {INSIDE/ABOVE_UPPER/
+BELOW_LOWER}, is_expanding, is_compressing, price_vs_vwap · `StructureMap`:
+structure_sequence {HH_HL/LH_LL/MIXED/NEUTRAL}, in_sr_zone, nearest_sr_distance_pct ·
+`LiquidityMap`: recent_sweep, sweep_age_bars, named levels · `LiquiditySweep`:
+reclaimed, closes_beyond, rejection_pct, swept_named_level, bars_ago · plus the
+Layer-1-internal **flat_angle_deg(closes, atr)** and **midline_crossings(closes)**
+computed over the rolling 25-bar window (a property of the current window — legal).
+
+---
+
+##### 1. TASK 1 — Per-regime truth audit
+
+##### TRENDING_BULL / TRENDING_BEAR  *(directional — corroborators compensatory)*
+
+The two are one definition; `overall_direction` routes the score to one label and
+zeroes the other. `_BEAR` flips the sign on every directional read.
+
+| role | factor | field / formula | PRIOR |
+|---|---|---|---|
+| ⛔ HARD VETO | no contradicting structure | `structure_sequence` ≠ contra (contra = LH_LL for bull, HH_HL for bear) | — |
+| ⛔ HARD VETO | direction is not neutral | `overall_direction` ∈ {BULLISH, BEARISH} | — |
+| ◐ SOFT-NECESSARY | trend strength | `ramp(primary_adx, ADX_TREND−5, ADX_STRONG_SOLO)` = ramp(20, 35) | 20 / 35 |
+| ✚ CORROBORATOR | timeframe alignment | `aligned_timeframes / total_timeframes` | w≈0.6 |
+| ✚ CORROBORATOR | momentum accelerating | `momentum == ACCELERATING` (per primary TF) | w≈0.4 |
+
+**Settled hard truths:** structure-contradiction veto (v1.2) and non-neutral
+direction. A tape whose swings print LH_LL cannot be a bull trend regardless of ADX.
+**Graded:** ADX strength is necessary-but-graded — soft, not a cliff. Alignment is
+**corroboration, not a gate** — the v1.3 coverage fix: above `ADX_STRONG_SOLO=35`,
+unambiguous strength carries the trend even when alignment momentarily fractures.
+Encoded as a corroborator (in the sum), so weak alignment *lowers* the score without
+zeroing it — this is precisely what stops the 07-09 clean-breakout-scored-UNKNOWN
+failure. **Wrongly excluded by v1.3's boolean form:** marginal-ADX trends with
+perfect alignment scored identically to strong-ADX trends; graded ADX fixes this.
+**Discriminator vs adjacent regimes:** see matrix — the load-bearing one is the
+value-center veto against RANGING (a trend's value migrates; a range's does not),
+expressed there as RANGING's flat-angle veto being TRENDING's mirror.
+
+*Note — ADX slope:* rising/falling ADX would strengthen this, but true ADX-slope is
+not a HEAD field. `momentum {ACCELERATING/DECELERATING}` is the instantaneous proxy
+and is used. A dedicated ADX-slope field is a **proposed engine addition**, not
+assumed here. **[→L2]** "ADX has been rising for N ticks" is persistence — the
+integrator banks a rising series of TRENDING evidence; Layer 1 only reports
+accelerating-*now*.
+
+---
+
+##### BREAKOUT_VOLATILE  *(directional — necessary-conjunctive, minimal sum)*
+
+| role | factor | field / formula | PRIOR |
+|---|---|---|---|
+| ◐ SOFT-NECESSARY | range expanding | `ramp(atr_current/atr_avg_20, 1.0, 1.5)` if `is_expanding` else same ramp(1.1,1.6)×0.6 | 1.0/1.5 |
+| ◐ SOFT-NECESSARY | price accepting outside envelope | `1.0 if price_vs_bb≠INSIDE else ramp(primary_adx, 38, 50)` | 38/50 |
+| ✚ CORROBORATOR | (reserved) velocity-at-level | *proposed — see below* | — |
+
+Breakout is genuinely **two necessary conditions with almost no corroborators**, so
+its score is a soft-necessary product and the sum is (for now) near-empty — the one
+place the adapter's "product" form is *correct* and is kept. Expansion answers "is
+energy releasing," envelope-acceptance answers "through a level, not just poking."
+
+**Momentum carry (the anchor), and why it is Layer 1 and not Layer 2:** the
+envelope factor does **not** hard-zero on a momentary BB re-entry — at clearly-high
+ADX (`ramp(38,50)`) an inside-band print still scores. This reads **only current
+ADX**: "high ADX *now* means an inside print *now* doesn't contradict breakout." It
+is a statement about this tick, so it is legal Layer 1. Remembering that price *was*
+outside 3 ticks ago would be memory — illegal; not done. **[→L2]** persistence of
+the breakout across a genuine multi-tick re-entry is the integrator's decay
+resistance, not ours.
+
+**Discriminator vs TRENDING:** breakout = expansion *through* a level (envelope +
+`atr_state=EXPANDING`); trending = sustained strength that is agnostic to expansion
+(a trend runs at any vol). **Discriminator vs SWEEP at a level:** acceptance
+(`closes_beyond ≥ 2`) is breakout; penetrate-then-reclaim is sweep — the same level,
+opposite resolution. **Future first-class discriminator (proposed, Phase-3+):**
+velocity sign at the mapped level — accelerate-*through* vs decelerate-*reverse* —
+which would separate BREAKOUT from SWEEP on the *approach*, before the reclaim
+resolves. Needs an engine velocity field; flagged, not assumed.
+
+---
+
+##### RANGING  *(premium — hard veto carries the weight)*
+
+| role | factor | field / formula | PRIOR |
+|---|---|---|---|
+| ⛔ HARD VETO | flat value center | `flat_angle_deg(w25, atr) < FLAT_ANGLE_CUT_DEG` | 20° |
+| ◐ SOFT-NECESSARY | flatness depth | `ramp(CUT − angle, 0, FLAT_ANGLE_SOFT_DEG)` | soft 8° |
+| ◐ SOFT-NECESSARY | room to oscillate | `ramp(bb_width_pct, RANGE_ROOM_LO, RANGE_ROOM_HI)` | 0.05 / 0.20 |
+| ✚ CORROBORATOR | midline oscillation | `ramp(midline_crossings(w25), 2, 5)`, blended `0.4 + 0.6·osc` | 2/5 |
+
+**The deal-breaker truth (validated):** a trend cannot hold a flat value center —
+its value migrates; a range oscillates around a stable local one. `flat_angle_deg`
+is instrument-agnostic by the `ATR·√n` normalization (fixed the SPX raw-percent
+false-flat, 48%→17%), so one 20° cutoff serves SPX and a $4 name. At/above the cut
+the regime is **vetoed to 0.0** no matter how low ADX looks. **Local-center anchor:**
+the window's own regression midline — valid *only because the veto has certified it
+flat* (session VWAP too strict, trailing mean too loose; in a trend the veto fires
+first, so the trailing-mean leak is structurally blocked). **No R²/fit filter** —
+shark-fin scatter is expected; only the center must hold. Oscillation is
+**confirmation only** and enters as a corroborator: crossing *frequency*
+distinguishes rotation (a range) from a pin/drift, not residual balance (which is
+near-balanced by construction).
+
+**Room to oscillate (v0.2 — the COMPRESSION handoff):** a range needs room. As the
+container squeezes toward zero width, the tape is no longer *oscillating across* a
+range — the oscillation is dying into a coil, and range-ness must fade. `room_s`
+ramps RANGING down over `bb_width_pct ∈ [0.05, 0.20]`; this is the exact instantaneous
+complement of COMPRESSION's `narrow_s` — the **same width axis pushing the two regimes
+apart**, RANGING fading as COMPRESSION rises. A normal/wide flat center with active
+crossings stays full RANGING; a squeezed flat center hands off. It does **not** require
+wide bands (energetic chop at moderate width still ranges) — it only bites at genuine
+squeeze. In the transition both score moderately, which is honest; Layer 2 resolves.
+
+**Wrongly excluded by v1.3:** the old `_is_ranging` (ADX<20 + price INSIDE bands)
+was too strict to claim energetic mean-reverting chop — the 88% of the 07-09 UNKNOWN
+dwell. Elevated ADX and BB pokes are **allowed** here: fin stabs hit the edges by
+nature. The angle read is what admits that chop as RANGING. **Honest caveat:** a
+single 25-bar window is a noisy estimator — a marginal drift can read 12° on one
+window. That is *why Layer 2 exists*: single-window misreads don't persist, ranges
+do. Layer 1 reports the honest per-window angle; the impostor separation is
+downstream. **[→L2]** "held the flat angle 24–29 bars" (genuine) vs "12–15 bars"
+(impostor) is the integrator's slow RANGING τ_up — never a Layer-1 counter.
+
+**Fallback** (bars unavailable): reduced-ceiling quiet-range read (`adx <
+ADX_RANGE_THRESHOLD` and `price_vs_bb=INSIDE` and not expanding) → 0.6, so the
+regime is not blind. Returns **None** only when the window/ATR are unreadable
+(unobservable ≠ contradicted).
+
+---
+
+##### COMPRESSION  *(premium — the weakest regime; truths written here)*
+
+**This is the regime the ROADMAP flags as "little more than a BB-width percentile."**
+The adapter's current read (`ramp(0.20 − bb_width_pct, 0, 0.15) × quiet`) has **no
+flat-center truth and no discriminator against early-RANGING** — its known gap. New
+Layer-1 definition:
+
+| role | factor | field / formula | PRIOR |
+|---|---|---|---|
+| ⛔ HARD VETO | flat value center | `flat_angle_deg(w25, atr) < FLAT_ANGLE_CUT_DEG` | 20° (shared w/ RANGING) |
+| ⛔ HARD VETO | containment (v0.4) | `price_vs_bb == "INSIDE"` — close beyond band edge ⇒ coil resolving | — |
+| ◐ SOFT-NECESSARY | bands narrow | `ramp(BB_WIDTH_COMPRESSION_PCT − bb_width_pct, 0, 0.15)` | 0.20 |
+| ◐ SOFT-NECESSARY | not expanding | `1.0 if atr_state∈{CONTRACTING,STABLE} and not is_expanding else 0.0` | — |
+| ✚ CORROBORATOR | squeeze state | `1.0 if bb_state == SQUEEZE else 0.0` | w=1.0 |
+
+**The discriminator we owe — COMPRESSION vs early-RANGING:** *both* are flat-center
+(so both take the flat-angle veto — this is the fix: compression now shares RANGING's
+center truth instead of ignoring it). They separate on **band width regime**:
+RANGING oscillates across a flat center at *normal/expanded* width (crossings are its
+signature); COMPRESSION is a flat center at *contracted* width with the crossings
+*collapsing* toward the midline. In Layer-1 instantaneous terms: low `bb_width_pct` +
+`atr_state=CONTRACTING/STABLE` + `bb_state=SQUEEZE` = compression; normal width +
+oscillation = ranging. The handoff is **symmetric on the width axis** (v0.2):
+COMPRESSION's `narrow_s` rises exactly as RANGING's `room_s` falls, so squeeze moves
+score from one to the other rather than lighting both. **Potential-energy read
+(instantaneous):** a range *spends* energy — excursions reach the edges and turn
+around (crossings, at width); a coil *stores* it — the envelope tightens while
+excursions fade (SQUEEZE + collapsing crossings, encoded as the `stored` corroborator
+`1 − osc`). Both flat-center; the separator is release-vs-absorb, read at one tick.
+A tape can score *both* moderately during the transition — that is honest, and Layer 2
+resolves which is committing.
+
+**[→L2] — the "persisting" truth is explicitly NOT here.** The ROADMAP wants
+"contraction persisting — width percentile falling or floored *over N bars*." That
+"over N bars" is accumulation and is **deferred to the integrator**: Layer 1 reports
+narrow-and-flat-*now*; the integrator banking a run of high COMPRESSION ticks *is*
+"it has been coiling." Writing an N-bar counter here would double-smooth the system.
+**Discriminator vs BREAKOUT:** exact opposite on the width axis — `is_expanding` /
+`atr_state=EXPANDING` zeroes the not-expanding factor, so a tape cannot score
+COMPRESSION and BREAKOUT together.
+
+---
+
+##### SWEEP_REVERSAL  *(event overlay — hard-veto triple × age-decay)*
+
+| role | factor | field / formula | PRIOR |
+|---|---|---|---|
+| ⛔ HARD VETO | LOCATION — named zone swept | `recent_sweep.swept_named_level` non-empty | — |
+| ⛔ HARD VETO | REJECTION — reclaimed | `recent_sweep.reclaimed == True` | — |
+| ⛔ HARD VETO | non-acceptance | `recent_sweep.closes_beyond < SWEEP_ACCEPT_CLOSES` | <2 |
+| ◐ SOFT-NECESSARY | **trend opposition** (v0.3) | `1 − ramp(primary_adx,20,35)·opp_mom` when the reversal direction fights `overall_direction`; else 1 | 20/35 |
+| ◐ SOFT-NECESSARY | age-decay | `0.5 ** (sweep_age_bars / SWEEP_HALFLIFE_BARS)` | half-life 3 bars |
+| ✚ CORROBORATOR | rejection quality (v0.3) | `0.60·ramp(rejection_pct,0.002,0.008) + 0.40·ramp(pool.touch_count,2,5)` | w = 0.45 |
+| ✚ CORROBORATOR | trend exhaustion (v0.3) | `primary_momentum` DECELERATING 1.0 / FLAT 0.5 / ACCELERATING 0.0 / no-vote 0.0 | w = 0.55 |
+
+**Direction is definitional and was missing (v0.3).** The discriminator matrix
+below has always carried a `direction — (reject dir)` cell for SWEEP, but the
+implementation never received `trend_state` at all: `_sweep(self, liq_map)` was
+structurally incapable of seeing a trend. On 2026-07-27 that let a lone
+level-rejection score 0.62 and short a name trending +7.2% on the day. The
+opposition term is **multiplicative** precisely so a strong accelerating trend
+can zero the regime outright, and `opp_mom` weights it by whether that opposing
+trend is ACCELERATING (1.0 — full suppression) or DECELERATING (0.25 — barely
+suppresses, because a decelerating opposing trend is the exhaustion being traded).
+
+**Level quality is matched, not read.** `LiquiditySweep` carries no strength
+field; the swept pool is matched back through `LiquidityMap.pools` by
+`pool_price`. A `getattr(sweep, "level_strength", 0.0)` would have returned 0.0
+forever with no error and no log — the same silent-attribute failure that
+hard-blocked the continuation trade (see `trend_engine` v3.2, defect W).
+
+**The sweep truth triple (definitional, closed — v1.1):** LOCATION + PENETRATION +
+REJECTION. All three are hard vetoes no other regime touches — its specialism made
+literal. **Acceptance = breakout, not sweep:** `closes_beyond ≥ 2` fails the
+non-acceptance veto, which is the exact BREAKOUT-at-a-level discriminator. **Age
+decay is the key event-property:** a sweep without follow-through must *evaporate* —
+the `0.5**(age/3bars)` half-life is what lets a rising BREAKOUT *displace* a stale
+sweep instead of the sweep lingering (the AMZN failure). This decay reads
+`sweep_age_bars` (a current field), so it is instantaneous, not memory. **[→L2]** the
+*displacement* of a stale sweep by a competitor is the integrator's δ-margin
+mechanic; Layer 1 only decays the evidence.
+
+---
+
+##### 2. Discriminator matrix (mutual exclusivity from truths, not cascade order)
+
+The system reduces to **three organizing binary truths** stacked with graded
+evidence. Read each column for the axis that separates the pair.
+
+| axis (normalized) | TREND_BULL | TREND_BEAR | RANGING | COMPRESSION | BREAKOUT | SWEEP |
+|---|---|---|---|---|---|---|
+| **value center** (flat_angle) | migrating ⛔ | migrating ⛔ | **flat ⛔** | **flat ⛔** | migrating | — |
+| **band width** (bb_width_pct/state) | — | — | **needs room ◐** | **contracting ◐** | **expanding ◐** | — |
+| **level resolution** (closes_beyond/reclaim) | — | — | — | — | **accept-through ◐** | **reclaim ⛔** |
+| ADX strength | ≥mid ◐ | ≥mid ◐ | any (allowed) | low | ≥high ◐ | — |
+| direction | bull ⛔ | bear ⛔ | — | — | (breakout dir) | (reject dir) |
+| oscillation crossings | low | low | **high ✚** | collapsing | — | — |
+| named-zone location | — | — | — | — | — | **present ⛔** |
+
+**The three cleaving truths:**
+1. **value center migrating vs flat** — cleaves {TRENDING, BREAKOUT} from {RANGING,
+   COMPRESSION} before any other factor speaks. The master discriminator.
+2. **band width contracting vs expanding** — within flat-center, splits COMPRESSION
+   (contracting) from RANGING (normal); within migrating, marks BREAKOUT (expanding).
+3. **acceptance vs rejection at a level** — within migrating-at-a-level, splits
+   BREAKOUT (accept-through) from SWEEP (penetrate-reclaim).
+
+Everything else is graded confluence stacked on top. **A signal's role is
+regime-relative and that is the consensus mechanic:** high ADX lifts TRENDING/
+BREAKOUT and is *allowed* under RANGING; width-contraction lifts COMPRESSION and
+zeroes BREAKOUT. A tape where ADX rises *and* width contracts genuinely scores two
+regimes moderately and *should* — the ambiguity is honest, and Layer 2 sorts it over
+time. Mutual exclusivity is enforced by opposing truths, never by priority order.
+
+---
+
+##### 3. TASK 2 — UNKNOWN disposition table
+
+UNKNOWN is eliminated **as a regime**. Every population it absorbed gets an explicit
+destination. Layer 1's obligation: **always emit scores, never abstain** (the adapter
+already satisfies this — it returns per-regime floats/None, never a global UNKNOWN).
+The UNKNOWN *emission* deletion is Layer 2's port task (ROADMAP Phase 0), not Layer 1.
+
+| UNKNOWN population (07-09 autopsy) | share | new destination | mechanism |
+|---|---|---|---|
+| Breakout flicker (BB re-entry at ADX 43–50) | 12% (≤30s) | **BREAKOUT** score stays >0 | momentum carry: `outside_s=ramp(adx,38,50)` doesn't zero on inside print |
+| Energetic shark-fin chop (flat VWAP, high-vol fin stabs) | 88% (long dwell) | **RANGING** score dominant | flat-angle veto passes + crossings corroborate; elevated ADX/pokes allowed |
+| Genuine regime-to-regime transition | — | **both** regimes score moderately | honest low/split scores; Layer 2 displacement resolves, no UNKNOWN interlude |
+| Pre-open / insufficient bars | — | RANGING **None** (fallback if partial) | `None` = unobservable; integrator stale-decays, ORB lockout covers commit window |
+| Engine-state fault (stale feed / restart gap) | — | **DATA-FAULT state** (not a regime) | owned by `candle_feed` heartbeat + integrator STALE; the only surviving hard block |
+
+**`UNKNOWN` string-scrub checklist** (Phase 4 — grep the fleet before enum deletion):
+`analysis/regime_classifier.py` (enum + `_classify` fallback) · `main.py` (dispatch
+no-trade gate ~L469–560) · `status.py` · `query.py` · `eod_summary.py` ·
+`notifications/` (regime-change alerts) · `conviction_integrator.py` emission law
+(§2 — the `→ UNKNOWN` fallback becomes always-argmax) · any `data/shadow/` JSONL
+readers keyed on the label. Data-fault no-trade **survives**; indecision no-trade
+does not.
+
+---
+
+##### 4. Open calibration knobs (all PRIOR — fit from candle-logger tape, never one day)
+
+| knob | current PRIOR | calibration plan |
+|---|---|---|
+| **FLAT_ANGLE_CUT_DEG** | 20° | **top priority.** Sweep 16–26° against labeled range/trend windows from multi-day store tape. One day clusters everyone at 24–32° — needs base rates. |
+| FLAT_ANGLE_SOFT_DEG | 8° | joint with the cut, from the same labeled windows |
+| crossings ramp | 2 / 5 | rotation-vs-pin frequency on confirmed ranges |
+| ADX ramps (trend/breakout) | 20/35, 38/50 | ROC of score vs labeled trend/breakout onset |
+| bb_width compression ramp | 0.20 / 0.15 | squeeze base rate; separate early-compression from ranging |
+| RANGE_ROOM_LO / _HI | 0.05 / 0.20 | width at which RANGING hands off to COMPRESSION; fit jointly with the compression ramp against the same squeeze base rate |
+| sweep rejection ramp | 0.002 / 0.008 | confirmed-sweep rejection_pct distribution |
+| sweep half-life | 3 bars | follow-through-vs-evaporation survival curve |
+| corroborator weights `w_k` | see tables | **Phase 1 tape** — per-regime, one factor at a time |
+
+**Circularity guard:** truths tuned and weights calibrated on the *same* sessions
+look beautiful and mean nothing. Split the tape — the sessions used to set these
+thresholds must not be the sessions used to validate the scorer.
+
+---
+
+##### 5. Provenance & boundary ledger
+
+- **Read from HEAD `49d7af8`:** all engine fields, enums, config thresholds, v1.3
+  classifier logic. Every field cited above verified present.
+- **Reference (off-repo):** `conviction_integrator.py` v1.0 `EvidenceAdapter` — the
+  Layer-1 prototype this document audits and re-sorts into the three-tier grammar.
+  Built vs `ef76b4a`/v1.2; field-compatible with HEAD (re-verified).
+- **Layer boundary held:** no factor references a trade, strike, premium, size, or
+  ROI (Layer 3). No factor remembers, counts-over-N, or accumulates (Layer 2) —
+  every persistence-flavored truth carries a **[→L2]** deferral. Failure-cost
+  asymmetry is design rationale only; it is absent from runtime.
+- **Not yet validated on real tape:** the entire Layer-1 factor design. Synthetic
+  sims validated the *integrator*, never the *adapter*. Monday's shadow run is the
+  first real-tape test — expect PRIOR knobs to move.
+
+**Open decisions carried forward (none block the build):**
+- ADX-slope and velocity-at-level are **proposed engine additions**, used via
+  proxies (`momentum`, and nothing yet) until built — not assumed present.
+- GRIND / VOLATILE_RANGE seventh-regime candidates remain **shelved** (insufficient
+  non-chop tape); resume conditions logged separately.
+
+---
+*Next deliverable: `analysis/regime_confluence.py` v1.0 — the standalone module
+implementing this document (adapter lifted from `conviction_integrator.py`, re-sorted
+to the three-tier grammar, breakdown/audit dict added, guarded imports, no side
+effects). Then the Layer-1 validation plan for Monday's shadow tape.*
+
+---
+
+
+<!-- ================= was: docs/EXIT_RULES.md ================= -->
+
+##### EXIT RULES — every way every trade closes, and what it's set at
+
+Extracted from the running code (`exit_engine.py` **v4.1**, `base_strategy.py`,
+`config.py` v3.9), 2026-07-15, **last synced 2026-07-23** — covers the runner
+refinements (v3.8), the 2026-07-22 **mark-limit closes** (exits post a limit AT
+the mark, re-anchored every retry tick; EOD flatten escalates 15:40 mark-limit →
+15:45 MARKET), the **continuation exit rework** (v4.0: 5m-anchored FVG trail,
+theta-bleed enabled after exhaustion, backstop 40%→25% via
+`CONTINUATION_STOP_LOSS_PCT`), and **condor leg management v2** (v4.1: ratcheting
+stop, time-gated TP@25%). Original v3.8 note (all
+env-tunable for paper A/B): directional floor 25%→**40%** (`OT_MAX_LOSS_PCT`);
+trails anchor to **5-minute FVGs** (`OT_USE_5M_FVG_TRAIL`); FVG floors clamped
+to ≤ **90% of current** (`OT_FVG_FLOOR_MAX_LOCK_PCT`); post-target fallback
+**85%→75%** (`OT_POST_TARGET_TRAIL_LOCK_PCT`); sweep's +100% hard TP replaced
+by the post-target trail (`OT_SWEEP_POST_TARGET_TRAIL`). Butterfly floor stays
+25%; condor unchanged. Sizing is full-premium based, so at $1000 positions a
+floored directional now costs ~$400 — set `OT_DAILY_LOSS_LIMIT` to match
+(e.g. 3 stops = $1,200). New telemetry: `max_premium_seen` / `min_premium_seen`
+per trade (MFE/MAE) for evidence-based tuning. Evaluated **every tick, first
+match wins**, in the order listed per strategy.
+
+Each exit is tagged by its role in the design:
+- 🛑 **LOSS-MINIMIZER** — fires on losing trades to cap the damage
+- 📉 **GIVE-BACK EXIT** — books a PROFIT, but only when the market starts
+  taking it back (trail/structure/momentum) — the "let runners run" family
+- 🎯 **HARD TAKE-PROFIT** — closes at a fixed profit level regardless
+- ⏰ **TIME EXIT** — the clock, not price
+
+---
+
+##### Universal (every strategy, every mode)
+
+| Exit | Trigger | Value | Tag |
+|---|---|---|---|
+| Hard close | **15:40 ET mark-limit flatten → 15:45 ET MARKET escalation** (`limit_ladder.hard_close_order_mode`, 2026-07-22) | flatten_all retries every tick to 16:00, pages on failure | ⏰ |
+
+---
+
+##### ORB (the flagship) — **no hard take-profit exists, by design**
+
+| # | Exit | Trigger | Set at | Tag |
+|---|---|---|---|---|
+| 1 | Hard close | 15:45 ET | — | ⏰ |
+| 2 | **Hard stop (−25% floor)** | premium ≤ `stop_premium` | **entry × 0.60 (−40%, `MAX_LOSS_PCT`)** — immutable, set at entry, checked UNCONDITIONALLY every tick regardless of trail state; label carries the record's actual floor pct | 🛑 |
+| 3 | **Structure stop** | last CLOSED 1m candle beyond the impulsive candle's wick (`underlying_stop`): close < impulsive low (long) / > impulsive high (short). Closing back inside the ORB range does NOT stop | thesis level, set at entry | 🛑 (thesis death — can fire green or red) |
+| 4 | **Theta bleed** | ALL of: held ≥ **20 min** · gain ≥ **+10%** · gain < **+20%** (trail ceiling) · projected decay over next **20 min** (per CALENDAR day, θ×20/1440) ≥ current gain | narrow window: a small, stalled winner only | 📉 |
+| 5 | **Past +100%** ("target") | premium ≥ entry × 2.0 (`ORB_TP_MULTIPLIER = 1.0`) — **NO exit fires.** Trail tightens: nearest unfilled in-favor **5m** FVG (1m fallback) converted to a premium floor, else **85% of current premium** | the runner regime | 📉 |
+| 6 | **Trail (below +100%)** | Two trails, HIGHER governs: **FVG trail** arms at **+20%** (floor = FVG level, else 80% of current — `FVG_TRAIL_LOCK_PCT`); **% trail** arms at **+50%** (`TRAIL_ACTIVATION_PCT`), initial lock at entry × 1.25 (`TRAIL_LOCK_PCT`), then ratchets to **75% of current premium**, never down | 📉 |
+
+**ORB never exits "at target."** +100% just switches it into the tightest
+trail. Every profitable ORB exit is the market taking some back: trail hit,
+FVG floor hit, structure break, or theta about to eat a stalled small gain.
+
+##### Sweep Reversal
+
+| # | Exit | Trigger | Set at | Tag |
+|---|---|---|---|---|
+| 1 | Hard close | 15:45 ET | — | ⏰ |
+| 2 | Hard stop | premium ≤ `stop_premium` | **entry × 0.60** (−40%) | 🛑 |
+| 3 | **Past +100%** | `SWEEP_POST_TARGET_TRAIL=True` (default): NO hard exit — switches to the ORB post-target trail (5m FVG / 75%-of-current fallback). Env False restores the old `target_hit` guillotine | 📉 (was the one hard TP among directionals) |
+| 4 | **BOS exit** | 1-min break of structure against the position — only once pnl > 0 (a healthy retest that hasn't moved yet can't be BOS'd out) | structure-defined | 📉 |
+| 5 | Theta bleed | same four gates as ORB (≥20 min, gain in [+10%, +20%), decay ≥ gain) | 📉 |
+| 6 | Trail | same dual trail as ORB: FVG arms +20%, % trail arms +50% → 75%-of-current ratchet, higher governs, floored at the −25% stop | 📉 |
+
+##### Iron Condor legs (credit verticals — P&L is inverted: spread value ↓ = profit)
+
+| # | Exit | Trigger | Set at | Tag |
+|---|---|---|---|---|
+| 1 | Hard close | 15:45 ET | — | ⏰ |
+| 2 | **Adverse regime flip** | direction-aware: call spread exits on TRENDING_BULL / BREAKOUT_VOLATILE; put spread on TRENDING_BEAR / BREAKOUT_VOLATILE. A FAVORABLE flip holds (Leg 2 **pauses** — `iron_condor` v3.2; it fires when RANGING returns AND price is at the far band). Note: fired **0 times in 143 legs** to date | regime engine | 🛑 (thesis death, pre-emptive) |
+| 3 | **Ratcheting stop** (v4.1) | tightens only: at **+20%** gain → stop moves to **breakeven**; at **+40%** → stop locks **+20%**. Base floor before any ratchet: spread value ≥ credit × **1.25** (`CONDOR_STOP_LOSS_PCT = 0.25`, −25% of credit) | ends the ~+25%→−25% round-trip | 🛑→📉 |
+| 4 | **Time-gated TP @ 25%** (v4.1) | ONLY after `CONDOR_ENTRY_CUTOFF_ET`, ONLY when the opposite side is **not open** (a condor leg is never closed on profit — the only reason to close one is the roll), min-hold quote-noise gate | backtest: turned −$242.77 into −$8.43 on 18 standalone legs | 🎯 |
+| 5 | **Nickel close** | spread value ≤ **$0.05** (`CONDOR_NICKEL_CLOSE`) | ~all the credit captured; closes to free margin and kill tail risk | 🎯 |
+| — | **Broken-wing roll** | not an exit: when one side is tested and rolling the untested side makes it risk-free, the untested vertical closes (books its P&L) and re-opens rolled. Final form — no further adjustments | strategy | — |
+
+##### Trend Continuation (debit directional — NEW 2026-07-18, exits reworked v4.0)
+
+| # | Exit | Trigger | Set at | Tag |
+|---|---|---|---|---|
+| 1 | Hard close | 15:45 ET | — | ⏰ |
+| 2 | **Regime flip** | regime no longer trending **in our direction** — thesis death, the primary smart stop | regime engine | 🛑 |
+| 3 | **Backstop −25%** | premium ≤ entry × **0.75** (`CONTINUATION_STOP_LOSS_PCT`, v4.0 — no longer borrows `MAX_LOSS_PCT`) | disaster floor | 🛑 |
+| 4 | **Exhaustion (two-stage)** | *only past +15% gain* (`CONTINUATION_EXHAUST_MIN_GAIN`). **Extension**: ≥ 2·ATR from the BB midline → tighten trail to **85%** (does NOT exit). **Divergence**: new favourable extreme on weaker 5-bar momentum → **exit** | detect a spent move | 📉 |
+| 5 | **Theta bleed** (v4.0) | placed AFTER exhaustion (the smarter signal gets first refusal): held ≥ 20 min · gain ≥ +10% · below the trail ceiling · projected calendar-day decay ≥ gain | a stalled winner no longer decays to the floor | 📉 |
+| 6 | **Runner trail** | FVG trail **anchored to 5m gaps** via `_fvg_frame` (v4.0; graceful 1m fallback); once armed it owns the trade and silences theta | let it run | 📉 |
+
+Prefers live `vol_state`/`trend` threaded from `main.py`; falls back to recomputing
+midline/ROC from `df_5m` (restart recovery, adopted) — degrades precision, never raises.
+
+##### Debit Butterfly
+
+| # | Exit | Trigger | Set at | Tag |
+|---|---|---|---|---|
+| 1 | Hard close | 15:45 ET | — | ⏰ |
+| 2 | **Regime flip** | regime becomes TRENDING_BULL / TRENDING_BEAR / BREAKOUT_VOLATILE — any trend breaks the pinning thesis, either direction | regime engine | 🛑 (pre-emptive) |
+| 3 | **Max hold** | held ≥ **150 min** (`BUTTERFLY_MAX_HOLD_MIN`, 2.5h) | ⏰ |
+| 4 | Hard stop | net value ≤ `stop_premium` | **net debit × 0.75** (−25%) | 🛑 |
+| 5 | **Target hit** | net value ≥ debit + **20% of max profit** (`BUTTERFLY_TP_PCT = 0.20`) | 🎯 (deliberately modest — pin plays decay fast) |
+
+No trail, no BOS on butterflies.
+
+##### Adopted positions (found at the broker with no DB plan)
+
+| # | Exit | Trigger | Set at | Tag |
+|---|---|---|---|---|
+| 1 | Hard close | 15:45 ET | — | ⏰ |
+| 2 | Hard stop | sign-correct: long ≤ entry × 0.75; short ≥ entry × 1.25 (`ADOPTED_STOP_PCT = 0.25`, tracking `MAX_LOSS_PCT`) | 🛑 |
+| 3 | Trail (LONGS only) | standard % trail (arms +50%, 75%-of-current ratchet). Lone adopted shorts (anomaly) get stop + hard close only — no trail | 📉 |
+
+Already past its stop when adopted → exits first tick ("if red exit, if green
+manage").
+
+---
+
+##### The design, confirmed by the tags
+
+Count the profit-side exits: across all six strategies there are exactly
+**four 🎯 hard take-profits** — sweep's +100% (default-replaced by the
+post-target trail since v3.8, `SWEEP_POST_TARGET_TRAIL`), the condor nickel
+close, the v4.1 time-gated condor TP@25% (a standalone-leg salvage, never on a
+formed condor), and the butterfly's 20%-of-max — and two of those (nickel,
+butterfly) exist
+because *holding* a nearly-max-profit 0DTE credit/pin structure is pure tail
+risk for pennies. Everything else that books a profit is 📉 **give-back
+triggered**: trails that only ratchet up, FVG floors, BOS, the impulsive-origin
+structure stop, theta protection on stalled small winners. The flagship (ORB)
+has **no hard TP at all** — +100% only tightens the leash.
+
+So yes: by construction, most winning exits WILL log as some form of "stop"
+(`trail_stop_hit`, `post_target_trail`, `bos_exit`, `orb_structure_stop` in
+the green, `theta_bleed`) — that is the runner philosophy working, not stops
+misfiring. The v3.3 exit-reason integrity fix matters here: labels are now
+truthful (a post-target trail exit at +140% logs as a trail, never as
+`hard_stop_25pct`), so the `exit_reason` distribution in the DB can be read
+at face value when checking this design against results.
+
+**The one number to watch:** the loss side is a single flat rule everywhere —
+**−25% of premium/credit/debit** (`stop_premium`, immutable since v3.3) plus
+thesis stops (structure, adverse regime) that usually fire before the dollars
+do. Loss-minimization = whichever dies first, premium or thesis.
+
+---
+
+
+<!-- ================= was: docs/TRADE_RECORD_FIELDS.md ================= -->
+
+##### Trade Record — Observability Fields
+
+**What this is:** the reference for the diagnostic fields captured on every trade
+record. These exist so a trade can be explained *after the fact* without
+reconstructing state from logs. If you are trying to answer "why did it take that
+trade / at that strike / with that size," start here.
+
+**Where the data lives:**
+- Per box: `~/options-trader/trades.db` (table `trades`)
+- Consolidated: `~/day_trader_pro/fleet_trades_<YYYY-MM-DD>.json` and `.csv`
+  (built by the **EOD conductor**, devtools menu option **50**; re-runnable
+  standalone via option **39**)
+
+---
+
+##### Fields
+
+##### `adx_at_entry` — float
+ADX at the moment the entry signal fired. Trend strength, 0–100ish. Added
+2026-07-24 (commit `0421f37`).
+
+**Why it exists:** post-mortems kept asking "was this a trending tape?" and the
+answer had to be reconstructed from replay logs, which were often cold-start and
+wrong. Now it is stamped on the trade.
+
+**Reading it:** >40 is a strong trend; <20 is chop. A countertrend trade with a
+high `adx_at_entry` is a red flag — that combination is what surfaced the sweep's
+missing trend filter.
+
+##### `regime_conviction` — float, nominally 0.0–1.0
+The Layer-1 regime conviction at entry — the confluence engine's own confidence in
+the regime label it assigned. Added 2026-07-24 (commit `0421f37`).
+
+**Why it exists:** conviction drives strike selection (sweep delta scaling) and
+position sizing, but was never recorded, so there was no way to check whether
+high-conviction trades actually outperformed. It is captured **for the sole purpose
+of evaluating the conviction scores themselves.**
+
+**KNOWN ISSUES as of 2026-07-28 (first full day of collection, n=23):**
+- **Compressed ceiling.** Observed range was `0.000 – 0.582`. Nothing approached
+  the top of the nominal 0–1 scale. Any consumer treating 0.8+ as "high
+  conviction" is reading a scale that never gets there.
+- **Quantized, not continuous.** Five trades landed on exactly `0.438` (AVGO,
+  NFLX, PLTR, QQQ, TSLA — all ORB) and four on exactly `0.000`. Nine of 23 sat on
+  two discrete values. That is the signature of a score driven by a few
+  boolean-ish inputs rather than accumulating evidence.
+- **No relationship to outcome yet.** correlation(conviction, pnl) = **0.104**,
+  n=23. The four highest-conviction trades went 0/4, −$740; the mid band
+  (0.40–0.50) went 6/11, +$787. **Confounded** — the high band was dominated by
+  condors, which had a separate strike-placement bug that day. Do not read this as
+  "conviction is inverted"; read it as "not yet measurable."
+- The confluence excavation (`92c89d7`, `regime_confluence` v1.3) landed
+  2026-07-28. **Comparing the conviction distribution before/after that commit is
+  a clean test of whether the rebuild widened the scale.**
+
+##### `flat_angle_deg` — float, degrees
+The directional-drift angle of the regime window at entry. Added 2026-07-24
+(commit `0421f37`). Low = flat/ranging tape, higher = directional drift.
+
+**Status:** as a *day-level* discriminator this was tested and
+**CONFIRMED-NEGATIVE** — it does not separate good sweep days from washouts (see
+OBSERVATIONS, 2026-07-24 entry). Retained as per-trade context; do not build a
+gate on it without new evidence.
+
+##### `swept_level_name` — string, `level_strength` — float 0.0–1.0
+For sweep trades: which liquidity level was swept, and its quality. Added
+2026-07-24 (commit `934f9d4`).
+
+`level_strength` scale: equal-H/L (unnamed) ≈ 0.2; named PDH/PDL/session 0.6–1.0
+scaled by touch count.
+
+**Why it exists:** to test the live hypothesis that **sweep outcome is driven by
+the quality of the pool it targeted**, not by the entry logic or the tape. This is
+the surviving lead after the tape/regime fingerprint was ruled out.
+
+**Note:** stamped by the sweep path only. ORB trades leave these empty/0.0 — that
+is expected, not a bug.
+
+---
+
+##### Querying it
+
+Per box, straight from the trade DB:
+
+```
+cd ~/options-trader && sqlite3 -header -column trades.db \
+  "SELECT symbol,strategy,adx_at_entry,regime_conviction,pnl_usd,exit_reason
+   FROM trades WHERE date(entry_time)=date('now') ORDER BY regime_conviction DESC;"
+```
+
+Fleet-wide, from the conductor's consolidated CSV on the control box:
+
+```
+cd ~/day_trader_pro && python3 -c "
+import csv,sys
+r=[t for t in csv.DictReader(open(sys.argv[1])) if t['entry_time'].startswith(sys.argv[2])]
+f=lambda x: float(x) if x not in ('','None') else 0.0
+for t in sorted(r,key=lambda x:-f(x['regime_conviction'])):
+    print(f\"{t['symbol']:6}{t['strategy'][:20]:21}conv={f(t['regime_conviction']):.3f} \"
+          f\"adx={f(t['adx_at_entry']):5.1f} pnl={f(t['pnl_usd']):>9.2f}  {t['exit_reason'][:30]}\")
+" fleet_trades_2026-07-28.csv 2026-07-28
+```
+
+Distribution check (the thing that exposed the compressed ceiling):
+
+```
+cd ~/day_trader_pro && python3 -c "
+import csv,sys
+from collections import Counter
+r=[t for t in csv.DictReader(open(sys.argv[1]))]
+f=lambda x: float(x) if x not in ('','None') else 0.0
+c=Counter(round(f(t['regime_conviction']),3) for t in r)
+for v,n in sorted(c.items()): print(f'{v:.3f}: {n}')
+" fleet_trades_2026-07-28.csv
+```
+
+---
+
+##### Adding a new observability field
+
+The pattern these followed, so the next one is not a dig to find:
+
+1. Add the column to the `trades` table schema **with auto-migration** (existing
+   DBs must not break).
+2. Wire it through every entry path that creates a trade record — strategies,
+   `entry_engine`, and the condor leg builder. Missing one path produces silent
+   zeros in a subset of trades.
+3. Add it to the consolidation so the EOD conductor carries it into
+   `fleet_trades_<date>.json/.csv`.
+4. **Document it here**, with: what it is, why it exists, what "good" looks like,
+   and any known issues found in the first days of collection.
+
+Step 4 is the one that got skipped for the 2026-07-24 batch — the fields were
+live and collecting for four days before anyone could say what they were without
+reading commits.
+
+---
+
+
+<!-- ================= was: docs/README_orb_regime_ungate_v3_2.md ================= -->
+
+##### ORB Regime Un-Gate — v3.2 (2026-07-11)
+
+##### Scope
+
+Lets the flagship **5-minute ORB break-and-retest fire regardless of the regime
+label** — including `UNKNOWN` and `SWEEP_REVERSAL` — behind a single config
+switch. The ORB engine's break+retest is self-validating; the classifier does
+not even test for it, so the label is not consulted for the go/no-go decision.
+
+This pass sits **on top of the v3.1 stop rework** (`orb_engine` + `exit_engine`).
+Deploy them together — the four files below are the complete, consistent set.
+
+Files:
+
+- `config.py` — new switch `ORB_FIRES_REGARDLESS_OF_REGIME` (default `True`)
+- `main.py` (v3.2) — dispatch un-gate
+- `analysis/orb_engine.py` (v3.2) — stop rework (v3.1) **+** sweep-deferral guard
+- `execution/exit_engine.py` (v3.1) — structure stop (from the stop-fix pass, unchanged)
+
+**Not included (still queued):** the ORB-target-path conviction haircut and the
+proximity-graded sweep demotion. Those touch scoring, not gating, and are a
+separate pass.
+
+---
+
+##### Why this exists
+
+The ORB is the highest-quality, fully mechanical setup in the book, and v2 was
+blocking it: during the opening-range window the classifier frequently returns
+`UNKNOWN` (a single 5m frame early in the session rarely resolves to a named
+regime), and `UNKNOWN` was a hard no-trade. So the best setup was being gated by
+a label that says nothing about whether the setup is present.
+
+The fix is one rule: **a confirmed ORB fires regardless of the label.** The
+break+retest is the edge; the regime dimension becomes a *scoring input*, not a
+veto.
+
+---
+
+##### What changed
+
+##### `config.py`
+
+```python
+ORB_FIRES_REGARDLESS_OF_REGIME = True   # set False to restore strict v2 gating
+```
+
+##### `main.py` (v3.2) — `run_entry_logic`
+
+Two edits, both switch-gated:
+
+1. **Hard UNKNOWN gate bypassed for a confirmed ORB.** The `UNKNOWN`/undefined
+   no-trade gate no longer vetoes when the engine is in a confirmed `OPEN_LONG`/
+   `OPEN_SHORT` state. A genuinely unclassified tape with *no* ORB setup still
+   blocks (only a proven setup bypasses).
+2. **ORB dispatch admits `UNKNOWN` and `SWEEP_REVERSAL`.** A confirmed ORB now
+   dispatches under those labels too (previously only TRENDING/BREAKOUT/RANGING/
+   COMPRESSION).
+
+##### `analysis/orb_engine.py` (v3.2)
+
+The retest confirm previously **deferred** (left the setup awaiting retest)
+whenever the regime was `SWEEP_REVERSAL`, so a sweep label suppressed a valid
+ORB. Now guarded by the switch: with it on, the engine confirms OPEN under a
+sweep label so the dispatch can fire it — **ORB beats sweep.** (The v3.1 stop
+logic is unchanged.)
+
+---
+
+##### Expected behavior (verified truth table)
+
+| regime label | ORB engine confirmed? | switch | outcome |
+|---|---|---|---|
+| UNKNOWN | yes | **on** | **ORB fires** |
+| UNKNOWN | yes | off | blocked (v2 behavior) |
+| UNKNOWN | no | on | blocked (no setup to bypass) |
+| SWEEP_REVERSAL | yes | **on** | **ORB fires (beats sweep)** |
+| SWEEP_REVERSAL | yes | off | falls to sweep strategy (v2 behavior) |
+| RANGING / COMPRESSION / TRENDING / BREAKOUT | yes | either | ORB fires (unchanged) |
+| None / undefined | — | on | blocked (no crash) |
+
+What does **not** change:
+
+- **The setup scorer still governs.** A confirmed ORB under `UNKNOWN` still has to
+  clear the B threshold. `regime_conviction` simply contributes 0 (its 0.20
+  weight), so only ORBs that earn a B on break quality + VWAP + liquidity + macro
+  fire; marginal ones are still refused. The scorer *is* the consensus filter.
+- **Exits are unchanged.** v3.1 structure stop (close beyond the impulsive origin)
+  + the unconditional −25% premium floor. The un-gate changes entry, not exit.
+- **Sweep / butterfly / condor are untouched.** They self-gate on their own regime
+  values and do not fire under `UNKNOWN`. This pass only frees the ORB.
+
+---
+
+##### Interaction with the shadow observer
+
+Every ORB that fires under `UNKNOWN` is logged with `regime=UNKNOWN` on the trade
+record. That is precisely the labeled tape the shadow subsystem exists to
+capture: it can now record the Layer-1 confluence scores (`regime_confluence`)
+and raw factors at the moment an `UNKNOWN`-labeled ORB fires and resolves, which
+is the corpus the v3 conviction integrator needs to be calibrated against. In
+other words, un-gating the ORB is also what starts *feeding* the shadow program
+the exact population v2 was starving it of.
+
+---
+
+##### What this does and does not establish
+
+- **Verified:** the gate logic (all 9 regime/state/switch combinations), the
+  engine confirming OPEN under a sweep label, syntax and imports across all four
+  files. The un-gate does what it says and is fully reversible via the switch.
+- **Not established here:** that the newly-fired ORBs are net-profitable. That is
+  a **paper-forward** question — option-premium P&L can't be reconstructed from
+  underlying OHLC. The posture is deliberate: these are lower-information trades
+  (the tape was `UNKNOWN`), taken to generate labeled data, with the scorer's
+  B-threshold and the v3.1 stops containing the downside. Expect a lower hit rate
+  than regime-confirmed ORBs; that's the point.
+- **Reminder on single-day tape:** the classifier is starved on one session, so
+  the exact "how often was the ORB window `UNKNOWN`" rate is only reliable live —
+  which the shadow program will now measure directly.
+
+---
+
+##### Deploy
+
+All four files are one consistent set (v3.1 stops + v3.2 un-gate). Ship together:
+
+```
+scp config.py   <box>:<repo>/config.py ;
+scp main.py     <box>:<repo>/main.py ;
+scp orb_engine.py  <box>:<repo>/analysis/orb_engine.py ;
+scp exit_engine.py <box>:<repo>/execution/exit_engine.py ;
+```
+
+No new dependencies, no schema changes. To roll back the un-gate alone, set
+`ORB_FIRES_REGARDLESS_OF_REGIME = False` (restores strict v2 gating; the v3.1 stop
+rework stays in force). Restart the bot service to load the changes; confirm
+`PAPER_TRADING` is set as intended before the first session.
+
+---
+
+
+<!-- ================= was: docs/README_orb_stop_rework_v3_1.md ================= -->
+
+##### ORB Stop-Placement Rework — v3.1 (2026-07-11)
+
+##### Scope
+
+The 5-minute opening-range break-and-retest stop was being placed and enforced
+against the wrong price levels. This change corrects **where the stop level is
+set** (the engine) and **how it is enforced** (the exit path). Two files change,
+both bumped to **v3.1**:
+
+- `analysis/orb_engine.py`
+- `execution/exit_engine.py`
+
+No other strategy (sweep, butterfly, condor) is touched. **The regime un-gate
+(letting a confirmed ORB fire under an UNKNOWN/sweep label) is NOT part of this
+change set** — it remains queued separately.
+
+---
+
+##### Root cause
+
+Two distinct defects, both in the ORB stop, discovered by driving the real
+engine over candle-logger tape:
+
+1. **Stop LEVEL was anchored to the impulsive candle's body, not its wick.**
+   The engine set the stop to `min(open, close)` (long) / `max(open, close)`
+   (short) of the break candle. When that candle opened *outside* the range, its
+   body edge sat outside the level — so the retest entry (which returns to the
+   level) printed a stop on the *wrong side* of the entry. Result: inverted /
+   near-zero risk on a meaningful share of trades.
+
+2. **The exit's structure stop fired at the range boundary, not the impulsive
+   origin.** `_evaluate_orb` exited on any 1-minute close back inside the ORB
+   range (`close < orb_high` for a long). By the strategy's definition that is
+   *not* an invalidation — the trade is allowed to breathe inside the range as
+   long as it holds the impulsive candle's origin. Stopping at the range edge
+   cut trades that were still structurally valid.
+
+A separate, important finding from the same dissection: the corrected
+`underlying_stop` is **not** the live executor. Live exits govern off the **−25%
+premium floor** (`current_premium <= stop_premium`); the underlying level is a
+structure check that runs *beside* it. Both are intentional and both are kept —
+see "The stop model now."
+
+---
+
+##### What changed
+
+##### `analysis/orb_engine.py` (v3.1) — `_check_for_break`
+
+1. **Stop anchors to the impulsive candle's wick**: its `low` for a long, its
+   `high` for a short (was the body `min/max(open, close)`). The wick is the true
+   origin of the breakout move and sits inside the range where invalidation lives.
+
+2. **A valid impulsive candle must originate inside the range**: `low < orb_high`
+   for a long, `high > orb_low` for a short. A candle sitting entirely beyond the
+   range is late continuation, not an ORB break; taking its "retest" was the
+   source of the remaining inverted stops (fast/gap breaks and re-arms while
+   price was already extended). Gating on origin removes them, and — because the
+   engine now waits for the valid break instead of firing on the extended one —
+   it did not cost setups.
+
+##### `execution/exit_engine.py` (v3.1) — `_evaluate_orb`
+
+- The structure stop now keys off `underlying_stop` (the impulsive origin set by
+  the engine) instead of `orb_range_high` / `orb_range_low`. A long exits on a
+  1-minute close **below the impulsive low**, a short on a close **above the
+  impulsive high**. A close back inside the range that still holds the origin now
+  **keeps** the trade.
+- It remains close-based on the last *closed* candle (`iloc[-2]`), so an intrabar
+  wick into the range survives; only a confirmed close beyond the origin exits.
+- The **unconditional −25% premium floor (v1.6) is unchanged** and still evaluated
+  first, every tick.
+
+---
+
+##### The stop model now (the "AND")
+
+Two independent exits protect an ORB position. Whichever trips first closes it —
+they are an **AND** (both always armed), not a choice:
+
+| Exit | Level | Fires when | Catches |
+|---|---|---|---|
+| **Structure stop** | impulsive candle origin (low/high) | 1-min *close* beyond it | thesis is dead, regardless of premium |
+| **−25% premium floor** | 75% of entry premium | premium ≤ floor | dollars gone past tolerance — theta, retracement, or the two combined — regardless of structure |
+
+Neither is redundant: a slow bleed or a shallow-but-costly retracement can hit
+−25% without ever closing beyond the origin, and a sharp close beyond the origin
+can invalidate the thesis while the premium is still above −25%.
+
+---
+
+##### Smoke test
+
+**Tape:** candle-logger 1-minute OHLC for 2026-07-09 (15 symbols) and 2026-07-10
+(29 symbols) — 44 symbol-sessions. **Method:** the *real* `ORBEngine` is driven
+bar-by-bar with the clock and opening range injected (no reimplementation), then
+each confirmed entry's stop geometry is measured; the *real* `_evaluate_orb` is
+run against the MU reference sequence.
+
+##### Expected
+
+- Every confirmed entry carries a stop below entry (long) / above entry (short).
+- The MU 2026-07-10 setup reproduces the manual read: impulsive candle 09:49,
+  retest 09:50, stop at the impulsive low, 09:54 survives, 09:55 stops.
+- The exit's structure stop gives room inside the range that the old
+  range-boundary rule did not.
+
+##### Realized
+
+| Metric | Before (body stop, range-boundary exit) | After (v3.1) |
+|---|---|---|
+| Inverted / degenerate-risk entries | **26 / 92 (28%)** | **0 / 96 (0%)** |
+| Median entry risk (% of price) | 0.089% (collapsed onto entry) | **0.201%** (sane distance) |
+| Confirmed ORB entries | 92 | 96 (fix did not cost setups) |
+
+- **MU reference, through the real exit method:**
+  ORB range 971.50 / 958.08; impulsive candle **09:49** (O 971.35, H 975.49,
+  **L 971.14**, C 973.83); retest **09:50** doji (L 971.00 wicks in, C 973.99
+  closes out) → fires, entry 973.83, **stop = 971.14**.
+  `09:54` close 972.15 → **holds**. `09:55` close 970.88 → **exits**:
+  `orb_structure_stop: 1m close 970.88 below impulsive-candle low 971.14`. Exact
+  match to the manual walkthrough.
+- **Extra room from the exit change:** across the entries where the two rules
+  differed, the impulsive-origin stop held the trade a **median of +3 bars**
+  longer than the old range-boundary stop (~1/3 of entries), i.e. it survived a
+  range re-entry the old rule would have cut. The −25% floor still independently
+  caps dollar loss on those.
+
+---
+
+##### What this does and does not establish
+
+- **Verified:** stop *geometry* (level) and exit *trigger* (level + close-based).
+  Every ORB entry in the run now has a correctly-placed, non-inverted stop, and
+  the exit fires on the origin, not the range edge.
+- **Not established here:** option-premium P&L / win-rate. The bot's real
+  outcomes ride on option premium (a 25% premium stop and premium target), which
+  cannot be reconstructed from underlying OHLC without the option chain. Whether
+  these setups are net-profitable is a **paper-forward** question, not a
+  backtest-from-tape one.
+- **Data limits:** two single-day sessions; the regime classifier is starved on
+  single-day tape and is unaffected by this change regardless.
+
+---
+
+##### Deploy
+
+Both files ship together (they are a matched pair — the engine sets the level the
+exit reads).
+
+```
+scp orb_engine.py  <box>:<repo>/analysis/orb_engine.py ;
+scp exit_engine.py <box>:<repo>/execution/exit_engine.py ;
+```
+
+No `config.py` changes, no new dependencies, no schema changes. `underlying_stop`
+is already carried on the trade record (written by `entry_engine`), so no
+migration is required. Restart the bot service to load v3.1.
+
+---
+

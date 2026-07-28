@@ -159,6 +159,10 @@ this session) carries the *tiered* value and the postmortem buckets become meani
 ---
 
 ## 2026-07-24 (eve) — Trade record was missing regime context at entry
+> **Field reference: [docs/TRADE_RECORD_FIELDS.md](TRADE_RECORD_FIELDS.md)** — what each
+> observability field means, how to query it, and known issues (the conviction
+> scale is compressed/quantized — see the 2026-07-28 findings there).
+
 **STATUS: RESOLVED.** The trades table never had an ADX field — ADX lived only in the
 separate `regime_log` table, so every trade showed adx=0.0 (structural blank, not a
 starvation bug). Fixed as observability: added `adx_at_entry`, `regime_conviction`,
