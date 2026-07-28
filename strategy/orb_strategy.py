@@ -24,6 +24,17 @@ RULE 2 — Named level in path between entry and 50% TP (hard reduce):
 RULE 3 — Named level just beyond 100% TP (adjust target, don't block):
   If a named pool sits within 0.5 ORB-widths past the 100% TP, move the target
   to that pool price rather than projecting past it.
+v-namelevels (2026-07-28) — the liquidity gate NAMES the levels it blocks on.
+        Was: "Named pool in fakeout zone (entry->50%TP): 1 named level(s)." — a bare
+        count, unauditable. On 2026-07-28 this gate held the AVGO ORB short for SIX
+        consecutive ticks (13:42:15 -> 13:43:30, 90s) starting the same tick the
+        retest confirmed; the trade finally filled at 372.11 — 1.4pt below the
+        confirmation and 0.5pt off the absolute low — then reversed and stopped out
+        (-$135.50). The block never said WHAT it blocked on. Now logs name@price for
+        every pool in the fakeout zone plus entry/50%TP/direction, and carries
+        named_in_path_detail / unnamed_in_path_detail on the result for callers.
+        NOTE: this is OBSERVABILITY ONLY — the gate behaviour is unchanged. What the
+        block SHOULD do (skip / trade-to-pool / enter reduced) is still open.
 """
 
 import logging
@@ -76,12 +87,20 @@ class ORBStrategy(BaseOptionsStrategy):
             orb, liq_map, current_price, direction, break_level
         )
 
+        # v-nopause 2026-07-28: a named pool in the target path DOWNGRADES the
+        # entry (setup_scorer: grade A -> B, smaller size). It does NOT veto and it
+        # does NOT pause. The veto here was never part of the design and produced
+        # behaviour nobody asked for: on 2026-07-28 it held the AVGO ORB short for
+        # SIX ticks (90s) from the moment the retest confirmed, then let it fill
+        # 1.4pt lower at the exhaustion low of the move (-$135.50). Waiting for the
+        # obstacle to fall behind price is the worst of the three possible
+        # responses. The pool is still detected, named, and journalled — it just
+        # feeds the grade instead of blocking the trade.
         if liq_result["block"]:
             logger.info(
-                f"ORB BLOCKED — named liquidity pool in path with no extra "
-                f"confluence: {liq_result['block_reason']}"
+                f"ORB pool in path (DOWNGRADE, not a block): "
+                f"{liq_result['block_reason']}"
             )
-            return None
 
         target_100 = liq_result.get("adjusted_target", orb.target_100pct)
         target_50  = orb.orb_high + (target_100 - orb.orb_high) * 0.5 \
@@ -208,6 +227,11 @@ class ORBStrategy(BaseOptionsStrategy):
             "path_clear":           True,
             "named_in_path":        0,
             "unnamed_in_path":      0,
+            # v-namelevels 2026-07-28: identities, not just counts. "1 named
+            # level(s)" told us NOTHING when this gate held an AVGO ORB entry for
+            # 6 straight ticks (90s) and the trade filled 1.4pt late at the low.
+            "named_in_path_detail":   [],   # [(name, price), ...] in the fakeout zone
+            "unnamed_in_path_detail": [],   # [price, ...] equal-H/L clusters (metric only)
             "target_adjusted":      False,
             "adjusted_target":      orb.target_100pct,
             "target_adj_reason":    "",
@@ -244,6 +268,7 @@ class ORBStrategy(BaseOptionsStrategy):
             )
             if in_danger_zone and is_named:
                 result["named_in_path"] += 1
+                result["named_in_path_detail"].append((pool_name, float(pool_price)))
                 result["path_clear"]     = False
 
             in_full_path = (
@@ -256,6 +281,7 @@ class ORBStrategy(BaseOptionsStrategy):
                 # (metric only) so we can later study whether they matter at scale.
                 # Only NAMED pools (PDH/PDL/session) affect path_clear / grade.
                 result["unnamed_in_path"] += 1
+                result["unnamed_in_path_detail"].append(float(pool_price))
 
             adj_zone_long  = (direction == "long"  and
                               target_100 < pool_price < target_100 + orb_width * BEYOND_TP_ADJUSTMENT_WIDTHS)
@@ -269,9 +295,12 @@ class ORBStrategy(BaseOptionsStrategy):
 
         if result["named_in_path"] > 0 and not result["break_is_named_level"]:
             result["block"]        = True
+            _named = ", ".join(f"{n}@{px:.2f}" for n, px in result["named_in_path_detail"]) \
+                     or "(unidentified)"
             result["block_reason"] = (
                 f"Named pool in fakeout zone (entry→50%TP): "
-                f"{result['named_in_path']} named level(s)."
+                f"{result['named_in_path']} named level(s): {_named} "
+                f"[entry={current_price:.2f} 50%TP={target_50:.2f} dir={direction}]"
             )
 
         return result

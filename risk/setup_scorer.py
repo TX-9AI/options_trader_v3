@@ -57,6 +57,9 @@ v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         mapping optimization (all market data now flows from the single
         shared TastyTrade candle feed — see data/candle_feed.py). No logic
         change in this file.
+v-namelevels (2026-07-28) — ORB grade line names the pools in path instead of
+        counting them ("2 pool(s) in path: PDL@371.65, ..."), and the breakdown gains
+        pools_in_path_detail. Observability only; grading unchanged.
 """
 
 import logging
@@ -364,15 +367,23 @@ class SetupScorer:
         grade = "A" if not pools_blocking else "B"
         multiplier = GRADE_SIZE_MULTIPLIER[grade]
 
+        # v-namelevels 2026-07-28: name the pools, don't just count them. A bare
+        # count is unauditable — "2 pool(s) in path" cost us an hour tracing an
+        # AVGO ORB entry that this gate delayed by 6 ticks.
+        _pool_names = ", ".join(
+            f"{getattr(p, 'name', None) or 'unnamed'}@{getattr(p, 'price', 0.0):.2f}"
+            for p in pools_blocking) or "none"
+
         breakdown = {
             "orb_geometry": "confirmed",          # the gate the state machine passed
             "pools_in_path": len(pools_blocking),
+            "pools_in_path_detail": _pool_names,
             "liquidity_path": "clear" if grade == "A" else "pool_in_path",
         }
 
         logger.info(
             f"ORB grade: {grade} ({'clear path' if grade=='A' else ''}"
-            f"{len(pools_blocking)} pool(s) in path) mult={multiplier}x"
+            f"{len(pools_blocking)} pool(s) in path: {_pool_names}) mult={multiplier}x"
         )
         # Journal it like any other scored signal (REJECT path is unreachable
         # for the ORB, so grade is always A or B here). total is reported as
