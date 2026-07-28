@@ -1,4 +1,22 @@
 """
+v-dualfloor + v-indep-legs — 2026-07-28 — TWO FIXES to strike selection and legging.
+  (1) STRIKE FLOOR: short strike must clear BOTH 0.80*expected_move from spot
+      AND the BB band (whichever is farther). The old code anchored to the BB
+      band, had a fallback that placed strikes INSIDE the band when nothing
+      liquid sat outside, and only rejected strikes that were too FAR — there
+      was NO minimum-distance floor. It sold calls/puts on top of spot with no
+      room to breathe (~3 weeks of bleed). Verified against the 2026-07-28
+      entries: all six sold at 6-28% of EM; the 0.80 floor rejects every one.
+      `_select_beyond_floor` keeps the liquidity-based selection but biases
+      OUTWARD and has NO inside fallback — no liquid strike beyond the floor
+      means the leg is SKIPPED, never sold close.
+  (2) INDEPENDENT LEGS: the call and put sides are independent credit spreads
+      sharing a plan. Both triggers are checked EVERY tick; whichever side's
+      conditions are met fires, regardless of order. Previously leg 2 was
+      state-gated behind leg 1, so if price only ever visited leg 2's side that
+      leg never fired at all. call_filled/put_filled tracked separately;
+      COMPLETE only when both are in. leg1/leg2 now mean only first/second to
+      fill (preserved for the entry_engine interface and the roll path).
 strategy/iron_condor_strategy.py — Legged Iron Condor for RANGING regime.
 v3.2 — 2026-07-23 — LEG 2 PAUSES INSTEAD OF CANCELLING on a non-RANGING tick,
         and its short strike is RE-DERIVED from the CURRENT bands at fire time
@@ -76,6 +94,7 @@ from data.macro_data import MacroSnapshot
 from config import (
     CONDOR_WING_WIDTH_SPX, CONDOR_WING_WIDTH_QQQ,
     CONDOR_EXPECTED_MOVE_GUARDRAIL_MULT,
+    CONDOR_EM_FLOOR_FRAC,
     CONDOR_PROXIMITY_STRIKES,
     CONDOR_TRIGGER_APPROACH,
     CONDOR_NICKEL_CLOSE, CONDOR_STOP_LOSS_PCT,
@@ -133,6 +152,14 @@ class CondorPlan:
     state: str = CondorState.IDLE
     decided_at: str = ""
     leg1_filled_at: str = ""
+    # v-indep-legs 2026-07-28: the two sides are INDEPENDENT credit spreads that
+    # merely share a plan. Each fills on ITS OWN trigger; order is irrelevant.
+    # (Was: leg2 was state-gated behind leg1, so if price visited leg2's side
+    # first that leg never fired at all.) leg1/leg2 now mean only "first/second
+    # to fill", preserved for the entry_engine interface and the roll logic.
+    call_filled: bool = False
+    put_filled:  bool = False
+    pending_side: str = ""    # side of the signal currently out for fill
 
 
 class IronCondorStrategy(BaseOptionsStrategy):
@@ -216,6 +243,40 @@ class IronCondorStrategy(BaseOptionsStrategy):
                 return max(outside, key=lambda c: c.strike)
             return min(candidates, key=lambda c: abs(c.strike - band_level))
 
+    def _select_beyond_floor(self, contracts: List[OptionContract],
+                             floor_level: float, side: str) -> Optional[OptionContract]:
+        """
+        v-dualfloor 2026-07-28: select the MOST LIQUID strike that sits BEYOND
+        the floor (call: strike >= floor; put: strike <= floor). Preserves the
+        elegant liquidity-based selection the operator wanted to keep — but
+        (1) biases OUTWARD (only strikes beyond the floor are eligible) and
+        (2) has NO inside fallback: if nothing liquid exists beyond the floor,
+        return None so the leg is SKIPPED rather than sold with no room. This is
+        the reversal of the old bug (nearest-to-band fallback placed strikes
+        INSIDE the range, on top of spot, with no breathing room — ~3 weeks of
+        bleed). Liquidity = mark (proxy); ties break to the strike CLOSEST to the
+        floor among the eligible outside strikes (richest premium still beyond
+        the floor), not deepest OTM.
+        """
+        eligible = [c for c in contracts
+                    if c.mark > 0.01 and
+                    (c.strike >= floor_level if side == "call" else c.strike <= floor_level)]
+        if not eligible:
+            return None
+        # most liquid; tie-break to the one nearest the floor (richest still-safe).
+        def liq(c):
+            return (getattr(c, "open_interest", 0) or 0) + (getattr(c, "volume", 0) or 0)
+        max_liq = max(liq(c) for c in eligible)
+        if max_liq > 0:
+            top = [c for c in eligible if liq(c) >= max_liq * 0.5]  # liquid cohort
+        else:
+            top = eligible                                          # no OI/vol data: all eligible
+        # among the liquid cohort, take the strike nearest the floor (richest premium
+        # that still clears the floor — closest to spent-move edge without going inside)
+        if side == "call":
+            return min(top, key=lambda c: c.strike)
+        return max(top, key=lambda c: c.strike)
+
     def _find_contract_at_strike(self, contracts: List[OptionContract],
                                   target_strike: float) -> Optional[OptionContract]:
         """Find contract at exact strike, or nearest with a valid mark."""
@@ -259,36 +320,48 @@ class IronCondorStrategy(BaseOptionsStrategy):
             logger.debug("Condor: could not compute expected move")
             return None
 
-        # BB-anchored strike selection — no delta involvement.
-        # Short call placed at or just outside the BB upper band — structurally
-        # correct for a ranging day since the BB band IS the range boundary.
-        # Short put placed at or just outside the BB lower band. If no liquid
-        # strike exists near a band, the leg is skipped (return None) — there
-        # is no delta fallback.
+        # ── DUAL-FLOOR STRIKE SELECTION (v-dualfloor 2026-07-28) ─────────────
+        # RULES (operator, reversing the old broken logic that sold spreads with
+        # NO breathing room — bled P&L for ~3 weeks):
+        #   1. the short strike must be OUTSIDE the expected move (>= spot ± em)
+        #   2. AND outside the widest Bollinger point (>= bb_upper / <= bb_lower)
+        # The floor is the FARTHER of the two — a short strike must clear BOTH.
+        # The OLD code anchored to the BB band then only rejected strikes that
+        # were too FAR; it had NO minimum-distance floor and a fallback that
+        # placed strikes INSIDE the band when nothing liquid sat outside it — so
+        # it sold calls/puts right on top of spot, inside the range, with no room
+        # to breathe. That fallback is REMOVED: if no liquid strike exists beyond
+        # the floor, the leg is SKIPPED (return None), never placed inside.
         bb_upper = vol_state.bb_upper if vol_state.bb_upper > 0 else current_price + em
         bb_lower = vol_state.bb_lower if vol_state.bb_lower > 0 else current_price - em
 
-        if bb_upper <= current_price or bb_lower >= current_price:
-            logger.info("Condor: BB bands not usable (price outside bands) — skip")
-            return None
+        # the dual floor: farther of (80%-of-expected-move edge, BB band).
+        # 80% EM is the operator's "premium is rich here" line — the short strike
+        # must sit at least 0.80*EM from spot (so ~80% of the move is already
+        # priced past it) AND beyond the BB band. Whichever is farther wins.
+        em_floor = em * CONDOR_EM_FLOOR_FRAC
+        call_floor = max(current_price + em_floor, bb_upper)
+        put_floor  = min(current_price - em_floor, bb_lower)
 
-        short_call = self._select_by_band(chain.calls, bb_upper, "call")
-        short_put  = self._select_by_band(chain.puts,  bb_lower, "put")
+        short_call = self._select_beyond_floor(chain.calls, call_floor, "call")
+        short_put  = self._select_beyond_floor(chain.puts,  put_floor,  "put")
 
         if short_call is None or short_put is None:
-            logger.debug("Condor: could not find short strikes near BB bands")
+            logger.info(
+                f"Condor: no liquid strike beyond dual floor "
+                f"(call>={call_floor:.2f}, put<={put_floor:.2f}) — SKIP, "
+                f"will not sell inside the expected move / BB band")
             return None
 
-        # Guardrail: sanity check that strikes aren't beyond 1.2x expected move
         call_dist = short_call.strike - current_price
         put_dist  = current_price - short_put.strike
-        guardrail = em * CONDOR_EXPECTED_MOVE_GUARDRAIL_MULT
 
+        # Upper guardrail unchanged: reject absurdly-far (illiquid-skew) strikes.
+        guardrail = em * CONDOR_EXPECTED_MOVE_GUARDRAIL_MULT
         if max(call_dist, put_dist) > guardrail:
             logger.info(
-                f"Condor: BB-selected strikes exceed expected move guardrail "
-                f"({guardrail:.1f}pt) — unusual skew, skip"
-            )
+                f"Condor: dual-floor strikes exceed {guardrail:.1f}pt guardrail "
+                f"— unusual skew, skip")
             return None
 
         # Wing widths (fixed, instrument-appropriate)
@@ -405,26 +478,31 @@ class IronCondorStrategy(BaseOptionsStrategy):
                 plan.state = CondorState.COMPLETE
             return None
 
-        # Check which leg should fire
-        if plan.state == CondorState.DECIDED:
-            # Check Leg 1 trigger
-            if plan.leg1_side == "call":
-                triggered = current_price >= plan.call_trigger_price
+        # ── INDEPENDENT LEGS (v-indep-legs 2026-07-28) ───────────────────────
+        # Check BOTH sides every tick. Each side fires on its own trigger, with
+        # identical entry logic, regardless of what the other side has done. No
+        # ordering: whichever side's conditions are met first fills first. The
+        # only coupling is the shared plan (and, later, the roll).
+        if plan.state in (CondorState.DECIDED, CondorState.LEG1_FILLED):
+            call_hit = (not plan.call_filled) and current_price >= plan.call_trigger_price
+            put_hit  = (not plan.put_filled)  and current_price <= plan.put_trigger_price
+
+            # If both trigger on the same tick (rare), take the side price has
+            # travelled FURTHER past — its premium is the richer of the two.
+            if call_hit and put_hit:
+                call_excess = current_price - plan.call_trigger_price
+                put_excess  = plan.put_trigger_price - current_price
+                side = "call" if call_excess >= put_excess else "put"
+            elif call_hit:
+                side = "call"
+            elif put_hit:
+                side = "put"
             else:
-                triggered = current_price <= plan.put_trigger_price
+                return None
 
-            if triggered:
-                return self._build_leg_signal(plan, plan.leg1_side, chain, is_leg1=True)
-
-        elif plan.state == CondorState.LEG1_FILLED:
-            # Check Leg 2 trigger
-            if plan.leg2_side == "call":
-                triggered = current_price >= plan.call_trigger_price
-            else:
-                triggered = current_price <= plan.put_trigger_price
-
-            if triggered:
-                return self._build_leg_signal(plan, plan.leg2_side, chain, is_leg1=False)
+            first_fill = not (plan.call_filled or plan.put_filled)
+            plan.pending_side = side
+            return self._build_leg_signal(plan, side, chain, is_leg1=first_fill)
 
         return None
 
@@ -435,6 +513,13 @@ class IronCondorStrategy(BaseOptionsStrategy):
         if self._plan is None:
             return
         plan = self._plan
+        # mark the side that actually filled (v-indep-legs)
+        side = plan.pending_side or (plan.leg1_side if is_leg1 else plan.leg2_side)
+        if side == "call":
+            plan.call_filled = True
+        elif side == "put":
+            plan.put_filled = True
+        plan.pending_side = ""
         if is_leg1:
             plan.state         = CondorState.LEG1_FILLED
             plan.leg1_credit   = credit
@@ -446,7 +531,9 @@ class IronCondorStrategy(BaseOptionsStrategy):
                 f"credit=${credit:.2f} — queuing Leg 2 ({plan.leg2_side.upper()})"
             )
         else:
-            plan.state       = CondorState.COMPLETE
+            # COMPLETE only when BOTH independent sides are filled
+            plan.state       = (CondorState.COMPLETE if (plan.call_filled and plan.put_filled)
+                                else CondorState.LEG1_FILLED)
             plan.leg2_credit = credit
             plan.leg2_short  = short_contract
             plan.leg2_long   = long_contract

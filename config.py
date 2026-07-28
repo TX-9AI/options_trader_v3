@@ -343,6 +343,7 @@ BUTTERFLY_GEX_PIN_PROXIMITY_MULT = 1.0  # Multiplier on expected move
 CONDOR_WING_WIDTH_SPX       = 5      # Narrow wings — affordable verticals (was 25)
 CONDOR_WING_WIDTH_QQQ       = 5      # Fixed wing width in points on QQQ/SPY
 CONDOR_EXPECTED_MOVE_GUARDRAIL_MULT = 1.2  # Short strikes must be within this x EM
+CONDOR_EM_FLOOR_FRAC = 0.80   # short strike must sit >= this * expected_move from spot
 CONDOR_PROXIMITY_STRIKES    = 2      # (legacy) strikes inside the short — superseded by CONDOR_TRIGGER_APPROACH
 # Fraction of the distance from the BB midline to each short strike that price
 # must travel before that side's spread fires. Higher = price must get closer

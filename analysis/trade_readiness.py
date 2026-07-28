@@ -1,4 +1,17 @@
 # analysis/trade_readiness.py — options_trader_v3
+# v1.4 — 2026-07-28 — ARM-ORIGIN EXTENSION (operator spec). The "move" is
+#         defined to START when confluence ARMS: ReadinessState now stamps
+#         (origin_price, origin_em, origin_ts) at every STAGING->ARMED
+#         transition, RE-STAMPS on every re-arm (flicker/disarm then re-arm =
+#         fresh origin), and clears on disarm. `_extension_from_arm` scores the
+#         fraction of the arm-EM consumed since; a short-premium vertical is
+#         "premium rich" at TR_EXT_FIRE_FRAC (0.80) of that EM. Wired as the
+#         shared W_VERT_EXT corroborator into BOTH the condor sides (range
+#         adapter, per-side up/down) and the trend credit spread (trend adapter)
+#         — the two are the same short-premium family, split only by regime.
+#         `_expected_move_now` derives EM from the ATM straddle on ctx["chain"].
+#         Bounds OT_TR_EXT_* / OT_TR_W_VERT_* overridable. 0.80 is a PRIOR — the
+#         point of shipping live+logged is to discover the right number.
 # v1.3 — 2026-07-28 — TREND CREDIT SPREAD readiness track (TC.4, LOG-ONLY). New
 #         `_trend_credit_spread` track: readiness for a short-premium trend-
 #         participation trade (PCS in TRENDING_BULL, CCS in TRENDING_BEAR) that
@@ -216,6 +229,20 @@ W_TCS_CONV    = _envf("W_TCS_CONV", 0.25)
 W_TCS_ROOM    = _envf("W_TCS_ROOM", 0.20)
 W_TCS_MOM     = _envf("W_TCS_MOM", 0.15)
 
+# Extension-from-arm (v1.4, operator 2026-07-28). A short-premium vertical
+# (trend credit spread OR condor side) fires only once price has consumed
+# >= TR_EXT_FIRE_FRAC of the expected move that existed WHEN THE TRACK ARMED.
+# 0.80 = "premium is rich here" (80% of the arm-EM spent -> selling the fat,
+# unlikely tail). The ramp starts contributing at LO and maxes at HI so the
+# corroborator is graded, not a cliff. ALL PRIOR — the whole point of shipping
+# this live+logged is to discover whether 0.80 is the right number.
+TR_EXT_FIRE_FRAC = _envf("EXT_FIRE_FRAC", 0.80)   # fire threshold (fraction of arm-EM)
+TR_EXT_LO        = _envf("EXT_LO", 0.80)          # ramp floor (contribution begins)
+TR_EXT_HI        = _envf("EXT_HI", 1.20)          # ramp max (fully spent / overshot)
+W_VERT_EXT       = _envf("W_VERT_EXT", 0.50)      # extension weight in the shared core
+W_VERT_ROOM      = _envf("W_VERT_ROOM", 0.20)
+W_VERT_CONV      = _envf("W_VERT_CONV", 0.30)
+
 # Machine states
 DORMANT, STAGING, ARMED = "DORMANT", "STAGING", "ARMED"
 
@@ -238,6 +265,15 @@ class ReadinessState:
     last_beat:  float = 0.0        # wall-clock of last heartbeat journal row
     peak_r:     float = 0.0        # session peak while >= STAGING (resets on DORMANT)
     conv_ema:   float = 0.0        # v1.1: smoothed conviction (wall-clock EMA)
+    # v1.4 — arm-origin snapshot for extension-from-arm (operator 2026-07-28):
+    # the "move" is defined to START when confluence first ARMS. Stamp price + EM
+    # at each STAGING->ARMED transition; RE-STAMP on every re-arm (flicker/disarm
+    # then re-arm = fresh origin); clear on disarm. Extension is measured as
+    # travel since this origin / EM-at-this-origin. A short-premium vertical fires
+    # only once >= TR_EXT_FIRE_FRAC (0.80) of the arm-EM has been consumed.
+    origin_price: float = 0.0      # spot at the arm that opened this episode
+    origin_em:    float = 0.0      # straddle expected move captured at that arm
+    origin_ts:    float = 0.0      # wall-clock of that arm
     factors:    dict  = field(default_factory=dict)
 
 
@@ -341,13 +377,25 @@ class TradeReadinessEngine:
         room_val = ramp(float(getattr(vol, "bb_width_pct", 0.0) or 0.0) if vol else 0.0,
                         TR_ROOM_LO, TR_ROOM_HI)   # a condor needs room
         conv_val = ramp(conv, TR_CONV_LO, TR_CONV_HI)
+        # v1.4: extension-from-arm — has price consumed >= 80% of the arm-EM
+        # toward THIS side's edge? (call side = up-move, put side = down-move).
+        # This is the shared vertical-quality driver; a side won't fire until the
+        # move it's selling against is spent. Reads the origin stamped at arm.
+        tr_state = self.tracks.get("condor_" + side)
+        ext_side = "up" if side == "call" else "down"
+        ext_frac, ext_val, ext_fires = (self._extension_from_arm(tr_state, px, ext_side)
+                                        if tr_state is not None else (0.0, 0.0, False))
         r = _combine(hard_vetoes=[ranging], soft_necessary=[],
-                     corroborators=[(W_CNDR_APPROACH, appr_val),
+                     corroborators=[(W_VERT_EXT,  ext_val),
+                                    (W_CNDR_APPROACH, appr_val),
                                     (W_CNDR_CONV, conv_val),
                                     (W_CNDR_ROOM, room_val)])
         return r, {"label": label, "conv": round(conv, 3), "side": side,
                    "approach": round(approach, 3), "appr_val": round(appr_val, 3),
-                   "room_val": round(room_val, 3)}
+                   "room_val": round(room_val, 3),
+                   "ext_frac": round(ext_frac, 3), "ext_val": round(ext_val, 3),
+                   "ext_fires": ext_fires, "origin_px": round(getattr(tr_state, "origin_price", 0.0), 2) if tr_state else 0.0,
+                   "origin_em": round(getattr(tr_state, "origin_em", 0.0), 3) if tr_state else 0.0}
 
     def _butterfly(self, ctx, regime) -> Tuple[float, dict]:
         """Compression play: coil conviction, squeeze, narrowness degree."""
@@ -365,6 +413,55 @@ class TradeReadinessEngine:
                                     (W_BFLY_NARROW, narrow_val)])
         return r, {"label": label, "conv": round(conv, 3),
                    "squeeze_val": sqz_val, "narrow_val": round(narrow_val, 3)}
+
+    @staticmethod
+    def _expected_move_now(ctx, price):
+        """
+        ATM straddle expected move for THIS tick, if a chain is on ctx.
+        EM = ATM call mark + ATM put mark. Returns 0.0 if unavailable (origin
+        still stamps price; extension simply can\'t score until an EM exists).
+        Never raises.
+        """
+        try:
+            chain = ctx.get("chain")
+            if chain is None or price <= 0:
+                return 0.0
+            calls = getattr(chain, "calls", None) or []
+            puts  = getattr(chain, "puts", None) or []
+            if not calls or not puts:
+                return 0.0
+            atm_c = min(calls, key=lambda c: abs(getattr(c, "strike", 0.0) - price))
+            atm_p = min(puts,  key=lambda c: abs(getattr(c, "strike", 0.0) - price))
+            em = float(getattr(atm_c, "mark", 0.0) or 0.0) + float(getattr(atm_p, "mark", 0.0) or 0.0)
+            return em if em > 0 else 0.0
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _extension_from_arm(tr, price, side):
+        """
+        Fraction of the arm-EM consumed since the track armed, and its ramp value.
+        side: "up" (call-credit / bull-continuation, price rising away from origin)
+              "down" (put-credit / bear, price falling away from origin).
+        Returns (frac, ext_val, fires). frac<0 means price moved AGAINST the
+        expected direction since arming (never fires). Requires a stamped origin
+        with a real EM; returns (0,0,False) otherwise.
+        """
+        try:
+            if getattr(tr, "origin_em", 0.0) <= 0 or getattr(tr, "origin_price", 0.0) <= 0:
+                return 0.0, 0.0, False
+            if side == "up":
+                travel = price - tr.origin_price
+            else:
+                travel = tr.origin_price - price
+            frac = travel / tr.origin_em
+            ext_val = ramp(frac, TR_EXT_LO, TR_EXT_HI)
+            # epsilon: hitting the threshold EXACTLY must fire (float repr of
+            # e.g. 4.8/6.0 lands at 0.79999... and would silently not fire).
+            fires = frac >= (TR_EXT_FIRE_FRAC - 1e-9)
+            return frac, ext_val, fires
+        except Exception:
+            return 0.0, 0.0, False
 
     @staticmethod
     def _impulse_sd(df_1m, direction: str, lookback: int):
@@ -453,10 +550,19 @@ class TradeReadinessEngine:
         mom_val = {"ACCELERATING": TR_TCS_MOM_ACC, "FLAT": TR_TCS_MOM_FLAT,
                    "DECELERATING": TR_TCS_MOM_DEC, "": 0.0}.get(mom, 0.0)
 
+        # v1.4: extension-from-arm, shared with the condor sides. A trend credit
+        # spread also only fires once the move has consumed >= 80% of the EM that
+        # existed when this track armed — same "premium is rich here" line.
+        tr_state = self.tracks.get("trend_credit_spread")
+        ext_side = "up" if direction == "long" else "down"
+        armext_frac, armext_val, armext_fires = (
+            self._extension_from_arm(tr_state, px, ext_side)
+            if (tr_state is not None and direction) else (0.0, 0.0, False))
         r = _combine(
             hard_vetoes=[veto],
             soft_necessary=[ext_damp],
-            corroborators=[(W_TCS_IMPULSE, impulse_val),
+            corroborators=[(W_VERT_EXT,    armext_val),
+                           (W_TCS_IMPULSE, impulse_val),
                            (W_TCS_CONV,    conv_val),
                            (W_TCS_ROOM,    room_val),
                            (W_TCS_MOM,     mom_val)])
@@ -467,11 +573,16 @@ class TradeReadinessEngine:
                    "room_val": round(room_val, 3), "conv": round(conv, 3),
                    "conv_val": round(conv_val, 3),
                    "ext_atr": (None if ext_atr is None else round(ext_atr, 3)),
-                   "ext_damp": round(ext_damp, 3), "mom": mom, "mom_val": mom_val}
+                   "ext_damp": round(ext_damp, 3), "mom": mom, "mom_val": mom_val,
+                   "armext_frac": round(armext_frac, 3),
+                   "armext_val": round(armext_val, 3), "armext_fires": armext_fires,
+                   "origin_px": round(getattr(tr_state, "origin_price", 0.0), 2) if tr_state else 0.0,
+                   "origin_em": round(getattr(tr_state, "origin_em", 0.0), 3) if tr_state else 0.0}
 
     # ── the temporal core: slope + state machine ─────────────────────────────
 
-    def _advance(self, key: str, r: float, factors: dict, now: float):
+    def _advance(self, key: str, r: float, factors: dict, now: float,
+                 price: float = 0.0, em: float = 0.0):
         tr = self.tracks[key]
         # dt-aware slope: EMA of dR/dt in R-units/minute. Wall-clock only.
         dt = now - tr.last_ts if tr.last_ts > 0 else 0.0
@@ -498,6 +609,20 @@ class TradeReadinessEngine:
             if tr.slope <= TR_DEARM_SLOPE or r < TR_ARM_BAR - TR_HYSTERESIS:
                 m = STAGING if r >= TR_STAGE_BAR else DORMANT
         would_fire = (m == ARMED and r >= TR_FIRE_BAR and tr.slope > 0)
+
+        # ── arm-origin snapshot (v1.4) ───────────────────────────────────────
+        # Stamp price+EM at EVERY entry into ARMED (fresh episode OR re-arm after
+        # a flicker). Clear when we leave ARMED. Per operator: re-arm re-snapshots.
+        just_armed = (m == ARMED and prev_machine != ARMED)
+        left_armed = (m != ARMED and prev_machine == ARMED)
+        if just_armed:
+            tr.origin_price = price
+            tr.origin_em    = em
+            tr.origin_ts    = now
+        elif left_armed:
+            tr.origin_price = 0.0
+            tr.origin_em    = 0.0
+            tr.origin_ts    = 0.0
 
         if m != DORMANT:
             tr.peak_r = max(tr.peak_r, r)
@@ -544,6 +669,11 @@ class TradeReadinessEngine:
             log.debug(f"readiness assess skipped: {e}")
             return self.tracks
         conv_now = float(getattr(regime, "conviction", 0.0) or 0.0)
+        # v1.4: price + expected move for the arm-origin snapshot. EM from the
+        # ATM straddle if a chain is on ctx; else 0 (origin still stamps price,
+        # extension just can't be computed until an EM is available — logged).
+        px_now = float(ctx.get("price") or 0.0)
+        em_now = self._expected_move_now(ctx, px_now)
         for key, (r, factors) in computed.items():
             tr = self.tracks[key]
             # v1.1: smoothed conviction — the calm number staged picks use.
@@ -553,7 +683,8 @@ class TradeReadinessEngine:
             else:
                 a = 1.0 - 0.5 ** (dtc / TR_CONV_HALFLIFE_S)
                 tr.conv_ema = tr.conv_ema + a * (conv_now - tr.conv_ema)
-            transition, would_fire, prev = self._advance(key, r, factors, now)
+            transition, would_fire, prev = self._advance(key, r, factors, now,
+                                                         price=px_now, em=em_now)
             beat = (tr.machine != DORMANT and (now - tr.last_beat) >= TR_HEARTBEAT_S)
             if transition:
                 self._journal(key, "readiness", prev=prev)
