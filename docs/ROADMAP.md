@@ -425,6 +425,106 @@ circularity discipline as every layer gating on the one beneath it.
   vs conviction, expiry selection, spread vs single-leg by regime. Each follows the same
   rule — one stated goal, one DONE-means, measured against the frozen L3 baseline.
 
+- 🔨 **TC.4 — Trend Credit Spread (a NEW strategy — participate in a runaway without
+  chasing or a pullback).** GOAL (operator, 2026-07-28): the fleet has no way to join a
+  strong one-directional trend that doesn't pull back. ORB needs a retest; continuation
+  needs a midline pullback (gates on `at_midline`); sweep is a reversal. So a clean rip
+  (e.g. SPX 2026-07-28 15:15–15:50 UTC, +34pts, regime correctly TRENDING_BULL 66%) falls
+  through every entry — continuation returned None every tick because price never came back
+  to the midline. The professional answer is NOT a momentum long (that chases); it is to
+  **sell premium beneath the move**: a put credit spread (PCS) in a bull, call credit
+  spread (CCS) in a bear. No pullback needed, no chase, premium-rich, defined risk, and a
+  rip *away* from the strikes is exactly what you want.
+
+  **The confluence spec (operator, 2026-07-28) — three tiers by the IMPULSE ramp:**
+  impulse = a 1-min candle whose range in rolling-SD units clears a bound. AWARE=1.75 SD
+  (contribution begins), ESTABLISHED=2.0 SD (real committed move), SCREAMING=2.5+ SD
+  (max). The impulse candle does DOUBLE duty: its *magnitude* (SD) feeds conviction; its
+  *extreme* (low for PCS / high for CCS) anchors the short strike — committed order flow
+  won't fully retrace even at exhaustion, so the impulse origin is a durable floor/ceiling
+  AND the invalidation (close back through it = thesis dead).
+  - **HIGH conviction (full size):** trend strong & rising, aligned across TFs, momentum
+    accel/steady, screaming impulse, real cushion to the impulse floor, premium rich, vol
+    stable, not final hour. Full size, strike below the impulse floor.
+  - **LESSER (reduced size / further strike):** trend real but a factor soft (younger TF
+    alignment, flat momentum, thinner cushion, edging extended). Trade smaller / lower
+    delta / more cushion.
+  - **STAND DOWN (no trade):** thin agreement (sea level never reached the gate) OR any
+    hard veto — decelerating momentum, parabolic exhaustion, no cushion, vol spike, final
+    hour, opposing level overhead. Any one veto zeroes it regardless of the rest.
+
+  **Architecture — TWO permanent files, NOT one that evolves** (mirrors every existing
+  strategy: `_continuation` readiness + `continuation_strategy.py` firing engine, etc.):
+  1. **`_trend_credit_spread` readiness track** — DONE 2026-07-28, LOG-ONLY, in
+     `trade_readiness.py` (v1.3). Journals impulse SD, floor, room, extension, readiness R
+     every tick; feeds `readiness_digest`. Freeze-safe (gates nothing). Permanent.
+  2. **`vertical_spread_strategy.py` firing engine** — NOT YET BUILT. Constructs & places
+     the spread when the gate is crossed; impulse-anchored strikes via the staged-pick
+     smoothed-conviction selector; close-through-origin invalidation; reversal-risk stop;
+     time-of-day guard. This is the money-path muscle.
+
+  **Why the firing engine is NOT built yet (three independent gates):** (a) the SD bounds
+  are PRIORS — the readiness track exists to journal real data so the digest fits them,
+  same discipline as the v1.2 conv-bound refit; firing on guessed bounds is the error the
+  workstream exists to stop. (b) It's SHORT-VOL — a spread fired on a MISLABELED trend is a
+  max-loss, so it is gated on the L1 confluence excavation (honest TRENDING) landing first.
+  (c) It changes trade decisions → categorically cannot enter before the L1 freeze.
+
+  **TIMELINE / DELIVERABLES:**
+  - **T0 (done, 2026-07-28):** readiness track `_trend_credit_spread` shipped, log-only,
+    smoke-tested (impulse ramp drives R; trend veto zeroes; extension damps). Deploy to
+    fleet — it journals from day one.
+  - **T0→T+1wk:** accumulate readiness journal across the fleet. NO firing.
+  - **T+1wk:** run `readiness_digest` → fit SD bounds (aware/established/screaming),
+    room/extension bounds, corroborator weights from the observed distribution. Priors →
+    calibrated knobs. Deliverable: a digest-backed bounds PR (env flips, no bake).
+  - **Gated on L1 excavation complete (honest TRENDING):** build `vertical_spread_strategy.py`
+    firing engine against the calibrated bounds. Deliverable: the engine file + its own
+    smoke test + canary (paper, one box, one symbol).
+  - **T+? (paper proven):** widen to fleet paper, measure expectancy per tier, then live.
+  Four gates, same as every strategy earned. Do not skip calibration; do not fire before
+  the excavation; do not deploy the engine before the freeze lifts.
+
+  **DECONFLICTION with pullback continuation (verified at the readiness layer, 2026-07-28).**
+  Continuation and the credit spread deconflict *automatically* on the shared
+  distance-from-midline axis — no explicit suppression rule needed at readiness:
+  - **0–0.7 ATR from midline: BOTH armed** (early trend — continuation's pull_val high AND
+    the spread's extension healthy). This is the "armed together for the first part" the
+    operator wanted — confirmed.
+  - **~1.05–3.0 ATR: credit spread favored, continuation dark** (pull_val hits 0 — no
+    pullback — while the spread is in its sweet spot). This is the SPX-2026-07-28 rip case:
+    the move that KILLS continuation is the move that QUALIFIES the spread. Clean handoff.
+  - **>4.5 ATR: NEITHER** (continuation dead; spread's extension damper zeroes it —
+    parabolic snapback risk). Correct: nobody chases parabolic.
+  - **⚠ TRANSITION-GAP WATCH (3.0–4.5 ATR):** continuation is dead but the spread's
+    extension damper is only *fading* (0.75→0.50→0), so a late/weak spread could arm right
+    as price gets dangerously extended. The 2.5/4.5 extension bounds are PRIORS — calibrate
+    from the journal whether the spread arms too late in this danger band.
+
+  **FIRING-LAYER DECONFLICTION (build requirement for `vertical_spread_strategy.py`, not
+  yet built).** Readiness "both armed" is fine (log-only). But the firing engine's dispatch
+  MUST deconflict with continuation so a single trend is never double-positioned:
+  near-midline (pullback available) → **continuation has priority** (the pullback is the
+  higher-quality, defined-risk-cheaper entry); extended (no pullback) → **credit spread**;
+  never both on the same symbol/trend simultaneously. Encode this in the dispatch when the
+  engine is built — by design, not discovered in production.
+
+  **PULLBACK-TRIGGER REDESIGN (operator, 2026-07-28, entertaining):** continuation's
+  current pullback trigger is "price returns to the BB MIDLINE" (`at_midline`, 0.35 ATR
+  band). Problem: in a strong trend the midline may NEVER be touched — the trend outruns it
+  — which is precisely why continuation sat out the SPX rip. Candidate replacement: a
+  **1-min wick into a 5-min Fair Value Gap (FVG)** as the pullback trigger. Rationale: FVGs
+  are where price ACTUALLY returns in a trend (the imbalance gets filled), so a 1-min wick
+  tagging a 5-min FVG is a real, frequently-presenting pullback entry, where the midline is
+  a statistical artifact a strong trend simply outpaces. This would (a) make continuation
+  fire on the pullbacks that actually occur, and (b) sharpen the deconfliction — FVG-fill =
+  continuation's domain, no-FVG-extension = credit spread's domain. NOTE: needs FVG-zone
+  detection surfaced into the readiness/dispatch context (an observability precursor, same
+  pattern as ADX/level-strength captures) before it can gate. Ties directly to the TC.2
+  exit-mechanism bake-off, which already lists "5-min FVG" as an exit candidate — the same
+  FVG primitive serves both. Deferred, tester-first; captured here so the design intent
+  isn't lost.
+
 **Trade-Construction DONE means:** every directional trade is *built* (strike, size,
 expiry) at the empirically-best construction for its signal, the same way L3 makes every
 trade *gated* at the empirically-best bar. Regime decides whether and when; construction
