@@ -792,6 +792,8 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
             current_price = ctx["price"],
             is_handoff    = _is_runaway,   # runaway ORB -> looser handoff gate
             handoff_direction = getattr(orb, "break_direction", "") if _is_runaway else "",
+            structure     = ctx.get("structure"),
+            df_1m         = ctx.get("df_1m"),
             macro         = macro,
         )
         if cont_sig:

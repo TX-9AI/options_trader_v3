@@ -1,5 +1,15 @@
 """
 strategy/continuation_strategy.py — Trend-continuation on pullback.
+v1.3 — 2026-07-28 — PULLBACK TRIGGER REWIRED: BB-midline -> 1-min wick TAGGING
+        the nearest unfilled 5-min FVG (edge-tag, >= 1 cent penetration,
+        CONTINUATION_FVG_TAG_MIN). The midline trigger was too conservative — a
+        strong trend outruns the midline so it never presented (continuation sat
+        out the SPX 2026-07-28 rip for exactly this). FVGs are where price
+        actually returns in a trend. Uses the existing structure_analyzer FVG
+        primitive (smap.fvgs, already built every tick in main). Removed the
+        orphaned CONTINUATION_MIDLINE_ATR / CONTINUATION_MAX_PULLBACK_R. New
+        params structure + df_1m threaded from the main dispatch. STRATEGY change
+        (not an L1 definition) — freeze-safe, live this week to observe fires.
 v1.2 — 2026-07-22 — stop backstop 40%% -> 25%% (CONTINUATION_STOP_LOSS_PCT now
         lives in config, env OT_CONT_STOP_PCT). Paired with exit_engine v4.0:
         5m-anchored trail + theta-bleed enabled for this strategy.
@@ -81,8 +91,11 @@ logger = logging.getLogger(__name__)
 
 # ── Tunables (env-overridable at wire-in time; conservative defaults) ─────────
 CONTINUATION_CONV_FLOOR      = 0.45   # min regime conviction to consider the trade
-CONTINUATION_MIDLINE_ATR     = 0.35   # "at the midline": |price-mid| <= this * ATR
-CONTINUATION_MAX_PULLBACK_R  = 0.60   # pullback deeper than this frac of the leg = trend broken, skip
+# v-fvg-pullback (2026-07-28): pullback trigger is now a 1-min wick TAGGING the
+# nearest unfilled 5-min FVG (edge-tag, >= 1 cent penetration). The old BB-midline
+# trigger (CONTINUATION_MIDLINE_ATR / _MAX_PULLBACK_R) was removed — too
+# conservative, a strong trend outruns the midline so it never presented.
+CONTINUATION_FVG_TAG_MIN     = 0.01   # cents the 1m wick must penetrate the FVG edge to "tag" it
 # v1.2 (2026-07-22): sourced from config (env OT_CONT_STOP_PCT), tightened
 # 0.40 -> 0.25. Regime-flip remains the PRIMARY exit; this is the backstop.
 from config import CONTINUATION_STOP_LOSS_PCT   # 0.25 default
@@ -91,7 +104,7 @@ CONTINUATION_HANDOFF_CONV_RELAX = 0.10  # handoff path lowers the conviction flo
 
 
 class ContinuationStrategy(BaseOptionsStrategy):
-    """Trend-continuation entry on a pullback to the BB midline."""
+    """Trend-continuation entry on a pullback: 1-min wick tagging a 5-min FVG."""
 
     def name(self) -> str:
         return "ContinuationStrategy"
@@ -105,6 +118,8 @@ class ContinuationStrategy(BaseOptionsStrategy):
                         current_price: float,
                         is_handoff: bool = False,
                         handoff_direction: str = "",
+                        structure=None,
+                        df_1m=None,
                         macro=None) -> Optional[OptionsSignal]:
         """
         Return an OptionsSignal if a trend-continuation pullback entry sets up,
@@ -138,21 +153,50 @@ class ContinuationStrategy(BaseOptionsStrategy):
         if _label_trending and regime.conviction < conv_floor:
             return None
 
-        # ── 2. LEVEL: price must have pulled back TO the BB midline ─────────
-        mid = getattr(vol_state, "bb_middle", 0.0)
+        # ── 2. PULLBACK = 1-min WICK TAGS the nearest unfilled 5-min FVG ───────
+        # v-fvg-pullback 2026-07-28: the BB-midline trigger was too conservative
+        # — a strong trend outruns the midline and it NEVER presents (continuation
+        # sat out the SPX 2026-07-28 rip for exactly this). FVGs are where price
+        # ACTUALLY returns in a trend (the imbalance fills), so the pullback is a
+        # 1-min wick TAGGING (>= 1 cent into) the nearest unfilled 5-min FVG in
+        # the trend direction. Edge-tag is preferred: price often reverses at the
+        # proximal edge without filling deep. Midline logic REMOVED entirely.
         atr = getattr(vol_state, "atr_current", 0.0)
-        if mid <= 0 or atr <= 0:
-            return None
-        at_midline = abs(current_price - mid) <= CONTINUATION_MIDLINE_ATR * atr
-        if not at_midline:
+        if atr <= 0 or df_1m is None or structure is None:
             return None
 
-        # pullback not so deep the trend is broken: price should still be on the
-        # trend side of the midline structurally (bull: not far below; bear: not
-        # far above). Depth measured in ATR as a proxy for "fraction of the leg".
-        if direction == "long"  and current_price < mid - CONTINUATION_MAX_PULLBACK_R * atr:
+        fvgs = [g for g in getattr(structure, "fvgs", []) if not getattr(g, "filled", False)]
+        # direction filter: a long pulls back DOWN into a bullish gap below price;
+        # a short pulls back UP into a bearish gap above price.
+        want = "bullish" if direction == "long" else "bearish"
+        cands = []
+        for g in fvgs:
+            if getattr(g, "direction", "") != want:
+                continue
+            if direction == "long"  and g.top < current_price:   # gap sits below
+                cands.append(g)
+            elif direction == "short" and g.bottom > current_price:  # gap sits above
+                cands.append(g)
+        if not cands:
             return None
-        if direction == "short" and current_price > mid + CONTINUATION_MAX_PULLBACK_R * atr:
+        # nearest unfilled gap in favor: for a long, the highest such gap top;
+        # for a short, the lowest such gap bottom (the one price is closest to).
+        gap = (max(cands, key=lambda g: g.top) if direction == "long"
+               else min(cands, key=lambda g: g.bottom))
+
+        # TAG test: the most recent 1-min candle must penetrate the gap's proximal
+        # edge by >= TAG_MIN_PENETRATION (1 cent). Long: 1m low pokes at/under the
+        # gap TOP. Short: 1m high pokes at/over the gap BOTTOM.
+        try:
+            last_low  = float(df_1m["low"].iloc[-1])
+            last_high = float(df_1m["high"].iloc[-1])
+        except Exception:
+            return None
+        if direction == "long":
+            tagged = last_low <= (gap.top - CONTINUATION_FVG_TAG_MIN)
+        else:
+            tagged = last_high >= (gap.bottom + CONTINUATION_FVG_TAG_MIN)
+        if not tagged:
             return None
 
         # ── 3. ENTRY (LOW BAR): momentum flipping back toward the trend ─────
