@@ -1,4 +1,7 @@
 #!/bin/bash
+# v4.2 — 2026-07-28 — +5 canaries: trade_readiness v1.2 (all factor bounds
+#         OT_TR_* overridable — parity with OT_RC_*) and readiness_digest v1.1
+#         (factor calibration + fit suggestions).
 # v4.1 — 2026-07-27 — +3 canaries: trade_readiness v1.1 staged picks, main
 #         v4.4, tests/readiness_digest.py (conductor phase-9 target).
 # v4.0 — 2026-07-27 — +6 canaries: trade_readiness v1.0 engine + main v4.3
@@ -195,6 +198,11 @@ check "main.py"                          "main.py — options_trader v4.4" "v4.4
 check "analysis/trade_readiness.py"      "readiness_staged_pick"        "v1.1 staged-pick journaling (calm-vs-spike experiment)"
 check "analysis/trade_readiness.py"      "TR_CONV_HALFLIFE_S"           "v1.1 smoothed-conviction EMA knob"
 check "tests/readiness_digest.py"        "readiness_digest_"            "v1.0 nightly digest tool present (conductor phase 9 target)"
+check "tests/readiness_digest.py"        "FIT SUGGESTIONS"              "v1.1 digest emits fitted OT_TR_* bounds (no second guess)"
+check "tests/readiness_digest.py"        "FACTOR_MAP"                   "v1.1 factor calibration section (peg rates on ramped outputs)"
+check "analysis/trade_readiness.py"      "TR_CONV_LO"                   "v1.2 conviction ramp env-overridable (the day-1 peg)"
+check "analysis/trade_readiness.py"      "TR_PULL_ATR_LO"               "v1.2 midline-pull band env-overridable"
+check "analysis/trade_readiness.py"      "TR_NARROW_PIVOT"              "v1.2 all 13 factor bounds OT_TR_* (parity with OT_RC_*)"
 
 # ABSENCE checks — these four terms must be GONE from the whole file. Unlike the
 # _orb_quality canary we can grep the bare token, because v1.3's changelog was

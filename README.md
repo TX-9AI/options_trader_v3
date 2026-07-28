@@ -211,6 +211,17 @@ arm episodes, staged-pick stats, anticipation lead-times) into
 Safe to deploy ahead of the fleet: an empty journal prints an honest headline
 and returns 0.
 
+**v1.2 (2026-07-28) — every factor bound is now `OT_TR_*` overridable**, parity
+with L1's `OT_RC_*`. v1.0/v1.1 env-ified only the state-machine bars and left
+the factor ramps hardcoded; day one showed the cost when the conviction ramp
+(top 0.65) pegged against live L2 conviction of 0.59–0.83 and ten symbols
+reported an identical `r=0.65`. Correcting a bound is now an env flip trialled
+on one box, not a fleet bake. **Defaults are deliberately unchanged** — the raw
+inputs (`conv`, `dist_atr`, `approach`, `age_bars`) are journaled un-ramped, and
+`readiness_digest` **v1.1** fits the bounds from their observed percentiles and
+prints the exact `export OT_TR_..._LO=/_HI=` line, flagging any ramped factor
+pegged on >60% of ticks. Fitted, not guessed — the room_s convention.
+
 `analysis/trade_readiness.py` v1.0 + the `main.py` v4.3 every-tick hook. Each
 strategy's pre-trigger confluence is a graded readiness **R ∈ [0,1]** (same
 three-tier `_combine` grammar as L1, living at strategy level where tradability

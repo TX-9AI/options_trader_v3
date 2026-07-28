@@ -1,4 +1,22 @@
 # analysis/trade_readiness.py — options_trader_v3
+# v1.2 — 2026-07-28 — ALL FACTOR BOUNDS ENV-OVERRIDABLE (OT_TR_*). v1.0/v1.1
+#         env-ified only the STATE-MACHINE bars and left every FACTOR ramp as
+#         a hardcoded literal — inconsistent with L1, where all 14 ramp bounds
+#         are OT_RC_* overridable, and that property is exactly what let the
+#         room_s refit be trialled on one box with instant rollback instead of
+#         a fleet redeploy. First live day (2026-07-28) proved the cost: the
+#         conviction ramp topped out at 0.65 while fleet L2 conviction ran
+#         0.59-0.83, so conv_val pegged at 1.0 on roughly half the boxes and
+#         ten symbols reported an identical r=0.65. Correcting that guess
+#         should be an env flip, not a bake. Now: 13 factor bounds + 8
+#         categorical momentum weights are OT_TR_*.
+#         DEFAULTS DELIBERATELY UNCHANGED. The pegged bound is NOT re-guessed
+#         here — every readiness row already journals the RAW conv/approach/
+#         distance alongside the ramped value, so the digest (v1.1) fits the
+#         bounds from the observed distribution the way room_s was fitted.
+#         Guessing a second time is the error this whole workstream exists to
+#         stop. Pegging does not corrupt the fit: the raw inputs are logged
+#         un-ramped, and nothing gates on R.
 # v1.1 — 2026-07-27 — STAGED PICKS (still LOG-ONLY). While a directional
 #         strategy (continuation, sweep) is ARMED and a chain is on ctx, the
 #         engine now computes the contract it WOULD select — through the SAME
@@ -111,6 +129,38 @@ TR_MAX_DT_S         = _envf("MAX_DT_S", 120.0)   # dt gaps beyond this reset the
 TR_CONT_TARGET_DELTA = _envf("CONT_TARGET_DELTA", 0.45)  # continuation staged-pick delta (PRIOR)
 TR_CONV_HALFLIFE_S   = _envf("CONV_HALFLIFE_S", 90.0)    # smoothed-conviction EMA half-life
 
+# ── v1.2 FACTOR BOUNDS (all PRIOR, all OT_TR_* overridable) ──────────────────
+# Shared conviction ramp — used by all four strategies. KNOWN MIS-FIT as of
+# 2026-07-28: fleet L2 conviction observed 0.59-0.83, so HI=0.65 pegs. Refit
+# from the digest's conv percentiles (p25->p95 convention), not by guess.
+TR_CONV_LO          = _envf("CONV_LO", 0.25)
+TR_CONV_HI          = _envf("CONV_HI", 0.65)
+# Continuation: distance from the BB midline in ATR. Beyond HI the trend is
+# still extended and the pullback has not arrived — 0 is correct there.
+TR_PULL_ATR_LO      = _envf("PULL_ATR_LO", 0.35)
+TR_PULL_ATR_HI      = _envf("PULL_ATR_HI", 1.05)
+# Sweep freshness half-life, in bars.
+TR_FRESH_HALFLIFE_B = _envf("FRESH_HALFLIFE_B", 3.0)
+# Condor: approach fraction toward the band edge (the trigger's own graded
+# input, kept graded here), and range room.
+TR_APPROACH_LO      = _envf("APPROACH_LO", 0.30)
+TR_APPROACH_HI      = _envf("APPROACH_HI", 0.90)
+TR_ROOM_LO          = _envf("ROOM_LO", 0.17)
+TR_ROOM_HI          = _envf("ROOM_HI", 1.00)
+# Butterfly: BB-width narrowness, measured below this pivot across this span.
+TR_NARROW_PIVOT     = _envf("NARROW_PIVOT", 0.20)
+TR_NARROW_SPAN      = _envf("NARROW_SPAN", 0.15)
+# Categorical momentum weights. Continuation reads momentum as RESUMPTION
+# (accelerating = resuming now); sweep reads it as EXHAUSTION (decelerating =
+# move spent). Empty string = no 5m vote and earns NOTHING in both, per the
+# trend_engine v3.2 contract.
+TR_CONT_MOM_ACC     = _envf("CONT_MOM_ACC", 1.0)
+TR_CONT_MOM_FLAT    = _envf("CONT_MOM_FLAT", 0.6)
+TR_CONT_MOM_DEC     = _envf("CONT_MOM_DEC", 0.3)
+TR_SWEEP_MOM_DEC    = _envf("SWEEP_MOM_DEC", 1.0)
+TR_SWEEP_MOM_FLAT   = _envf("SWEEP_MOM_FLAT", 0.5)
+TR_SWEEP_MOM_ACC    = _envf("SWEEP_MOM_ACC", 0.0)
+
 # Machine states
 DORMANT, STAGING, ARMED = "DORMANT", "STAGING", "ARMED"
 
@@ -173,19 +223,22 @@ class TradeReadinessEngine:
         # (0.35 ATR is the strategy's at-midline band; readiness sees the approach)
         if mid > 0 and atr > 0 and px > 0:
             dist_atr = abs(px - mid) / atr
-            pull_val = 1.0 - ramp(dist_atr, 0.35, 1.05)
+            pull_val = 1.0 - ramp(dist_atr, TR_PULL_ATR_LO, TR_PULL_ATR_HI)
         else:
             pull_val = 0.0
         mom = getattr(trend, "primary_momentum", "") if trend else ""
         # resumption wants DECELERATING -> ACCELERATING; readiness grades the
         # precondition state: ACCELERATING = resuming now, FLAT = coiled, DECEL = still pulling back
-        mom_val = {"ACCELERATING": 1.0, "FLAT": 0.6, "DECELERATING": 0.3, "": 0.0}.get(mom, 0.0)
-        conv_val = ramp(conv, 0.25, 0.65)   # graded around the 0.45 floor, not a cliff
+        mom_val = {"ACCELERATING": TR_CONT_MOM_ACC, "FLAT": TR_CONT_MOM_FLAT,
+                   "DECELERATING": TR_CONT_MOM_DEC, "": 0.0}.get(mom, 0.0)
+        conv_val = ramp(conv, TR_CONV_LO, TR_CONV_HI)   # graded, not a cliff
         r = _combine(hard_vetoes=[trending], soft_necessary=[],
                      corroborators=[(W_CONT_CONV, conv_val),
                                     (W_CONT_PULL, pull_val),
                                     (W_CONT_MOM,  mom_val)])
         return r, {"label": label, "conv": round(conv, 3), "conv_val": round(conv_val, 3),
+                   "dist_atr": (None if not (mid > 0 and atr > 0 and px > 0)
+                                else round(abs(px - mid) / atr, 3)),
                    "pull_val": round(pull_val, 3), "mom": mom, "mom_val": mom_val}
 
     def _sweep(self, ctx, regime) -> Tuple[float, dict]:
@@ -195,10 +248,11 @@ class TradeReadinessEngine:
         liq   = ctx.get("liq_map"); trend = ctx.get("trend")
         is_sweep = 1.0 if label.upper().endswith("SWEEP_REVERSAL") else 0.0
         age = float(getattr(liq, "sweep_age_bars", 999) or 999) if liq else 999.0
-        fresh_val = 0.5 ** (age / 3.0)
+        fresh_val = 0.5 ** (age / max(TR_FRESH_HALFLIFE_B, 1e-6))
         mom = getattr(trend, "primary_momentum", "") if trend else ""
-        exh_val = {"DECELERATING": 1.0, "FLAT": 0.5, "ACCELERATING": 0.0, "": 0.0}.get(mom, 0.0)
-        conv_val = ramp(conv, 0.25, 0.65)
+        exh_val = {"DECELERATING": TR_SWEEP_MOM_DEC, "FLAT": TR_SWEEP_MOM_FLAT,
+                   "ACCELERATING": TR_SWEEP_MOM_ACC, "": 0.0}.get(mom, 0.0)
+        conv_val = ramp(conv, TR_CONV_LO, TR_CONV_HI)
         r = _combine(hard_vetoes=[is_sweep], soft_necessary=[],
                      corroborators=[(W_SWEEP_CONV, conv_val),
                                     (W_SWEEP_FRESH, fresh_val),
@@ -227,10 +281,10 @@ class TradeReadinessEngine:
             elif side == "put" and mid > lo:
                 approach = max(0.0, min((mid - px) / (mid - lo), 1.5))
         # graded through the 0.65 trigger point: staging begins well before it
-        appr_val = ramp(approach, 0.30, 0.90)
+        appr_val = ramp(approach, TR_APPROACH_LO, TR_APPROACH_HI)
         room_val = ramp(float(getattr(vol, "bb_width_pct", 0.0) or 0.0) if vol else 0.0,
-                        0.17, 1.00)   # mirrors RANGE_ROOM bounds: a condor needs room
-        conv_val = ramp(conv, 0.25, 0.65)
+                        TR_ROOM_LO, TR_ROOM_HI)   # a condor needs room
+        conv_val = ramp(conv, TR_CONV_LO, TR_CONV_HI)
         r = _combine(hard_vetoes=[ranging], soft_necessary=[],
                      corroborators=[(W_CNDR_APPROACH, appr_val),
                                     (W_CNDR_CONV, conv_val),
@@ -247,8 +301,8 @@ class TradeReadinessEngine:
         coil = 1.0 if label.upper().endswith("COMPRESSION") else 0.0
         sqz_val = 1.0 if (getattr(vol, "bb_state", "") == "SQUEEZE" if vol else False) else 0.0
         width = float(getattr(vol, "bb_width_pct", 0.5) or 0.5) if vol else 0.5
-        narrow_val = ramp(0.20 - width, 0.0, 0.15)
-        conv_val = ramp(conv, 0.25, 0.65)
+        narrow_val = ramp(TR_NARROW_PIVOT - width, 0.0, TR_NARROW_SPAN)
+        conv_val = ramp(conv, TR_CONV_LO, TR_CONV_HI)
         r = _combine(hard_vetoes=[coil], soft_necessary=[],
                      corroborators=[(W_BFLY_CONV, conv_val),
                                     (W_BFLY_SQZ, sqz_val),

@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 # tests/readiness_digest.py — options_trader_v3
+# v1.1 — 2026-07-28 — FACTOR CALIBRATION SECTION. v1.0 reported the machine
+#         (states, R, arm episodes) but not the FACTORS, which is the same
+#         omission ramp_calibration.py exists to prevent one layer down: a
+#         corroborator pegged at its bound is a constant wearing new clothes,
+#         and you cannot see that from R alone. Day one proved it — ten
+#         symbols reported an identical r=0.65 because the conviction ramp
+#         topped out below where the fleet actually lives. This section now
+#         reports, per strategy per factor: percentiles of the RAW input and
+#         peg rates on the RAMPED output, then prints a FIT SUGGESTION line
+#         with the exact OT_TR_* export to try. Fitted, not guessed.
 # v1.0 — 2026-07-27 — NEW. Nightly readiness digest (ROADMAP readiness track).
 #
 #   Offline control-server tool, stdlib-only, read-only. Reads the harvested
@@ -25,6 +35,18 @@
 from __future__ import annotations
 import argparse, json, os, sys, glob
 from collections import defaultdict
+
+
+# factor map: raw journal key -> (ramped key, OT_TR_ env stem, inverted?)
+# "inverted" means the ramp output falls as the raw input rises (pull_val).
+FACTOR_MAP = {
+    "conv":      ("conv_val",  "CONV",     False),
+    "dist_atr":  ("pull_val",  "PULL_ATR", True),
+    "approach":  ("appr_val",  "APPROACH", False),
+    "age_bars":  ("fresh_val", None,       True),
+}
+PEG_HI, PEG_LO = 0.95, 0.05
+PEG_ALARM = 0.60          # >60% pegged = constant in new clothes (L1 convention)
 
 
 def _pct(vals, q):
@@ -63,7 +85,8 @@ def digest(day_dir, date):
     disps = [r for r in rows if r.get("event") == "disposition"]
 
     per = defaultdict(lambda: {"rs": [], "machines": defaultdict(int),
-                               "would_fire": 0, "arm_spans": [], "slopes": []})
+                               "would_fire": 0, "arm_spans": [], "slopes": [],
+                               "factors": defaultdict(list)})
     # arm episode tracking per (symbol, strategy)
     armed_since = {}
     for r in sorted(ready, key=lambda x: (x.get("_sym", ""), x.get("ts_et", ""))):
@@ -72,6 +95,9 @@ def digest(day_dir, date):
         p = per[key]
         p["rs"].append(float(d.get("r", 0.0)))
         p["slopes"].append(float(d.get("slope_per_min", 0.0)))
+        for fk, fv in (d.get("factors") or {}).items():
+            if isinstance(fv, (int, float)) and not isinstance(fv, bool):
+                p["factors"][fk].append(float(fv))
         m = d.get("machine", "?"); p["machines"][m] += 1
         if r.get("event") == "readiness_would_fire":
             p["would_fire"] += 1
@@ -125,13 +151,66 @@ def digest(day_dir, date):
             "r_p50": _pct(p["rs"], .5), "r_p90": _pct(p["rs"], .9),
             "would_fire": p["would_fire"], "arm_episodes": len(p["arm_spans"]),
             "staged_picks": (ps["n"] if ps else 0)}
+    # ── v1.1: factor calibration ────────────────────────────────────────────
+    lines.append("")
+    lines.append("FACTOR CALIBRATION  (raw-input percentiles + ramped-output peg rates)")
+    lines.append("  a ramped factor pegged on >%d%% of ticks is a constant, not evidence"
+                 % int(PEG_ALARM * 100))
+    fits = {}
+    for key in sorted(per):
+        fac = per[key]["factors"]
+        if not fac:
+            continue
+        lines.append(f"  [{key}]")
+        for fk in sorted(fac):
+            vals = fac[fk]
+            if not vals:
+                continue
+            if fk.endswith("_val"):
+                hi = sum(1 for v in vals if v >= PEG_HI) / len(vals)
+                lo = sum(1 for v in vals if v <= PEG_LO) / len(vals)
+                flag = "  <-- PEGGED" if (hi > PEG_ALARM or lo > PEG_ALARM) else ""
+                lines.append(f"    {fk:<14} n={len(vals):<6} hi={100*hi:3.0f}% "
+                             f"lo={100*lo:3.0f}% graded={100*(1-hi-lo):3.0f}%{flag}")
+            else:
+                lines.append(f"    {fk:<14} n={len(vals):<6} p25={_pct(vals,.25):.3f} "
+                             f"p50={_pct(vals,.5):.3f} p75={_pct(vals,.75):.3f} "
+                             f"p95={_pct(vals,.95):.3f}")
+                m = FACTOR_MAP.get(fk)
+                if m and m[1]:
+                    ramped, stem, inverted = m
+                    rv = fac.get(ramped) or []
+                    pegged = rv and (
+                        sum(1 for v in rv if v >= PEG_HI) / len(rv) > PEG_ALARM or
+                        sum(1 for v in rv if v <= PEG_LO) / len(rv) > PEG_ALARM)
+                    if pegged:
+                        fits[stem] = (round(_pct(vals, .25), 2), round(_pct(vals, .95), 2))
+        out_json["strategies"].setdefault(key, {})["factors"] = {
+            fk: {"n": len(v), "p25": _pct(v, .25), "p50": _pct(v, .5),
+                 "p95": _pct(v, .95),
+                 "peg_hi": (sum(1 for x in v if x >= PEG_HI) / len(v)) if v else 0.0,
+                 "peg_lo": (sum(1 for x in v if x <= PEG_LO) / len(v)) if v else 0.0}
+            for fk, v in fac.items() if v}
+    if fits:
+        lines.append("")
+        lines.append("FIT SUGGESTIONS (p25 -> p95, ramp_calibration convention).")
+        lines.append("  Trial on ONE box first, then fleet-wide — no redeploy needed:")
+        for stem, (lo_v, hi_v) in sorted(fits.items()):
+            lines.append(f"    export OT_TR_{stem}_LO={lo_v}  OT_TR_{stem}_HI={hi_v}")
+        out_json["fit_suggestions"] = {k: {"lo": v[0], "hi": v[1]} for k, v in fits.items()}
+
     if anticipations:
         lines.append("")
         lines.append("ANTICIPATION (strategy was ARMED before its trade fired):")
         for a in anticipations:
             lines.append(f"    {a['sym']} {a['strategy']}: armed {a['armed_since']} -> fired {a['fired_at']}")
     out_json["anticipations"] = anticipations
+    npeg = sum(1 for k in per for fk, v in per[k]["factors"].items()
+               if fk.endswith("_val") and v and
+               (sum(1 for x in v if x >= PEG_HI) / len(v) > PEG_ALARM or
+                sum(1 for x in v if x <= PEG_LO) / len(v) > PEG_ALARM))
     headline = (f"🧭 readiness {date}: "
+                + (f"{npeg} pegged factor(s) — see FIT SUGGESTIONS; " if npeg else "")
                 + (", ".join(f"{k} wf={per[k]['would_fire']} arm={len(per[k]['arm_spans'])}"
                              for k in sorted(per)) if per
                    else "no readiness rows yet (journal not harvested or fleet pre-v4.4)"))
