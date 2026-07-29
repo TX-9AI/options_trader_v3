@@ -1,4 +1,24 @@
 #!/bin/bash
+# v4.4 — 2026-07-29 — GLYPH FIX (legibility, no logic change). Every status
+#         line printed a literal "\u2713 PRESENT" / "\u2717 MISSING": bash's
+#         echo does not interpret \u escapes, so the check/cross glyphs have
+#         never actually rendered — inherited defect, present since the marks
+#         were introduced, caught on the first control-side run of v4.3. Now
+#         literal UTF-8 characters. Matters most for the v4.3 banner: 15 boxes
+#         of output are meant to be scanned, and a wall of \u2717 defeats that.
+#         Grep note: `grep '✗'` now works; `grep MISSING` always did and is
+#         still the encoding-proof form for fleet passes.
+# v4.3 — 2026-07-29 — PARITY INVARIANT (closes the last open piece of audit
+#         defect U). New section after GIT STATE: compares this checkout's
+#         HEAD to origin HEAD via ls-remote — RED on mismatch (a box running
+#         stale code passes every fingerprint if its files are internally
+#         consistent; only the commit comparison catches "consistent but
+#         old"). Origin unreachable = WARN not FAIL (boxes may check while
+#         offline); dirty tracked files = WARN (fingerprints on a modified
+#         file prove nothing about origin). Also: MISSING/PARITY failures now
+#         counted and summarized on the DONE banner, so option-23 fleet output
+#         is one greppable line per box instead of 125. Exit code deliberately
+#         still 0 — callers' semantics unchanged.
 # v4.2 — 2026-07-28 — +5 canaries: trade_readiness v1.2 (all factor bounds
 #         OT_TR_* overridable — parity with OT_RC_*) and readiness_digest v1.1
 #         (factor calibration + fit suggestions).
@@ -107,14 +127,16 @@ echo "  CRITICAL FIX CHECKS — today's session"
 echo "============================================================"
 echo ""
 
+MISS=0
 check() {
     local file="$1"
     local pattern="$2"
     local label="$3"
     if [ -f "$file" ] && grep -q "$pattern" "$file" 2>/dev/null; then
-        echo "  \u2713 PRESENT: $label  (in $file)"
+        echo "  ✓ PRESENT: $label  (in $file)"
     else
-        echo "  \u2717 MISSING: $label  (expected in $file)"
+        echo "  ✗ MISSING: $label  (expected in $file)"
+        MISS=$((MISS+1))
     fi
 }
 
@@ -209,9 +231,9 @@ check "analysis/trade_readiness.py"      "TR_NARROW_PIVOT"              "v1.2 al
 # written to describe them without naming them.
 for _tok in W_RANGE_BASE W_COMP_BASE quiet_fallback vol_only_fallback; do
     if grep -q "$_tok" analysis/regime_confluence.py 2>/dev/null; then
-        echo "  \u2717 STALE:   $_tok is BACK in regime_confluence.py — a constant corroborator or fabricated fallback was restored (expected DELETED)"
+        echo "  ✗ STALE:   $_tok is BACK in regime_confluence.py — a constant corroborator or fabricated fallback was restored (expected DELETED)"
     else
-        echo "  \u2713 PRESENT: $_tok deleted (v1.3 excavation held)"
+        echo "  ✓ PRESENT: $_tok deleted (v1.3 excavation held)"
     fi
 done
 
@@ -258,25 +280,25 @@ check "main.py"                          "chain_snapshot import snapshot" "v4.2 
 check "strategy/iron_condor_strategy.py" "Leg 2 PAUSED"                 "v3.2 leg 2 pauses on non-RANGING (was CANCELLED)"
 # ABSENCE: the half-size budget must be gone
 if grep -q "half_budget" risk/risk_manager.py 2>/dev/null; then
-    echo "  \u2717 STALE:   risk_manager still half-sizes condor verticals (expected FULL budget)"
+    echo "  ✗ STALE:   risk_manager still half-sizes condor verticals (expected FULL budget)"
 else
-    echo "  \u2713 PRESENT: condor verticals sized at full budget (no half_budget)"
+    echo "  ✓ PRESENT: condor verticals sized at full budget (no half_budget)"
 fi
 # ABSENCE: "STEADY" is a phantom — trend_engine emits ACCELERATING/DECELERATING/
 # FLAT only. Its return means a stale continuation_strategy.py is back.
 if grep -qE 'momentum in \("ACCELERATING", "STEADY"\)' strategy/continuation_strategy.py 2>/dev/null; then
-    echo "  \u2717 STALE:   continuation_strategy uses phantom STEADY value — pre-v1.1 file restored"
+    echo "  ✗ STALE:   continuation_strategy uses phantom STEADY value — pre-v1.1 file restored"
 else
-    echo "  \u2713 PRESENT: continuation momentum vocabulary is ACCELERATING/FLAT (no phantom STEADY)"
+    echo "  ✓ PRESENT: continuation momentum vocabulary is ACCELERATING/FLAT (no phantom STEADY)"
 fi
 # ABSENCE check: _orb_quality must be GONE from executable code. A stale sync
 # that restores it re-introduces the regime/VWAP/macro-weighted ORB score. We
 # grep only for a CALL (self._orb_quality(), def _orb_quality) — the string
 # survives in the v1.4 changelog prose, which is fine.
 if grep -qE "def _orb_quality|self\._orb_quality\(" risk/setup_scorer.py 2>/dev/null; then
-    echo "  \u2717 STALE:   _orb_quality is BACK in setup_scorer.py — ORB weighted score restored (expected DELETED)"
+    echo "  ✗ STALE:   _orb_quality is BACK in setup_scorer.py — ORB weighted score restored (expected DELETED)"
 else
-    echo "  \u2713 PRESENT: _orb_quality deleted from code (ORB is a geometry gate)"
+    echo "  ✓ PRESENT: _orb_quality deleted from code (ORB is a geometry gate)"
 fi
 
 # ── 2026-07-17/18 day-zero fingerprints (trend v3.1 + VWAP + condor + continuation) ──
@@ -327,5 +349,30 @@ echo "Uncommitted changes:"
 git status --short 2>/dev/null
 echo ""
 echo "============================================================"
-echo "  DONE"
+echo "  PARITY INVARIANT — this checkout vs origin HEAD"
+echo "============================================================"
+LOCAL_HEAD=$(git rev-parse HEAD 2>/dev/null)
+REMOTE_HEAD=$(timeout 10 git ls-remote origin HEAD 2>/dev/null | awk '{print $1}')
+if [ -z "$LOCAL_HEAD" ]; then
+    echo "  ✗ PARITY: not a git checkout — cannot verify"
+    MISS=$((MISS+1))
+elif [ -z "$REMOTE_HEAD" ]; then
+    echo "  ⚠ PARITY: origin unreachable — HEAD is ${LOCAL_HEAD:0:12} (UNVERIFIED, not failed)"
+elif [ "$LOCAL_HEAD" = "$REMOTE_HEAD" ]; then
+    echo "  ✓ PARITY: checkout == origin HEAD (${LOCAL_HEAD:0:12})"
+else
+    echo "  ✗ PARITY BROKEN: local ${LOCAL_HEAD:0:12} != origin ${REMOTE_HEAD:0:12} — re-sync before trusting this session's data"
+    MISS=$((MISS+1))
+fi
+DIRTY=$(git status --porcelain 2>/dev/null | grep -cv "^??")
+if [ "$DIRTY" -gt 0 ]; then
+    echo "  ⚠ PARITY: $DIRTY tracked file(s) locally modified (listed above) — a green fingerprint on a dirty file proves nothing about origin"
+fi
+echo ""
+echo "============================================================"
+if [ "$MISS" -eq 0 ]; then
+    echo "  DONE — ALL CANARIES GREEN"
+else
+    echo "  DONE — $MISS CANARY/PARITY FAILURE(S) — DO NOT TRUST THIS SYNC"
+fi
 echo "============================================================"
