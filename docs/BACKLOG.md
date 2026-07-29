@@ -1,6 +1,24 @@
-# docs/BACKLOG.md — v3.4
+# docs/BACKLOG.md — v3.5
 
 **CHANGELOG**
+- **v3.5 — 2026-07-29 — new item X on Fri Jul 31 (light day): the morning
+  scorer looks like it picks the same 15 symbols every session.** Found while
+  back-harvesting 07-27/28/29 — all three reported an identical discretionary
+  cohort. Either the scorer is working and 14 boxes simply never contribute
+  tape (a calibration-breadth problem before the Aug 21 freeze), or the model
+  call is failing into `selector`'s EXACTLY-N backfill and selection has
+  degraded to reporter rank while still looking normal — the same
+  silent-fallback shape as the L2 guard, the discarded scp return values and
+  the conductor's OHLC-only completeness check. `selection_log.jsonl` already
+  holds the evidence to tell the two apart, so the item is a read, not a
+  build. Also recorded here: **07-29 ran the v1.3 fallback classifier for the
+  ENTIRE session** — a fleet-wide `bot.log` grep found every REGIME line tagged
+  `[v13]` and not one `[L2` line, so L2.5 never produced a committed label that
+  day (main v4.5 reached the boxes only at the ~17:05 fan-out, after the
+  close). W.1's quarantine therefore covers the whole day with no per-box
+  bracketing needed, and the afternoon's P&L recovery cannot be attributed to
+  L2.5. The fix remains UNPROVEN in production until `[L2 c=...]` tags appear
+  on REGIME lines after an open.
 - **v3.4 — 2026-07-29 — 07-29 FLEET INCIDENT: items W, W.1, W.2 at the top of
   Thu Jul 30.** Zero trades fleet-wide until ~10:05 ET (continuation v1.3
   orphaned `mid` → NameError every tick; hotfixed as v1.3.1, `dd0d097`), and a
@@ -302,6 +320,46 @@ the tester. Nothing behavior-changing deploys except on Mon Aug 3.*
   From Sep 1, the live fill-quality audit takes over as the permanent validator.
 
 **⬜ Fri Jul 31**
+- **X — LIGHT-DAY INVESTIGATION: the morning scorer appears to pick the same 15
+  symbols every day.** Surfaced 2026-07-29 when back-harvesting three separate
+  sessions (07-27, 07-28, 07-29) reported the **identical** discretionary cohort
+  each time: AAPL AMD AVGO CRM GOOGL META MSFT MU NFLX NVDA PLTR QQQ SMH SPX
+  TSLA. Two very different explanations, and they are not equally benign.
+  **(a) Working as designed.** `selector.select()` is model-driven off the
+  morning brief, not random — SPX/QQQ are `ALWAYS_ON` and the rest are scored.
+  If the brief surfaces the same liquid names daily, a sound scorer picks them
+  daily. Then the finding is not a bug but a *dataset* question: 14 boxes
+  (AMZN COST CVX DIA GLD GS IWM JPM LLY ORCL SMCI TLT UNH XOM) never trade,
+  never journal, and never enter the calibration set — which matters before the
+  Aug 21 freeze, because every conditional table and ramp fit is then built on
+  half the universe.
+  **(b) Silent fallback — the pattern that has bitten three times today.**
+  `select()` wraps the model call in `except Exception` → sets `fallback=True`,
+  empties the picks, and the EXACTLY-N backfill then refills the cohort from the
+  reporter's `move_ranked` order. The fleet still wakes to a full 15 and the
+  wake message still looks normal. If that path is running, selection has
+  quietly degraded to "top 15 by reporter rank" — which would be *stable by
+  construction* and explains identical cohorts exactly.
+  **HOW:** distinguish (a) from (b) before touching anything. Read
+  `data/selection_log.jsonl` across the last several sessions and look at two
+  fields per entry: `fallback` (should be false) and the per-symbol `rationale`
+  (all reading `backfill: reporter rank` is the tell for (b), model prose is the
+  tell for (a)). If (b), the real defect is that a failed model call is
+  indistinguishable from a successful one in every downstream artifact — fix by
+  surfacing `fallback`/`error` in the wake message and alerting on it, exactly
+  as main v4.5 now does for the L2 engine. If (a), the question moves to whether
+  a fixed cohort is acceptable for calibration breadth, or whether the scorer
+  should be made to rotate deliberately (e.g. reserve N slots for
+  least-recently-traded names) so the whole universe accumulates tape.
+  **VALIDATE:** `selection_log.jsonl` already records every selection — no new
+  instrumentation, no replay, and the answer is a read. Count distinct cohorts
+  across all logged sessions: if it is 1, this is settled either way; if it
+  varies and only recent days collapsed, that dates the onset. Cross-check
+  against the recovered journals — a box that never appears in
+  `signal_journal/<date>/` on any harvested date has never contributed data,
+  which is the impact measured directly rather than inferred.
+  *(Read-only throughout. Nothing here changes what the fleet does; park the
+  remedy until the cause is known.)*
 - **D (service half) — Templatize `shadow-observer.service`.** The unit hardcodes
   `/home/ubuntu/options-trader`; sed the path at install time like `setup_ec2.sh`
   does for `optionsbot.service`. Zero behavior change on the fleet (canonical path
