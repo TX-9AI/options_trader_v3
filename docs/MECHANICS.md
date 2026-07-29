@@ -1043,3 +1043,406 @@ migration is required. Restart the bot service to load v3.1.
 
 ---
 
+
+
+---
+
+## APPENDIX — migrated from the root README (2026-07-28)
+
+<!-- ================= was: README.md § Trade readiness engine ================= -->
+
+## Trade readiness (v4.4 / engine v1.1, 2026-07-27 — LOG-ONLY, gates nothing)
+
+**v1.1 staged picks:** while ARMED, continuation/sweep journal the contract they
+WOULD select — via the live `select_sweep_strike` selector on a SMOOTHED
+conviction (wall-clock EMA, `OT_TR_CONV_HALFLIFE_S=90`) instead of the
+instantaneous spike — as `readiness_staged_pick` rows. When the real trigger
+fires, the journal holds calm-pick vs spike-pick side by side and the chain
+archive prices the difference. **Nightly automation (zero manual steps):**
+dtp `harvest` v0.5.0 pulls each box's `data/signal_journal/<date>/<SYM>.jsonl`
+into the control journal root (lighting up conductor phase 8's journal tables —
+the 07-18 deferral closed), and conductor v1.6.0 **phase 9 READINESS** runs
+`tests/readiness_digest.py --quiet` (states, R distribution, would-fire counts,
+arm episodes, staged-pick stats, anticipation lead-times) into
+`reports/readiness_digest_<date>.{txt,jsonl}` with a 🧭 Telegram headline.
+Safe to deploy ahead of the fleet: an empty journal prints an honest headline
+and returns 0.
+
+**v1.2 (2026-07-28) — every factor bound is now `OT_TR_*` overridable**, parity
+with L1's `OT_RC_*`. v1.0/v1.1 env-ified only the state-machine bars and left
+the factor ramps hardcoded; day one showed the cost when the conviction ramp
+(top 0.65) pegged against live L2 conviction of 0.59–0.83 and ten symbols
+reported an identical `r=0.65`. Correcting a bound is now an env flip trialled
+on one box, not a fleet bake. **Defaults are deliberately unchanged** — the raw
+inputs (`conv`, `dist_atr`, `approach`, `age_bars`) are journaled un-ramped, and
+`readiness_digest` **v1.1** fits the bounds from their observed percentiles and
+prints the exact `export OT_TR_..._LO=/_HI=` line, flagging any ramped factor
+pegged on >60% of ticks. Fitted, not guessed — the room_s convention.
+
+`analysis/trade_readiness.py` v1.0 + the `main.py` v4.3 every-tick hook. Each
+strategy's pre-trigger confluence is a graded readiness **R ∈ [0,1]** (same
+three-tier `_combine` grammar as L1, living at strategy level where tradability
+context is legal), with a **dt-aware slope** (R/minute, wall-clock EMA — no
+per-evaluate counters) and a **DORMANT → STAGING → ARMED** machine that
+journals transitions, 60s heartbeats while active, and `readiness_would_fire`
+moments. The last gate stays binary — the point is that the bit is the LAST
+place information collapses: level AND slope AND state, so a wick-flicker
+(same level, collapsing slope) de-arms instead of firing. Strategies covered:
+continuation, sweep, condor call/put sides (the approach fraction the condor
+trigger computes and then collapses at 0.65 is kept graded here), butterfly.
+ORB exempt (mechanical by directive). Knobs `OT_TR_*` (stage 0.35 / arm 0.55 /
+fire 0.70 / de-arm slope −0.15/min), all PRIOR — calibrate from the readiness
+journal. Log-only per the pitchfork weight-0 precedent, so it rides inside the
+frozen-baseline window; it does not validate L1, it records what L1 believes,
+per strategy, per tick. Restart resets the in-memory tracks (journals as a
+DORMANT reset — itself evidence).
+
+`regime_confluence.py` **v1.3.1 (2026-07-27)**: adds the COMPRESSION containment hard
+veto (close beyond the band edge zeroes the coil) — an A3 squeeze-break collision the
+A/B pool surfaced on XOM 07-22, latent since v1.0 but only exposed once BREAKOUT could
+accumulate. See `docs/REGIME_TRUTHS.md` v0.4.
+
+`regime_confluence.py` **v1.3 (2026-07-27, CONFLUENCE EXCAVATION)**: four of the five
+scorers were Boolean gates wearing confluence clothing — `_breakout` and `_sweep` passed
+an EMPTY corroborator list (so `_combine` defaulted their sum term to 1.0 and nothing
+accumulated), while `_ranging` and `_compression` each carried a constant-1.0
+corroborator worth 40% / 30% of their "confluence". All four rebuilt so evidence
+actually accumulates; `_trending` was already real and is untouched; ORB is not scored
+here at all. `_sweep` now RECEIVES `trend_state` — it previously could not see trend,
+which on 2026-07-27 let a lone level-rejection score 0.62 and short PLTR into a +7.2%
+uptrend for −27.8%. The `OSC_CROSS_*` crossings axis is now decoupled per scorer.
+Weights are **design-derived, not tape-fitted** (each block states the minimum evidence
+set that should just barely score); pool calibration is the next pass, so treat the
+current weights as honest priors. See `docs/REGIME_TRUTHS.md` v0.3 for the role table.
+Paired with `config.py` **v4.0** (`SWEEP_DELTA_STRONG` 0.08 → 0.12 — the same PLTR trade
+also bought a strike gamma could not reach; deliberately a SEPARATE commit so post-freeze
+sweep P&L stays attributable between entry quality and strike selection).
+
+`regime_confluence.py` **v1.2 (2026-07-22, ramp de-saturation)**: all 14 ramp bounds
+env-overridable (`OT_RC_<NAME>`); `room_s`/`osc_s` re-fitted from 60,341 ticks over 6 sessions
+and promoted to defaults (RANGE_ROOM 0.05–0.20 → 0.17–1.00, OSC_CROSS 2–5 → 4–10). RANGING was
+saturating (p90=1.0) and colliding with TRENDING on 14–25% of ticks; now 4.3% (the residual is
+genuine cross-horizon co-occurrence, not saturation — see ROADMAP L1.10).
+
+`regime_classifier.py` **v1.3 still runs** alongside (memoryless boolean cascade, first-match-
+wins: SWEEP_REVERSAL → BREAKOUT_VOLATILE → COMPRESSION → TRENDING_BULL/BEAR → RANGING →
+UNKNOWN) and populates RegimeState's rich fields; it is the rollback engine. ADX comes from the
+**5-minute** timeframe. The `UNKNOWN` hard gate below only matters under rollback — the live L2
+label cannot emit it.
+
+| Regime | Strategies permitted to fire |
+|---|---|
+| TRENDING_BULL / TRENDING_BEAR | **ORB · Trend Continuation** |
+| BREAKOUT_VOLATILE | **ORB** |
+| SWEEP_REVERSAL | Sweep Reversal · **ORB (v3.2 — ORB wins)** |
+| RANGING | Iron Condor · Butterfly (if GEX PINNING) · **ORB** |
+| COMPRESSION | Butterfly (if GEX PINNING) · **ORB** |
+| UNKNOWN | **ORB only** (v3.2 un-gate). Everything else: no trade. |
+
+The ORB appears in every row because the break+retest is **self-validating** — the classifier
+does not even test for it, so the label is a scoring input, not a veto.
+
+---
+
+---
+
+<!-- ================= was: README.md § The ORB — the flagship, and it is now definitional ================= -->
+
+## The ORB — the flagship, and it is now definitional
+
+The setup is mechanical. As of **v3.5 there are no tolerances anywhere in it.**
+
+```
+BREAK  = a 1m candle that OPENS INSIDE the opening range and CLOSES OUTSIDE it.
+RETEST = a SUBSEQUENT 1m candle — any bar within ORB_MAX_RETEST_BARS (12) of the
+         break, NOT only the very next one — whose WICK enters the range and
+         whose BODY stays entirely OUTSIDE it. Bars in between that neither
+         retest, close back inside, nor reach the 50% TP simply pass; the
+         engine stays ARMED and keeps waiting.
+STOP   = a 1m CLOSE beyond the impulsive (break) candle's WICK.
+```
+
+**Opening range** = the 9:30–9:35 ET 5-minute candle, sourced through the bot's own data
+layer (`market_data.fetch_candles`) so it always agrees with the tape the bot trades. Written
+to `orb_range.json` as a three-state model — `ESTABLISHED` / `IN_PROGRESS` / `EXPIRED` — and
+the engine **arms only on `ESTABLISHED`/today**, so a carried prior-day range can never be
+traded.
+
+**State machine** (`ORBState`, renamed in v3.4 to the operator's vocabulary):
+
+```
+NO_RANGE → WAITING_FOR_BREAK → ARMED_LONG / ARMED_SHORT → OPEN_LONG / OPEN_SHORT
+                  ↑                       ↓
+                  └───── INVALIDATED ─────┘        (re-arm rules below)
+```
+
+**ARMED means a break has occurred and the next event is FIRE or INVALIDATE.** Before a break
+there is nothing armed — the engine is merely waiting.
+
+**Why "opens inside" is definitional (v3.5).** It is an *opening-range* break. A candle that
+began life outside the range never broke out of it — it was already out. That is late
+continuation. (v3.1 approximated origin as `low < orb_high` — the wick merely reaching back in
+— which still admitted candles that opened *above* the range, dipped, and closed higher.)
+
+**Why there is no buffer (v3.5).** The retest **is** the noise filter — a marginal break that
+means nothing simply fails its retest. The old `ORB_BREAK_BUFFER` (0.05% *of price*) required
+the close to clear the range by **$0.49 on MU, ~$3.00 on SPX**, so price could close three
+full points beyond the opening range and not register a break.
+
+**Why there is no grace band (v3.3).** The retest is the **falsification step** of the break
+hypothesis ("this level is now support"). A level that was not tested produced *no evidence*;
+a level whose retest closed back inside was tested and **failed**. Neither is a graded setup.
+The old `body_low >= orb_high * 0.999` admitted a candle whose body **closed back inside the
+range** — the disarm condition — as a *confirmed retest*, and bought it. On SPX that window
+was ~6 points deep.
+
+**Three invalidations:**
+
+| Reason | Trigger | Re-arms? |
+|---|---|---|
+| `close_inside` | 1m close back inside the range — the hypothesis failed | ✅ **Yes**, if before 11:00. The second attempt is often the cleaner one; the first is often the fake-out. |
+| `runaway` | Ran to the 50% TP with **no retest** | ❌ No. Hands off to Sweep Reversal — the setup a failed runaway most favors. |
+| `timeout` | 12 bars without a retest (`ORB_MAX_RETEST_BARS`) | ❌ No. The setup has gone stale. |
+
+**Break latches** (`broke_high`/`broke_low`) are maintained **unconditionally every tick, in
+every state**. They are a session-level fact ("a 1m candle closed beyond this boundary"),
+independent of the ORB entry state machine, because the sweep gate needs them even while the
+ORB is dormant. They are **close-based** (a wick that pokes and closes back inside does not
+arm a sweep) and take **no origin gate** — they record a fact, not a setup.
+
+**Entry:** single-leg long call/put, strike near the ORB-projected 100% target.
+**Hard cutoff 11:00 ET** — the engine EXPIRES from any state. This expires the *engine*, not
+an open position: a fill at 10:58 runs to its own exits.
+
+---
+
+---
+
+
+---
+
+## APPENDIX — strategy & exit detail migrated from the root README (2026-07-28)
+
+> **STALE WARNING:** the Iron Condor subsection below describes the
+> pre-2026-07-28 model (Bollinger-anchored strike selection; sequential
+> `DECIDED → LEG1_FILLED → COMPLETE` legging). Both were replaced on
+> 2026-07-28 — see the *Iron Condor (current)* note that follows it.
+
+<!-- ================= was: README.md § Strategies ================= -->
+
+## Strategies
+
+##### Sweep Reversal
+Detects liquidity sweeps at **mapped** zones (PDH/PDL, equal highs/lows, session H/L). A sweep
+requires all three: **location** (at a named pool), **penetration**, and **rejection**
+(reclaimed and held). Acceptance *through* a level is a breakout, not a sweep. OTM strikes by
+delta targeting, scaled inversely to reversal strength (strong snap → far-OTM; weak →
+near-ATM). **BOS exit** on the 1m chart — closes only, no wicks.
+
+##### Trend Continuation (NEW 2026-07-18 — paper-first, the trend-native trade)
+The trade the `trend_engine v3.1` fix exists to enable. Fires **only in a trending regime** —
+and because the classifier is *stingy* about calling trend (it is a high bar to clear), a
+trending label is itself the high-conviction signal. Debit directional (long call in
+`TRENDING_BULL`, long put in `TRENDING_BEAR`).
+
+**Philosophy: make entry easy, make exit smart.** Entry is a deliberately *low* bar — the
+protection lives in the exit, not the entry. Price pulls back to the **BB midline**
+(`bb_middle`, the same anchor the condor uses), momentum flips back toward the trend, and it
+enters. Two entry paths, both trend-gated:
+
+- **Handoff (looser).** A **runaway ORB** — a break that ran to the 50% TP with no retest —
+  is one of the *strongest* trend confirmations there is (strong push → pullback → next leg is
+  textbook trend behaviour). So when a runaway ORB invalidates in a trending regime, it now
+  **hands off to continuation first** (`main.py` Priority 2.5, `is_handoff=True`): conviction
+  floor relaxed 0.45→0.35, `STEADY` momentum accepted. This replaces the old hardcoded
+  runaway→sweep chain. Sweep still owns a runaway heading into a near/strong mapped zone when
+  *not* trending.
+- **Standalone (stricter).** No runaway vouching for it, so it must self-source the setup:
+  conviction ≥ 0.45 and `ACCELERATING` momentum required.
+
+**Downside = regime-change OR 40%, whichever first.** Regime-invalidation *is* the smart
+stop — the trade is *defined* by the trend, so a flip out of trending kills the thesis
+regardless of P&L (this mirrors how the condor self-gates on RANGING). The 40% floor is the
+disaster backstop beneath it. No separate structural stop.
+
+All thresholds env-tunable (`OT_CONT_*`). The `MIDLINE_ATR` band (how close to the midline
+counts as "at" it, default 0.35·ATR) is the primary knob — it controls how *often* the trade
+fires — and is the first thing to calibrate off the paper baseline.
+
+##### Iron Condor (legged, tracked)
+RANGING fallback when no GEX pin is available. **Strike SELECTION is Bollinger-Band anchored —
+no delta enters the strike-picking path.** Short call = lowest liquid strike at/above the BB
+upper band; short put = highest at/below the BB lower band. Delta is deliberately excluded
+*from selection*: it is relative to where price *sits*, not to the actual range boundary.
+
+**Delta as a calibration street-sign (v3.4).** Distinct from selection: after the BB selector
+has picked the short strike, the leg **records `abs(short-strike delta)` as its `setup_score`** —
+read-only, purely as a logged waypoint. It does not influence which strike is chosen, how the
+leg is sized, or whether it fires; it is written *after* the pick is final. Condor legs
+otherwise carry no conviction score (they hardcode Grade B), so this is the axis condor
+threshold-calibration will bin fee-adjusted ROI against later. `NULL` when the Greeks feed did
+not populate delta — a real short strike is never exactly 0.0 delta, so a stored value is
+always a genuine delta. This is the *only* delta anywhere near the condor, and it decides
+nothing.
+
+The condor is **the only strategy allowed two concurrent positions** (its two verticals). Each
+vertical is a fully tracked position — managed, exited, and P&L'd independently with
+credit-spread math — and each is sized at the **full grade budget** (`risk_manager` v3.2, 2026-07-23 — half-budget
+retired: 18 of 46 legs never got a second side, so half-sizing chronically under-sized a
+structure that never existed). Wings are narrow (5 points SPX / $5 QQQ). Legged entry:
+`DECIDED → LEG1_FILLED → COMPLETE`; a pending leg **PAUSES** if the regime flips away from
+RANGING (`iron_condor` v3.2, 2026-07-23 — the plan stays alive; leg 2 fires when regime
+returns AND price is at the far band); a filled leg is never cancelled. Exit per leg
+(`exit_engine` v4.1, 2026-07-23): **ratcheting stop** (+20% → breakeven, +40% → lock +20%,
+tightens only), **time-gated TP at 25%** (only after the entry cutoff, only when the sibling
+side is not open, min-hold quote-noise gate), or a $0.05 nickel close. Regime-flip exit is **direction-aware** — a call spread only
+exits on a bullish flip; a bearish flip is favorable, so it holds.
+
+##### Broken-Wing Roll
+When both verticals are open and price tests one side, rolls the **untested** side toward
+price — **only if the math makes the tested side risk-free**
+(`banked_credit + roll_credit − close_cost ≥ tested_side_width`). Smallest qualifying roll
+wins. **One-time and final**: once rolled, every leg is flagged `is_broken_wing` and never
+adjusted again. Roll once, stand it, defend it.
+
+##### Debit Butterfly
+RANGING or COMPRESSION **with a PINNING GEX environment**. Center strike = the **GEX pin**, not
+ATM. Gated on proximity (price within 1× the session expected move of the pin). Fixed wings
+(25pt SPX / $5 QQQ). One per session. Exits immediately on a flip to trending.
+
+**GEX is computed live from the TastyTrade chain every 15s. No scraping, no external API.**
+Derived: call wall, put wall, pin strike, flip strike, environment. The condor is intentionally
+*not* GEX-dependent — it fires precisely when GEX is **not** pinning.
+
+---
+
+**In development** (not firing; see [`docs/ROADMAP.md`](docs/ROADMAP.md)):
+
+- **Trend Credit Spread (TC.4)** — participates in a strong trend that never pulls
+  back, by selling premium beneath it (PCS in a bull, CCS in a bear). Readiness
+  track is live and log-only; the firing engine is gated on calibration and on the
+  Layer-1 excavation.
+- **Pitchfork sloped S/R** — designed, not built, gated on Layer 2. See
+  [`docs/WHITEPAPER_pitchfork_overlay.md`](docs/WHITEPAPER_pitchfork_overlay.md).
+
+Per-strategy entry mechanics, gates and thresholds are in
+[`docs/MECHANICS.md`](docs/MECHANICS.md); every exit path is catalogued there too.
+
+---
+
+<!-- ================= Iron Condor (current, 2026-07-28) ================= -->
+
+##### Iron Condor — current model (supersedes the subsection above)
+
+**Strike selection — dual floor.** The short strike must clear BOTH
+`0.80 × expected_move` from spot AND the Bollinger band; whichever is farther
+wins. Among strikes beyond that floor the most liquid is chosen, biased outward,
+with the tie broken toward the floor (richest premium that still clears it).
+**There is no inside fallback** — if no liquid strike exists beyond the floor the
+leg is skipped, never sold close. This replaced BB-anchored selection, which had
+no minimum-distance floor at all and a fallback that placed strikes *inside* the
+band; on 2026-07-28 that model sold seven legs at 6–28% of the expected move.
+
+**Legging — independent.** Both triggers are checked every tick. Whichever side's
+conditions are met fires, regardless of order; `call_filled` / `put_filled` are
+tracked separately and the structure is COMPLETE only when both are in. This
+replaced the sequential model, under which leg 2 was state-gated behind leg 1 —
+so if price only ever visited leg 2's side, that leg never fired at all.
+
+Once one side is filled the only valid next actions are **fill the other side** or
+**close the filled one**; no new condor plan can start while a leg is live.
+
+<!-- ================= end-of-day flatten (limit_ladder v1.2) ================= -->
+
+##### End-of-day flatten — the 15:40 ladder, then the 15:45 market cross
+
+**This applies to every strategy and every open position.** It is the one place the
+mark-limit policy is deliberately abandoned, because an unfilled 0DTE at the bell
+is worth nothing.
+
+`execution/limit_ladder.hard_close_order_mode(now_et)` returns the mode:
+
+| ET window | mode | behaviour |
+|---|---|---|
+| before **15:40** | `none` | Flatten window not open. Normal exits only. |
+| **15:40 – 15:44** | `limit` | Post at the mark and **re-price every tick (~15s)**, repeatedly, trying to close without paying the spread. |
+| **15:45** onward | `market` | MARKET order. No exceptions. The position closes. |
+
+Constants: `HARD_CLOSE_LIMIT_START_ET = 15:40`, `HARD_CLOSE_MARKET_AT_ET = 15:45`
+(`execution/limit_ladder.py`); `HARD_CLOSE_ET = (15, 45)` in `config.py`.
+
+Two notes that matter when reading fills:
+
+- **The 15:40 start is a change, not the original design** (limit_ladder v1.2,
+  2026-07-22). It used to be a single 15:45 market sweep; the five-minute ladder
+  was added so most positions close at the mark instead of crossing.
+- Trades closed this way carry exit reason **`hard_close_15:45_ET`**. A position
+  that filled during the 15:40–15:44 ladder still books under that reason, so the
+  reason alone does not tell you whether it crossed the spread — check the fill
+  time against 15:45.
+
+<!-- ================= was: README.md § Exits ================= -->
+
+## Exits
+
+##### ORB — evaluated every tick, first match wins
+
+| # | Trigger | Condition | Purpose |
+|---|---|---|---|
+| 1 | Hard close | 15:45 ET | Time |
+| 2 | **−25% premium floor** | `premium ≤ entry × 0.75` — **unconditional, every tick**, independent of trail state | **Minimize loss** |
+| 3 | **Structure stop** | Last *closed* 1m candle closes **beyond the impulsive candle's wick** (`underlying_stop`). **NOT** the range boundary — closing back inside the range does **not** stop the trade | **Thesis death** |
+| 4 | Theta bleed | **All four:** held ≥ 20 min · gain ≥ 10% · gain **< 20%** · projected decay (`theta × 20/1440`) ≥ current gain | **Protect profit** |
+| 5 | Past 100% TP | **No hard exit.** Trail tightens to the nearest unfilled in-favor 1m FVG, floored at 85% of current premium | **Let it run** |
+| 6 | Below 100% TP | FVG trail arms at **+20%**; % trail arms at **+50%** and ratchets to 75% of current. Higher governs | **Protect profit** |
+
+**#2 and #3 are an AND, not an OR.** They catch different deaths: premium death (theta,
+retracement, or the mix) and thesis death (structure). Whichever fires first.
+
+**Exit-reason integrity (v3.3, 2026-07-12):** `stop_premium` is **immutable** — set once at
+entry, forever the true −25% floor. Trails persist in their own `trail_stop` column (schema
+migration is automatic), and the exit engine re-arms its in-memory trail from it on restart.
+Before this, every trail update overwrote `stop_premium`, so every trail-armed exit — including
+post-target exits at +100%+ — was logged `hard_stop_25pct`/`stop_hit`, poisoning the
+`exit_reason` distributions Phase-3 calibration reads. Same exit ticks, same prices; the labels
+now tell the truth.
+
+**The trail and the structure stop are both necessary and serve opposite jobs** — one protects
+gains, one minimizes losses. Neither supersedes the other.
+
+**Not present on the ORB:** no BOS exit (that is sweep-only) · no max-hold · no 11:00 exit.
+
+##### Trend Continuation — EXHAUSTION-based (NEW 2026-07-18)
+
+The continuation exit is where the trade lives or dies, so it is the deliberately intelligent
+half. Evaluated every tick, first match wins:
+
+| # | Trigger | Condition | Purpose |
+|---|---|---|---|
+| 1 | Hard close | 15:45 ET | Time |
+| 2 | **Regime flip** | Regime no longer trending **in our direction** | **Thesis death — the primary stop** |
+| 3 | **−25% backstop** | `premium ≤ entry × 0.75` (`CONTINUATION_STOP_LOSS_PCT`, `exit_engine` v4.0 — no longer borrows the blanket `MAX_LOSS_PCT`) | Disaster backstop |
+| 4 | **Exhaustion (two-stage)** | *Only past +15% gain.* **Extension:** price ≥ 2·ATR from the midline → **tighten trail to 85%** (does *not* exit — a strong trend can stay stretched). **Divergence:** new favourable price extreme on **weaker** 5-bar momentum → **exit** | **Detect a spent move** |
+| 5 | **Theta bleed** (`exit_engine` v4.0) | placed AFTER exhaustion: held ≥ 20 min · gain ≥ +10% · below the trail ceiling · projected calendar-day decay ≥ gain | A stalled winner no longer decays untouched toward the floor |
+| 6 | Runner trail | FVG trail **anchored to 5m gaps** via `_fvg_frame` (v4.0; graceful 1m fallback); once armed it owns the trade and silences theta | Let it run |
+
+The distinction from a normal stop: a stop asks *"was I proven wrong?"* (that is #2/#3).
+Exhaustion asks *"is the move **tired**, even while still technically going my way?"* — which is
+what stops a continuation trade from handing back its gains at the turn. **Extension tightens,
+divergence exits** (v1 two-stage). A stricter "both must agree" mode is noted in-code for
+future reconsideration; it maps closer to how the operator trades but is intentionally not a
+live flag.
+
+**Engine-state exactness with a safety net.** The exit prefers the *live* `vol_state`/`trend`
+threaded down from `main.py` (so it judges exhaustion against the same midline/momentum the
+entry used), but **falls back to recomputing midline and ROC from `df_5m`** when that state is
+absent (restart recovery, adopted positions). It therefore *cannot* raise on a missing engine
+snapshot — it only degrades precision. The `vol_state`/`trend` kwargs were added
+**optional-with-defaults** through `manage_open_position → _manage_one → evaluate()`
+specifically to avoid the 2026-07-16 signature-mismatch crash-loop; every existing strategy
+routes byte-identically with them present (regression-checked).
+
+The complete exit catalogue — every strategy, every path, with current values —
+is in [`docs/MECHANICS.md`](docs/MECHANICS.md).
+
+---

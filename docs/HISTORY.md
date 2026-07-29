@@ -803,3 +803,247 @@ FillResult` with this contract:
 
 ---
 
+
+
+---
+
+## APPENDIX — migrated from the root README (2026-07-28)
+
+These sections described shipped work and rollout state that had gone stale in
+the README. Preserved here verbatim.
+
+<!-- ================= was: README.md § READ THIS FIRST — entry logic v2.5 ================= -->
+
+## ⚠️ READ THIS FIRST — the entry logic is v2.5, and that is deliberate
+
+The regime architecture is mid-migration. Three eras coexist in this tree, and the honest
+label for what is *running today* is neither v2 nor v3:
+
+| | Gating model | Result |
+|---|---|---|
+| **v1** | Boolean gates, permissive | Fired into hostile tape. Sold into uptrends. Got faked out. |
+| **v2** | Boolean gates + an `UNKNOWN` regime with **hard veto** | Over-corrected. Most of RTH classified `UNKNOWN`; the veto skipped clean trending setups; **the trade sample starved the very analysis loop meant to fix it.** |
+| **v2.5** (to 2026-07-21) | v2's cascade, but `UNKNOWN`'s **veto power removed for the ORB** | Sample restored. The safety was removed before the replacement was built. |
+| **v3-label — RUNNING NOW** (landed main.py v4.0, 2026-07-21; `main.py` now v4.2) | **L1 confluence → L2 conviction integrator's committed label** drives `primary_regime`. `UNKNOWN` is gone from live emission (indecision = a low conviction number on a best-fit label). **The conviction NUMBER is still observe-only — gates run wide open.** | The v3 *label* machinery is live; the v3 *bars* (L3) are not. Rollback: `OT_REGIME_ENGINE=v13`. |
+| **v3 — TARGET** | Weighted confluence → per-regime conviction → `fires iff regime ∈ permissive AND C ≥ bar(trade_type)` | Bars placed empirically at the marginal fee-adjusted-ROI zero crossing. |
+
+**State it plainly (updated 2026-07-22):** the regime *label* is now the v3 spine (L1→L2, see
+§Regime engine), but the conviction number still gates nothing — so the honest label for the
+*entry gating* remains v2.5. v3.2 shipped ROADMAP **Phase 2's permissive set** for the ORB
+(`_orb_ok_regimes` in `main.py` is the ROADMAP Phase-2 table verbatim, plus `UNKNOWN` and
+`SWEEP_REVERSAL` under the switch) **without Phase 2's conviction bar.** The gate opened; the
+thing meant to replace it has not landed.
+
+Consequently, **a confirmed ORB break+retest fires in every regime the classifier can emit,
+including `UNKNOWN`.** The only thing between a confirmed setup and an order is
+`setup_scorer`'s B-threshold (0.55), inside which `regime_conviction` is a 20%-weighted
+dimension that contributes **exactly 0.0 under `UNKNOWN`**.
+
+This is intentional — it is how labeled tape gets generated for the Phase-3 calibration.
+**It is also why the fleet stays in paper.** `PAPER_TRADING` defaults to `True` and must not
+be flipped on any box until the conviction bars exist. See `ROADMAP.md` §Risks.
+
+Sweep, butterfly, condor, and trend continuation are **untouched** by this: they still
+self-gate and still do not fire under `UNKNOWN` (continuation hard-requires a *trending*
+regime, a strictly higher bar). Set `ORB_FIRES_REGARDLESS_OF_REGIME = False` to restore strict
+v2 gating.
+
+---
+
+---
+
+<!-- ================= was: README.md § DAY-ZERO ROLLOUT — 2026-07-18 build ================= -->
+
+## 📦 DAY-ZERO ROLLOUT — 2026-07-18 build (deploy state)
+
+> **SINCE DAY ZERO (2026-07-20 → 07-22) — everything below in this section is now historical; these landed after it:**
+> - **2026-07-20:** `orb_engine` **v3.9** — stale-retest timeout restored *correctly*: real 1m bars (deduped on candle ts, break candle excluded, fires on the 13th post-break bar), and expiry **re-arms** instead of terminating (the SMH missed-short fix; the old timeout counted 15-s loop ticks as bars and died in ~3 min). `status.py` **v1.12** — daily-loss banner reads the limit via the runtime env chain (the false "$200 LIMIT HIT" display bug).
+> - **2026-07-21:** `main.py` **v4.0** — **L2.5 live**: the L1→L2 committed label now drives `primary_regime` (see §Regime engine). `sweep_reversal_strategy` **v3.2** — **ORB-ownership gate**: a sweep may fire only after the ORB has *released* price (stale/runaway/EXPIRED/past 11:00), not merely after a break registered (CVX 07-21 09:55 double-ownership fix).
+> - **2026-07-27 (excavation deploy):** `regime_confluence` **v1.3** (all four non-`_trending`
+>   scorers rebuilt as accumulating evidence; `_sweep` gains `trend_state`), `config` **v4.0**
+>   (`SWEEP_DELTA_STRONG` 0.12), `REGIME_TRUTHS` **v0.3**, `check_versions` **v3.8**.
+>   **Consequence:** this changes the L1 score DISTRIBUTION, not just its labels — every
+>   downstream threshold calibrated against the old shape (setup grade bars,
+>   `CONTINUATION_CONV_FLOOR`, `_sweep_target_delta` endpoints, condor regime self-gating)
+>   is now calibrated against a distribution that no longer exists. **The frozen-baseline
+>   window resets to this deploy**, and the L1 knob freeze moves out one week.
+> - **2026-07-22 (one fleet deploy, commit `3530b3c` era, 8 files):** `regime_confluence` **v1.2** ramp de-saturation promoted to defaults **and, riding the same push, the mark-limit execution workstream** — new `execution/limit_ladder.py` v1.2, `entry_engine` v3.8 (mark-limit entries), mark-limit exit closes in `exit_engine`, `FLATTEN_WINDOW_OPEN_ET=(15,40)` in config + `time_utils`. **Consequence:** label-gated regime metrics stay attributable to v1.2; P&L / fill-dependent stats are confounded by both changes. The ~2-week frozen-baseline window gets **one week added to its back end** to preserve a clean stretch.
+
+
+Monday 2026-07-18 is **day zero** on a materially changed engine, and the start of the
+~2-week hands-off baseline window (regime labels trusted, L2 weights frozen, condor behavior
+confirmed) that gates the pitchfork. What lands and how:
+
+**Already live on the fleet (Fri 2026-07-17):**
+- `trend_engine` v3.1 — intraday-primary tf_weights, the dead-4h TRENDING fix (confirmed via
+  journal: AVGO threw TRENDING_BEAR conviction 0.52).
+
+**Landing this deploy pass (fleet flat, one `devtools` option-23 FULL wake→bake→restart→STOP,
+catching the 19 asleep boxes):**
+- `volatility_engine` VWAP zero-volume guard — SPX NaN→"BELOW" false-signal fix (commit `cf5def8`).
+- Iron condor premium-rich band-approach triggers + roll-gets-first-refusal (commit `792d802`).
+- Trend Continuation strategy — NEW, paper-first on all boxes from Monday (the 2-week baseline is
+  its proving ground).
+- Signal journal instrumentation (v1.0 module + `setup_scorer` v1.3 + `main.py` v3.9 +
+  `orb_engine` v3.7) — **log-only, zero behavior change.**
+
+**Deploy discipline:** full-file drop-ins, never `git apply` patches (patch desyncs against
+uncertain server versions burned ~a dozen turns). **The deploy gate is
+`python3 -c "import ast; ast.parse(open('<f>').read())"` on the box** — NOT pytest (wrong-venv /
+no-pytest on boxes burned this repeatedly). After the pull, `bash check_versions.sh | grep
+MISSING` must print nothing; the canary set now fingerprints every day-zero change plus the
+instrumentation, so a stale sync surfaces immediately. **Parity invariant:** the same engines
+must reach the control checkout (`~/options-trader-v3`) so the replay harness scores Monday's
+tape with the bot that traded it — pull + `check_versions.sh` on control right after the fleet.
+
+**Path note:** the 29 boxes deploy to `~/options-trader` (no `-v3`); the control server checkout
+is `~/options-trader-v3`.
+
+**Also activated this pass (2026-07-18):** the shadow observer, **on the live QQQ paper box**
+(→ **superseded 2026-07-22: rolled out fleet-wide, all 29 boxes** — still zero new DXFeed
+subscriptions, each observer reads its own box's shared store)
+(the real fleet instance, `OT_INSTRUMENT=QQQ`, `~/options-trader`) — **not a separate QQQ-TEST
+instance.** This is deliberate and is the whole point of the one-producer/many-readers design:
+the observer opens **no DXFeed of its own**, it reads the shared store that the QQQ box's own
+`candle-feed.service` already fills. One feed, two readers (bot + observer) — no 11th
+subscription. Installed as `shadow-observer.service` — **enabled at boot since 2026-07-22; the original
+`shadow-start`/`shadow-stop` timers (09:00 / 16:30 ET) are RETIRED**: edge-triggered timers
+fire while the overnight-stopped boxes are off (which is why the observer collected exactly
+one session ever); the service self-gates on RTH instead. Env supplied via a `.d/env.conf` drop-in copied from
+`optionsbot.service` (secrets never leave the box), running **stage 1 (primitives measure-only)**.
+Smoke-tested clean; dormant until Monday 09:00 ET. Stays at stage 1 for several sessions
+(velocity verification against `data/OHLC/`) before stage 2 is considered.
+
+**Deliberately NOT in this pass:** the offline-replay bookmark (defect S — build and prove inert
+on the tester first); observer *fleet* deployment (one live box — QQQ — is the whole ask, not all
+29); shadow-observer service-unit templatizing (defect D service-half); any gate change. Monday's
+engine *decisions* are exactly what was approved Friday.
+
+**The Monday habit:** after the EOD conductor runs on control, `cd ~/day_trader_pro &&
+./label_day.sh` to tag the session's trend/sweep/pin/breakout symbols — this is what fills the
+Layer-1 Tier-B tape gaps (see `docs/REPLAY_VALIDATION.md` and `ROADMAP.md` L1.7).
+
+---
+
+---
+
+<!-- ================= was: README.md § Data — one producer, many readers (v3.0) ================= -->
+
+### Data — one producer, many readers (shipped, v3.0)
+
+Every process on a box — bot, engines, ORB range, candle logger, shadow observer, VIX —
+reads **one** SQLite (WAL) store, written by **one** DXFeed subscription held exclusively by
+`data/candle_feed.py` (`candle-feed.service`). No consumer may open its own stream.
+
+`data/market_data.py` is a pure store *reader* preserving the exact v2 contract
+(`fetch_candles` / `fetch_quote` / `fetch_all_candles`), which is why every downstream engine
+required zero changes. Readers **fail loud**: `None` + `WARNING` when the store is missing or
+the heartbeat exceeds `OT_FEED_STALE_S` (120s). A dead feed surfaces as "no data," never as
+stale numbers driving a decision.
+
+The purge is real and verified: **zero `yfinance` imports repo-wide.** It is the load-bearing
+prerequisite for everything else — calibrating conviction against ROI on a feed the bot
+doesn't trade is calibrating a board it never plays on.
+
+---
+
+<!-- ================= was: README.md § Signal journal — Phase-3.1 (v1.0) ================= -->
+
+### Signal journal — Phase-3.1 instrumentation (shipped, v1.0, 2026-07-18)
+
+`analysis/signal_journal.py` is a **log-only** subsystem that makes the *perishable* part of
+every trading decision durable. The 1-min OHLC tape can be replayed forever; what evaporates at
+16:00 is what the option chain looked like at signal time — premium, bid/ask spread, IV, greeks
+— and which gate disposed of each signal. Without it, every session between now and the Phase-3
+calibration campaign is tape that can never *become* calibration data. ROADMAP Phase 3.1 states
+the rule: *"a gate you can't counterfactual is a gate you can't calibrate."*
+
+It writes append-only JSONL to `data/signal_journal/<YYYY-MM-DD>/<SYMBOL>.jsonl` (gitignored,
+self-locating repo root like the shadow observer). Event vocabulary:
+
+| event | emitted by | carries |
+|---|---|---|
+| `scored` | `setup_scorer` v1.3 | every scored signal **including below-B REJECTs** — grade, total, both thresholds, full breakdown, regime conviction, and the signal's quote context (bid/ask/mark/spread/IV/greeks) |
+| `disposition` | `main.py` v3.9 | what happened after scoring: `fired` / `sizing_rejected` / `invalid_signal`; ORB dispositions carry `retest_depth_px` + its ATR-relative form |
+| `retest_check` | `orb_engine` v3.7 | per-armed-candle retest penetration depth in PX (**negative = near-miss**) + `orb_width` — the defect-G distribution |
+| `condor_plan` / `condor_leg` | `main.py` v3.9 | regime conviction at condor decision/fire time — the condor bypasses the score path, so without these its Phase-3 bar could never be calibrated |
+
+**Design guarantee:** every emission is wrapped so any failure (full disk, bad payload,
+permissions) degrades to a missing log line, never a raised exception. The trading loop is
+byte-identical whether the journal is present, absent, or broken. It imports nothing from
+`execution/`, `risk/`, `strategy/`, or `notifications/`, never opens `trades.db`, and places no
+orders. Join key across events: `ts_et` + symbol (one signal per tick, single-threaded per box).
+
+Collection: journal files ride `snapshot.sh` today; an EOD-conductor collection phase will be
+added when volume justifies it — **deliberately not wired into the conductor chain yet**, which
+is finally flawless and stays untouched until any addition is proven inert on the tester.
+
+---
+
+---
+
+<!-- ================= was: README.md § Mark-limit execution (2026-07-22) ================= -->
+
+### Mark-limit execution (2026-07-22, `execution/limit_ladder.py` v1.2, now v1.3) — never cross the spread
+
+Before this, single-leg entries **and** exits were MARKET orders and spread closes used a fixed
+$0.10 buffer past mark — on a $0.20 0DTE contract with a $0.05 spread that is ~25% of premium
+round-trip, larger than any edge being captured. Every decision in this system is made at the
+mark; now the fill targets it too:
+
+- **OPENS** post a limit **at the mark**, re-priced to the fresh mark every tick (~15s). An
+  entry that never fills costs nothing — the strategy re-signals next tick.
+- **CLOSES** post at the mark and **re-anchor every retry tick**, so a stop chases a falling
+  market down instead of parking at a stale price. The exit *trigger* (e.g. −40%) decides WHEN
+  to start closing; it never anchors WHERE the limit sits.
+- **The one exception — EOD flatten:** 15:40 ET opens the flatten window with mark-limit
+  reposts; **15:45 ET sends MARKET, no exceptions** (an unfilled 0DTE at the bell is an expiry,
+  and an assignment on a short leg). `FLATTEN_WINDOW_OPEN_ET=(15,40)`,
+  `limit_ladder.hard_close_order_mode()`, `time_utils.is_hard_close_time()`.
+- **Paper parity:** paper books the same mark the live limit would post
+  (`paper_fill_price`). Paper is now honest about **price** but still optimistic about **fill
+  rate** — the residual paper↔live gap is no-fill risk, not slippage. ⚠️ This *supersedes* the
+  defect-R uniform 1% paper slippage for single-leg and butterfly entries and the
+  `LIVE_CLOSE_LIMIT_BUFFER` close pricing; see defects R and T.
+
+---
+
+<!-- ================= was: README.md § Fill-confirmed exits (v3.4/v3.5) ================= -->
+
+### Fill-confirmed exits (v3.4/v3.5, 2026-07-15) — a close is only real when the broker says so
+
+The 2026-07-15 hard close booked ~8 condor legs at `pnl=+$0.00` because
+`flatten_all` treated order *submission* as a fill and booked at a fallback
+price. That entire class of bug is now closed:
+
+- **The shared contract:** `place_exit_order()` returns a `FillResult`
+  (`confirmed / fill_price / order_id / partial`). `_execute_exit()` books P&L
+  **only** when `confirmed=True` with a real price. Unconfirmed → the row
+  stays OPEN and the 15:45→16:00 retry loop re-attempts and pages.
+- **PAPER:** simulates the fill at the last-known mark in one pass; no mark →
+  declines and retries next tick rather than inventing a price. Unchanged
+  behavior, now formalized.
+- **LIVE (`_confirm_and_book_live_exit`, v3.5):** submit → capture the broker
+  order id → poll to a bounded deadline (`LIVE_FILL_POLL_SECONDS` /
+  `LIVE_FILL_DEADLINE_SECONDS`) → book **only** the broker's net fill price
+  read from per-leg fills. Never the mark, never entry, never $0.00.
+  Unfilled at deadline → cancel, resolve the cancel/fill race, stay open,
+  page once. **Partials:** filled portion stashed, remainder resubmitted next
+  tick at a fresh mark, booked once at the quantity-weighted net price. A
+  working order id is resumed on re-entry — retry ticks can never
+  double-submit. Verticals close as one 2-leg spread order (previously the
+  long leg was orphaned); spread closes are marketable **limits** (tastytrade
+  rejects MARKET on spreads) with the vertical debit capped at spread width;
+  limit prices follow the SDK's **signed** convention (negative=debit). **2026-07-22: close limit *pricing* superseded by the mark-limit policy above (post at mark, re-price per tick) — the buffer is retired; the FillResult confirmation contract is unchanged.**
+  Acceptance tests: `tests/test_live_fill_confirmation.py` (A–E per
+  `FABLE_SPEC_live_exit_fill_confirmation.md`) — all pass; tiny-account live
+  validation still required before cash.
+
+Theta protection is deliberately narrow (v1.5). The v1.3 check fired on the first green tick —
+58 of 77 exits were theta-bleed at a **median 60-second hold**, capping trends while the day's
+P&L came from the few trades that reached the trail. Decay is projected per **calendar** day
+(1440 min); v1.3 divided by the 390-minute RTH day and overstated decay ~3.7×.
+
+---
+
+---

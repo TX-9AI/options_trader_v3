@@ -385,3 +385,103 @@ capability, not new code.
 5. **Sequencing against the freeze** — the overlay is queued behind the L2.6
    baseline freeze and built in a git fork. That ordering should not change
    because this document is exciting.
+
+
+---
+
+## APPENDIX — migrated from the root README (2026-07-28)
+
+<!-- ================= was: README.md § PLANNED — Pitchfork sloped S/R ================= -->
+
+# 🔱 PLANNED — Pitchfork sloped S/R (designed, NOT built, gated on Layer 2)
+
+**Status: design-complete, deliberately unbuilt. Do not deploy before Layer 2 is ready.**
+This section is the build brief so the next hands (or the next thread) inherit the full
+requirement, not a hunch.
+
+#### What it is
+
+An Andrews-style **median-line pitchfork** used as *sloped* support/resistance — the tilted
+cousin of the Bollinger Band (BB is `mean ± σ` around a **horizontal** MA; a pitchfork is the
+median line ± tines around a **sloped** axis anchored to three swing pivots). It is folded
+**into `LiquidityMapper` as a long-lived sloped-zone object**, not a separate module — because
+an S/R level and a liquidity pool are frequently the *same* price described twice, and unifying
+them lets one zone carry both its S/R character and its liquidity character.
+
+#### Hard requirements (these are the spec, not suggestions)
+
+- **HTF-anchored.** Pivots come from **daily/hourly** swings, computed on HTF data — never by
+  zooming out an intraday calc. An LTF-anchored fork redraws every 20 minutes and means nothing.
+- **Placed once, persists until invalidated.** A fork is not re-anchored on every wiggle. It
+  stands until price *earns* its death: a **decisive close beyond the outer tine** on the wrong
+  side, **or** the anchoring swing structure itself is broken. It is **NOT** invalidated by
+  price merely tagging the median or a tine — those are *reactions*, the fork working as
+  designed. (Naive implementations kill the fork on first touch; do not.)
+- **Deterministic placement off `LiquidityMapper` swing pivots.** A pitchfork is pure
+  coordinate geometry once the three pivots are chosen; the only hard problem is *anchor
+  selection*, solved with a scoring rule (pick the anchoring price has reacted to most),
+  validated offline. **NOT the vision API** — non-deterministic, un-backtestable, opaque in the
+  live loop; that violates the "regime shapes the trade, outcomes never feed classification"
+  discipline. The API's only legitimate role here is **offline anchor-quality validation**
+  (batch-check that the deterministic anchors look sane across many tapes), never the live call.
+- **Bands, not lines.** Zones are ranges (the tines are ranges by construction), which composes
+  with liquidity pools and the BB/ORB ranges already in use.
+
+#### Where it contributes (ranked by whether it moves P&L)
+
+1. **Conviction scoring** — rail-distance + confluence as new dimensions. A setup entering *at*
+   a strong confluence zone is objectively higher-probability. This is the real payoff.
+2. **The continuation trade's exit** — structural-level proximity is the **highest-confidence
+   exhaustion signal** (a spent move *at a level* beats a spent move in open air). This is the
+   `_evaluate_continuation` "ADD structural-level proximity" hook, already flagged in-code.
+3. **Exit/target anchors** — the opposite rail is a natural target / trail-tighten point.
+4. **NOT regime definition.** A fork tells you *where* a trend pauses, not *whether* you are
+   trending. Regime stays ADX/structure/BB-driven. Do not wire it into the classifier.
+
+#### Empirical weight — ship at zero
+
+The pitchfork conviction dimension **ships at weight 0 (shadow)** and is calibrated to
+*realized edge* from paper data — exactly as `conviction_integrator` was deployed to observe
+before it gated. The weight is a function of `(rail strength × timeframe × confluence)` and is
+**allowed to stay 0** if the tape shows no edge. Do not hand-tune a weight; discover it.
+
+#### What we are WAITING FOR — the gate
+
+**Build it when ready; do NOT deploy it until Layer 2 is set.** "Set" means:
+
+1. **Trend labels trusted in production** — the `trend_engine v3.1` fix has weeks of live
+   confirmation, not one afternoon.
+2. **Conviction weights frozen** — the pitchfork enters as a *new* conviction dimension, and
+   that is only measurable if the *existing* Layer-2 weights are a stable baseline. Calibrating
+   a new dimension against a moving target is impossible. **This is the real gate.**
+3. **A clean baseline logged** — a stretch of untouched production performance to compare the
+   pitchfork twin against.
+
+Concretely: **~2-week hands-off window from the 2026-07-XX day-zero** (materially changed
+engine: trend v3.1 + VWAP + condor triggers + continuation), *then* the pitchfork build spins
+up against a frozen Layer-2.
+
+#### How it gets built (isolation plan)
+
+- An **ironically-named git fork** of this repo (keeps the production fleet's `git pull` safe).
+  Pitchfork lives in **additive, separate modules** so upstream merges stay clean.
+- Its own **isolated yfinance HTF feed** (cannibalized from v1/v2) — *not* the broker DXFeed
+  stream. Adequate because the fork is HTF *context*, never execution; the entry fill still
+  happens on real DXFeed price. Keep the two feeds strictly separated — yfinance HTF in, fork
+  geometry out, **no yfinance price ever touches an entry/exit decision.**
+- Backtest/replay harness **resident on the tester**.
+- Proven via a **QQQ twin A/B**: the pitchfork-weighted tester vs a production QQQ twin on the
+  current engine — same execution data, one variable (pitchfork conviction).
+- **First concrete deliverable when the build starts:** the swing-pivot rule that anchors the
+  fork + the invalidation condition. Everything else is geometry that follows from those two.
+
+#### Related future trade (prelude only, not scheduled)
+
+**Rejection-fade** — the near-opposite of continuation. Sell a **premium-rich credit spread**
+at a level that has been **firmly rejected**, with conviction **scaling up by HTF rejection
+count** (a level rejected three times on the daily >> a one-touch). Continuation trades *with*
+momentum into a level expecting breakthrough (debit); rejection-fade sells *against* momentum
+into a level expecting it to hold (credit). This trade *wants* the pitchfork/LiquidityMapper
+multi-touch HTF zone with a rejection-count attribute — it is the pitchfork's natural partner.
+
+---

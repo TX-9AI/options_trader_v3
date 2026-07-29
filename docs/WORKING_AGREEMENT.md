@@ -166,3 +166,19 @@ subfolder, not a guess.)
 - **OBSERVATIONS.md** — evidenced findings about the *system*, deferred fixes.
 - **ROADMAP.md** — the L1→L2→L3 build plan and where each piece stands.
 - **README.md** — architecture + defect log.
+
+
+---
+
+## Operating notes migrated from the root README (2026-07-28)
+
+### Bytecode cache
+
+**Always purge the bytecode cache before restarting.** This is the single most common cause of "I
+pushed the fix but it's still broken" — and it matters more than usual right now, because v3.4
+renamed the `ORBState` strings.
+
+### Monitoring and mode
+
+Monitoring: `python status.py` · `python query.py` · `bash configure.sh` (risk, mode, daily-loss
+cap override).
