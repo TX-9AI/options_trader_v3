@@ -1,6 +1,13 @@
-# docs/BACKLOG.md — v3.2
+# docs/BACKLOG.md — v3.3
 
 **CHANGELOG**
+- **v3.3 — 2026-07-29 — new item V on the Thu Jul 30 punch list: `push.sh`
+  resolves its target by scanning `$HOME` and ignoring the caller's cwd.**
+  Surfaced when a push from the correct directory reported the wrong repo's
+  remote. Both remotes were correct — the tool had cd'd elsewhere. Dormant now
+  that the borrowed futures checkout is off the box, which is exactly why it is
+  written down: nothing will show it is still broken until the next time two
+  projects share `$HOME`. Same file ships in futures_trader_v1.
 - **v3.2 — 2026-07-29 — check_versions v4.4 (glyph fix) + a path convention
   worth writing down.** First control-side run of v4.3 surfaced an inherited
   defect: status glyphs were emitted as literal `\u2713` / `\u2717` (bash
@@ -129,6 +136,29 @@ the tester. Nothing behavior-changing deploys except on Mon Aug 3.*
   test passed. **Sync after RTH close (~16:30 ET) with today's other deploys.**
 
 **⬜ Thu Jul 30**
+- **V — NEW: `push.sh` finds its target by guessing (control-server hazard).**
+  Found 2026-07-29 when `push.sh` run *from* `~/options-trader-v3` reported the
+  remote as `futures_trader_v1.git` and refused. Cause is structural, not a
+  mispointed remote (both remotes were correct): push.sh ignores the caller's
+  cwd and scans `$HOME`  alphabetically for the first directory containing both
+  `main.py` and `config.py`, then cd's there. On a bot box `$HOME` holds one bot
+  so it is invisible; on control it silently selects the wrong project.
+  Currently DORMANT — the futures checkout was deleted the same day, so the scan
+  now lands on the right directory and the tool appears healthy. It returns the
+  next time any second project is unpacked on control. Note the same file (same
+  trap) ships in **futures_trader_v1**; fix both or the borrowed-box case
+  re-bites from the other side.
+  **HOW:** v1.7 — prefer `$PWD` when it is a git work tree containing
+  `main.py` + `config.py`; fall back to the `$HOME` scan only when invoked from
+  outside a bot checkout, and PRINT the resolved directory and remote before
+  acting so a wrong pick is visible rather than silent. Keep the refusal
+  behaviour (it is what saved us here) but make the message name the resolved
+  path, not just the remote.
+  **VALIDATE:** self-validating by construction test — recreate the failure in
+  a scratch `$HOME` holding two bot-shaped directories, confirm v1.6 picks the
+  alphabetically-first one and v1.7 picks the cwd; then confirm the fallback
+  still works when invoked from `~`. No dataset needed. Deploy-truth is covered
+  by the v4.3 parity invariant on the next fleet pass.
 - **P5.1 — Chain-snapshot harvest (TIME-CRITICAL — re-scoped at v3.0).** Verified
   at HEAD: `harvest.py` is already **v0.5.1** (07-27) and pulls
   `data/chain_snapshots/<date>/<SYM>.jsonl.gz` + `signal_journal` — the build is
