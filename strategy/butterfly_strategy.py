@@ -36,24 +36,25 @@ Exit logic:
     hard close. Whichever fires first.
   - Max hold: 2.5 hours
 
-v-convprox — 2026-07-28 — PIN PROXIMITY IS NOW EARNED BY CONVICTION.
-        Gate 6 was a fixed 1x expected move from the GEX pin. That directly
-        contradicted the v1.4 discount gate: proximity forced price NEAR the pin,
-        near-pin tents carry a fat debit, and the <= 0.33 debit/width gate then
-        refused them. Measured on QQQ's full log: debit ratios ran 0.41-0.64
-        (min 0.41, cluster 0.47-0.53) against a 0.33 gate -- UNREACHABLE, so every
-        setup that survived to the discount gate was rejected. Three butterflies
-        exist in the entire fleet archive (2026-07-09, 07-20, 07-24).
-        Now the allowed distance scales with regime conviction between
-        BUTTERFLY_PROX_EM_MIN (1.0x, low conviction -- must sit close, fat tent,
-        correctly refused) and BUTTERFLY_PROX_EM_MAX (2.5x, high conviction -- may
-        sit out where the tent is genuinely cheap and 0.33 is reachable). Ramp
-        bounds are set against the OBSERVED conviction range (0.000-0.582), not a
-        nominal 0-1 which would never leave the floor. All four knobs are
-        OT_BFLY_PROX_* env-overridable. Every evaluation logs
-        "Butterfly proximity: conv= mult= em= threshold= distance= pin= spot="
-        alongside the existing debit-ratio line, so accepts AND rejects are both
-        on the ledger and the curve can be fit from tape.
+v-convdiscount — 2026-07-28 — THE DISCOUNT CEILING IS EARNED BY CONVICTION.
+        MEASURED, not inferred. QQQ's full log: debit ratios 0.41-0.64 (min 0.41,
+        cluster 0.47-0.53) against a FLAT 0.33 ceiling -> the gate rejected 100%
+        of setups that reached it. Three butterflies exist in the whole fleet
+        archive (07-09, 07-20, 07-24). Ruled out first: VIX (16.0-18.2, under the
+        20 disable), regime (COMPRESSION/RANGING, valid), GEX (QQQ logs 708
+        PINNING ticks, real 0.4-1.0M magnitudes), and PROXIMITY -- gate 6 logged
+        ZERO "too far from pin" rejections ever, so it was never binding and
+        scaling it would have admitted nothing.
+        The tent is expensive because price sits near the pin. With high
+        conviction it STAYS pinned, paying more is justified; with low conviction,
+        demand the cheap tent. The ceiling now scales 0.33 (conv <= 0.30) to 0.50
+        (conv >= 0.55); at the observed median conviction 0.438 the gate is 0.42,
+        which admits the cheapest observed setups. Bounds are set against the
+        OBSERVED conviction range (0.000-0.582), NOT a nominal 0-1.
+        Knobs OT_BFLY_DEBIT_HICONV / OT_BFLY_DISC_CONV_LO / _HI are env-
+        overridable. Every evaluation logs
+        "Butterfly discount gate: conv= ratio= gate= ... PASS|REJECT"
+        so accepts AND rejects are both on the ledger.
 """
 
 import logging
@@ -74,8 +75,8 @@ from config import (
     BUTTERFLY_GEX_PIN_PROXIMITY_MULT,
     BUTTERFLY_ENTRY_START_ET, BUTTERFLY_ENTRY_CUTOFF_ET,
     STRIKE_INCREMENT, INSTRUMENT, VIX_BUTTERFLY_DISABLE,
-    BUTTERFLY_PROX_EM_MIN, BUTTERFLY_PROX_EM_MAX,
-    BUTTERFLY_PROX_CONV_LO, BUTTERFLY_PROX_CONV_HI,
+    BUTTERFLY_MAX_DEBIT_PCT_WIDTH_HICONV,
+    BUTTERFLY_DISC_CONV_LO, BUTTERFLY_DISC_CONV_HI,
     CONTRACT_MULTIPLIER,
     BUTTERFLY_MAX_DEBIT_PCT_WIDTH,
     BUTTERFLY_STOP_LOSS_PCT,
@@ -175,21 +176,12 @@ class ButterflyStrategy(BaseOptionsStrategy):
             logger.info("Butterfly: no pin strike available")
             return None
 
-        # ── Gate 6: proximity to pin, SCALED BY CONVICTION (v-convprox) ───────
-        # Was a fixed 1x expected move, which contradicted the v1.4 discount gate:
-        # proximity forced price NEAR the pin -> near-pin tents are expensive ->
-        # the <= 0.33 debit/width gate rejected them. Observed ratios on QQQ ran
-        # 0.41-0.64; 0.33 was never reachable, so 100% of setups reaching the
-        # discount gate were refused and the strategy took 3 trades ever.
-        # Now: distance from the pin is EARNED. Low conviction must sit close
-        # (fat tent -> correctly refused). High conviction may sit further out,
-        # where the tent is genuinely cheap and the discount gate is reachable.
+        # ── Gate 6: proximity to pin (fixed 1x EM — MEASURED never-binding:
+        # zero "too far from pin" rejections in the entire QQQ log, so scaling
+        # this gate would admit nothing. Left as-is deliberately.)
         _conv = float(getattr(regime, "conviction", 0.0) or 0.0)
-        _span = max(BUTTERFLY_PROX_CONV_HI - BUTTERFLY_PROX_CONV_LO, 1e-9)
-        _t    = min(max((_conv - BUTTERFLY_PROX_CONV_LO) / _span, 0.0), 1.0)
-        _mult = BUTTERFLY_PROX_EM_MIN + (BUTTERFLY_PROX_EM_MAX - BUTTERFLY_PROX_EM_MIN) * _t
         _em   = self._expected_move(current_price, macro.vix)
-        proximity_threshold = _em * _mult
+        proximity_threshold = _em
         distance_from_pin   = abs(current_price - pin_strike)
 
         # logged on EVERY evaluation (accept or reject) so the ledger can fit the
@@ -261,8 +253,25 @@ class ButterflyStrategy(BaseOptionsStrategy):
             f"(debit={net_debit:.2f} / wing={wing_width:.0f}, "
             f"gate ≤ {BUTTERFLY_MAX_DEBIT_PCT_WIDTH:.2f})"
         )
-        if debit_ratio > BUTTERFLY_MAX_DEBIT_PCT_WIDTH:
-            logger.info("Butterfly: tent too expensive — no discount, no edge; skip")
+        # v-convdiscount 2026-07-28: the ceiling is EARNED BY CONVICTION.
+        # MEASURED: observed ratios 0.41-0.64 (min 0.41) against a flat 0.33 gate
+        # -> 100% rejection, 3 butterflies in the entire fleet archive. Proximity
+        # was NOT the binding gate (zero "too far from pin" rejections ever).
+        # The tent is expensive because price sits near the pin; with high
+        # conviction that it STAYS pinned, paying more is justified. With low
+        # conviction, demand the cheap tent.
+        _span = max(BUTTERFLY_DISC_CONV_HI - BUTTERFLY_DISC_CONV_LO, 1e-9)
+        _t    = min(max((_conv - BUTTERFLY_DISC_CONV_LO) / _span, 0.0), 1.0)
+        _gate = BUTTERFLY_MAX_DEBIT_PCT_WIDTH + (
+                    BUTTERFLY_MAX_DEBIT_PCT_WIDTH_HICONV
+                    - BUTTERFLY_MAX_DEBIT_PCT_WIDTH) * _t
+        logger.info(
+            f"Butterfly discount gate: conv={_conv:.3f} ratio={debit_ratio:.2f} "
+            f"gate={_gate:.2f} (floor={BUTTERFLY_MAX_DEBIT_PCT_WIDTH:.2f} "
+            f"ceil={BUTTERFLY_MAX_DEBIT_PCT_WIDTH_HICONV:.2f}) "
+            f"{'PASS' if debit_ratio <= _gate else 'REJECT'}")
+        if debit_ratio > _gate:
+            logger.info("Butterfly: tent too expensive for this conviction — skip")
             return None
 
         max_profit = wing_width - net_debit

@@ -200,22 +200,19 @@ FULL_STRATEGY_INSTRUMENTS    = set(STRIKE_INCREMENTS)
 # reward:risk). Self-normalizing across symbols; needs only marks. PRIOR —
 # calibrate from logged debit-ratio vs outcome once fleet-wide entries accrue.
 BUTTERFLY_MAX_DEBIT_PCT_WIDTH = 0.33
-# ── Conviction-scaled pin proximity (v-convprox 2026-07-28) ──────────────────
-# The old gate was a FIXED 1x expected move from the pin, which contradicted the
-# v1.4 discount gate: proximity forced price NEAR the pin, near-the-pin tents are
-# expensive, and the discount gate (<= 0.33 debit/width) then rejected them. On
-# QQQ the observed debit ratios were 0.41-0.64 (min 0.41, cluster 0.47-0.53) --
-# the 0.33 gate was UNREACHABLE and rejected 100% of setups that got to it.
-# Fix: the allowed distance from the pin is EARNED BY CONVICTION. Low conviction
-# must sit close (fat tent -> discount gate correctly refuses it); high conviction
-# may sit further out, where the tent is genuinely cheap and 0.33 is reachable.
-# NOTE the bounds are set against the OBSERVED conviction range (0.000-0.582 on
-# 2026-07-28, n=23), NOT a nominal 0-1 -- a 0->1 ramp would never leave the floor.
-# ALL PRIOR. Recalibrate from the debit-ratio ledger, which logs every evaluation.
-BUTTERFLY_PROX_EM_MIN   = float(os.environ.get("OT_BFLY_PROX_EM_MIN",  "1.0"))
-BUTTERFLY_PROX_EM_MAX   = float(os.environ.get("OT_BFLY_PROX_EM_MAX",  "2.5"))
-BUTTERFLY_PROX_CONV_LO  = float(os.environ.get("OT_BFLY_PROX_CONV_LO", "0.30"))
-BUTTERFLY_PROX_CONV_HI  = float(os.environ.get("OT_BFLY_PROX_CONV_HI", "0.55"))
+# ── Conviction-scaled DISCOUNT gate (v-convdiscount 2026-07-28) ─────────────
+# MEASURED on QQQ's full log: debit ratios 0.41-0.64 (min 0.41, cluster
+# 0.47-0.53) against a flat 0.33 ceiling -> the gate rejected 100% of setups that
+# reached it. Three butterflies exist in the entire fleet archive. Proximity was
+# NOT the constraint: zero "too far from pin" rejections were ever logged.
+# The tent is expensive because price sits near the pin. With high conviction it
+# STAYS pinned, paying more is justified; with low conviction, demand the cheap
+# tent. So the ceiling scales from the strict floor to a high-conviction ceiling.
+# Bounds are set against the OBSERVED conviction range (0.000-0.582), NOT 0-1.
+# ALL PRIOR -- refit from the debit-ratio ledger, which logs every evaluation.
+BUTTERFLY_MAX_DEBIT_PCT_WIDTH_HICONV = float(os.environ.get("OT_BFLY_DEBIT_HICONV", "0.50"))
+BUTTERFLY_DISC_CONV_LO = float(os.environ.get("OT_BFLY_DISC_CONV_LO", "0.30"))
+BUTTERFLY_DISC_CONV_HI = float(os.environ.get("OT_BFLY_DISC_CONV_HI", "0.55"))
 DIRECTIONAL_ONLY_INSTRUMENTS = set(STRIKE_INCREMENTS) - FULL_STRATEGY_INSTRUMENTS
 DIRECTIONAL_ONLY             = INSTRUMENT in DIRECTIONAL_ONLY_INSTRUMENTS
 CONTRACT_MULTIPLIER = 100
