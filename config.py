@@ -200,6 +200,22 @@ FULL_STRATEGY_INSTRUMENTS    = set(STRIKE_INCREMENTS)
 # reward:risk). Self-normalizing across symbols; needs only marks. PRIOR —
 # calibrate from logged debit-ratio vs outcome once fleet-wide entries accrue.
 BUTTERFLY_MAX_DEBIT_PCT_WIDTH = 0.33
+# ── Conviction-scaled pin proximity (v-convprox 2026-07-28) ──────────────────
+# The old gate was a FIXED 1x expected move from the pin, which contradicted the
+# v1.4 discount gate: proximity forced price NEAR the pin, near-the-pin tents are
+# expensive, and the discount gate (<= 0.33 debit/width) then rejected them. On
+# QQQ the observed debit ratios were 0.41-0.64 (min 0.41, cluster 0.47-0.53) --
+# the 0.33 gate was UNREACHABLE and rejected 100% of setups that got to it.
+# Fix: the allowed distance from the pin is EARNED BY CONVICTION. Low conviction
+# must sit close (fat tent -> discount gate correctly refuses it); high conviction
+# may sit further out, where the tent is genuinely cheap and 0.33 is reachable.
+# NOTE the bounds are set against the OBSERVED conviction range (0.000-0.582 on
+# 2026-07-28, n=23), NOT a nominal 0-1 -- a 0->1 ramp would never leave the floor.
+# ALL PRIOR. Recalibrate from the debit-ratio ledger, which logs every evaluation.
+BUTTERFLY_PROX_EM_MIN   = float(os.environ.get("OT_BFLY_PROX_EM_MIN",  "1.0"))
+BUTTERFLY_PROX_EM_MAX   = float(os.environ.get("OT_BFLY_PROX_EM_MAX",  "2.5"))
+BUTTERFLY_PROX_CONV_LO  = float(os.environ.get("OT_BFLY_PROX_CONV_LO", "0.30"))
+BUTTERFLY_PROX_CONV_HI  = float(os.environ.get("OT_BFLY_PROX_CONV_HI", "0.55"))
 DIRECTIONAL_ONLY_INSTRUMENTS = set(STRIKE_INCREMENTS) - FULL_STRATEGY_INSTRUMENTS
 DIRECTIONAL_ONLY             = INSTRUMENT in DIRECTIONAL_ONLY_INSTRUMENTS
 CONTRACT_MULTIPLIER = 100

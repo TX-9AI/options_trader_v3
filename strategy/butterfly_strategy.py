@@ -35,6 +35,25 @@ Exit logic:
     flip to trending, 2.5h max hold, 25% stop, 20% target, or the 15:45
     hard close. Whichever fires first.
   - Max hold: 2.5 hours
+
+v-convprox — 2026-07-28 — PIN PROXIMITY IS NOW EARNED BY CONVICTION.
+        Gate 6 was a fixed 1x expected move from the GEX pin. That directly
+        contradicted the v1.4 discount gate: proximity forced price NEAR the pin,
+        near-pin tents carry a fat debit, and the <= 0.33 debit/width gate then
+        refused them. Measured on QQQ's full log: debit ratios ran 0.41-0.64
+        (min 0.41, cluster 0.47-0.53) against a 0.33 gate -- UNREACHABLE, so every
+        setup that survived to the discount gate was rejected. Three butterflies
+        exist in the entire fleet archive (2026-07-09, 07-20, 07-24).
+        Now the allowed distance scales with regime conviction between
+        BUTTERFLY_PROX_EM_MIN (1.0x, low conviction -- must sit close, fat tent,
+        correctly refused) and BUTTERFLY_PROX_EM_MAX (2.5x, high conviction -- may
+        sit out where the tent is genuinely cheap and 0.33 is reachable). Ramp
+        bounds are set against the OBSERVED conviction range (0.000-0.582), not a
+        nominal 0-1 which would never leave the floor. All four knobs are
+        OT_BFLY_PROX_* env-overridable. Every evaluation logs
+        "Butterfly proximity: conv= mult= em= threshold= distance= pin= spot="
+        alongside the existing debit-ratio line, so accepts AND rejects are both
+        on the ledger and the curve can be fit from tape.
 """
 
 import logging
@@ -55,6 +74,8 @@ from config import (
     BUTTERFLY_GEX_PIN_PROXIMITY_MULT,
     BUTTERFLY_ENTRY_START_ET, BUTTERFLY_ENTRY_CUTOFF_ET,
     STRIKE_INCREMENT, INSTRUMENT, VIX_BUTTERFLY_DISABLE,
+    BUTTERFLY_PROX_EM_MIN, BUTTERFLY_PROX_EM_MAX,
+    BUTTERFLY_PROX_CONV_LO, BUTTERFLY_PROX_CONV_HI,
     CONTRACT_MULTIPLIER,
     BUTTERFLY_MAX_DEBIT_PCT_WIDTH,
     BUTTERFLY_STOP_LOSS_PCT,
@@ -154,10 +175,31 @@ class ButterflyStrategy(BaseOptionsStrategy):
             logger.info("Butterfly: no pin strike available")
             return None
 
-        # ── Gate 6: Price within 1× expected move of pin ──────────────────────
-        proximity_threshold = self._expected_move(current_price, macro.vix)
+        # ── Gate 6: proximity to pin, SCALED BY CONVICTION (v-convprox) ───────
+        # Was a fixed 1x expected move, which contradicted the v1.4 discount gate:
+        # proximity forced price NEAR the pin -> near-pin tents are expensive ->
+        # the <= 0.33 debit/width gate rejected them. Observed ratios on QQQ ran
+        # 0.41-0.64; 0.33 was never reachable, so 100% of setups reaching the
+        # discount gate were refused and the strategy took 3 trades ever.
+        # Now: distance from the pin is EARNED. Low conviction must sit close
+        # (fat tent -> correctly refused). High conviction may sit further out,
+        # where the tent is genuinely cheap and the discount gate is reachable.
+        _conv = float(getattr(regime, "conviction", 0.0) or 0.0)
+        _span = max(BUTTERFLY_PROX_CONV_HI - BUTTERFLY_PROX_CONV_LO, 1e-9)
+        _t    = min(max((_conv - BUTTERFLY_PROX_CONV_LO) / _span, 0.0), 1.0)
+        _mult = BUTTERFLY_PROX_EM_MIN + (BUTTERFLY_PROX_EM_MAX - BUTTERFLY_PROX_EM_MIN) * _t
+        _em   = self._expected_move(current_price, macro.vix)
+        proximity_threshold = _em * _mult
         distance_from_pin   = abs(current_price - pin_strike)
 
+        # logged on EVERY evaluation (accept or reject) so the ledger can fit the
+        # conviction->distance curve against real tape, same as the debit ratio.
+        logger.info(
+            f"Butterfly proximity: conv={_conv:.3f} mult={_mult:.2f}x "
+            f"em=${_em:.2f} threshold=${proximity_threshold:.2f} "
+            f"distance=${distance_from_pin:.2f} "
+            f"pin=${pin_strike} spot=${current_price:.2f}"
+        )
         if distance_from_pin > proximity_threshold:
             logger.info(
                 f"Butterfly: price ${current_price:.2f} too far from pin ${pin_strike} "
