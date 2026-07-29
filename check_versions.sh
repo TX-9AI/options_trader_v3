@@ -1,4 +1,9 @@
 #!/bin/bash
+# v4.6 — 2026-07-29 — +2 canaries for main v4.6's audible L2 gate, and the
+#         version-pinned main header moved to v4.6. The gate matters because a
+#         probe showed L2 CAN commit (tick 1, conviction 0.984) while production
+#         may still print [v13] indefinitely from starved evidence — with no log
+#         line at all before v4.6.
 # v4.5 — 2026-07-29 — L2.5 IMPORT-CONTRACT CANARIES + absence-loop counting.
 #         Adds 3 presence checks and 1 absence check pinning main.py v4.5's
 #         corrected L2 import and the v1.7 degraded-engine pager, after an
@@ -224,7 +229,7 @@ check "analysis/trade_readiness.py"      "readiness_would_fire"         "v1.0 wo
 check "analysis/trade_readiness.py"      "TR_DEARM_SLOPE"               "v1.0 slope de-arm knob (falling confluence disarms)"
 check "analysis/trade_readiness.py"      "0.5 \*\* (dt / TR_SLOPE_HALFLIFE_S)" "v1.0 dt-aware slope EMA (wall-clock, no tick counters)"
 check "main.py"                          "_readiness.assess_all(ctx, regime)" "v4.3 readiness hooked in the every-tick block"
-check "main.py"                          "main.py — options_trader v4.5" "v4.5 main header current (L2 import contract fixed)"
+check "main.py"                          "main.py — options_trader v4.6" "v4.6 main header current (silent L2 gate now reports)"
 check "analysis/trade_readiness.py"      "readiness_staged_pick"        "v1.1 staged-pick journaling (calm-vs-spike experiment)"
 check "analysis/trade_readiness.py"      "TR_CONV_HALFLIFE_S"           "v1.1 smoothed-conviction EMA knob"
 check "tests/readiness_digest.py"        "readiness_digest_"            "v1.0 nightly digest tool present (conductor phase 9 target)"
@@ -256,6 +261,8 @@ done
 # so the bare grep below stays honest (changelog-prose trap).
 check "main.py"  "regime_confluence import RegimeConfluenceScorer, RANGE_WINDOW_BARS"  "v4.5 L2 symbols imported from their OWNING module"
 check "main.py"  "send_regime_engine_degraded_alert"  "v4.5 silent L2 fallback now pages (data-integrity event)"
+check "main.py"  "L2.5 NOT committing"  "v4.6 non-committing L2 gate reports its reason (was silent)"
+check "main.py"  "_l2_mute"             "v4.6 reason-change throttle present"
 check "notifications/alert_manager.py"  "def send_regime_engine_degraded_alert"  "v1.7 degraded-engine pager exists"
 if grep -q "conviction_integrator import ConvictionIntegrator, RANGE_WINDOW_BARS" main.py 2>/dev/null; then
     echo "  ✗ STALE:   main.py re-imports RANGE_WINDOW_BARS from conviction_integrator — the 07-29 fleet-wide L2 outage is BACK"

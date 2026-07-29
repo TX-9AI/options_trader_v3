@@ -1,5 +1,20 @@
 """
-main.py — options_trader v4.5
+main.py — options_trader v4.6
+v4.6 — 2026-07-29 — THE SILENT L2 GATE IS NOW AUDIBLE. v4.5 fixed the import,
+        and a probe against the real classes confirmed L2 commits from tick 1
+        on a full evidence vector (TRENDING_BULL, conviction 0.984). But three
+        conditions must hold for L2 to override v1.3, and only two of them
+        logged anything: `st.regime and not st.stale` failing was completely
+        silent. Since ConvictionIntegrator clears `stale` ONLY when every
+        dimension of the evidence vector is non-None, one perpetually-None
+        dimension pins the book stale indefinitely and every REGIME line prints
+        [v13] with no warning anywhere — which is exactly why "did L2.5 land?"
+        was unanswerable from the logs. The non-committing branch now reports
+        the reason and names the missing dimensions, throttled to one line per
+        change, and announces recovery when it starts committing again. Known
+        starvation paths: closes=None (df_1m shorter than RANGE_WINDOW_BARS)
+        nulls RANGING+COMPRESSION; a tick gap over dt_max=90s re-stales every
+        tick. Observability only — no change to trading behaviour.
 v4.5 — 2026-07-29 — L2.5 IMPORT CONTRACT FIXED + SILENT DEGRADATION MADE LOUD.
         `RANGE_WINDOW_BARS` was imported from conviction_integrator, which does
         not define it — it lives in regime_confluence (v1.3, ~line 181) and was
@@ -291,7 +306,7 @@ try:
     # classifier for a full session (2026-07-29). Import symbols from the module
     # that DEFINES them; a re-export is not a contract.
     from analysis.regime_confluence import RegimeConfluenceScorer, RANGE_WINDOW_BARS
-    from analysis.conviction_integrator import ConvictionIntegrator
+    from analysis.conviction_integrator import ConvictionIntegrator, INTEGRATED_REGIMES
     _L2_OK = True
 except Exception as _l2e:                       # pragma: no cover
     _L2_OK = False
@@ -307,6 +322,7 @@ except Exception as _l2e:                       # pragma: no cover
     except Exception:                           # pragma: no cover
         pass                                    # never let the pager kill the bot
 
+_l2_mute     = {}          # v4.6 — last-reported reason L2 is not committing
 _l1_scorer   = RegimeConfluenceScorer() if _L2_OK else None
 _l2_integ    = ConvictionIntegrator() if _L2_OK else None
 _L2_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -486,6 +502,32 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
                 l2_label, l2_conv = st.regime, st.conviction
                 regime.primary_regime = st.regime
                 regime.conviction     = st.conviction
+                if _l2_mute.get("why"):          # v4.6 — announce recovery once
+                    logger.info("L2.5 COMMITTING again (%s c=%.2f) — was: %s",
+                                st.regime, st.conviction, _l2_mute["why"])
+                    _l2_mute.clear()
+            else:
+                # v4.6 — THE SILENT GATE, NOW AUDIBLE. Import can be fine and the
+                # integrator can run without raising, yet L2 still not commit,
+                # because `stale` only clears on a FULL evidence vector:
+                #     if all(evidence.get(r) is not None ...): self.stale = False
+                # One perpetually-None dimension therefore pins the book stale
+                # forever and every REGIME line prints [v13] with NOTHING logged.
+                # That is precisely why the 2026-07-29 question "did L2.5 land?"
+                # could not be answered from the logs. Report the REASON, and the
+                # exact dimensions that are missing, throttled so a long stale
+                # stretch is one line per change rather than one per tick.
+                _missing = [r for r in INTEGRATED_REGIMES if evidence.get(r) is None]
+                if st.stale:
+                    _why = ("stale: evidence dims None=" + ",".join(_missing)) if _missing \
+                           else "stale: awaiting a full evidence vector (or post-gap warm-up)"
+                else:
+                    _why = "empty committed label on a warm book"
+                if _l2_mute.get("why") != _why:
+                    logger.warning("L2.5 NOT committing — %s; falling back to the "
+                                   "v1.3 label. Conviction data logged while this "
+                                   "persists is NOT L2.5-grade.", _why)
+                    _l2_mute["why"] = _why
         except Exception as e:
             logger.warning("L2.5 integrator step failed (%s) — using v1.3 label", e)
 
