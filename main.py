@@ -1,5 +1,21 @@
 """
-main.py — options_trader v4.6
+main.py — options_trader v4.7
+v4.7 — 2026-07-29 — **L2.5 WAS NEVER REACHABLE.** Root cause of every symptom
+        chased today. `_REGIME_ENGINE` is built with `.lower()`, yielding "l2",
+        and BOTH gates compared it to the uppercase literal "L2" — at the tick
+        override (was line 482) and at the startup warm-load (was 1749). "l2" ==
+        "L2" is False, so the L2.5 block has never executed on any box since
+        v4.0 wired it, and no environment variable could have helped because the
+        DEFAULT itself failed the comparison. This is why a fleet-wide grep of
+        34k-138k-line bot.logs on all 29 boxes returned L2=0, FAILED=0, STALE=0
+        and integrator_state.json had never been written: nothing inside the
+        block — commit, save, load, even the failure handler — was ever reached.
+        The v4.5 import fix and v4.6 observability were both real and both
+        irrelevant to reachability. Fixed by comparing lowercase at both sites,
+        plus a start-up assert that refuses to boot on an unrecognised value
+        rather than silently selecting an engine nobody chose, and a start-up log
+        line naming the active engine so "which engine is running?" is answerable
+        from line one of the log instead of inferred from regime tags.
 v4.6 — 2026-07-29 — THE SILENT L2 GATE IS NOW AUDIBLE. v4.5 fixed the import,
         and a probe against the real classes confirmed L2 commits from tick 1
         on a full evidence vector (TRENDING_BULL, conviction 0.984). But three
@@ -297,7 +313,13 @@ from analysis.orb_engine import get_orb_engine, ORBState
 # a low conviction number on a best-fit label, not a seventh label. Gates run
 # WIDE OPEN this week (conviction logged, not gated — L3 tunes the bars later);
 # paper P&L is the de-facto arbiter of L1+L2 quality. Rollback: OT_REGIME_ENGINE=v13.
-_REGIME_ENGINE = os.environ.get("OT_REGIME_ENGINE", "L2").lower()   # "L2" | "v13"
+# v4.7 — the value is LOWERCASED here, so every comparison against it must be
+# lowercase too. It was compared to "L2" at both gate sites, which can never
+# match "l2" — L2.5 was unreachable dead code from the moment v4.0 wired it.
+_REGIME_ENGINE = os.environ.get("OT_REGIME_ENGINE", "L2").lower()   # "l2" | "v13"
+assert _REGIME_ENGINE in ("l2", "v13"), (
+    f"OT_REGIME_ENGINE={_REGIME_ENGINE!r} is neither 'l2' nor 'v13' — refusing to "
+    f"start rather than silently running an unintended regime engine")
 try:
     # RANGE_WINDOW_BARS is OWNED by regime_confluence (v1.3, line ~181). It was
     # previously imported via conviction_integrator, which merely re-exported a
@@ -323,6 +345,12 @@ except Exception as _l2e:                       # pragma: no cover
         pass                                    # never let the pager kill the bot
 
 _l2_mute     = {}          # v4.6 — last-reported reason L2 is not committing
+# v4.7 — state the active regime engine ONCE at import, at INFO. Until now the
+# only way to answer "which engine is running?" was to infer it from [L2]/[v13]
+# tags on regime-CHANGE lines — which is how a dead L2.5 block hid for weeks.
+logger.info("REGIME ENGINE: %s (L2 import %s) — OT_REGIME_ENGINE=%s",
+            _REGIME_ENGINE, "OK" if _L2_OK else "FAILED",
+            os.environ.get("OT_REGIME_ENGINE", "(unset, default L2)"))
 _l1_scorer   = RegimeConfluenceScorer() if _L2_OK else None
 _l2_integ    = ConvictionIntegrator() if _L2_OK else None
 _L2_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -479,7 +507,7 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
     # ── L2.5 override: committed integrator label drives the gate ──────────────
     l2_label = None
     l2_conv  = None
-    if _REGIME_ENGINE == "L2" and _L2_OK:
+    if _REGIME_ENGINE == "l2" and _L2_OK:      # v4.7 — value is .lower()ed
         try:
             closes = None
             df1m = ctx.get("df_1m")
@@ -1746,7 +1774,7 @@ def main():
     # lesson). If the snapshot is stale/absent, load() returns False and the
     # book stays cold — the first few ticks re-warm it, and stale=True keeps it
     # from driving the gate until warmed (see run_regime_classification).
-    if _REGIME_ENGINE == "L2" and _L2_OK:
+    if _REGIME_ENGINE == "l2" and _L2_OK:      # v4.7 — value is .lower()ed
         try:
             ok = _l2_integ.load(_L2_STATE_PATH, now_utc().timestamp())
             logger.info("L2.5 integrator book %s (engine=%s)",

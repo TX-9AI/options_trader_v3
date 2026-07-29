@@ -1,6 +1,39 @@
-# docs/BACKLOG.md — v3.5
+# docs/BACKLOG.md — v3.6
 
 **CHANGELOG**
+- **v3.6 — 2026-07-29 (evening) — L2.5 HAS NEVER RUN. NOT ONCE.** The day's
+  chase ended somewhere none of the earlier hypotheses reached. A fleet-wide
+  grep of `bot.log` on all 29 boxes — 34k to 138k lines each — returned
+  **L2=0, FAILED=0, STALE=0**, and `integrator_state.json` had never been
+  written on any box. Cause: `_REGIME_ENGINE` is built with `.lower()`, so it is
+  always `"l2"`, while **both** gate sites compared it to the uppercase literal
+  `"L2"` — the tick override and the startup warm-load that calls
+  `_l2_integ.load`/`save`. `"l2" == "L2"` is False, so the entire L2.5 block has
+  been unreachable dead code since v4.0 wired it, and **no environment variable
+  could ever have helped, because the default itself failed the comparison.**
+  Today's earlier fixes were real and both irrelevant to reachability: v4.5
+  repaired an import into a block that never executed, and v4.6 added reporting
+  to a branch never entered. Fixed as **main v4.7** (lowercase at both gates, a
+  start-up assert that refuses to boot on an unrecognised engine value, and a
+  start-up line naming the active engine), **check_versions v4.7** (absence
+  canary on the uppercase literal), and three reachability tests — suite 45/45,
+  deliberate-failure test passed.
+  **Why nothing caught it for weeks:** a gate that never opens raises nothing,
+  logs nothing, alerts nothing, and breaks no test. Every check we had asked
+  "does this code work?" — none asked "does this code run?". That is the fifth
+  and worst instance of today's recurring shape, after the L2 import guard, the
+  discarded scp return values, the conductor's OHLC-only completeness check and
+  the scorer's EXACTLY-N backfill. **W.2 is no longer a scoping pass; it is the
+  most valuable item on this backlog.**
+  **The calibration consequence is the big one.** Every regime label and every
+  conviction value this fleet has ever logged came from the v1.3 classifier. The
+  contamination is not 07-29 — it is the **entire history**. W.1's quarantine
+  widens accordingly, and any L2-derived prior (L2.4 churn fits,
+  `conditional_tables`, the L1.11 ramp) has never had real L2.5 data behind it.
+  **Thu Jul 30 will be the first session L2.5 has ever actually run**, which
+  makes it Day Zero for the L2 dataset and pushes every L2-dependent freeze date
+  out by however long the real baseline takes. Do not re-fit anything L2-derived
+  against pre-07-30 data.
 - **v3.5 — 2026-07-29 — new item X on Fri Jul 31 (light day): the morning
   scorer looks like it picks the same 15 symbols every session.** Found while
   back-harvesting 07-27/28/29 — all three reported an identical discretionary
@@ -169,7 +202,19 @@ the tester. Nothing behavior-changing deploys except on Mon Aug 3.*
   test passed. **Sync after RTH close (~16:30 ET) with today's other deploys.**
 
 **⬜ Thu Jul 30**
-- **W — 🔴 FIRST: deploy the L2.5 restoration (fix built 2026-07-29, awaiting
+- **W.0 — 🔴🔴 BEFORE THE OPEN: deploy main v4.7.** The fleet is currently
+  stopped on v4.6, in which L2.5 is still unreachable. Until v4.7 is on the
+  boxes, Thursday runs the v1.3 classifier exactly like every session before
+  it. Push tonight so the morning wake pulls it, then verify from the log's
+  first lines rather than by inference: `REGIME ENGINE: l2 (L2 import OK)` at
+  start-up, and `[L2 c=...]` on the first regime change after the open. If the
+  regime lines still read `[v13]` with v4.7 live, v4.6's new warning will now
+  name the exact evidence dimensions starving the book — which is the one
+  question left that the probe could not answer offline.
+  **VALIDATE:** `echo "L2=$(grep -c "\[L2" ~/options-trader/bot.log)"` on the
+  fleet after the first hour of RTH. Any box still at 0 is a box where L2.5 is
+  loading but not committing, and its own log now says why.
+- **W — ✅ superseded by W.0: the L2.5 restoration (fix built 2026-07-29, awaiting
   the post-close window).** Two defects from the 07-29 incident, one already
   hotfixed on the fleet (continuation v1.3.1 `mid` NameError, `dd0d097`) and
   one still live at the time of writing: **every box is running the v1.3

@@ -1,4 +1,11 @@
 #!/bin/bash
+# v4.7 — 2026-07-29 — REACHABILITY CANARY. main v4.7 fixed the real 07-29 root
+#         cause: `_REGIME_ENGINE` is .lower()ed to "l2" while both gates compared
+#         it to "L2", so L2.5 never executed once on any box since v4.0 wired it.
+#         An absence canary now fails if the uppercase literal returns, plus a
+#         presence check on the startup engine-identity line. This is the canary
+#         that would have caught it: no test, no log line and no alert could,
+#         because a gate that never opens raises nothing.
 # v4.6 — 2026-07-29 — +2 canaries for main v4.6's audible L2 gate, and the
 #         version-pinned main header moved to v4.6. The gate matters because a
 #         probe showed L2 CAN commit (tick 1, conviction 0.984) while production
@@ -229,7 +236,7 @@ check "analysis/trade_readiness.py"      "readiness_would_fire"         "v1.0 wo
 check "analysis/trade_readiness.py"      "TR_DEARM_SLOPE"               "v1.0 slope de-arm knob (falling confluence disarms)"
 check "analysis/trade_readiness.py"      "0.5 \*\* (dt / TR_SLOPE_HALFLIFE_S)" "v1.0 dt-aware slope EMA (wall-clock, no tick counters)"
 check "main.py"                          "_readiness.assess_all(ctx, regime)" "v4.3 readiness hooked in the every-tick block"
-check "main.py"                          "main.py — options_trader v4.6" "v4.6 main header current (silent L2 gate now reports)"
+check "main.py"                          "main.py — options_trader v4.7" "v4.7 main header current (L2 gate reachable)"
 check "analysis/trade_readiness.py"      "readiness_staged_pick"        "v1.1 staged-pick journaling (calm-vs-spike experiment)"
 check "analysis/trade_readiness.py"      "TR_CONV_HALFLIFE_S"           "v1.1 smoothed-conviction EMA knob"
 check "tests/readiness_digest.py"        "readiness_digest_"            "v1.0 nightly digest tool present (conductor phase 9 target)"
@@ -263,6 +270,13 @@ check "main.py"  "regime_confluence import RegimeConfluenceScorer, RANGE_WINDOW_
 check "main.py"  "send_regime_engine_degraded_alert"  "v4.5 silent L2 fallback now pages (data-integrity event)"
 check "main.py"  "L2.5 NOT committing"  "v4.6 non-committing L2 gate reports its reason (was silent)"
 check "main.py"  "_l2_mute"             "v4.6 reason-change throttle present"
+check "main.py"  "REGIME ENGINE:"       "v4.7 active regime engine stated at startup"
+if grep -q '_REGIME_ENGINE == "L2"' main.py 2>/dev/null; then
+    echo "  ✗ STALE:   main.py compares _REGIME_ENGINE to \"L2\" but the value is .lower()ed — L2.5 is UNREACHABLE dead code (the 07-29 root cause is back)"
+    MISS=$((MISS+1))
+else
+    echo "  ✓ PRESENT: v4.7 L2 gate literal is lowercase (block is reachable)"
+fi
 check "notifications/alert_manager.py"  "def send_regime_engine_degraded_alert"  "v1.7 degraded-engine pager exists"
 if grep -q "conviction_integrator import ConvictionIntegrator, RANGE_WINDOW_BARS" main.py 2>/dev/null; then
     echo "  ✗ STALE:   main.py re-imports RANGE_WINDOW_BARS from conviction_integrator — the 07-29 fleet-wide L2 outage is BACK"

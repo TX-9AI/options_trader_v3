@@ -99,3 +99,41 @@ def test_degraded_alert_exists_on_the_alert_manager():
 
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── v4.7 REACHABILITY (added 2026-07-29) ─────────────────────────────────────
+# The import contract above was necessary and NOT sufficient. `_REGIME_ENGINE`
+# is built with .lower(), and both gates compared it to the uppercase literal
+# "L2" — so the entire L2.5 block was unreachable dead code from the moment v4.0
+# wired it, on every box, regardless of environment. A fleet-wide grep of
+# 34k-138k-line logs on all 29 boxes returned L2=0 / FAILED=0 / STALE=0 and
+# integrator_state.json had never been written. Nothing detected it because a
+# gate that never opens raises nothing, logs nothing, and breaks no test.
+
+def test_regime_engine_gate_is_reachable():
+    """The literal in the gate must match what .lower() can actually produce."""
+    src = open(MAIN, encoding="utf-8").read()
+    bad = re.findall(r'_REGIME_ENGINE\s*==\s*"([^"]*)"', src)
+    assert bad, "no _REGIME_ENGINE comparison found — did the gate move?"
+    for lit in bad:
+        assert lit == lit.lower(), (
+            f'_REGIME_ENGINE is .lower()ed but compared to "{lit}" — that '
+            f'comparison can never be true, making L2.5 unreachable')
+        assert lit in ("l2", "v13"), f'unexpected engine literal "{lit}"'
+
+
+def test_regime_engine_default_selects_l2():
+    """With OT_REGIME_ENGINE unset, the resolved value must open the L2 gate."""
+    import os as _os
+    resolved = _os.environ.get("OT_REGIME_ENGINE", "L2").lower()
+    assert resolved == "l2", (
+        f"default OT_REGIME_ENGINE resolves to {resolved!r}, which will not "
+        f"open the L2 gate")
+
+
+def test_startup_states_the_active_engine():
+    """Which engine is live must be readable from the log's first lines, not
+    inferred from [L2]/[v13] tags on regime-change lines."""
+    src = open(MAIN, encoding="utf-8").read()
+    assert "REGIME ENGINE:" in src, \
+        "main.py must announce the active regime engine at startup"
