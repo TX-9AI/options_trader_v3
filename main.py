@@ -1,5 +1,18 @@
 """
-main.py — options_trader v4.4
+main.py — options_trader v4.5
+v4.5 — 2026-07-29 — L2.5 IMPORT CONTRACT FIXED + SILENT DEGRADATION MADE LOUD.
+        `RANGE_WINDOW_BARS` was imported from conviction_integrator, which does
+        not define it — it lives in regime_confluence (v1.3, ~line 181) and was
+        only ever reachable through a re-export tuple that the 07-28 excavation
+        trimmed. The ImportError was swallowed by the L2 guard, so all 15 boxes
+        ran the v1.3 classifier for the whole 07-29 session while logging a
+        single WARNING per start. Two changes: (a) both symbols now import from
+        the modules that OWN them — a re-export is not a contract; (b) the
+        fallback logs at ERROR and pages via
+        alert_manager.send_regime_engine_degraded_alert (v1.7), because a
+        silent engine swap invalidates the session's conviction data for
+        calibration even though trading continues unaffected. The pager is
+        itself wrapped — it can never take the bot down.
 v4.4 — 2026-07-27 — READINESS STAGED PICKS (trade_readiness v1.1, LOG-ONLY):
         while ARMED, continuation/sweep now journal the contract they WOULD
         select via the live selector on SMOOTHED conviction — the calm-vs-
@@ -271,12 +284,28 @@ from analysis.orb_engine import get_orb_engine, ORBState
 # paper P&L is the de-facto arbiter of L1+L2 quality. Rollback: OT_REGIME_ENGINE=v13.
 _REGIME_ENGINE = os.environ.get("OT_REGIME_ENGINE", "L2").lower()   # "L2" | "v13"
 try:
-    from analysis.regime_confluence import RegimeConfluenceScorer
-    from analysis.conviction_integrator import ConvictionIntegrator, RANGE_WINDOW_BARS
+    # RANGE_WINDOW_BARS is OWNED by regime_confluence (v1.3, line ~181). It was
+    # previously imported via conviction_integrator, which merely re-exported a
+    # tuple of regime-label constants — when the v1.3 excavation trimmed that
+    # tuple the import broke and every box silently dropped to the v1.3
+    # classifier for a full session (2026-07-29). Import symbols from the module
+    # that DEFINES them; a re-export is not a contract.
+    from analysis.regime_confluence import RegimeConfluenceScorer, RANGE_WINDOW_BARS
+    from analysis.conviction_integrator import ConvictionIntegrator
     _L2_OK = True
 except Exception as _l2e:                       # pragma: no cover
     _L2_OK = False
-    logger.warning("L2.5 unavailable (%s) — falling back to v1.3 classifier", _l2e)
+    # ERROR, not WARNING: this silently changes WHICH ENGINE produces every
+    # regime label and conviction value for the session. Trading survives; the
+    # session's conviction data is not calibration-grade. Page immediately.
+    logger.error("L2.5 UNAVAILABLE (%s) — falling back to v1.3 classifier; "
+                 "this session's conviction data is NOT calibration-grade", _l2e)
+    try:
+        from notifications.alert_manager import get_alert_manager as _gam
+        _gam().send_regime_engine_degraded_alert(
+            os.environ.get("OT_INSTRUMENT", "?"), str(_l2e))
+    except Exception:                           # pragma: no cover
+        pass                                    # never let the pager kill the bot
 
 _l1_scorer   = RegimeConfluenceScorer() if _L2_OK else None
 _l2_integ    = ConvictionIntegrator() if _L2_OK else None

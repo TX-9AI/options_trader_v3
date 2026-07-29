@@ -1,6 +1,21 @@
-# docs/BACKLOG.md — v3.3
+# docs/BACKLOG.md — v3.4
 
 **CHANGELOG**
+- **v3.4 — 2026-07-29 — 07-29 FLEET INCIDENT: items W, W.1, W.2 at the top of
+  Thu Jul 30.** Zero trades fleet-wide until ~10:05 ET (continuation v1.3
+  orphaned `mid` → NameError every tick; hotfixed as v1.3.1, `dd0d097`), and a
+  second, still-live defect: all 15 boxes running the v1.3 classifier instead
+  of L2.5. Root cause diagnosed and **differs from the initial read** —
+  `RANGE_WINDOW_BARS` was never in `conviction_integrator`; main.py imported it
+  through a re-export tuple that the 07-28 excavation trimmed, and main.py's L2
+  guard swallowed the ImportError into a per-start WARNING. Fix built and
+  tested (main v4.5, alert_manager v1.7, check_versions v4.5,
+  tests/test_l2_import_contract.py — suite 42/42), deploying after the close.
+  **W.1 quarantines the day's conviction data** — it is off-engine and must not
+  feed any fit until the contaminated window is bounded from the logs. W.2
+  opens the systemic question: two silent-degradation faults in one morning,
+  both invisible because trading continued. That pattern, not either bug, is
+  the go-live risk.
 - **v3.3 — 2026-07-29 — new item V on the Thu Jul 30 punch list: `push.sh`
   resolves its target by scanning `$HOME` and ignoring the caller's cwd.**
   Surfaced when a push from the correct directory reported the wrong repo's
@@ -136,6 +151,75 @@ the tester. Nothing behavior-changing deploys except on Mon Aug 3.*
   test passed. **Sync after RTH close (~16:30 ET) with today's other deploys.**
 
 **⬜ Thu Jul 30**
+- **W — 🔴 FIRST: deploy the L2.5 restoration (fix built 2026-07-29, awaiting
+  the post-close window).** Two defects from the 07-29 incident, one already
+  hotfixed on the fleet (continuation v1.3.1 `mid` NameError, `dd0d097`) and
+  one still live at the time of writing: **every box is running the v1.3
+  classifier, not the L2.5 conviction integrator.**
+  **DIAGNOSIS (this is not what the handoff assumed).** `RANGE_WINDOW_BARS` has
+  never been defined in `conviction_integrator`. It is owned by
+  `regime_confluence` (v1.3, ~line 181, value 25). `conviction_integrator`
+  re-exports a tuple of six *regime-label* constants from regime_confluence and
+  nothing else; `main.py:275` imported `RANGE_WINDOW_BARS` *through* it, so the
+  import only ever worked while that name sat in the re-export list. The 07-28
+  excavation (`92c89d7`) trimmed the tuple. The resulting ImportError was
+  swallowed by main.py's `except Exception` L2 guard, which downgraded a hard
+  contract break to one WARNING per process start.
+  **THE REAL DEFECT is the guard, not the import.** The import is a one-line
+  fix. What let it cost a full session of calibration data is that the failure
+  mode was *silent and non-fatal*: trading continued normally, so nothing in
+  P&L, status, or alerts looked wrong. Same shape as the `mid` NameError the
+  same morning — a fault that unit tests could not reach because nothing
+  asserted the contract that production actually depends on.
+  **HOW (built, tested, not yet deployed):** `main.py` **v4.5** imports both
+  symbols from the modules that OWN them (a re-export is never a contract) and
+  the fallback now logs at ERROR *and* pages via
+  `alert_manager` **v1.7** `send_regime_engine_degraded_alert` — the pager is
+  itself wrapped so it can never take a box down. `check_versions` **v4.5**
+  adds 3 presence canaries + 1 absence canary on the broken import form, and
+  fixes a defect in its own v4.3 banner (the regime_confluence ABSENCE loop
+  printed ✗ STALE without incrementing MISS, so a restored fabricated fallback
+  would still have reported ALL CANARIES GREEN). New
+  `tests/test_l2_import_contract.py` (5 assertions) enforces the general rule:
+  symbols import from their definer, `conviction_integrator` must NOT re-export
+  `RANGE_WINDOW_BARS`, main.py must not use the broken form, and the fallback
+  must be loud. Suite **42/42**.
+  **VALIDATE:** (a) deliberate-failure test PASSED — reintroducing the old
+  import turns the contract suite red; (b) post-deploy, the L2.5-unavailable
+  line must be absent from every box's log and `status.py` must show the L2
+  engine; (c) the canary set proves it can't return on a stale sync.
+  **DEPLOY:** after the close with the day's other syncs — this needs a
+  fleet restart and must not happen mid-session.
+- **W.1 — 🔴 QUARANTINE 07-29 CONVICTION DATA (do this before any fit).**
+  Every `regime_conviction` value, every L2 committed label, and every
+  readiness factor logged 07-29 came from the fallback engine. It is not
+  comparable to the L2.5 series the epoch ladder is fitted against. Until the
+  contaminated window is bounded, **treat 07-29 as excluded** from L1.11 ramp
+  fits, L2.4 churn calibration, conditional_tables, and the readiness digest.
+  **HOW:** bound the window from the logs rather than assuming it started
+  07-28 — the WARNING prints once per process start, so the first occurrence
+  per box dates it exactly. Menu-ready (option 14):
+  `journalctl -u optionsbot --since "2026-07-26" | grep -m1 "L2.5 unavailable" || echo NONE`
+  Then write the resulting date range into `session_labels.jsonl` as an
+  explicit exclusion so every downstream tool inherits it instead of each
+  analysis remembering separately.
+  **VALIDATE:** the exclusion is self-proving — re-run `ramp_calibration.py`
+  and `readiness_digest.py` with and without the window and confirm the excluded
+  run changes the fitted bounds. If it doesn't, the contamination was
+  immaterial and that is worth knowing too. **N.1 (regime_log harvest) becomes
+  more valuable, not less** — it is what makes this bounding automatic next
+  time instead of a 15-box journalctl sweep.
+- **W.2 — Ask the harder question the incident raises: what else fails
+  silently?** Two silent-degradation faults surfaced in one morning. Both were
+  invisible because the bot kept trading. Before go-live (Aug 31) the guards
+  that can swallow a contract break should be inventoried — every
+  `except Exception` that sets a `_OK = False` flag and continues.
+  **HOW:** grep the repo for the pattern, list each one, and classify: may
+  degrade silently / must page / must refuse to trade. This is a scoping pass
+  producing a list, not a rewrite.
+  **VALIDATE:** the list itself is the deliverable; each entry that lands on
+  "must page" gets an alert like v1.7's and a canary. Schedule the resulting
+  work in Epoch 2, not tomorrow.
 - **V — NEW: `push.sh` finds its target by guessing (control-server hazard).**
   Found 2026-07-29 when `push.sh` run *from* `~/options-trader-v3` reported the
   remote as `futures_trader_v1.git` and refused. Cause is structural, not a

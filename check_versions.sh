@@ -1,4 +1,12 @@
 #!/bin/bash
+# v4.5 — 2026-07-29 — L2.5 IMPORT-CONTRACT CANARIES + absence-loop counting.
+#         Adds 3 presence checks and 1 absence check pinning main.py v4.5's
+#         corrected L2 import and the v1.7 degraded-engine pager, after an
+#         ImportError swallowed by the L2 guard put all 15 boxes on the v1.3
+#         classifier for a full session. Also fixes a defect in v4.3's own
+#         banner: the regime_confluence ABSENCE loop printed ✗ STALE without
+#         incrementing MISS, so a restored fabricated fallback would have
+#         reported "ALL CANARIES GREEN". Absence failures now count.
 # v4.4 — 2026-07-29 — GLYPH FIX (legibility, no logic change). Every status
 #         line printed a literal "\u2713 PRESENT" / "\u2717 MISSING": bash's
 #         echo does not interpret \u escapes, so the check/cross glyphs have
@@ -216,7 +224,7 @@ check "analysis/trade_readiness.py"      "readiness_would_fire"         "v1.0 wo
 check "analysis/trade_readiness.py"      "TR_DEARM_SLOPE"               "v1.0 slope de-arm knob (falling confluence disarms)"
 check "analysis/trade_readiness.py"      "0.5 \*\* (dt / TR_SLOPE_HALFLIFE_S)" "v1.0 dt-aware slope EMA (wall-clock, no tick counters)"
 check "main.py"                          "_readiness.assess_all(ctx, regime)" "v4.3 readiness hooked in the every-tick block"
-check "main.py"                          "main.py — options_trader v4.4" "v4.4 main header current (staged picks wired)"
+check "main.py"                          "main.py — options_trader v4.5" "v4.5 main header current (L2 import contract fixed)"
 check "analysis/trade_readiness.py"      "readiness_staged_pick"        "v1.1 staged-pick journaling (calm-vs-spike experiment)"
 check "analysis/trade_readiness.py"      "TR_CONV_HALFLIFE_S"           "v1.1 smoothed-conviction EMA knob"
 check "tests/readiness_digest.py"        "readiness_digest_"            "v1.0 nightly digest tool present (conductor phase 9 target)"
@@ -232,10 +240,29 @@ check "analysis/trade_readiness.py"      "TR_NARROW_PIVOT"              "v1.2 al
 for _tok in W_RANGE_BASE W_COMP_BASE quiet_fallback vol_only_fallback; do
     if grep -q "$_tok" analysis/regime_confluence.py 2>/dev/null; then
         echo "  ✗ STALE:   $_tok is BACK in regime_confluence.py — a constant corroborator or fabricated fallback was restored (expected DELETED)"
+        MISS=$((MISS+1))
     else
         echo "  ✓ PRESENT: $_tok deleted (v1.3 excavation held)"
     fi
 done
+
+# main v4.5 (2026-07-29) — THE L2.5 IMPORT CONTRACT. RANGE_WINDOW_BARS is owned
+# by regime_confluence; importing it via conviction_integrator relied on a
+# re-export tuple that the v1.3 excavation trimmed, and the resulting ImportError
+# was swallowed by the L2 guard — 15 boxes ran the v1.3 classifier for a whole
+# session on nothing but one WARNING per start. Presence pins the corrected
+# source; absence pins that the broken form has not come back on a stale sync.
+# The v4.5 changelog in main.py deliberately does not spell the old import line,
+# so the bare grep below stays honest (changelog-prose trap).
+check "main.py"  "regime_confluence import RegimeConfluenceScorer, RANGE_WINDOW_BARS"  "v4.5 L2 symbols imported from their OWNING module"
+check "main.py"  "send_regime_engine_degraded_alert"  "v4.5 silent L2 fallback now pages (data-integrity event)"
+check "notifications/alert_manager.py"  "def send_regime_engine_degraded_alert"  "v1.7 degraded-engine pager exists"
+if grep -q "conviction_integrator import ConvictionIntegrator, RANGE_WINDOW_BARS" main.py 2>/dev/null; then
+    echo "  ✗ STALE:   main.py re-imports RANGE_WINDOW_BARS from conviction_integrator — the 07-29 fleet-wide L2 outage is BACK"
+    MISS=$((MISS+1))
+else
+    echo "  ✓ PRESENT: broken L2 import form is gone from main.py"
+fi
 
 # config v4.0 (2026-07-27) — sweep strike floor. VALUE-pinned: the number IS the
 # fix, and a name-only check passes happily on the reverted 0.08.

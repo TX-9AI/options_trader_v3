@@ -26,6 +26,13 @@ v1.5 — 2026-07-07 — broker-reconcile alerts: send_adopted_alert() (a positio
         (DB rows the broker no longer shows, closed), and
         send_reconcile_unavailable_alert() (broker read failed/empty — fell back
         to DB-only recovery, closed nothing).
+v1.7 — 2026-07-29 — send_regime_engine_degraded_alert(): the L2.5 integrator
+        failing to import degraded all 15 boxes to the v1.3 classifier for a
+        full session and announced it only as a WARNING in each box's log —
+        nobody saw it until the logs were read by hand. Trading was unaffected,
+        but every conviction value logged that day came from a different engine
+        than the one the epoch ladder calibrates against. A silent engine swap
+        is a data-integrity event, so it now pages.
 v1.6 — 2026-07-07 — send_short_leg_closed_alert(): loud alarm when an intraday
         broker check finds a SHORT leg auto-closed by the broker while the long
         remains — protection removed, now managing the long on its own.
@@ -174,6 +181,22 @@ class AlertManager:
         self._send(
             f"\u26A0\uFE0F Broker reconcile unavailable{why} | {instrument} | "
             f"DB-only recovery, no positions closed | verify manually | "
+            f"{fmt_et_short()}"
+        )
+
+    def send_regime_engine_degraded_alert(self, instrument: str, reason: str = ""):
+        """The L2.5 conviction integrator failed to load and the bot fell back to
+        the v1.3 classifier. Trading continues, but every regime label and
+        conviction value produced this session comes from a DIFFERENT engine than
+        the one the calibration ladder is fitted against — so the session's
+        conviction data is not comparable and must be excluded from any fit.
+        Silent for a full session on 2026-07-29 across all 15 boxes; this alert
+        exists so that can never happen quietly again."""
+        why = f" ({reason})" if reason else ""
+        self._send(
+            f"\U0001F534 REGIME ENGINE DEGRADED{why} | {instrument} | "
+            f"running v1.3 fallback, NOT L2.5 | trading continues | "
+            f"today's conviction data is NOT calibration-grade | "
             f"{fmt_et_short()}"
         )
 
