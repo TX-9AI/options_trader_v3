@@ -2,7 +2,7 @@
 
 Automated day-trading suite utilising the TastyTrade/DXFeed data stream for 0-DTE
 options. Entries, exits, position sizing and risk are driven by two weighted
-scores, and they are not the same thing:
+scores:
 
 - **Confluence** — the weighted accumulation of evidence *for a setup*. Each
   factor contributes according to its own weight, so agreement builds a graded
