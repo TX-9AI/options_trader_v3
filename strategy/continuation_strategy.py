@@ -73,6 +73,24 @@ kept it dark was the momentum defect above. Left here so nobody goes
 hunting for a flag that does not exist. Historical text follows:
 behind CONTINUATION_ENABLED (default False) so it ships dark and is proven in
 paper/backtest before it can affect live dispatch.
+
+v1.3.1 — 2026-07-29 — HOTFIX. v1.3 deleted the BB-midline block (which defined
+        `mid`) but left four references to it: the structural stop
+        (`underlying_stop = mid +/- 0.5*atr`), the confluence string, and the log
+        line. Result: NameError: name 'mid' is not defined, raised EVERY TICK,
+        killing the main loop before any strategy could evaluate. Fleet-wide, 15
+        boxes, ZERO trades taken 2026-07-29 open through ~09:55 ET.
+        Fix: the stop now anchors to the FVG, which is structurally correct --
+        the gap IS the level the entry was taken on. Long tags gap.top from
+        above, so a close through gap.bottom means the pullback became a
+        breakdown -> stop = gap.bottom - 0.5*atr. Short mirrors on gap.top.
+        Confluence and log lines now report the gap range instead of a midline
+        that no longer exists.
+        LESSON: v1.3 compiled and its FVG-tag geometry was unit-tested, but the
+        full generate_signal path was never executed -- the tastytrade SDK is not
+        installable in the sandbox, so only the extracted block was exercised. A
+        compile check does not catch an unbound name on a branch that never ran.
+        The canary must import and CALL the strategy on a box before deploy.
 """
 # v-runaway-fix (2026-07-24) — accepts runaway handoff_direction so it can enter on a flipped-off-trending label; conviction floor steps aside when the runaway (not the label) is the directional evidence.
 
@@ -233,9 +251,13 @@ class ContinuationStrategy(BaseOptionsStrategy):
         # midline minus/plus a small ATR buffer). Governing exits are regime-flip
         # + the 40% premium floor; this underlying_stop is structural context.
         if direction == "long":
-            underlying_stop = mid - 0.5 * atr
+            # v-fvg-pullback fix: anchor the stop to the FVG, not the deleted
+            # midline. Long entered by tagging gap.top from above; if price closes
+            # THROUGH the gap (below gap.bottom) the pullback became a breakdown.
+            underlying_stop = gap.bottom - 0.5 * atr
         else:
-            underlying_stop = mid + 0.5 * atr
+            # short entered by tagging gap.bottom from below; through gap.top = dead
+            underlying_stop = gap.top + 0.5 * atr
 
         signal = OptionsSignal(
             strategy_name    = self.name(),
@@ -255,14 +277,14 @@ class ContinuationStrategy(BaseOptionsStrategy):
         signal.adx_at_signal = regime.adx
         signal.flat_angle_deg = getattr(regime, 'flat_angle_deg', 0.0) or 0.0
         self._add_confluence(signal, f"Trending regime ({signal.regime}) conv={regime.conviction:.2f}")
-        self._add_confluence(signal, f"Pullback to BB midline ({mid:.2f}), price {current_price:.2f}")
+        self._add_confluence(signal, f"1m wick tagged 5m FVG {gap.bottom:.2f}-{gap.top:.2f}, price {current_price:.2f}")
         self._add_confluence(signal, f"Momentum {momentum} (resumption)")
         if is_handoff:
             self._add_confluence(signal, "ORB-runaway handoff (directional force pre-proven)")
 
         logger.info(
             f"[continuation] {direction} {option_side} @ {current_price:.2f} "
-            f"midline={mid:.2f} atr={atr:.2f} mom={momentum} "
+            f"fvg={gap.bottom:.2f}-{gap.top:.2f} atr={atr:.2f} mom={momentum} "
             f"conv={regime.conviction:.2f} {'HANDOFF' if is_handoff else 'STANDALONE'}"
         )
         return signal
