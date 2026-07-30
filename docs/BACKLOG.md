@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.14
+# docs/BACKLOG.md — v3.15
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -61,74 +61,12 @@ alone, not on us.
 never-built gates built and proven, the bookmark live, mapper hierarchy proven on
 the tester. Nothing behavior-changing deploys except on Mon Aug 3.*
 
-**✅ Wed Jul 29 — day closed at v3.1. All three items resolved (see Part 3).**
-- **T.1 ✅** — already resolved at HEAD (07-22 defect-T pass); suite verified
-  **37/37 green** today on a fresh clone. No change shipped; register entry
-  carries the evidence.
-- **T.3 ✅** — already resolved at HEAD (position_manager v3.9, 07-22). No
-  change shipped.
-- **U ✅** — canary set was already current (check_versions v3.1→v4.2, 125
-  checks); the missing parity-invariant check shipped today as
-  **check_versions v4.3** (+ failure-count DONE banner). Deliberate-failure
-  test passed. **Sync after RTH close (~16:30 ET) with today's other deploys.**
-
+**✅ Wed Jul 29 — day closed. T.1 · T.3 · U all resolved — see PART 3.**
 **◐ Thu Jul 30 — L2.5 ran in production for the first time in the project's
 history.** Seven of eight items resolved and marked ✅ inline below. **W.1 is
 NOT resolved and carries forward** — the quarantine cannot complete until
 enough real L2 data exists to compare against (re-check at the Aug 10
 calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
-- **W.0 — ✅ 2026-07-30. Deployed 07-29 evening; verified live 07-30 — `STATE=yes` on 15/15 (that state file had never existed on any box) and `RECOVERED=1` fleet-wide. First production L2 label at ~09:55 ET.** Original text follows.
-  🔴🔴 BEFORE THE OPEN: deploy main v4.7. The fleet is currently
-  stopped on v4.6, in which L2.5 is still unreachable. Until v4.7 is on the
-  boxes, Thursday runs the v1.3 classifier exactly like every session before
-  it. Push tonight so the morning wake pulls it, then verify from the log's
-  first lines rather than by inference: `REGIME ENGINE: l2 (L2 import OK)` at
-  start-up, and `[L2 c=...]` on the first regime change after the open. If the
-  regime lines still read `[v13]` with v4.7 live, v4.6's new warning will now
-  name the exact evidence dimensions starving the book — which is the one
-  question left that the probe could not answer offline.
-  **VALIDATE:** `echo "L2=$(grep -c "\[L2" ~/options-trader/bot.log)"` on the
-  fleet after the first hour of RTH. Any box still at 0 is a box where L2.5 is
-  loading but not committing, and its own log now says why.
-- **W — ✅ superseded by W.0: the L2.5 restoration (fix built 2026-07-29, awaiting
-  the post-close window).** Two defects from the 07-29 incident, one already
-  hotfixed on the fleet (continuation v1.3.1 `mid` NameError, `dd0d097`) and
-  one still live at the time of writing: **every box is running the v1.3
-  classifier, not the L2.5 conviction integrator.**
-  **DIAGNOSIS (this is not what the handoff assumed).** `RANGE_WINDOW_BARS` has
-  never been defined in `conviction_integrator`. It is owned by
-  `regime_confluence` (v1.3, ~line 181, value 25). `conviction_integrator`
-  re-exports a tuple of six *regime-label* constants from regime_confluence and
-  nothing else; `main.py:275` imported `RANGE_WINDOW_BARS` *through* it, so the
-  import only ever worked while that name sat in the re-export list. The 07-28
-  excavation (`92c89d7`) trimmed the tuple. The resulting ImportError was
-  swallowed by main.py's `except Exception` L2 guard, which downgraded a hard
-  contract break to one WARNING per process start.
-  **THE REAL DEFECT is the guard, not the import.** The import is a one-line
-  fix. What let it cost a full session of calibration data is that the failure
-  mode was *silent and non-fatal*: trading continued normally, so nothing in
-  P&L, status, or alerts looked wrong. Same shape as the `mid` NameError the
-  same morning — a fault that unit tests could not reach because nothing
-  asserted the contract that production actually depends on.
-  **HOW (built, tested, not yet deployed):** `main.py` **v4.5** imports both
-  symbols from the modules that OWN them (a re-export is never a contract) and
-  the fallback now logs at ERROR *and* pages via
-  `alert_manager` **v1.7** `send_regime_engine_degraded_alert` — the pager is
-  itself wrapped so it can never take a box down. `check_versions` **v4.5**
-  adds 3 presence canaries + 1 absence canary on the broken import form, and
-  fixes a defect in its own v4.3 banner (the regime_confluence ABSENCE loop
-  printed ✗ STALE without incrementing MISS, so a restored fabricated fallback
-  would still have reported ALL CANARIES GREEN). New
-  `tests/test_l2_import_contract.py` (5 assertions) enforces the general rule:
-  symbols import from their definer, `conviction_integrator` must NOT re-export
-  `RANGE_WINDOW_BARS`, main.py must not use the broken form, and the fallback
-  must be loud. Suite **42/42**.
-  **VALIDATE:** (a) deliberate-failure test PASSED — reintroducing the old
-  import turns the contract suite red; (b) post-deploy, the L2.5-unavailable
-  line must be absent from every box's log and `status.py` must show the L2
-  engine; (c) the canary set proves it can't return on a stale sync.
-  **DEPLOY:** after the close with the day's other syncs — this needs a
-  fleet restart and must not happen mid-session.
 - `[DESK·DATA]` **W.1 — 🔴 QUARANTINE ALL PRE-2026-07-30 L2 DATA. The scope is the entire
   project history, not one session.** This item was written as "quarantine
   07-29" when we believed the L2.5 outage began with the 07-28 excavation. The
@@ -177,162 +115,8 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   thinner than the session count suggests. Re-check sample adequacy at the
   Aug 10 calibration-epoch start rather than assuming it.
 
-- **W.2 — ✅ 2026-07-30. Delivered as `tests/swallow_audit.py` and promoted to conductor phase 10, so the census runs nightly and WARNS when the silent count rises.** Original text follows.
-  Ask the harder question the incident raises: what else fails
-  silently?** Two silent-degradation faults surfaced in one morning. Both were
-  invisible because the bot kept trading. Before go-live (Aug 31) the guards
-  that can swallow a contract break should be inventoried — every
-  `except Exception` that sets a `_OK = False` flag and continues.
-  **HOW:** grep the repo for the pattern, list each one, and classify: may
-  degrade silently / must page / must refuse to trade. This is a scoping pass
-  producing a list, not a rewrite.
-  **VALIDATE:** the list itself is the deliverable; each entry that lands on
-  "must page" gets an alert like v1.7's and a canary. Schedule the resulting
-  work in Epoch 2, not tomorrow.
-- **V — ✅ 2026-07-30 as push.sh v1.7: prefers the caller's directory, falls back to the $HOME scan with a loud warning, and announces the resolved target + remote before acting. All three paths tested.** Original text follows.
-  `push.sh` finds its target by guessing (control-server hazard).
-  Found 2026-07-29 when `push.sh` run *from* `~/options-trader-v3` reported the
-  remote as `futures_trader_v1.git` and refused. Cause is structural, not a
-  mispointed remote (both remotes were correct): push.sh ignores the caller's
-  cwd and scans `$HOME`  alphabetically for the first directory containing both
-  `main.py` and `config.py`, then cd's there. On a bot box `$HOME` holds one bot
-  so it is invisible; on control it silently selects the wrong project.
-  Currently DORMANT — the futures checkout was deleted the same day, so the scan
-  now lands on the right directory and the tool appears healthy. It returns the
-  next time any second project is unpacked on control. Note the same file (same
-  trap) ships in **futures_trader_v1**; fix both or the borrowed-box case
-  re-bites from the other side.
-  **HOW:** v1.7 — prefer `$PWD` when it is a git work tree containing
-  `main.py` + `config.py`; fall back to the `$HOME` scan only when invoked from
-  outside a bot checkout, and PRINT the resolved directory and remote before
-  acting so a wrong pick is visible rather than silent. Keep the refusal
-  behaviour (it is what saved us here) but make the message name the resolved
-  path, not just the remote.
-  **VALIDATE:** self-validating by construction test — recreate the failure in
-  a scratch `$HOME` holding two bot-shaped directories, confirm v1.6 picks the
-  alphabetically-first one and v1.7 picks the cwd; then confirm the fallback
-  still works when invoked from `~`. No dataset needed. Deploy-truth is covered
-  by the v4.3 parity invariant on the next fleet pass.
-- **P5.1 — ✅ 2026-07-29/30. Root cause was a missing `os.makedirs` (scp does not create its destination); fixed in harvest v0.6.0 along with three-state pull classification and `--date` back-harvest, and conductor v1.7.0 now checks every artifact class while the fleet is still up.** Original text follows.
-  Chain-snapshot harvest (TIME-CRITICAL — re-scoped at v3.0). Verified
-  at HEAD: `harvest.py` is already **v0.5.1** (07-27) and pulls
-  `data/chain_snapshots/<date>/<SYM>.jsonl.gz` + `signal_journal` — the build is
-  done; what remains is confirming it's deployed on control and that the first
-  harvested night actually landed.
-  **HOW:** commit/push v0.5.1 from control if not already at origin (execute-bit
-  convention), run one manual harvest, `ls chain_snapshots/<date>/ | wc -l` vs
-  boxes-run; then add a **completeness manifest** — harvest emits one line per
-  root (`ohlc/trades/journal/chains: N files, M bytes`) into the conductor
-  headline, so the standing daily habit is a glance at the Telegram, not an ssh.
-  **VALIDATE:** the manifest is the framework; downstream,
-  `chain_reconstruction_check.py` (Aug 14) only runs if this landed — its input
-  count IS the audit. Every day this slips is a permanent hole (a strike's quote
-  is unrecoverable at 16:00).
-- **N.1 — ✅ RE-SCOPED 2026-07-29/30. No new pull was needed: `regime_log` is a TABLE inside trades.db, which harvest already collects. The real gap was provenance, closed by main v4.8's `engine` column.** Original text follows.
-  harvest `regime_log` off-box (instrumentation for L1.9, Aug 5, and
-  the Aug 10 churn watch).** Verified at HEAD: harvest pulls OHLC, trades.db,
-  journal, chains — **not** the per-box regime timeline. Three scheduled
-  validations need it: (a) L1.9's proof metric is *offline-diary vs live-label
-  agreement*, which requires the live labels on control; (b) the Aug 5 ADX
-  reconstruction timestamp-joins regime_log → trades and shouldn't need 15 ad-hoc
-  box pulls; (c) the Aug 10 calibration deploy's "watch churn live" is only
-  checkable if the live committed-label timeline is on control nightly.
-  **HOW:** harvest v0.6.0 — same best-effort scp pattern as the journal/chain
-  pulls, `data/regime_log*` → `BASE_DIR/regime_log/<date>/<SYM>.*`; one file
-  touched, rides the same deploy as the P5.1 verification.
-  **VALIDATE:** self-validating via the completeness manifest; first consumer is
-  the Aug 4 L1.9 agreement metric.
-- **Z — ✅ already shipped as consolidate_trades v1.2 (day_trader_pro `2400ca2`), found on 07-29 — another item this file trailed the repo on.** Original text follows.
-  `consolidate_trades.py` date filter. Rollups are
-  not date-clean (61% of condor legs sat in a wrong-dated file;
-  `fleet_trades_2026-07-13.json` holds only 07-07→07-10 trades). Fix: filter by
-  `entry_time[:10]`, dedupe by `trade_id`; regenerate the rollups from the per-box
-  DBs. DONE = every row's entry date matches its filename.
-  **HOW:** as stated — filter + dedupe in `consolidate_trades.py`, bump to v1.2,
-  then regenerate every dated rollup from `trades/<date>/` (the DBs are ground
-  truth and are already clean; only the JSON/CSV view was contaminated —
-  `conditional_tables` reads the DBs directly, so the L3.4 substrate was never
-  polluted).
-  **VALIDATE:** existing data closes this loop exactly: a one-shot audit script
-  compares each regenerated rollup to its source DBs — row count and P&L sum must
-  match per date, and `min/max(entry_time[:10]) == filename date`. Run it over
-  every date on disk; zero mismatches = DONE. No new collection needed.
-- **T.2 — ✅ 2026-07-30. The unification shipped in main v4.1 (07-22) — only the documentation was missing, now in MECHANICS with the reasoning recorded. Decision: normalize everything against the mark; the residual is no-fill risk, which cannot be modelled as a price haircut.** Original text follows.
-  Decide the condor paper-friction split.
-  Condor paper credits still take the `PAPER_FILL_SLIPPAGE_PCT` haircut while
-  singles/butterflies book the raw mark. Live condor entries are already mid-credit
-  limits, so the mark-limit rationale applies: unify (or write down, in MECHANICS,
-  exactly why condors keep the haircut). One model, documented.
-  **HOW:** unify — paper condor books the **limit credit it actually placed**
-  (mid-credit, same number the live path submits), no second haircut; the 20s
-  cancel-window fill-or-kill is the realism knob, not a synthetic shave. Document
-  the model in MECHANICS in the same edit.
-  **VALIDATE:** the honest validator is *live* condor fills, which don't exist
-  until Aug 31 — so **N.4 (Aug 14)** is the bridge: the chain archive holds real
-  bid/ask at the condor's strikes at entry timestamps; reprice every post-Aug-3
-  paper condor's credit against the archived NBBO and measure booked-vs-achievable.
-  If paper credits sit systematically rich vs the archived quotes, the unification
-  overstated fills and the haircut returns with a measured value, not a guess.
-  From Sep 1, the live fill-quality audit takes over as the permanent validator.
-
-**⬜ Thu Jul 30 — AFTER THE CLOSE**
-- **Y — ✅ 2026-07-30. All three parts landed and verified: Y-a orchestrator v0.3.0→v0.3.2 (freshness guard + fallback repointed + mock guard), Y-b the live 09:00 timer AND the installer, Y-c `DTP_REPORT_JSON` in both `.env` and the install.sh heredoc. Confirmed live at the 07-30 wake: fresh brief-driven cohort with varying per-symbol strengths.** Original text follows.
-  🔴 LAND THE DURABLE FIX (3 parts, 2 repos, all committed code). The
-  env-var-only version of this item was WRONG and is withdrawn: `install.sh`
-  overwrites `~/market-brief/.env` wholesale from a heredoc, so a hand-edit dies
-  at the next reinstall or on any new instance. Nothing load-bearing lives in a
-  gitignored file.
-  **Y-a — `day_trader_pro/orchestrator.py` v0.3.0 (BUILT + TESTED).** Freshness
-  guard: audits the report's `date` against today ET and the presence of the
-  `move_ranked` sidecar, Telegrams on either problem, and stamps
-  `report_path / report_date / report_stale / report_move_ranked` onto the
-  selection so provenance is visible rather than inferred. Proceeds by default —
-  a stale cohort of liquid names is a lesser harm than refusing to wake 13 boxes
-  — with `DTP_REPORT_STALE_STRICT=1` to fail closed to `ALWAYS_ON`. Also repoints
-  the fallback from `~/market_brief/out/report.json` (misspelled AND a
-  non-existent `out/`, so it never once resolved) to the reporter's real default
-  drop, `~/market-brief/report.json`. **This is the half that makes the fix
-  durable**: with the fallback correct, the wake finds today's report even with
-  `$DTP_REPORT_JSON` unset. **VALIDATE:** deliberate-failure test PASSED against
-  the actual 2026-07-06 payload — frozen+no-sidecar raises 2 problems and one
-  alert, healthy today+sidecar is silent, yesterday's file is caught (the race
-  below), STRICT degrades to `ALWAYS_ON` only.
-  **Y-b — `market_brief_v1/install.sh`: morning timer 09:15 → 09:00 ET (BUILT).**
-  day_trader_pro's wake fires at 09:15:00 — the same minute the brief started —
-  so the wake could read a report the brief had not finished writing. Measured
-  runtime is ~75s (timer 09:15:00 → `generated_at_utc` 09:16:15 on 2026-07-29),
-  so 09:00 gives a ~15 minute margin instead of a race. Live effect needs the
-  unit rewritten on the box; the installer change is what survives a rebuild.
-  **Y-c — `DTP_REPORT_JSON` into install.sh's `.env` heredoc (BUILT).**
-  Defaulted to `$HOME/day_trader_pro/data/report.json`, overridable. Belt to
-  Y-a's braces: even if the fallback path is wrong someday, the variable is set
-  by provisioning rather than by memory.
-  **DEPLOY ORDER:** Y-a and Y-c are safe any time. **Y-b's live timer change and
-  the first brief-driven wake should NOT land on Thu Jul 30** — that is the first
-  session L2.5 has ever run (W.0), and changing the wake cohort the same day
-  makes a strange session unattributable. One variable at a time: L2.5 owns
-  Thursday, this owns Friday.
-  **EXPECT THE COHORT TO CHANGE** once a fresh report is being read — LLY and UNH
-  may wake in place of MU or AMD. That is the fix working. Watch two things: the
-  `scores` payload changes scale (frozen file 0–8, e.g. MU 7.7852; live brief
-  0–1, e.g. LLY 0.7684 — ordering is scale-invariant and `move_ranked` drives the
-  first pass once present, so selector should be unaffected), and the universe
-  went 29 tickers → 28, so confirm nothing downstream assumes 29.
-- **Y.1 — ✅ folded into Y-a.** The unreachable fallback is fixed in the same
-  patch rather than as a separate change.
-- **Y.2 — ✅ 2026-07-30 as emit v1.5.0: `_default_path()` now resolves explicit `path=` → `$DTP_REPORT_JSON` → the CONSUMER (`~/day_trader_pro/data/report.json`) when that tree exists, with cwd surviving only for a standalone brief install. All three branches tested. No longer 'optional' — the cwd default is precisely what let two projects point at different files for 23 days in silence.** Original text follows.
-  Optional hygiene in `market_brief_v1/report/emit.py`, whenever that
-  repo is next open.** `_default_path()` falls back to
-  `os.getcwd()/report.json`. A producer defaulting to its own working directory
-  is precisely how three weeks of reports went somewhere nothing read. Point the
-  default at the real consumer so the env var is an override, not a requirement.
-  Not needed for durability once Y-a and Y-c are in — which is why it is
-  optional rather than scheduled.
-
+**✅ Thu Jul 30 — AFTER THE CLOSE — Y · Y.1 · Y.2 all resolved, see PART 3.**
 **⬜ Fri Jul 31**
-- **X — ✅ SOLVED 2026-07-29 (same evening it was filed). See Part 3. Superseded
-  by item Y below, which lands the fix.**
-
 - `[DESK→DEPLOY]` **D (service half) — Templatize `shadow-observer.service`.** The unit hardcodes
   `/home/ubuntu/options-trader`; sed the path at install time like `setup_ec2.sh`
   does for `optionsbot.service`. Zero behavior change on the fleet (canonical path
@@ -1121,11 +905,80 @@ data that exists — or at the dated N-item that creates it first.*
 
 ---
 
+### Moved out of the schedule 2026-07-30 — resolved, no longer open work
+*These sat in PART 1 carrying ✅. PART 1 is now OPEN ITEMS ONLY.*
+*LETTERS ARE REUSED IN THIS FILE: the `V` and `Y` below are the 2026-07-29/30 items
+(push.sh target resolution; the report-wiring fix). They are NOT the older
+`V ✅ 2026-07-22` (ORB scored, not gated) or `Y ✅ 2026-07-23` (condor window opened
+before BB was computable) recorded above. Worth knowing before reading either.*
+
+- **W — ✅ superseded by W.0: the L2.5 restoration (fix built 2026-07-29, awaiting
+  the post-close window).** Two defects from the 07-29 incident, one already
+  hotfixed on the fleet (continuation v1.3.1 `mid` NameError, `dd0d097`) and
+  one still live at the time of writing: **every box is running the v1.3
+  classifier, not the L2.5 conviction integrator.**
+  **DIAGNOSIS (this is not what the handoff assumed).** `RANGE_WINDOW_BARS` has
+  never been defined in `conviction_integrator`. It is owned by
+  `regime_confluence` (v1.3, ~line 181, value 25). `conviction_integrator`
+  re-exports a tuple of six *regime-label* constants from regime_confluence and
+  nothing else; `main.py:275` imported `RANGE_WINDOW_BARS` *through* it, so the
+  import only ever worked while that name sat in the re-export list. The 07-28
+  excavation (`92c89d7`) trimmed the tuple. The resulting ImportError was
+  swallowed by main.py's `except Exception` L2 guard, which downgraded a hard
+  contract break to one WARNING per process start.
+  **THE REAL DEFECT is the guard, not the import.** The import is a one-line
+  fix. What let it cost a full session of calibration data is that the failure
+  mode was *silent and non-fatal*: trading continued normally, so nothing in
+  P&L, status, or alerts looked wrong. Same shape as the `mid` NameError the
+  same morning — a fault that unit tests could not reach because nothing
+  asserted the contract that production actually depends on.
+  **HOW (built, tested, not yet deployed):** `main.py` **v4.5** imports both
+  symbols from the modules that OWN them (a re-export is never a contract) and
+  the fallback now logs at ERROR *and* pages via
+  `alert_manager` **v1.7** `send_regime_engine_degraded_alert` — the pager is
+  itself wrapped so it can never take a box down. `check_versions` **v4.5**
+  adds 3 presence canaries + 1 absence canary on the broken import form, and
+  fixes a defect in its own v4.3 banner (the regime_confluence ABSENCE loop
+  printed ✗ STALE without incrementing MISS, so a restored fabricated fallback
+  would still have reported ALL CANARIES GREEN). New
+  `tests/test_l2_import_contract.py` (5 assertions) enforces the general rule:
+  symbols import from their definer, `conviction_integrator` must NOT re-export
+  `RANGE_WINDOW_BARS`, main.py must not use the broken form, and the fallback
+  must be loud. Suite **42/42**.
+  **VALIDATE:** (a) deliberate-failure test PASSED — reintroducing the old
+  import turns the contract suite red; (b) post-deploy, the L2.5-unavailable
+  line must be absent from every box's log and `status.py` must show the L2
+  engine; (c) the canary set proves it can't return on a stale sync.
+  **DEPLOY:** after the close with the day's other syncs — this needs a
+  fleet restart and must not happen mid-session.
+
+
+
+
+- **Y.1 — ✅ folded into Y-a.** The unreachable fallback is fixed in the same
+  patch rather than as a separate change.
+
+
 ## PART 4 — CHANGELOG (document history, newest first)
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.15 — 2026-07-30 — PART 1 IS NOW OPEN ITEMS ONLY.** Fifteen resolved
+  items were still sitting in the schedule carrying ✅. Eight were already
+  written up in PART 3 and were simply duplicates — dropped, along with the
+  "Original text follows" blocks that made some of them a third copy. The other
+  seven (W, W.2, P5.1, N.1, Z, T.2, Y.1, Y.2) moved into PART 3 under a dated
+  subsection. All 47 open items verified retained.
+  **Recorded because it will confuse someone later: THIS FILE REUSES LETTERS.**
+  PART 3 already held a `V ✅ 2026-07-22` (ORB scored, not gated) and a
+  `Y ✅ 2026-07-23` (condor window opened before BB was computable) — entirely
+  different items from the 2026-07-29/30 `V` (push.sh target resolution) and `Y`
+  (report wiring). The moved subsection says so inline.
+  Two bullets in PART 1 still contain a ✅ glyph and are CORRECTLY left there —
+  the Epoch-1 exit review and `L2.6 ✅ if the window ran clean` are future
+  conditionals, not resolved work. An automated sweep that keys on the glyph
+  alone would delete both.
 - **v3.14 — 2026-07-30 — CHANGELOG MOVED TO THE BOTTOM (PART 4).** The open
   schedule is now what the file opens with. Nothing in PART 0–3 was reordered:
   the date trajectory is the plan and it is untouched. Added a short orientation

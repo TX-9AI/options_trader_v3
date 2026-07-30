@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-tests/evm_status.py — v1.0 — 2026-07-30
+tests/evm_status.py — v1.1 — 2026-07-30
 
 EARNED VALUE against docs/BACKLOG.md, with the one adaptation that makes EVM
 honest for this project: SCHEDULE VARIANCE IS SPLIT BY WHAT CAUSED IT.
@@ -86,12 +86,20 @@ def load(path):
     the plan contained. A metric that can exceed its own baseline is measuring
     the document, not the project.
     """
-    raw = open(path, encoding="utf-8").read()
+    full = open(path, encoding="utf-8").read()
+    # v1.1 — BACKLOG v3.15 moved resolved items OUT of the schedule. Earned value
+    # now lives in PART 3 and remaining work in PART 1+2; reading PART 1 alone
+    # reported EV 2/49 and SPI 2.00, the same can't-exceed-your-own-baseline
+    # signature that flagged the duplicate-counting bug on the first ever run.
     try:
-        raw = raw[raw.index("## PART 1"):raw.index("## PART 3")]
+        raw   = full[full.index("## PART 1"):full.index("## PART 3")]
+        p3raw = full[full.index("## PART 3"):full.index("## PART 4")]
     except ValueError:
-        pass
+        raw, p3raw = full, ""
+    n_resolved = len([l for l in p3raw.split("\n")
+                      if re.match(r"^- \*\*[A-Za-z0-9.]+ ?[—✅]", l)])
     items, day, day_hdr = [], None, ""
+    items.append({"_resolved_count": n_resolved})
     for line in raw.split("\n"):
         h = re.match(r"^\*\*[⬜✅◐]\s*(.+?)\*\*", line)
         if h:
@@ -120,30 +128,34 @@ def main(argv):
             else dt.datetime.now().date())
 
     items = load(a.backlog)
+    resolved_n = items[0].get("_resolved_count", 0) if items else 0
+    items = [i for i in items if "name" in i]
     if not items:
         print("no items parsed — has the backlog format changed?")
         return 1
 
-    bac = len(items)
-    ev_items = [i for i in items if i["done"]]
-    pv_items = [i for i in items if i["day"] and i["day"] <= asof]
-    ev, pv = len(ev_items), len(pv_items)
+    # EV = work completed (PART 3). Overdue = scheduled by now, still open.
+    overdue = [i for i in items if i["day"] and i["day"] <= asof and not i["done"]]
+    ev  = resolved_n
+    bac = resolved_n + len(items)
+    pv  = ev + len(overdue)              # what the plan says should be done by now
     spi_all = (ev / pv) if pv else 1.0
 
     # controllable slice: DESK only, and only those already due
-    desk_due = [i for i in items
-                if i["tag"] == "DESK" and i["day"] and i["day"] <= asof]
-    desk_done = [i for i in desk_due if i["done"]]
-    spi_desk = (len(desk_done) / len(desk_due)) if desk_due else 1.0
+    # Accountability: DESK work that was due and is still open. Reported as a
+    # COUNT, not a ratio — resolved items no longer carry tags, so a desk ratio
+    # would have an unknowable denominator, and inventing one is false precision.
+    desk_overdue = [i for i in overdue if i["tag"] == "DESK"]
+    spi_desk = 1.0 if not desk_overdue else 0.0
 
-    late = [i for i in pv_items if not i["done"]]
+    late = overdue
     late_desk = [i for i in late if i["tag"] == "DESK"]
     late_data = [i for i in late if i["tag"] in ("DESK·DATA", "FLEET", "DESK→DEPLOY")]
 
     if a.quiet:
         print(f"EVM {asof}: EV {ev}/{bac} · PV {pv} · SV {ev - pv:+d} · "
-              f"SPI(all) {spi_all:.2f} · SPI(desk) {spi_desk:.2f} · "
-              f"late {len(late)} ({len(late_desk)} on us)")
+              f"SPI {spi_all:.2f} · overdue {len(late)} "
+              f"({len(desk_overdue)} DESK, on us)")
         return 0
 
     print(f"EARNED VALUE — as of {asof}\n" + "=" * 62)
@@ -152,8 +164,8 @@ def main(argv):
     print(f"  EV  (actually done)            {ev}")
     print(f"  SV  (EV − PV)                  {ev - pv:+d}")
     print(f"  SPI(all)   {spi_all:5.2f}   <- calendar truth (includes data waits)")
-    print(f"  SPI(desk)  {spi_desk:5.2f}   <- ACCOUNTABILITY: of what was ours "
-          f"to move, {len(desk_done)}/{len(desk_due)}")
+    print(f"  DESK overdue  {len(desk_overdue):>3}   <- ACCOUNTABILITY: due, open, "
+          f"and nothing blocking it")
 
     remaining = bac - ev
     print(f"\n  remaining: {remaining}")
