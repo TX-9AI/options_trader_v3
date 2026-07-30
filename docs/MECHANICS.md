@@ -1446,3 +1446,40 @@ The complete exit catalogue — every strategy, every path, with current values 
 is in [`docs/MECHANICS.md`](docs/MECHANICS.md).
 
 ---
+
+---
+
+## Paper fill pricing — ONE model, every strategy (T.2, documented 2026-07-30)
+
+**Every paper fill books the price the live path would have POSTED — the mark
+for singles and butterflies, the mid-credit limit for condor legs and rolled
+verticals. There is no synthetic haircut on any strategy.**
+
+Single authority: `execution/limit_ladder.paper_fill_credit()`. Condor legs
+(`main.py` v4.1), rolled verticals, singles and butterflies all route through
+it, so paper friction is identical across strategies and cross-strategy paper
+P&L is comparable. Before v4.1 the haircut was applied inline for condors while
+`entry_engine` v3.8 had already stopped applying it to singles — two friction
+models, and no note anywhere saying so.
+
+**Why no haircut (the reasoning, so it isn't re-litigated):** a limit order at
+the midpoint is a reasonable expectation. If it doesn't fill we cancel, reassess
+and re-establish the midpoint — that is the 20-second cancel window doing the
+work. The honest residual risk is therefore **no-fill risk, not slippage**, and
+no-fill risk cannot be modelled as a price shave. A haircut would book a worse
+price on trades that DID fill, which is a different and wrong claim.
+
+**The knob:** `OT_PAPER_SLIPPAGE_PCT`, default `0.0` (= the posted price). One
+lever, fleet-wide, no code change. It is deliberately a MEASURED value, not a
+guess:
+
+- **N.4 (Aug 14)** reprices post-Aug-3 paper condor credits against the archived
+  chain NBBO at the entry timestamps. If paper credits sit systematically rich
+  against real quotes, the haircut returns — with that measured number.
+- From **Sep 1** the live fill-quality audit becomes the permanent validator.
+- Pre-2026-07-22 paper history was booked at `0.01`; set that value to compare
+  like for like against it.
+
+**What this does NOT model:** the trade that never filled at all. Paper assumes
+the post fills. That gap is real, it is not slippage, and N.4 is how it gets
+measured rather than guessed.
