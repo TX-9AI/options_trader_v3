@@ -1,6 +1,45 @@
-# docs/BACKLOG.md — v3.6
+# docs/BACKLOG.md — v3.8
 
 **CHANGELOG**
+- **v3.8 — 2026-07-29 (late) — Y REWRITTEN: the env-var fix was a band-aid, and
+  the user caught it.** `install.sh` overwrites `~/market-brief/.env` from a
+  heredoc, so the one-line fix would have died at the next reinstall or on any
+  new instance — permanent-looking and not permanent. Y is now three committed
+  changes across two repos: **orchestrator v0.3.0** (freshness guard on the
+  report's `date` + `move_ranked` shape, Telegram alert, provenance stamped onto
+  the selection, and the never-resolving `~/market_brief/out/report.json`
+  fallback repointed at the reporter's real drop — this is what makes the fix
+  survive a rebuild), **install.sh 09:15 → 09:00** (the wake fired the same
+  minute the brief started; measured brief runtime ~75s, so 09:00 turns a race
+  into a 15-minute margin), and **`DTP_REPORT_JSON` provisioned in the .env
+  heredoc**. Deliberate-failure test passed against the real 2026-07-06 payload.
+  Also new: **`day_trader_pro/docs/ARCHITECTURE.md`** records the target layout —
+  Day_Trader_Pro as the over-arching project with `market_brief` and
+  `options_trader` as nested, independently-installable modules — plus the
+  modularity contract, an inventory of all five coupling seams, and the rule this
+  day earned: a file seam between two independently-scheduled processes must
+  carry a freshness stamp that the consumer checks, because it is the one seam
+  class that fails silently. It also flags that **`push.sh` must be fixed
+  (item V) BEFORE any migration**, since its `$HOME` scan becomes ambiguous once
+  two modules share a parent.
+- **v3.7 — 2026-07-29 (late) — ITEM X SOLVED THE SAME EVENING IT WAS FILED, and
+  it was neither of the two explanations X proposed.** The morning wake has been
+  ranking off a report frozen at **2026-07-06** — 23 days stale. The scorer is
+  not broken and there is no silent model fallback: `$DTP_REPORT_JSON` was never
+  set, so `report/emit.py` took its `os.getcwd()` fallback and has written
+  `~/market-brief/report.json` every morning while orchestrator read a different,
+  static file. Full diagnosis in Part 3; the one-line fix is **Y** (Thu Jul 30
+  after the close, deliberately NOT stacked on L2.5's first live session), with
+  **Y.1** repairing orchestrator's unreachable `~/market_brief/out/report.json`
+  fallback (underscore instead of hyphen, plus a non-existent `out/`).
+  **Also newly known: the brief's signed sentiment has never reached trading.**
+  `brief_strength` feeds the Stage-3 setup nudge and has been a constant 0.30 for
+  every name every day, because the frozen report predates the `move_ranked`
+  sidecar. Sixth silent-default finding of the day — the tally is now the L2
+  import guard, the discarded scp return values, the conductor's OHLC-only
+  completeness check, selector's EXACTLY-N backfill, the unreachable
+  `_REGIME_ENGINE` gate, and this. Every one of them produced plausible output
+  while doing nothing. **W.2 is the most valuable item in this file.**
 - **v3.6 — 2026-07-29 (evening) — L2.5 HAS NEVER RUN. NOT ONCE.** The day's
   chase ended somewhere none of the earlier hypotheses reached. A fleet-wide
   grep of `bot.log` on all 29 boxes — 34k to 138k lines each — returned
@@ -364,47 +403,62 @@ the tester. Nothing behavior-changing deploys except on Mon Aug 3.*
   overstated fills and the haircut returns with a measured value, not a guess.
   From Sep 1, the live fill-quality audit takes over as the permanent validator.
 
+**⬜ Thu Jul 30 — AFTER THE CLOSE**
+- **Y — 🔴 LAND THE DURABLE FIX (3 parts, 2 repos, all committed code).** The
+  env-var-only version of this item was WRONG and is withdrawn: `install.sh`
+  overwrites `~/market-brief/.env` wholesale from a heredoc, so a hand-edit dies
+  at the next reinstall or on any new instance. Nothing load-bearing lives in a
+  gitignored file.
+  **Y-a — `day_trader_pro/orchestrator.py` v0.3.0 (BUILT + TESTED).** Freshness
+  guard: audits the report's `date` against today ET and the presence of the
+  `move_ranked` sidecar, Telegrams on either problem, and stamps
+  `report_path / report_date / report_stale / report_move_ranked` onto the
+  selection so provenance is visible rather than inferred. Proceeds by default —
+  a stale cohort of liquid names is a lesser harm than refusing to wake 13 boxes
+  — with `DTP_REPORT_STALE_STRICT=1` to fail closed to `ALWAYS_ON`. Also repoints
+  the fallback from `~/market_brief/out/report.json` (misspelled AND a
+  non-existent `out/`, so it never once resolved) to the reporter's real default
+  drop, `~/market-brief/report.json`. **This is the half that makes the fix
+  durable**: with the fallback correct, the wake finds today's report even with
+  `$DTP_REPORT_JSON` unset. **VALIDATE:** deliberate-failure test PASSED against
+  the actual 2026-07-06 payload — frozen+no-sidecar raises 2 problems and one
+  alert, healthy today+sidecar is silent, yesterday's file is caught (the race
+  below), STRICT degrades to `ALWAYS_ON` only.
+  **Y-b — `market_brief_v1/install.sh`: morning timer 09:15 → 09:00 ET (BUILT).**
+  day_trader_pro's wake fires at 09:15:00 — the same minute the brief started —
+  so the wake could read a report the brief had not finished writing. Measured
+  runtime is ~75s (timer 09:15:00 → `generated_at_utc` 09:16:15 on 2026-07-29),
+  so 09:00 gives a ~15 minute margin instead of a race. Live effect needs the
+  unit rewritten on the box; the installer change is what survives a rebuild.
+  **Y-c — `DTP_REPORT_JSON` into install.sh's `.env` heredoc (BUILT).**
+  Defaulted to `$HOME/day_trader_pro/data/report.json`, overridable. Belt to
+  Y-a's braces: even if the fallback path is wrong someday, the variable is set
+  by provisioning rather than by memory.
+  **DEPLOY ORDER:** Y-a and Y-c are safe any time. **Y-b's live timer change and
+  the first brief-driven wake should NOT land on Thu Jul 30** — that is the first
+  session L2.5 has ever run (W.0), and changing the wake cohort the same day
+  makes a strange session unattributable. One variable at a time: L2.5 owns
+  Thursday, this owns Friday.
+  **EXPECT THE COHORT TO CHANGE** once a fresh report is being read — LLY and UNH
+  may wake in place of MU or AMD. That is the fix working. Watch two things: the
+  `scores` payload changes scale (frozen file 0–8, e.g. MU 7.7852; live brief
+  0–1, e.g. LLY 0.7684 — ordering is scale-invariant and `move_ranked` drives the
+  first pass once present, so selector should be unaffected), and the universe
+  went 29 tickers → 28, so confirm nothing downstream assumes 29.
+- **Y.1 — ✅ folded into Y-a.** The unreachable fallback is fixed in the same
+  patch rather than as a separate change.
+- **Y.2 — Optional hygiene in `market_brief_v1/report/emit.py`, whenever that
+  repo is next open.** `_default_path()` falls back to
+  `os.getcwd()/report.json`. A producer defaulting to its own working directory
+  is precisely how three weeks of reports went somewhere nothing read. Point the
+  default at the real consumer so the env var is an override, not a requirement.
+  Not needed for durability once Y-a and Y-c are in — which is why it is
+  optional rather than scheduled.
+
 **⬜ Fri Jul 31**
-- **X — LIGHT-DAY INVESTIGATION: the morning scorer appears to pick the same 15
-  symbols every day.** Surfaced 2026-07-29 when back-harvesting three separate
-  sessions (07-27, 07-28, 07-29) reported the **identical** discretionary cohort
-  each time: AAPL AMD AVGO CRM GOOGL META MSFT MU NFLX NVDA PLTR QQQ SMH SPX
-  TSLA. Two very different explanations, and they are not equally benign.
-  **(a) Working as designed.** `selector.select()` is model-driven off the
-  morning brief, not random — SPX/QQQ are `ALWAYS_ON` and the rest are scored.
-  If the brief surfaces the same liquid names daily, a sound scorer picks them
-  daily. Then the finding is not a bug but a *dataset* question: 14 boxes
-  (AMZN COST CVX DIA GLD GS IWM JPM LLY ORCL SMCI TLT UNH XOM) never trade,
-  never journal, and never enter the calibration set — which matters before the
-  Aug 21 freeze, because every conditional table and ramp fit is then built on
-  half the universe.
-  **(b) Silent fallback — the pattern that has bitten three times today.**
-  `select()` wraps the model call in `except Exception` → sets `fallback=True`,
-  empties the picks, and the EXACTLY-N backfill then refills the cohort from the
-  reporter's `move_ranked` order. The fleet still wakes to a full 15 and the
-  wake message still looks normal. If that path is running, selection has
-  quietly degraded to "top 15 by reporter rank" — which would be *stable by
-  construction* and explains identical cohorts exactly.
-  **HOW:** distinguish (a) from (b) before touching anything. Read
-  `data/selection_log.jsonl` across the last several sessions and look at two
-  fields per entry: `fallback` (should be false) and the per-symbol `rationale`
-  (all reading `backfill: reporter rank` is the tell for (b), model prose is the
-  tell for (a)). If (b), the real defect is that a failed model call is
-  indistinguishable from a successful one in every downstream artifact — fix by
-  surfacing `fallback`/`error` in the wake message and alerting on it, exactly
-  as main v4.5 now does for the L2 engine. If (a), the question moves to whether
-  a fixed cohort is acceptable for calibration breadth, or whether the scorer
-  should be made to rotate deliberately (e.g. reserve N slots for
-  least-recently-traded names) so the whole universe accumulates tape.
-  **VALIDATE:** `selection_log.jsonl` already records every selection — no new
-  instrumentation, no replay, and the answer is a read. Count distinct cohorts
-  across all logged sessions: if it is 1, this is settled either way; if it
-  varies and only recent days collapsed, that dates the onset. Cross-check
-  against the recovered journals — a box that never appears in
-  `signal_journal/<date>/` on any harvested date has never contributed data,
-  which is the impact measured directly rather than inferred.
-  *(Read-only throughout. Nothing here changes what the fleet does; park the
-  remedy until the cause is known.)*
+- **X — ✅ SOLVED 2026-07-29 (same evening it was filed). See Part 3. Superseded
+  by item Y below, which lands the fix.**
+
 - **D (service half) — Templatize `shadow-observer.service`.** The unit hardcodes
   `/home/ubuntu/options-trader`; sed the path at install time like `setup_ec2.sh`
   does for `optionsbot.service`. Zero behavior change on the fleet (canonical path
@@ -1055,6 +1109,32 @@ file: everything above either ✅ or explicitly re-dated below.
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
 `docs/HISTORY.md` and the audits. Resolution date + fixing versions + the why.*
 
+- **X ✅ 2026-07-29 — the morning wake picked the same 13 discretionary names
+  every day: the report it ranks on was FROZEN AT 2026-07-06.** Filed and solved
+  the same evening. The brief regenerates correctly every morning at 09:15 and
+  writes `~/market-brief/report.json`; `orchestrator._load_and_select()` reads
+  `config.DATA_DIR/report.json`, a different file, last written **2026-07-06
+  10:40 UTC** — 23 days stale. Cause: `report/emit.py` resolves its destination
+  as explicit `path=` → `$DTP_REPORT_JSON` → `os.getcwd()/report.json`, and
+  `DTP_REPORT_JSON` is set NOWHERE — the variable exists only inside emit.py's
+  own docstring instructing that it be set. Emit therefore took the cwd fallback
+  from day one.
+  **Every symptom follows from that one stale file:** the frozen report has no
+  `move_ranked` key (that sidecar shipped in emit v1.3.0 on 2026-07-15, after
+  the file was written), so selector's first `ranked` pass yields nothing and the
+  whole ranking falls through to the frozen composite `scores` — identical every
+  morning, hence the identical cohort. `strength_by_sym` ends up empty, so line
+  178's `strength_by_sym.get(s, 0.3)` defaults for every name, which is the
+  `str +0.30` printed against all 13 in the wake message. Proof from 07-29: the
+  brief's own top picks were discarded — LLY (#1, score +0.77) ranked **#18** and
+  missed the cutoff, ORCL (#4) **#19**, UNH (#2) did not place at all.
+  **The quiet one:** `brief_strength` feeds the bot's Stage-3 setup nudge, so the
+  brief's signed sentiment has been a hardcoded 0.30 constant for every name
+  every day. The sentiment pipeline is fully wired and has never influenced a
+  single setup — only the wake list, and that from a three-week-old file.
+  Diagnosis only; the fix lands as **Y** after Thu Jul 30's close, deliberately
+  not stacked on L2.5's first live session. Investigation cost one directory
+  scan and four one-line reads — no replay, no new tooling.
 - **T.1 ✅ 2026-07-22 (registered 2026-07-29) — red suite at HEAD.** Fixed in
   the defect-T pass: `test_paper_entries_mirror_live_friction` replaced by
   `test_paper_entries_book_the_mark_by_default` +
