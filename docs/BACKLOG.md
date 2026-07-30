@@ -1,7 +1,18 @@
-# docs/BACKLOG.md — v3.10
+# docs/BACKLOG.md — v3.11
 
 **CHANGELOG**
-- **v3.10 — 2026-07-30 — THURSDAY CLOSED. L2.5 committed a regime label in
+- **v3.11 — 2026-07-30 — MARKER CORRECTION (caught by the user).** v3.10 wrote
+  a day header asserting "every item below is resolved" and left every
+  individual bullet unmarked — W.0 still reading 🔴🔴 — while W.1 was in fact
+  still open. A summary claim is not a status. Each item now carries its own ✅
+  inline with the evidence, the original text is preserved beneath it, and the
+  day header says what is true: **closed EXCEPT W.1**, which carries forward to
+  the Aug 10 calibration-epoch start because the quarantine cannot complete
+  until enough real L2 data exists to compare against. **This is the fifth
+  stale-marker instance this week** and the only one I introduced: T.1, T.3, U
+  and T.2 were all cases of the file trailing the repo; this one was the file
+  contradicting itself. Rule reinforced — mark the ITEM, never the day.
+- **v3.10 — 2026-07-30 — THURSDAY'S WORK. L2.5 committed a regime label in
   production for the first time ever.** Verified live: `STATE=yes` on all 15
   woken boxes (that state file had never existed on any box), and
   `RECOVERED=1` fleet-wide — every box warmed through the opening window and
@@ -298,10 +309,13 @@ the tester. Nothing behavior-changing deploys except on Mon Aug 3.*
   **check_versions v4.3** (+ failure-count DONE banner). Deliberate-failure
   test passed. **Sync after RTH close (~16:30 ET) with today's other deploys.**
 
-**✅ Thu Jul 30 — DAY CLOSED at v3.10. L2.5 ran in production for the first
-time in the project's history.** Every item below is resolved; the day's own
-work is recorded in the changelog and the Part 3 register.
-- **W.0 — 🔴🔴 BEFORE THE OPEN: deploy main v4.7.** The fleet is currently
+**◐ Thu Jul 30 — L2.5 ran in production for the first time in the project's
+history.** Seven of eight items resolved and marked ✅ inline below. **W.1 is
+NOT resolved and carries forward** — the quarantine cannot complete until
+enough real L2 data exists to compare against (re-check at the Aug 10
+calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
+- **W.0 — ✅ 2026-07-30. Deployed 07-29 evening; verified live 07-30 — `STATE=yes` on 15/15 (that state file had never existed on any box) and `RECOVERED=1` fleet-wide. First production L2 label at ~09:55 ET.** Original text follows.
+  🔴🔴 BEFORE THE OPEN: deploy main v4.7. The fleet is currently
   stopped on v4.6, in which L2.5 is still unreachable. Until v4.7 is on the
   boxes, Thursday runs the v1.3 classifier exactly like every session before
   it. Push tonight so the morning wake pulls it, then verify from the log's
@@ -400,7 +414,8 @@ work is recorded in the changelog and the Part 3 register.
   thinner than the session count suggests. Re-check sample adequacy at the
   Aug 10 calibration-epoch start rather than assuming it.
 
-- **W.2 — Ask the harder question the incident raises: what else fails
+- **W.2 — ✅ 2026-07-30. Delivered as `tests/swallow_audit.py` and promoted to conductor phase 10, so the census runs nightly and WARNS when the silent count rises.** Original text follows.
+  Ask the harder question the incident raises: what else fails
   silently?** Two silent-degradation faults surfaced in one morning. Both were
   invisible because the bot kept trading. Before go-live (Aug 31) the guards
   that can swallow a contract break should be inventoried — every
@@ -411,7 +426,8 @@ work is recorded in the changelog and the Part 3 register.
   **VALIDATE:** the list itself is the deliverable; each entry that lands on
   "must page" gets an alert like v1.7's and a canary. Schedule the resulting
   work in Epoch 2, not tomorrow.
-- **V — NEW: `push.sh` finds its target by guessing (control-server hazard).**
+- **V — ✅ 2026-07-30 as push.sh v1.7: prefers the caller's directory, falls back to the $HOME scan with a loud warning, and announces the resolved target + remote before acting. All three paths tested.** Original text follows.
+  `push.sh` finds its target by guessing (control-server hazard).
   Found 2026-07-29 when `push.sh` run *from* `~/options-trader-v3` reported the
   remote as `futures_trader_v1.git` and refused. Cause is structural, not a
   mispointed remote (both remotes were correct): push.sh ignores the caller's
@@ -434,7 +450,8 @@ work is recorded in the changelog and the Part 3 register.
   alphabetically-first one and v1.7 picks the cwd; then confirm the fallback
   still works when invoked from `~`. No dataset needed. Deploy-truth is covered
   by the v4.3 parity invariant on the next fleet pass.
-- **P5.1 — Chain-snapshot harvest (TIME-CRITICAL — re-scoped at v3.0).** Verified
+- **P5.1 — ✅ 2026-07-29/30. Root cause was a missing `os.makedirs` (scp does not create its destination); fixed in harvest v0.6.0 along with three-state pull classification and `--date` back-harvest, and conductor v1.7.0 now checks every artifact class while the fleet is still up.** Original text follows.
+  Chain-snapshot harvest (TIME-CRITICAL — re-scoped at v3.0). Verified
   at HEAD: `harvest.py` is already **v0.5.1** (07-27) and pulls
   `data/chain_snapshots/<date>/<SYM>.jsonl.gz` + `signal_journal` — the build is
   done; what remains is confirming it's deployed on control and that the first
@@ -448,7 +465,8 @@ work is recorded in the changelog and the Part 3 register.
   `chain_reconstruction_check.py` (Aug 14) only runs if this landed — its input
   count IS the audit. Every day this slips is a permanent hole (a strike's quote
   is unrecoverable at 16:00).
-- **N.1 — NEW: harvest `regime_log` off-box (instrumentation for L1.9, Aug 5, and
+- **N.1 — ✅ RE-SCOPED 2026-07-29/30. No new pull was needed: `regime_log` is a TABLE inside trades.db, which harvest already collects. The real gap was provenance, closed by main v4.8's `engine` column.** Original text follows.
+  harvest `regime_log` off-box (instrumentation for L1.9, Aug 5, and
   the Aug 10 churn watch).** Verified at HEAD: harvest pulls OHLC, trades.db,
   journal, chains — **not** the per-box regime timeline. Three scheduled
   validations need it: (a) L1.9's proof metric is *offline-diary vs live-label
@@ -461,7 +479,8 @@ work is recorded in the changelog and the Part 3 register.
   touched, rides the same deploy as the P5.1 verification.
   **VALIDATE:** self-validating via the completeness manifest; first consumer is
   the Aug 4 L1.9 agreement metric.
-- **Z — `consolidate_trades.py` date filter (day_trader_pro side).** Rollups are
+- **Z — ✅ already shipped as consolidate_trades v1.2 (day_trader_pro `2400ca2`), found on 07-29 — another item this file trailed the repo on.** Original text follows.
+  `consolidate_trades.py` date filter. Rollups are
   not date-clean (61% of condor legs sat in a wrong-dated file;
   `fleet_trades_2026-07-13.json` holds only 07-07→07-10 trades). Fix: filter by
   `entry_time[:10]`, dedupe by `trade_id`; regenerate the rollups from the per-box
@@ -475,7 +494,8 @@ work is recorded in the changelog and the Part 3 register.
   compares each regenerated rollup to its source DBs — row count and P&L sum must
   match per date, and `min/max(entry_time[:10]) == filename date`. Run it over
   every date on disk; zero mismatches = DONE. No new collection needed.
-- **T.2 — Decide the condor paper-friction split** (code today, deploys Mon Aug 3).
+- **T.2 — ✅ 2026-07-30. The unification shipped in main v4.1 (07-22) — only the documentation was missing, now in MECHANICS with the reasoning recorded. Decision: normalize everything against the mark; the residual is no-fill risk, which cannot be modelled as a price haircut.** Original text follows.
+  Decide the condor paper-friction split.
   Condor paper credits still take the `PAPER_FILL_SLIPPAGE_PCT` haircut while
   singles/butterflies book the raw mark. Live condor entries are already mid-credit
   limits, so the mark-limit rationale applies: unify (or write down, in MECHANICS,
