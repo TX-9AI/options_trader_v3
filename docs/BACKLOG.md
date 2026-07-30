@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.15
+# docs/BACKLOG.md — v3.16
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -380,6 +380,35 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   the N.1-harvested regime_log, nightly, against the offline prediction. A live
   churn that diverges from the offline fit within 3 sessions = the fit was
   overfit; the freeze-window clean/broken verdict cites this number.
+- `[DESK]` **L1.CAL — ramp_calibration fixed, and the L1.9 dependency it exposed
+  (NEW 2026-07-30).** First real use of `tests/ramp_calibration.py` produced two
+  silent failures and one finding that reorders the calibration track.
+  **Fixed as v1.2:** run as a direct script the tool could not import
+  `analysis.regime_confluence` (tests/ on sys.path, not the repo root), fell to
+  `_RC = None` without a word, and printed HARDCODED FALLBACK bounds as
+  "CURRENT" — `room_s` reported lo=0.05/hi=0.20 when the live dials were
+  0.17/1.00. It misreported the very constants it exists to calibrate. Repo root
+  now on sys.path, and a failed import prints a banner stating the bounds column
+  cannot be trusted. Also: `load()` held every record of every session (~300MB
+  for a fortnight) and the 13-session auto-discover run died producing NO OUTPUT
+  — now streams per line, keeping only sampled floats.
+  **THE FINDING THAT REORDERS L1.11 — `align_frac` IS A CONSTANT.** Across
+  11,295 ticks its p25 = p50 = p95 = **0.67**. Since
+  `align_val = max(align_frac, ramp(adx, ...))`, one arm is frozen and TRENDING's
+  "corroborator" is ADX measured twice — `adx_s` and `align_val` peg at the
+  identical 54.2%. regime_confluence line 86 already says why: *"align_frac never
+  exceeds 0.67 in replay — blocked on L1.9 bookmark"*. **No ramp fit repairs a
+  constant input**, so **L1.11 cannot fit `align_val` until L1.9 lands.** That
+  dependency was nowhere in this file and would have surfaced on Aug 8.
+  **What IS fittable now:** `flat_s` pegs high 61.7% with real spread beneath it
+  (angle p5 1.4° → p99 41.9°); `adx_s` pegs high 54.2% but is DERIVED, so it
+  needs a hand fit. **`room_s` is the control case** — 78.5% graded, healthy,
+  and healthy *because* it was already re-fitted in the v1.3 pass
+  (LO 0.05→0.17, HI 0.20→1.00). Proof the process works when the tool reports
+  honestly.
+  **VALIDATE:** re-run over the full corpus once streaming is deployed; a fit is
+  only accepted where the raw distribution spans the behaviour the factor
+  measures (the pull_val rule), which one session cannot establish.
 - `[DESK·DATA]` **L1.11 — Fit the remaining ramps** (`flat_s` on its conditional population;
   `adx_s`/`align_val` from warm-bookmark or live `feed_store.db` depth — the L1.9
   gate is now open). Stage into the same calibration PR.
@@ -964,6 +993,13 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.16 — 2026-07-30 — L1 RAMP CALIBRATION: tool fixed, and it found that
+  L1.11 has an unrecorded dependency on L1.9.** `align_frac` is a CONSTANT 0.67
+  across 11,295 ticks, so `align_val` contributes nothing independent and cannot
+  be fitted until the bookmark lands. New item **L1.CAL** carries the detail.
+  Two more silent failures fixed in the tool itself (misreported bounds via a
+  swallowed import; a 300MB load that died producing no output) — that is the
+  ninth and tenth of the week, both in a tool built to detect exactly this class.
 - **v3.15 — 2026-07-30 — PART 1 IS NOW OPEN ITEMS ONLY.** Fifteen resolved
   items were still sitting in the schedule carrying ✅. Eight were already
   written up in PART 3 and were simply duplicates — dropped, along with the

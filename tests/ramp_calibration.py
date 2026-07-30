@@ -1,4 +1,14 @@
-# options_trader_v3/tests/ramp_calibration.py — v1.1
+# options_trader_v3/tests/ramp_calibration.py — v1.2
+# v1.2 — 2026-07-30 — TWO SILENT FAILURES, both found on the tool's first real
+#        use. (a) Run as a direct script, `from analysis import regime_confluence`
+#        failed (tests/ is on sys.path, not the repo root) and _RC fell to None
+#        WITHOUT a word — so every CURRENT bound printed a hardcoded fallback
+#        instead of the live constant. room_s reported lo=0.05/hi=0.20 when the
+#        dials in force were 0.17/1.00. Repo root is now on sys.path and a failed
+#        import prints a banner saying the bounds column cannot be trusted.
+#        (b) load() held every record of every session in memory (~300MB for a
+#        fortnight); the 13-session auto-discover run died producing NO OUTPUT.
+#        Now streams per line and keeps only the sampled floats.
 # v1.1 — 2026-07-22 — CURRENT bounds now read the LIVE module constants (which
 #        honour OT_RC_* overrides) instead of hardcoded defaults, so a run with
 #        dials set no longer misreports its own bounds or raises a false
@@ -48,14 +58,36 @@ SEARCH_PATHS = [
 # (label, regime-breakdown key, input field, scored field, current lo, current hi,
 #  higher_input_means_higher_score)
 # Live bounds come from the module, so OT_RC_* overrides are reflected.
+# v1.2 — running this as a DIRECT SCRIPT puts tests/ on sys.path, not the repo
+# root, so `from analysis import ...` failed and _RC fell silently to None —
+# every CURRENT bound then printed a hardcoded fallback instead of the value
+# actually in force. On 2026-07-30 that made room_s report lo=0.05/hi=0.20 when
+# the live constants were 0.17/1.00, i.e. the tool misreported the very dials it
+# exists to calibrate. Put the repo root on the path, and if the import still
+# fails SAY SO instead of quietly substituting defaults.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from analysis import regime_confluence as _RC
-except Exception:                                    # standalone use
-    _RC = None
+    _RC_ERR = None
+except Exception as _e:                              # standalone use
+    _RC, _RC_ERR = None, f"{type(_e).__name__}: {_e}"
 
 
 def _live(name: str, fallback: float):
     return getattr(_RC, name, fallback) if _RC else fallback
+
+
+def _bounds_banner():
+    """A calibration report whose CURRENT column is wrong is worse than none."""
+    if _RC:
+        return ("bounds source: LIVE module constants "
+                "(analysis.regime_confluence, honours OT_RC_*)")
+    return ("\u26a0 BOUNDS SOURCE: HARDCODED FALLBACKS — could not import "
+            f"analysis.regime_confluence ({_RC_ERR}).\n"
+            "   Every CURRENT and SUGGESTED line below is measured against "
+            "DEFAULTS, not the dials actually in force.\n"
+            "   SATURATION and INPUT are still valid (they come from the tape). "
+            "Fix the import before changing any bound.")
 
 
 # (label, regime, input field, scored field, lo, hi, ascending, tunable)
@@ -84,26 +116,53 @@ def discover() -> List[str]:
     return []
 
 
-def load(paths: List[str]) -> List[dict]:
-    recs, loaded = [], []
+def stream_collect(paths: List[str], wanted) -> Tuple[Dict[str, Tuple[List[float], List[float]]], int]:
+    """v1.2 — STREAM. Read one line, take the few floats each term needs, drop it.
+
+    v1.1 loaded every record of every session into one list before computing
+    anything. At ~23MB per replay log that is ~300MB for a fortnight's corpus,
+    and on 2026-07-30 the auto-discover run over 13 sessions produced NO OUTPUT
+    AT ALL — the process died before the first print. Silent, because the load
+    happens before anything is emitted. A calibration tool that fails as the
+    corpus grows is one that breaks exactly when it becomes worth running.
+
+    Memory now scales with the number of SAMPLED VALUES, not the tape.
+    """
+    acc: Dict[str, Tuple[List[float], List[float]]] = {
+        f"{rg}|{ik}|{ok}": ([], []) for rg, ik, ok in wanted}
+    loaded, total = [], 0
     for pat in paths:
         for path in sorted(glob.glob(os.path.expanduser(pat))) or [pat]:
+            n0 = total
             try:
                 with open(path) as fh:
-                    n0 = len(recs)
                     for line in fh:
                         line = line.strip()
-                        if line:
-                            recs.append(json.loads(line))
-                    loaded.append((os.path.basename(path), len(recs) - n0))
+                        if not line:
+                            continue
+                        try:
+                            r = json.loads(line)
+                        except Exception:            # noqa: BLE001 — truncated tail
+                            continue
+                        total += 1
+                        bds = r.get("breakdown") or {}
+                        for rg, ik, ok in wanted:
+                            bd = bds.get(rg) or {}
+                            iv, ov = bd.get(ik), bd.get(ok)
+                            ins, outs = acc[f"{rg}|{ik}|{ok}"]
+                            if isinstance(iv, (int, float)):
+                                ins.append(float(iv))
+                            if isinstance(ov, (int, float)):
+                                outs.append(float(ov))
+                loaded.append((os.path.basename(path), total - n0))
             except FileNotFoundError:
                 print(f"  ! not found: {path}", file=sys.stderr)
     if loaded:
-        print(f"loaded {len(loaded)} file(s):")
+        print(f"loaded {len(loaded)} file(s), streamed:")
         for name, n in loaded:
             print(f"   {name:<34} {n:>7d} ticks")
         print()
-    return recs
+    return acc, total
 
 
 def pctile(vals: List[float], p: float) -> Optional[float]:
@@ -156,18 +215,20 @@ def main(argv: List[str]) -> int:
         for p in SEARCH_PATHS:
             print(f"   {p}")
         return 2
-    recs = load(paths)
-    if not recs:
+    wanted = [(rg, ik, ok) for _, rg, ik, ok, _, _, _, _ in _terms()]
+    acc, n_ticks = stream_collect(paths, wanted)
+    if not n_ticks:
         print("no records loaded")
         return 2
 
     print("=" * 78)
-    print(f"RAMP CALIBRATION — {len(recs)} ticks")
+    print(f"RAMP CALIBRATION — {n_ticks} ticks")
     print("A term pegged at 1.0 on most scored ticks is a SWITCH, not a dial.")
+    print(_bounds_banner())
     print("=" * 78)
 
     for label, regime, in_key, out_key, cur_lo, cur_hi, ascending, caveat in _terms():
-        ins, outs = collect(recs, regime, in_key, out_key)
+        ins, outs = acc[f"{regime}|{in_key}|{out_key}"]
         if not outs:
             print(f"\n{label}\n   (no data)")
             continue
