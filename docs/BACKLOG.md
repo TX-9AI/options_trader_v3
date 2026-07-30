@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.17
+# docs/BACKLOG.md — v3.18
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -1020,6 +1020,53 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.18 — 2026-07-30 — CONTINUATION HAD NO STRIKE SELECTION. It has never
+  taken a trade, on any box, since it was written.** Found by asking why AMZN sat
+  out a textbook FVG pullback in a clean uptrend. `generate_signal` built an
+  `OptionsSignal` with **no strike and no entry_premium**;
+  `base_strategy.is_valid()` requires `strike > 0 and entry_premium > 0`, so main
+  rejected it every tick with `Invalid signal from ContinuationStrategy` and the
+  strategy re-signalled forever. Confirmed **fleet-wide** — AAPL, UNH, XOM, AMZN
+  and the rest all logging the same rejection all day.
+  **v1.1's own header predicted this and nobody read it that way:** defect W said
+  both paths "dead-ended before ever reaching strike selection." The gates were
+  fixed in v1.1; *the strike selection they were supposed to reach was never
+  written.* Every entry-trigger change since — the BB-midline logic, the
+  2026-07-28 FVG rewire, the 07-29 `mid` hotfix — was tuning a path that could
+  not produce a valid signal regardless.
+  **FIX (v1.4, `1017f3c`, deployed 15/15):** the strike now sits a fraction of
+  the ATM-straddle expected move out in the trend direction, the fraction being a
+  confluence of ADX (mechanical travel) and regime conviction (the engine's
+  agreement). Disagreement between the two pulls the strike back toward the
+  money; only mutual agreement pushes it out. Same EM basis as the condor's
+  0.80×EM floor. Bounds fitted from the fleet archive (ADX p25 24.7 / p75 47.3;
+  conviction p25 0.396 / p90 0.587) → `OT_CONT_ADX_LO=25 ADX_HI=50
+  CONV_LO=0.40 CONV_HI=0.60 W_ADX=0.6 W_CONV=0.4 EM_FRAC_MIN=0.25
+  EM_FRAC_MAX=0.75`, all env-overridable. `trend_strike_plan()` is module-level
+  **on purpose** so `trade_readiness._staged_pick` can call it while a trade is
+  merely STAGING — chain availability and liquidity checked as conviction climbs,
+  not at the moment of the trigger. Wiring readiness to it is NOT done.
+  **CORRECTS A FIGURE THIS FILE MAY CARRY ELSEWHERE:** conviction is *not*
+  ceilinged at 0.582. That was one day on the degraded fallback engine; the
+  archive reaches **0.831**.
+  **ELEVENTH SILENT FAILURE OF THE WEEK, and the fourth found this way.**
+  `is_valid()` returns a bare `False` — it never says which field failed. A
+  validator that named the field would have caught this the day it shipped. Same
+  class as the butterfly's DEBUG-level gates, ORB's "1 named level(s)", and
+  continuation's own three bare `return None` paths (all logged in v1.3.3, folded
+  into v1.4). A sweep of `strategy/` found **26 silent `return None` paths**;
+  most are regime-mismatch gates that fire every tick and are left silent
+  deliberately. The ones that can refuse a QUALIFYING setup and are still silent:
+  `butterfly_strategy.py:238` (find_strike, no liquid → butterfly dies with no
+  explanation), `condor_roll.py:131`, `iron_condor_strategy.py:288`. **Not fixed —
+  open punch list.**
+  **STILL UNVERIFIED:** no `[continuation] strike` line has appeared yet. v1.4
+  landed ~14:00 ET and the required conjunction (TRENDING + 1m wick tagging an
+  unfilled 5m FVG) has not occurred since. Zero `Invalid signal` in the hour
+  after deploy confirms the rejection path is closed; the strategy firing at all
+  remains **unproven on live tape.** Watch
+  `grep -E "\[continuation\]"` — a `no strike: no expected move` line would mean
+  the ATM straddle lookup fails and the fix is incomplete.
 - **v3.17 — 2026-07-30 — L1.CAL CORRECTED, and a verification dated.** The
   "align_frac is a constant" claim came from ONE session; the full 13-session
   corpus (134,137 ticks) shows p95 = 1.00, so the factor is severely compressed
