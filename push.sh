@@ -29,6 +29,13 @@
 #   bash push.sh "your commit message"  — push with a custom message
 #   bash push.sh --deploy               — fetch + reset --hard + restart (pull side)
 #   bash push.sh --deploy --no-restart  — deploy without restarting the service
+# v1.9 — 2026-07-30 — the v1.8 refusal told you to `pip install pyflakes`, which
+#         provisions one tool by hand and leaves the next one to be discovered
+#         the same way. It now points at install_tooling.sh, which installs the
+#         repo's own requirements into whatever python is active — venv if the
+#         checkout is a full setup_ec2.sh install, system python if it is a bare
+#         clone. Every bot here runs independently of any controller, so the repo
+#         has to be able to provision itself wherever it lands.
 # v1.8 — 2026-07-30 — UNDEFINED-NAME GATE before commit. The box-side deploy
 #         check is `python -c "import ast"`, which proves a file COMPILES; an
 #         undefined name compiles fine and raises at RUNTIME, so the deploy path
@@ -299,8 +306,9 @@ if [ "$HAS_CHANGES" = true ]; then
         LINT_PY="$(command -v python3 || command -v python)"
         if [ -z "$LINT_PY" ] || ! "$LINT_PY" -m pyflakes --version >/dev/null 2>&1; then
             echo -e "  ${RED}✗  pyflakes is not available — the undefined-name gate"
-            echo -e "     CANNOT RUN, so this push is refused. Install it:"
-            echo -e "       pip install pyflakes"
+            echo -e "     CANNOT RUN, so this push is refused. Provision the"
+            echo -e "     checkout (works with or without a controller):"
+            echo -e "       bash $BOT_DIR/install_tooling.sh"
             echo -e "     (Override with PUSH_SKIP_LINT=1 if you accept the risk.)"
             echo -e "     A silently skipped guard is the exact failure mode this"
             echo -e "     gate exists to prevent.${RESET}"
