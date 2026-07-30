@@ -1,6 +1,31 @@
-# docs/BACKLOG.md — v3.8
+# docs/BACKLOG.md — v3.9
 
 **CHANGELOG**
+- **v3.9 — 2026-07-30 — W.1 REWRITTEN TO ITS TRUE SCOPE, and W.2 answered.**
+  W.1 was scoped as "quarantine 07-29" on the belief that the L2.5 outage began
+  with the 07-28 excavation. The v4.7 reachability proof widened it to the whole
+  project history: the L2 block was never once executed, so **every regime label
+  and conviction value ever logged came from the v1.3 classifier**. First real
+  L2.5 data is 2026-07-30 from ~09:55 ET. The item now names exactly what is
+  affected (conditional_tables, L2.4 churn, L1.11 ramp, the readiness conv_val
+  ramp — plus the correction that 07-28's "L2 integrator saturation" was
+  actually v1.3's conviction band) and, deliberately, what is NOT: ORB, all
+  fill/friction/latency work, the harvest and conductor plumbing, the morning
+  selection chain, push.sh. **These proceed on their own merits — it is not an
+  if/then cascade.** Timeline assessed rather than assumed: ~16 trading sessions
+  of L2 data exist by the Aug 21 freeze, inside the original two-week intent, so
+  the schedule is tight but not derailed; the real constraint is per-symbol
+  depth, to be re-checked at the Aug 10 calibration start.
+  **W.2 delivered** as `tests/swallow_audit.py` — a repeatable, tiered census of
+  every exception handler that swallows without re-raising. 139 in
+  options_trader_v3 (81 silent) and 48 in day_trader_pro (42 silent), but tiered
+  by consequence only ~20 sit in risk/orders/record paths, and most of those are
+  correctly silent guarded imports and date parsers. `--json` emits a stable
+  snapshot so "did we add a new silent failure?" becomes a diff instead of a
+  memory exercise. The tool's docstring carries all seven of the week's
+  silent-failure defects and the line that ties them: every check we had asked
+  whether the code WORKS; none asked whether it RUNS, and whether it SAYS SO
+  when it does not.
 - **v3.8 — 2026-07-29 (late) — Y REWRITTEN: the env-var fix was a band-aid, and
   the user caught it.** `install.sh` overwrites `~/market-brief/.env` from a
   heredoc, so the one-line fix would have died at the next reinstall or on any
@@ -292,25 +317,54 @@ the tester. Nothing behavior-changing deploys except on Mon Aug 3.*
   engine; (c) the canary set proves it can't return on a stale sync.
   **DEPLOY:** after the close with the day's other syncs — this needs a
   fleet restart and must not happen mid-session.
-- **W.1 — 🔴 QUARANTINE 07-29 CONVICTION DATA (do this before any fit).**
-  Every `regime_conviction` value, every L2 committed label, and every
-  readiness factor logged 07-29 came from the fallback engine. It is not
-  comparable to the L2.5 series the epoch ladder is fitted against. Until the
-  contaminated window is bounded, **treat 07-29 as excluded** from L1.11 ramp
-  fits, L2.4 churn calibration, conditional_tables, and the readiness digest.
-  **HOW:** bound the window from the logs rather than assuming it started
-  07-28 — the WARNING prints once per process start, so the first occurrence
-  per box dates it exactly. Menu-ready (option 14):
-  `journalctl -u optionsbot --since "2026-07-26" | grep -m1 "L2.5 unavailable" || echo NONE`
-  Then write the resulting date range into `session_labels.jsonl` as an
-  explicit exclusion so every downstream tool inherits it instead of each
-  analysis remembering separately.
-  **VALIDATE:** the exclusion is self-proving — re-run `ramp_calibration.py`
-  and `readiness_digest.py` with and without the window and confirm the excluded
-  run changes the fitted bounds. If it doesn't, the contamination was
-  immaterial and that is worth knowing too. **N.1 (regime_log harvest) becomes
-  more valuable, not less** — it is what makes this bounding automatic next
-  time instead of a 15-box journalctl sweep.
+- **W.1 — 🔴 QUARANTINE ALL PRE-2026-07-30 L2 DATA. The scope is the entire
+  project history, not one session.** This item was written as "quarantine
+  07-29" when we believed the L2.5 outage began with the 07-28 excavation. The
+  v4.7 root cause proved otherwise: `_REGIME_ENGINE` was `.lower()`ed to `"l2"`
+  and both gates compared it to the literal `"L2"`, so the L2 block was
+  unreachable from the moment v4.0 wired it. **No environment variable could
+  have matched, because the DEFAULT itself failed the comparison.** Every regime
+  label and conviction value this fleet has ever produced came from the v1.3
+  classifier alone. Confirmed empirically: `[L2` count ZERO across bot.logs of
+  34k–138k lines on all 29 boxes, `integrator_state.json` had never been written
+  anywhere, and `FAILED`/`STALE` were also zero — the block never ran, so it
+  could not even fail.
+  **First real L2.5 data: Thu 2026-07-30, from ~09:55 ET** (the boxes committed
+  after the 25-bar 1m warm-up; `RECOVERED=1` on all 15).
+  **WHAT IS ACTUALLY AFFECTED — anything conditioned on an L2 label or an L2
+  conviction:** `conditional_tables` (regime × strategy × outcome — the
+  conditioning variable was v13 throughout), the **L2.4 churn calibration** (it
+  has never seen integrator churn), the **L1.11 ramp fits**, and the readiness
+  `conv_val` ramp. Note the knock-on: the 07-28 finding that "eight boxes sat at
+  conviction 0.679 simultaneously = L2 integrator saturation" was a
+  MISATTRIBUTION — that was v1.3's conviction distribution, and the observed
+  0.59–0.83 band is v1.3's band. Refit that ramp from L2 data, not from the
+  07-28 digest.
+  **WHAT IS NOT AFFECTED — assess these on their own merits, this is not an
+  if/then cascade:** ORB (regime-agnostic by design, defect V); all fill,
+  friction and latency work (T.2, N.4, N.5); harvest/conductor plumbing; the
+  morning selection chain (Y); push.sh (V); trade mechanics, exits and risk.
+  None of it is conditioned on an L2 label, so none of it waits.
+  **HOW (mechanical, not archaeological):** main v4.8 stamps
+  `regime_log.engine` and `trades.regime_engine` with `L2`/`v13`, so from today
+  the split is a `WHERE engine='L2'` clause. Rows written before v4.8 carry NULL
+  — which is honest: provenance for those is genuinely unknown at row level,
+  though we now know from the reachability proof that all of them are v13.
+  Treat `engine IS NULL OR engine='v13'` as excluded from any L2-conditioned
+  fit.
+  **VALIDATE:** re-run `conditional_tables` with and without the exclusion and
+  confirm the row counts collapse to today-only — if they do not, the filter is
+  not being applied. Then re-run once ~10 sessions of real L2 data exist and
+  compare the tables; a large divergence quantifies exactly what the v13-fitted
+  priors were worth.
+  **TIMELINE — TIGHT, NOT DERAILED.** The Aug 21 freeze assumed roughly two
+  weeks of L2 baseline. Real L2 data starting 07-30 gives ~16 trading sessions
+  by Aug 21 — still inside the original intent. The genuine constraint is
+  PER-SYMBOL depth rather than session count: only ~15 of 29 boxes trade daily
+  and the cohort now follows the brief, so any per-symbol L2 statistic will be
+  thinner than the session count suggests. Re-check sample adequacy at the
+  Aug 10 calibration-epoch start rather than assuming it.
+
 - **W.2 — Ask the harder question the incident raises: what else fails
   silently?** Two silent-degradation faults surfaced in one morning. Both were
   invisible because the bot kept trading. Before go-live (Aug 31) the guards
