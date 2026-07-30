@@ -29,6 +29,15 @@
 #   bash push.sh "your commit message"  — push with a custom message
 #   bash push.sh --deploy               — fetch + reset --hard + restart (pull side)
 #   bash push.sh --deploy --no-restart  — deploy without restarting the service
+# v1.8 — 2026-07-30 — UNDEFINED-NAME GATE before commit. The box-side deploy
+#         check is `python -c "import ast"`, which proves a file COMPILES; an
+#         undefined name compiles fine and raises at RUNTIME, so the deploy path
+#         could not see the class that cost two sessions in two days —
+#         continuation `mid` (07-29, whole ORB window, all 15 boxes) and
+#         butterfly `_mult` (07-30, IWM crash-loop, regime-gated so 14 boxes ran
+#         it clean). pyflakes now runs over the tracked *.py set and REFUSES the
+#         commit on any "undefined name". Missing pyflakes is a REFUSAL, never a
+#         skip. PUSH_SKIP_LINT=1 overrides, loudly.
 # v1.7 — 2026-07-30 — TARGET RESOLUTION: prefer the caller's directory over the
 #         $HOME scan, and ANNOUNCE the resolved target + remote before acting.
 #         The old block ignored $PWD entirely and took the first $HOME entry
@@ -268,6 +277,47 @@ if [ "$HAS_CHANGES" = true ]; then
     echo "  Staged changes:"
     git status --short
     echo ""
+
+    # ── v1.8 UNDEFINED-NAME GATE — the last moment a NameError is free ────────
+    # The box-side deploy gate is `python -c "import ast"` (working agreement,
+    # after repeated wrong-venv/no-pytest burns). ast.parse proves a file
+    # COMPILES — and an undefined name compiles fine, because it is a RUNTIME
+    # error. So the deploy path was structurally blind to the class that cost two
+    # sessions in two days:
+    #   2026-07-29  continuation `mid` — orphaned after the FVG rewire. NameError
+    #               every tick; all 15 boxes took ZERO trades until 10:05 ET.
+    #   2026-07-30  butterfly `_mult` — orphaned after the 1x-EM revert.
+    #               Regime-gated, so ONLY a box in COMPRESSION reached it: IWM
+    #               crash-looped for an hour while 14 boxes ran it clean.
+    # Both are found by static analysis in under a second. This runs here because
+    # push.sh is the chokepoint every deploy already passes through, and control
+    # is the last place the fix costs nothing.
+    if [ "${PUSH_SKIP_LINT:-0}" = "1" ]; then
+        echo -e "  ${YELLOW}⚠  PUSH_SKIP_LINT=1 — undefined-name gate BYPASSED."
+        echo -e "     Two production outages in two days came from this class.${RESET}"
+    else
+        LINT_PY="$(command -v python3 || command -v python)"
+        if [ -z "$LINT_PY" ] || ! "$LINT_PY" -m pyflakes --version >/dev/null 2>&1; then
+            echo -e "  ${RED}✗  pyflakes is not available — the undefined-name gate"
+            echo -e "     CANNOT RUN, so this push is refused. Install it:"
+            echo -e "       pip install pyflakes"
+            echo -e "     (Override with PUSH_SKIP_LINT=1 if you accept the risk.)"
+            echo -e "     A silently skipped guard is the exact failure mode this"
+            echo -e "     gate exists to prevent.${RESET}"
+            exit 1
+        fi
+        UNDEF="$("$LINT_PY" -m pyflakes $(git ls-files '*.py') 2>/dev/null \
+                 | grep -i 'undefined name' || true)"
+        if [ -n "$UNDEF" ]; then
+            echo -e "  ${RED}✗  UNDEFINED NAME(S) — refusing to commit or push.${RESET}"
+            echo "$UNDEF" | sed 's/^/       /'
+            echo -e "  ${YELLOW}     This is the 07-29 'mid' / 07-30 '_mult' defect class."
+            echo -e "     It compiles, passes the box-side ast gate, and raises at"
+            echo -e "     runtime on whatever path reaches it.${RESET}"
+            exit 1
+        fi
+        echo -e "  ${GREEN}✓  undefined-name gate: clean${RESET}"
+    fi
 
     COMMIT_MSG="${1:-$(date '+%Y-%m-%d') — patch update}"
     git add .
