@@ -1,5 +1,13 @@
 """
-main.py — options_trader v4.8
+main.py — options_trader v4.9
+v4.9 — 2026-07-30 — DISPATCH ISOLATION. Each strategy evaluation now runs inside
+        _safe_strategy(): a raise is logged at ERROR and returns None, so the
+        priority cascade continues instead of aborting the tick. Before this, one
+        strategy raising silently disabled every strategy BELOW it — butterfly's
+        `_mult` NameError (Priority 3) suppressed the iron condor (Priority 4) on
+        every RANGING/COMPRESSION tick where GEX was pinning, and nothing in any
+        log said the condor had been skipped. Applies to all six dispatch call
+        sites plus the Leg-2 check in the tick loop.
 v4.8 — 2026-07-30 — DECLARE THE OPENING GAP, AND STAMP THE ENGINE.
         (a) The first ~25 minutes of every session legitimately cannot produce
         RANGING or COMPRESSION: both are computed on a 25-bar 1-MINUTE window,
@@ -853,6 +861,35 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState):
     )
 
 
+def _safe_strategy(name: str, fn):
+    """v4.9 — run ONE strategy evaluation in isolation.
+
+    THE DEFECT (2026-07-30): the dispatch in attempt_new_entry is a bare cascade
+    of `if signal is None:` blocks with NO exception handling between them.
+    Butterfly is Priority 3; Iron Condor is Priority 4. When butterfly raised
+    NameError on `_mult`, the exception went straight to the tick loop and EVERY
+    strategy below it was skipped — condor was never asked. Proven on IWM: 161
+    `_mult` raises and PLAN=0, while CVX and ORCL (MULT=0, butterfly declining
+    cleanly at the GEX gate) built 3 and 4 condor plans on the same tape.
+
+    The dispatcher could not tell "this strategy DECLINED" from "this strategy
+    EXPLODED" — and those mean opposite things. A decline means try the next
+    priority. An explosion meant abandon the tick and silently suppress every
+    strategy below, announcing nothing.
+
+    Returns None on failure so the cascade continues exactly as for a normal
+    decline, and logs at ERROR naming the strategy: a raise is a defect and must
+    never be quiet, but it must not take the rest of the tick with it.
+    """
+    try:
+        return fn()
+    except Exception as exc:                       # noqa: BLE001
+        logger.error("%s raised during dispatch — SKIPPED, continuing to the "
+                     "next priority; other strategies unaffected. %s: %s",
+                     name, type(exc).__name__, exc, exc_info=True)
+        return None
+
+
 def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     """Try to generate and execute a trade signal."""
     session  = get_session_guard()
@@ -919,7 +956,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
             regime.primary_regime in _orb_ok_regimes
             or (ORB_FIRES_REGARDLESS_OF_REGIME and
                 regime.primary_regime in (Regime.UNKNOWN, Regime.SWEEP_REVERSAL))):
-        orb_sig = _orb_strategy.generate_signal(
+        orb_sig = _safe_strategy("ORB", lambda: _orb_strategy.generate_signal(
             orb           = orb,
             regime        = regime,
             vol_state     = ctx["vol"],
@@ -927,7 +964,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
             chain         = chain,
             macro         = macro,
             current_price = ctx["price"]
-        )
+        ))
         if orb_sig:
             signal = orb_sig
             get_orb_engine().mark_triggered()
@@ -950,7 +987,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     if signal is None and (
             _is_runaway
             or regime.primary_regime in (Regime.TRENDING_BULL, Regime.TRENDING_BEAR)):
-        cont_sig = _continuation_strategy.generate_signal(
+        cont_sig = _safe_strategy("Continuation", lambda: _continuation_strategy.generate_signal(
             regime        = regime,
             vol_state     = ctx["vol"],
             trend         = ctx["trend"],
@@ -961,7 +998,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
             structure     = ctx.get("structure"),
             df_1m         = ctx.get("df_1m"),
             macro         = macro,
-        )
+        ))
         if cont_sig:
             if _is_runaway:
                 cont_sig.setup_type = cont_sig.setup_type or "trend_continuation_handoff"
@@ -974,7 +1011,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     # and rejects is a legitimate reversal; a runaway that pokes an equal-H/L is
     # not. Non-runaway sweeps are unchanged (fire as before on the SWEEP label).
     if signal is None and regime.primary_regime == Regime.SWEEP_REVERSAL:
-        sweep_sig = _sweep_strategy.generate_signal(
+        sweep_sig = _safe_strategy("SweepReversal", lambda: _sweep_strategy.generate_signal(
             regime        = regime,
             vol_state     = ctx["vol"],
             structure     = ctx["structure"],
@@ -983,7 +1020,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
             macro         = macro,
             df_1m         = ctx.get("df_1m"),
             current_price = ctx["price"]
-        )
+        ))
         if sweep_sig is not None and _is_runaway and not getattr(sweep_sig, "swept_level_name", ""):
             # post-runaway sweep on an UNNAMED (equal-H/L) level — refuse it.
             logger.info("[sweep] post-runaway sweep on unnamed level — BLOCKED "
@@ -999,7 +1036,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
             not DIRECTIONAL_ONLY and
             regime.primary_regime in (Regime.RANGING, Regime.COMPRESSION) and
             macro.butterfly_allowed):
-        signal = _butterfly_strategy.generate_signal(
+        signal = _safe_strategy("Butterfly", lambda: _butterfly_strategy.generate_signal(
             regime        = regime,
             vol_state     = ctx["vol"],
             liq_map       = ctx["liq_map"],
@@ -1007,7 +1044,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
             macro         = macro,
             current_price = ctx["price"],
             gex           = ctx.get("gex")
-        )
+        ))
 
     # Priority 4: Iron Condor — legged entry, RANGING fallback when no GEX pin.
     if not _iron_condor_strategy.has_active_plan:
@@ -1016,13 +1053,13 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
         if (signal is None and
                 not DIRECTIONAL_ONLY and
                 regime.primary_regime == Regime.RANGING):
-            plan = _iron_condor_strategy.decide(
+            plan = _safe_strategy("CondorPlan", lambda: _iron_condor_strategy.decide(
                 regime        = regime,
                 vol_state     = ctx["vol"],
                 chain         = chain,
                 macro         = macro,
                 current_price = ctx["price"]
-            )
+            ))
             # Plan is informational — no order yet. Leg triggers fire on
             # subsequent ticks via check_leg_triggers().
             if plan:
@@ -1042,11 +1079,11 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
                         pass
     else:
         # Active plan: check if a leg should fire this tick
-        leg_signal = _iron_condor_strategy.check_leg_triggers(
+        leg_signal = _safe_strategy("CondorLeg", lambda: _iron_condor_strategy.check_leg_triggers(
             regime        = regime,
             chain         = chain,
             current_price = ctx["price"]
-        )
+        ))
         if leg_signal is not None:
             # Route directly to entry — bypasses normal signal/score path
             # since condor legs are credit spreads with their own P&L math.
@@ -1360,11 +1397,11 @@ def main_loop(state: BotState):
                 if (_iron_condor_strategy.has_active_plan and
                         _iron_condor_strategy.plan is not None and
                         _iron_condor_strategy.plan.state == "LEG1_FILLED"):
-                    leg_signal = _iron_condor_strategy.check_leg_triggers(
+                    leg_signal = _safe_strategy("CondorLeg", lambda: _iron_condor_strategy.check_leg_triggers(
                         regime        = regime,
                         chain         = ctx.get("chain"),
                         current_price = ctx["price"]
-                    )
+                    ))
                     if leg_signal is not None:
                         _execute_condor_leg(leg_signal, state)
             else:
