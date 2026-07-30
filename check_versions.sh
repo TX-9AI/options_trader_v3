@@ -1,4 +1,11 @@
 #!/bin/bash
+# v4.8 — 2026-07-30 — +4 canaries for main v4.8: the opening warm-up now logs
+#         INFO rather than a WARNING that fired on 13/15 boxes every morning for
+#         designed behaviour, and regime_log/trades carry the engine that
+#         produced each label. The engine stamp is the one that matters most —
+#         without it, "which engine labelled this row" was answerable only by
+#         grepping bot.log, and the designed v1.3 opening window could not be
+#         excluded from an L2-conditioned fit.
 # v4.7 — 2026-07-29 — REACHABILITY CANARY. main v4.7 fixed the real 07-29 root
 #         cause: `_REGIME_ENGINE` is .lower()ed to "l2" while both gates compared
 #         it to "L2", so L2.5 never executed once on any box since v4.0 wired it.
@@ -236,7 +243,7 @@ check "analysis/trade_readiness.py"      "readiness_would_fire"         "v1.0 wo
 check "analysis/trade_readiness.py"      "TR_DEARM_SLOPE"               "v1.0 slope de-arm knob (falling confluence disarms)"
 check "analysis/trade_readiness.py"      "0.5 \*\* (dt / TR_SLOPE_HALFLIFE_S)" "v1.0 dt-aware slope EMA (wall-clock, no tick counters)"
 check "main.py"                          "_readiness.assess_all(ctx, regime)" "v4.3 readiness hooked in the every-tick block"
-check "main.py"                          "main.py — options_trader v4.7" "v4.7 main header current (L2 gate reachable)"
+check "main.py"                          "main.py — options_trader v4.8" "v4.8 main header current (opening gap declared + engine stamped)"
 check "analysis/trade_readiness.py"      "readiness_staged_pick"        "v1.1 staged-pick journaling (calm-vs-spike experiment)"
 check "analysis/trade_readiness.py"      "TR_CONV_HALFLIFE_S"           "v1.1 smoothed-conviction EMA knob"
 check "tests/readiness_digest.py"        "readiness_digest_"            "v1.0 nightly digest tool present (conductor phase 9 target)"
@@ -271,6 +278,10 @@ check "main.py"  "send_regime_engine_degraded_alert"  "v4.5 silent L2 fallback n
 check "main.py"  "L2.5 NOT committing"  "v4.6 non-committing L2 gate reports its reason (was silent)"
 check "main.py"  "_l2_mute"             "v4.6 reason-change throttle present"
 check "main.py"  "REGIME ENGINE:"       "v4.7 active regime engine stated at startup"
+check "main.py"  "warming as designed"  "v4.8 opening 1m warm-up logs INFO, not a false WARNING"
+check "main.py"  "engine        = \"L2\" if l2_label"  "v4.8 regime_log rows stamped with the engine"
+check "database/trade_logger.py"  "regime_engine"  "v4.8 trades carry regime_engine"
+check "database/trade_logger.py"  "ALTER TABLE regime_log ADD COLUMN engine"  "v4.8 regime_log auto-migrates"
 if grep -q '_REGIME_ENGINE == "L2"' main.py 2>/dev/null; then
     echo "  ✗ STALE:   main.py compares _REGIME_ENGINE to \"L2\" but the value is .lower()ed — L2.5 is UNREACHABLE dead code (the 07-29 root cause is back)"
     MISS=$((MISS+1))

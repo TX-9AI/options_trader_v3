@@ -1,5 +1,27 @@
 """
-main.py — options_trader v4.7
+main.py — options_trader v4.8
+v4.8 — 2026-07-30 — DECLARE THE OPENING GAP, AND STAMP THE ENGINE.
+        (a) The first ~25 minutes of every session legitimately cannot produce
+        RANGING or COMPRESSION: both are computed on a 25-bar 1-MINUTE window,
+        and market_data deliberately scopes the 1m frame to the current session
+        (OT_FEED_INTRADAY_SCOPE=session) so it can never bleed across the
+        overnight gap and fabricate a slope. v4.6 announced that designed
+        condition at WARNING as "NOT L2.5-grade" and fired it on 13 of 15 boxes
+        at 09:30 on 2026-07-30. It now logs INFO ("warming as designed", naming
+        the dims and the frame depth) when ONLY window-dependent dims are missing
+        AND the frame is still filling, and keeps the WARNING — now carrying
+        df_1m — for every other starve, which really is a fault. Deliberately NOT
+        fixed by padding the frame (that is what the guard prevents) nor by
+        fabricating a low value (synthetic data would enter the calibration set)
+        nor by weakening the integrator's full-vector invariant.
+        (b) regime_log rows now carry `engine` ("L2" | "v13"), and trades carry
+        `regime_engine`. Provenance was previously recoverable only from a
+        [L2 c=..]/[v13] tag in bot.log — which is why "has L2.5 ever committed?"
+        took a fleet-wide grep across 138k-line logs. It also makes the designed
+        v1.3 opening window excludable from L2-conditioned fits by a WHERE
+        clause instead of by inference. Auto-migrates via ALTER TABLE (v-obs
+        pattern); observability only, no trade-mechanics change.
+v4.7 — 2026-07-29
 v4.7 — 2026-07-29 — **L2.5 WAS NEVER REACHABLE.** Root cause of every symptom
         chased today. `_REGIME_ENGINE` is built with `.lower()`, yielding "l2",
         and BOTH gates compared it to the uppercase literal "L2" — at the tick
@@ -329,6 +351,7 @@ try:
     # that DEFINES them; a re-export is not a contract.
     from analysis.regime_confluence import RegimeConfluenceScorer, RANGE_WINDOW_BARS
     from analysis.conviction_integrator import ConvictionIntegrator, INTEGRATED_REGIMES
+    from analysis.regime_confluence import RANGING, COMPRESSION
     _L2_OK = True
 except Exception as _l2e:                       # pragma: no cover
     _L2_OK = False
@@ -551,10 +574,40 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
                            else "stale: awaiting a full evidence vector (or post-gap warm-up)"
                 else:
                     _why = "empty committed label on a warm book"
+
+                # v4.8 — DECLARE THE OPENING GAP AS INTENTIONAL, NOT AS AN ERROR.
+                # RANGING and COMPRESSION are computed on a 25-bar 1-MINUTE window,
+                # and market_data deliberately scopes the 1m frame to the CURRENT
+                # SESSION (OT_FEED_INTRADAY_SCOPE=session) so that window can never
+                # bleed across the overnight gap and fabricate a slope. Therefore
+                # those two dims are legitimately unavailable for the first ~25
+                # minutes of every session — arithmetic, as market_data's own
+                # docstring says, not a fault. v4.6 announced it at WARNING with
+                # "NOT L2.5-grade", which is alarm language for designed behaviour
+                # and fired 13 times fleet-wide at 09:30 on 2026-07-30. A warning
+                # that cries wolf every morning is how real ones get ignored.
+                # The distinction: EXPECTED = only window-dependent dims missing,
+                # and the 1m frame is still filling. Anything else stays a WARNING.
+                _WINDOW_DIMS = {RANGING, COMPRESSION}
+                _bars = 0 if df1m is None else len(df1m)
+                _warming = (bool(_missing)
+                            and set(_missing) <= _WINDOW_DIMS
+                            and _bars < RANGE_WINDOW_BARS)
                 if _l2_mute.get("why") != _why:
-                    logger.warning("L2.5 NOT committing — %s; falling back to the "
-                                   "v1.3 label. Conviction data logged while this "
-                                   "persists is NOT L2.5-grade.", _why)
+                    if _warming:
+                        logger.info(
+                            "L2.5 warming as designed — %s need a %d-bar 1m window "
+                            "and the frame holds %d (session-scoped by design, never "
+                            "padded across the overnight gap). v1.3 label in use "
+                            "until the window fills.",
+                            "+".join(sorted(_missing)), RANGE_WINDOW_BARS, _bars)
+                    else:
+                        logger.warning(
+                            "L2.5 NOT committing — %s; falling back to the v1.3 "
+                            "label. df_1m=%s. This is NOT the designed opening "
+                            "warm-up: conviction data logged while it persists is "
+                            "not L2.5-grade.", _why,
+                            "None" if df1m is None else _bars)
                     _l2_mute["why"] = _why
         except Exception as e:
             logger.warning("L2.5 integrator step failed (%s) — using v1.3 label", e)
@@ -576,7 +629,14 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
             conviction    = regime.conviction,
             macro_context = ctx["macro"].macro_context if ctx["macro"] else "NEUTRAL",
             adx           = regime.adx,
-            trigger       = trigger
+            trigger       = trigger,
+            # v4.8 — PROVENANCE IN THE ROW, not just in a bot.log tag. Which
+            # engine produced this label was previously recoverable only by
+            # grepping [L2 c=..]/[v13] out of the log, which is how "has L2.5
+            # ever committed?" became a 29-box, 138k-line archaeology exercise
+            # on 2026-07-30. It also makes the designed v1.3 opening window
+            # excludable from L2-conditioned fits by a WHERE clause.
+            engine        = "L2" if l2_label else "v13"
         )
 
     state.last_regime_name = regime.primary_regime

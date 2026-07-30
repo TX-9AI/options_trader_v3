@@ -167,7 +167,8 @@ class TradeLogger:
         conviction    REAL,
         macro_context TEXT,
         adx           REAL,
-        trigger       TEXT
+        trigger       TEXT,
+        engine        TEXT
     );
     """
 
@@ -210,12 +211,25 @@ class TradeLogger:
             ("flat_angle_deg",    "REAL DEFAULT 0.0"),
             ("swept_level_name",  "TEXT DEFAULT ''"),   # v-obs: swept level kind (sweep postmortems)
             ("level_strength",    "REAL DEFAULT 0.0"),
+            ("regime_engine",     "TEXT DEFAULT ''"),   # v-eng: WHICH engine labelled this
         ]:
             try:
                 conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {definition}")
                 conn.commit()
             except sqlite3.OperationalError:
                 pass  # Column already exists
+        # v-eng (2026-07-30) — regime_log gains `engine`. Until now NOTHING in the
+        # data said which engine produced a label: L2.5 vs the v1.3 fallback was
+        # recoverable only from a [L2 c=..]/[v13] tag in bot.log, so on 2026-07-30
+        # the question "has L2.5 ever run?" needed a fleet-wide log grep across
+        # 138k-line files. It also means every session's first ~25 minutes are
+        # v1.3-labelled by design (the RANGING/COMPRESSION 1m warm-up), and no fit
+        # could exclude them without this column. Provenance belongs in the row.
+        try:
+            conn.execute("ALTER TABLE regime_log ADD COLUMN engine TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
         conn.close()
 
@@ -470,13 +484,18 @@ class TradeLogger:
             """, (ts_for_db(), reason, session_losses, notes))
 
     def log_regime(self, regime: str, conviction: float,
-                   macro_context: str, adx: float, trigger: str):
+                   macro_context: str, adx: float, trigger: str,
+                   engine: str = ""):
+        """engine (v-eng): "L2" when the committed integrator label drove this
+        row, "v13" when the v1.3 classifier did. Defaulted so any older caller
+        still works — but an empty value means UNKNOWN provenance, not L2."""
         with self._connect() as conn:
             conn.execute("""
                 INSERT INTO regime_log
-                (logged_at, regime, conviction, macro_context, adx, trigger)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (ts_for_db(), regime, conviction, macro_context, adx, trigger))
+                (logged_at, regime, conviction, macro_context, adx, trigger, engine)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (ts_for_db(), regime, conviction, macro_context, adx, trigger,
+                  engine))
 
     def _get_field(self, trade_id: str, field: str):
         with self._connect() as conn:
