@@ -111,12 +111,35 @@ v1.3.3 — 2026-07-30 — LOG THE DECLINES (all of them). v1.3/v1.3.1 had THREE 
         (Third instance of this pattern: butterfly gates at DEBUG, ORB's
         "1 named level(s)", now continuation. A gate that cannot say why it
         declined cannot be diagnosed.)
+
+v1.4 — 2026-07-30 — STRIKE SELECTION. THE STRATEGY HAD NONE. generate_signal
+        built an OptionsSignal with no strike and no premium, so is_valid()
+        (strike > 0 and entry_premium > 0) rejected it every single tick and
+        main logged only "Invalid signal from ContinuationStrategy". Trend
+        Continuation has NEVER taken a trade. v1.1's defect-W note said both
+        paths "dead-ended before ever reaching strike selection" -- the gates
+        were fixed, the strike selection they were supposed to reach was never
+        written. Diagnosed on AMZN 2026-07-30: TRENDING_BULL 100%, FVG tagged,
+        HANDOFF fired, conv=1.00, signal regenerated every 15s all session,
+        zero fills.
+        The strike now sits a FRACTION OF THE EXPECTED MOVE out in the trend
+        direction, the fraction being a confluence of ADX (mechanical travel)
+        and regime conviction (the engine's agreement). Disagreement between
+        them pulls the strike back toward the money; only mutual agreement
+        pushes it out. EM is the ATM straddle -- the same basis the condor's
+        0.80xEM floor uses.
+        `trend_strike_plan()` is module-level ON PURPOSE so trade_readiness can
+        call it while a trade is merely STAGING -- awareness of what the chain
+        offers now and what it will offer if conviction reaches the fire bar,
+        rather than looking the chain up at the moment of the trigger.
+        Bounds fitted from the fleet archive; all OT_CONT_* env-overridable.
 """
 # v-runaway-fix (2026-07-24) — accepts runaway handoff_direction so it can enter on a flipped-off-trending label; conviction floor steps aside when the runaway (not the label) is the directional evidence.
 
 
 from __future__ import annotations
 
+import os
 import logging
 from typing import Optional
 
@@ -139,6 +162,106 @@ CONTINUATION_FVG_TAG_MIN     = 0.01   # cents the 1m wick must penetrate the FVG
 from config import CONTINUATION_STOP_LOSS_PCT   # 0.25 default
 CONTINUATION_TP_PCT          = 1.0    # nominal; runner is exhaustion-trailed, not TP-capped
 CONTINUATION_HANDOFF_CONV_RELAX = 0.10  # handoff path lowers the conviction floor by this
+
+
+
+# ── EM-anchored, confluence-scaled strike selection (v1.4) ───────────────────
+# Shared by the FIRING path (generate_signal) and the AWARENESS path
+# (trade_readiness._staged_pick), so the chain is inspected while the trade is
+# still queuing rather than at the moment of the trigger.
+#
+# The strike sits a FRACTION OF THE EXPECTED MOVE out in the trend direction.
+# The fraction is a confluence of two independent reads of trend strength:
+#   ADX        — mechanical: how hard is price actually travelling
+#   conviction — the confluence engine's agreement that this is a real trend
+# They can disagree, and the disagreement is informative: a high-ADX/low-conv
+# tape is a chop-driven spike, high-conv/low-ADX is structure without thrust.
+# Either pulls the strike BACK toward the money. Only when both agree does the
+# strike go far out. Same rising-sea-level logic, applied to construction.
+#
+# Bounds fitted from the fleet archive (2026-07-30, n=36 ADX / n=32 conviction):
+#   ADX  p25=24.7  p50=35.5  p75=47.3   (directional-only p25=35.4 p75=49.0)
+#   CONV p25=0.396 p50=0.445 p75=0.528 p90=0.587 max=0.831
+# ALL PRIOR — tune from continuation's own entries once it starts logging them.
+CONT_ADX_LO   = float(os.environ.get("OT_CONT_ADX_LO",   "25.0"))
+CONT_ADX_HI   = float(os.environ.get("OT_CONT_ADX_HI",   "50.0"))
+CONT_CONV_LO  = float(os.environ.get("OT_CONT_CONV_LO",  "0.40"))
+CONT_CONV_HI  = float(os.environ.get("OT_CONT_CONV_HI",  "0.60"))
+CONT_W_ADX    = float(os.environ.get("OT_CONT_W_ADX",    "0.6"))
+CONT_W_CONV   = float(os.environ.get("OT_CONT_W_CONV",   "0.4"))
+CONT_EM_FRAC_MIN = float(os.environ.get("OT_CONT_EM_FRAC_MIN", "0.25"))
+CONT_EM_FRAC_MAX = float(os.environ.get("OT_CONT_EM_FRAC_MAX", "0.75"))
+CONT_MIN_MARK    = float(os.environ.get("OT_CONT_MIN_MARK", "0.10"))
+
+
+def _ramp(x, lo, hi):
+    if hi <= lo:
+        return 1.0 if x >= hi else 0.0
+    return min(max((x - lo) / (hi - lo), 0.0), 1.0)
+
+
+def expected_move_from_straddle(chain, underlying):
+    """ATM call mark + ATM put mark — the market's own price for the day's range.
+    Same basis the condor uses. Returns 0.0 if unavailable; never raises."""
+    try:
+        calls = [c for c in getattr(chain, "calls", []) or [] if c.mark > 0]
+        puts  = [c for c in getattr(chain, "puts",  []) or [] if c.mark > 0]
+        if not calls or not puts or underlying <= 0:
+            return 0.0
+        atm_c = min(calls, key=lambda c: abs(c.strike - underlying))
+        atm_p = min(puts,  key=lambda c: abs(c.strike - underlying))
+        em = float(atm_c.mark) + float(atm_p.mark)
+        return em if em > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def trend_strike_plan(chain, direction, current_price, adx, conviction):
+    """Return a dict describing the strike this trade WOULD take right now.
+
+    Callable while the trade is merely staging (awareness) or at the moment it
+    fires. Reports chain availability and liquidity either way, so a setup that
+    is about to arm can be checked against a chain that can actually fill it.
+
+    Returns {'ok': bool, 'reason': str, 'contract': OptionContract|None, ...}.
+    Never raises.
+    """
+    out = {"ok": False, "reason": "", "contract": None, "em": 0.0,
+           "strength": 0.0, "em_frac": 0.0, "target_price": 0.0,
+           "adx_val": 0.0, "conv_val": 0.0, "n_liquid": 0}
+    try:
+        em = expected_move_from_straddle(chain, current_price)
+        out["em"] = em
+        if em <= 0:
+            out["reason"] = "no expected move (chain has no priced ATM straddle)"
+            return out
+
+        adx_val  = _ramp(float(adx or 0.0), CONT_ADX_LO, CONT_ADX_HI)
+        conv_val = _ramp(float(conviction or 0.0), CONT_CONV_LO, CONT_CONV_HI)
+        strength = CONT_W_ADX * adx_val + CONT_W_CONV * conv_val
+        em_frac  = CONT_EM_FRAC_MIN + (CONT_EM_FRAC_MAX - CONT_EM_FRAC_MIN) * strength
+        out.update(adx_val=adx_val, conv_val=conv_val,
+                   strength=strength, em_frac=em_frac)
+
+        offset = em * em_frac
+        target = current_price + offset if direction == "long" else current_price - offset
+        out["target_price"] = target
+
+        pool = getattr(chain, "calls", []) if direction == "long" else getattr(chain, "puts", [])
+        liquid = [c for c in (pool or []) if c.mark >= CONT_MIN_MARK]
+        out["n_liquid"] = len(liquid)
+        if not liquid:
+            out["reason"] = f"no liquid {'call' if direction == 'long' else 'put'} (mark >= {CONT_MIN_MARK})"
+            return out
+
+        best = min(liquid, key=lambda c: abs(c.strike - target))
+        out["contract"] = best
+        out["ok"] = True
+        out["reason"] = "ok"
+        return out
+    except Exception as _e:
+        out["reason"] = f"{type(_e).__name__}: {_e}"
+        return out
 
 
 class ContinuationStrategy(BaseOptionsStrategy):
@@ -318,6 +441,32 @@ class ContinuationStrategy(BaseOptionsStrategy):
             stop_loss_pct    = CONTINUATION_STOP_LOSS_PCT,
             tp_pct           = CONTINUATION_TP_PCT,
         )
+
+        # ── STRIKE SELECTION (v1.4) — the step that never existed ─────────────
+        # Without this the signal shipped with strike=0 / entry_premium=0 and
+        # main's is_valid() rejected it EVERY tick ("Invalid signal from
+        # ContinuationStrategy"), so the strategy re-signalled forever and never
+        # traded. Observed on AMZN 2026-07-30: valid setup, conv=1.00, signal
+        # regenerated every 15s for the whole session, zero fills.
+        _plan = trend_strike_plan(chain, direction, current_price,
+                                  getattr(regime, "adx", 0.0), regime.conviction)
+        if not _plan["ok"]:
+            logger.info(
+                f"[continuation] no strike: {_plan['reason']} "
+                f"(em={_plan['em']:.2f} liquid={_plan['n_liquid']})")
+            return None
+        _c = _plan["contract"]
+        signal.strike        = _c.strike
+        signal.entry_premium = _c.mark
+        signal.option_symbol = getattr(_c, "symbol", "") or getattr(_c, "option_symbol", "")
+        signal.contract      = _c
+        logger.info(
+            f"[continuation] strike {_c.option_type if hasattr(_c,'option_type') else option_side} "
+            f"{_c.strike} mark=${_c.mark:.2f} delta={getattr(_c,'delta',0.0):.3f} | "
+            f"em=${_plan['em']:.2f} frac={_plan['em_frac']:.2f} "
+            f"strength={_plan['strength']:.2f} "
+            f"(adx={_plan['adx_val']:.2f} conv={_plan['conv_val']:.2f}) "
+            f"target=${_plan['target_price']:.2f} liquid={_plan['n_liquid']}")
 
         # conviction: inherit regime conviction (trending is the whole thesis),
         # small bump for a clean midline tag + momentum re-assertion.
