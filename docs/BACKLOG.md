@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.18
+# docs/BACKLOG.md — v3.19
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -117,6 +117,39 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
 
 **✅ Thu Jul 30 — AFTER THE CLOSE — Y · Y.1 · Y.2 all resolved, see PART 3.**
 **⬜ Fri Jul 31**
+- `[DESK]` **AC — silent-decline punch list (named in v3.18, never dated).** A
+  sweep of `strategy/` found 26 `return None` paths. Most are regime-mismatch
+  gates that fire every tick and are silent deliberately. **Three can refuse a
+  QUALIFYING setup and say nothing**, which is how continuation sat dead for its
+  entire life and how AMZN passed a textbook TRENDING_BULL session without an
+  explanation: `butterfly_strategy.py:238` (find_strike — no liquid strike, the
+  butterfly dies with no reason given), `condor_roll.py:131`,
+  `iron_condor_strategy.py:288`.
+  **HOW:** each gets a single log line naming what it rejected and why, at the
+  level the surrounding path already uses. No behaviour change — a setup that is
+  declined today is still declined, it just says so.
+  **VALIDATE:** the line appears in `bot.log` the next time each path is taken.
+  For butterfly:238 that needs a COMPRESSION box with an illiquid chain, so it
+  may sit unproven for days — acceptable; the point is that when it happens
+  there is a record instead of silence.
+- `[DESK·DATA]` **AD — continuation v1.4 LIVE-FIRE verification (unproven).**
+  v1.4 landed ~14:00 ET 07-30 and closed the `Invalid signal` rejection path —
+  confirmed by zero occurrences in the hour after deploy. **The strategy actually
+  producing a signal is NOT proven**: no `[continuation] strike` line has ever
+  appeared, because the required conjunction (TRENDING + a 1m wick tagging an
+  unfilled 5m FVG) has not occurred since the fix.
+  **HOW/VALIDATE:** `echo "$(grep -c "\[continuation\] strike" ~/options-trader/bot.log)"`
+  across the fleet. A **`no strike: no expected move`** line is the failure
+  signature — it means the ATM straddle lookup returns nothing and the fix is
+  incomplete. Until a strike line appears, treat continuation as still untested,
+  not as fixed.
+- `[DESK]` **AE — `futures_trader_v1` carries the same `push.sh` and still has
+  the undefined-name hole.** The gate shipped here as push.sh v1.8/v1.9 plus
+  `install_tooling.sh` (see AB in PART 3). futures_trader_v1 ships the same file
+  and has neither. Its checkout was removed from control 07-29, so this needs a
+  clone. Not urgent — that project is dormant — but it must not resume without
+  the gate, since the two NameErrors that motivated it took a full ORB window and
+  an hour of one box.
 - `[DESK→DEPLOY]` **D (service half) — Templatize `shadow-observer.service`.** The unit hardcodes
   `/home/ubuntu/options-trader`; sed the path at install time like `setup_ec2.sh`
   does for `optionsbot.service`. Zero behavior change on the fleet (canonical path
@@ -385,6 +418,30 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   histogram + n, so the Aug 22 decision knows its power.
 
 **⬜ Sat Aug 8 – Sun Aug 9 (weekend calibration fit)**
+- `[DESK·DATA]` **AF — refit continuation's strike-selection CONVICTION bounds
+  (`OT_CONT_CONV_LO/HI`). Currently recorded only in the v3.18 changelog and
+  scheduled nowhere.** v1.4 places the strike a fraction of the ATM-straddle
+  expected move out, the fraction being a confluence of ADX and regime
+  conviction. The ADX half is fine — ADX is mechanical and engine-independent.
+  **The conviction half is not.** Its bounds (`CONV_LO=0.40 / CONV_HI=0.60`,
+  from archive p25 0.396 / p90 0.587) were fitted against a conviction
+  distribution that **changed on 2026-07-30**: L2.5 committed its first live
+  label at ~09:55 that morning, and every conviction value before it came from
+  the v1.3 fallback engine. So the strike distance is calibrated against an
+  engine the fleet no longer runs.
+  **HOW:** refit `CONV_LO/HI` from L2-engine conviction only —
+  `WHERE engine='L2'` on `regime_log` (main v4.8 stamps it), which is exactly
+  the filter W.1's quarantine defines. Do it in the same sitting as L1.11 and
+  L2.4: same corpus, same question, and all three are meaningless if fitted on
+  mixed-engine data.
+  **VALIDATE:** compare the refitted bounds against the v1.4 values. A large
+  move quantifies what the fallback-engine fit was worth; a small one says the
+  two engines' conviction distributions overlap more than expected — itself
+  worth knowing before the Aug 21 freeze.
+  **DO NOT** refit before there are enough L2 sessions. Per the pull_val rule,
+  accept a bound only where the raw distribution spans the behaviour the factor
+  measures; at Aug 8 that is ~7 sessions of real L2 conviction. If it looks thin,
+  say so and defer rather than fitting thin data and calling it calibrated.
 - `[DESK·DATA]` **L2.4 — Fit the integrator priors offline.** θ_commit/θ_hold/δ_displace,
   dt_max/τ_stale, per-regime τ_up/τ_dn0/λ — recomputed from the labeled-tape
   bar-count distributions (the RANGING τ_up=780 template), judged on the churn
@@ -823,6 +880,24 @@ file: everything above either ✅ or explicitly re-dated below.
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
 `docs/HISTORY.md` and the audits. Resolution date + fixing versions + the why.*
 
+- **AB ✅ 2026-07-30 — the deploy gate could not see undefined names.** The
+  box-side gate is `python -c "import ast"` (working agreement, after repeated
+  wrong-venv/no-pytest burns). `ast.parse` proves a file COMPILES — an undefined
+  name compiles fine and raises at RUNTIME — so the deploy path was structurally
+  blind to the class that cost two sessions in two days: continuation `mid`
+  (07-29; all 15 boxes took zero trades until 10:05, whole ORB window) and
+  butterfly `_mult` (07-30; IWM crash-looped an hour, regime-gated so 14 boxes
+  ran it clean). Closed in three parts — `tests/test_no_undefined_names.py`
+  (suite gate, zero tolerance, deliberate-failure tested and it catches `mid`
+  too); **push.sh v1.8** running pyflakes before the commit and REFUSING on any
+  hit, with a missing pyflakes also a refusal rather than a skip; and
+  **install_tooling.sh** + push.sh v1.9 so a checkout provisions its own
+  dependencies with or without a controller — needed because the gate's hard
+  dependency was never installed on the control checkout, which no script has
+  ever provisioned. A second undefined name in main.py (a quoted forward
+  reference, no runtime risk) was fixed with a TYPE_CHECKING import so the gate
+  runs at zero tolerance instead of carrying an exception list.
+  **Remaining half is open as AE:** futures_trader_v1 ships the same push.sh.
 - **W.0 / W.2 / V / T.2 ✅ 2026-07-30 — Thursday's four, with two found already
   shipped.** W.0: main v4.7 deployed fleet-wide, and L2.5 committed its first
   production label at ~09:55 ET after the designed 25-bar warm-up — the first in
@@ -1020,6 +1095,29 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.19 — 2026-07-30 — THREE THINGS THAT EXISTED ONLY AS PROSE ARE NOW DATED
+  ITEMS, and AB is recorded as resolved.** v3.18 correctly captured the
+  continuation finding, but three of its consequences lived only in the
+  changelog, where nothing will ever prompt anyone to act on them: the
+  **silent-decline punch list** (now **AC**, Fri Jul 31 — three paths that can
+  refuse a qualifying setup in silence, named with file and line), **v1.4's
+  live-fire verification** (now **AD** — the rejection path is confirmed closed;
+  the strategy actually firing is NOT proven, and a `no strike: no expected move`
+  line would mean the fix is incomplete), and the **conviction-bound refit** (now
+  **AF**, Aug 8–9 alongside L1.11/L2.4 — `OT_CONT_CONV_LO/HI` were fitted against
+  fallback-engine conviction, and L2.5 replaced that engine on the morning of
+  07-30, so the strike distance is calibrated against an engine the fleet no
+  longer runs).
+  **AB recorded as resolved** with its open half split out as **AE**
+  (futures_trader_v1 ships the same push.sh and still has the hole).
+  **PROCESS NOTE, because it nearly cost this file real content:** an earlier
+  v3.18 from a parallel thread added AB and was never committed — the tarball was
+  delivered, the conversation moved on to the push.sh code, and the backlog edit
+  was simply never applied. Nothing was overwritten and no thread did anything
+  wrong; the item just evaporated between delivery and landing. **Any backlog
+  delivery should lead with `git pull --ff-only && head -1 docs/BACKLOG.md`** so
+  a version that is not what the edit expects refuses rather than silently
+  diverging — and so an unlanded edit is visible immediately.
 - **v3.18 — 2026-07-30 — CONTINUATION HAD NO STRIKE SELECTION. It has never
   taken a trade, on any box, since it was written.** Found by asking why AMZN sat
   out a textbook FVG pullback in a clean uptrend. `generate_signal` built an
