@@ -1,6 +1,43 @@
-# docs/BACKLOG.md — v3.11
+# docs/BACKLOG.md — v3.13
 
 **CHANGELOG**
+- **v3.13 — 2026-07-30 — EVM instrumented, and the first reading closed both
+  late DESK items.** `tests/evm_status.py` reports earned value against this
+  file, with the adaptation that makes it honest here: **schedule variance is
+  split by cause.** SPI(all) is calendar truth; **SPI(desk) is accountability**
+  — of the work that was ours to move, how much moved. A late `[DESK·DATA]`
+  item is a DC&A dependency, not an execution failure, and averaging the two
+  produces a number that cannot be acted on.
+  First run found two things immediately. It reported **SPI 2.53** — impossible,
+  and the cause was that PART 3's resolved register duplicates every item
+  already marked ✅ in PART 1, so earned value exceeded the baseline. A metric
+  that can exceed its own BAC is measuring the document, not the project; the
+  parser now reads the schedule only. **That duplication is real and still
+  present in this file** — it is what makes it balloon, and it is worth removing
+  in a later pass.
+  Corrected reading: **BAC 64 · PV 15 · EV 15 · SV 0 · SPI(all) 1.00** — on
+  plan. But **SPI(desk) was 0.00**: both DESK items due were open. **Y** was
+  simply never marked (it landed and was verified at the 07-30 wake) and **Y.2**
+  was genuinely outstanding — now shipped as emit **v1.5.0**. Both closed, so
+  the controllable index is clean.
+  Gate pressure, stated plainly: 13 DESK items fall on or before the **Aug 21
+  freeze**, 22 days out — **0.59/day, which the tool rates TIGHT.** DESK·DATA
+  and FLEET unblock themselves; the DESK pile does not.
+- **v3.12 — 2026-07-30 — EVERY OPEN ITEM TAGGED BY WHAT IT REQUIRES. Dates and
+  order untouched** — the trajectory is the plan and it stays exactly as it was.
+  All 49 open items now carry `[DESK]` / `[DESK→DEPLOY]` / `[DESK·DATA]` /
+  `[FLEET]`, so filling a light session is a grep instead of a reading exercise.
+  **The split: 16 DESK · 7 DESK→DEPLOY · 20 DESK·DATA · 6 FLEET.**
+  The point of the tagging: **DESK is the only bucket under our control.**
+  DESK·DATA unblocks itself on the calendar and FLEET waits for a window — so
+  the 16 DESK items are the whole of what effort can move. Drive them to zero
+  and the Aug 21 freeze waits on data alone rather than on us.
+  Flagged while classifying: **item I is an UNREACHABLE BRANCH**
+  (`can_enter(is_butterfly=...)` — the main.py call site never passes it),
+  scheduled Aug 17 as a tidy-up. That is the same defect class as
+  `_REGIME_ENGINE == "L2"`, which cost the entire L2.5 history. Two of these in
+  one week is a pattern, and `swallow_audit` does not catch it — it answers
+  "does it say so when it fails?", not "does it run at all?"
 - **v3.11 — 2026-07-30 — MARKER CORRECTION (caught by the user).** v3.10 wrote
   a day header asserting "every item below is resolved" and left every
   individual bullet unmarked — W.0 still reading 🔴🔴 — while W.1 was in fact
@@ -292,6 +329,16 @@ Jul 30).
 
 ## PART 1 — THE SCHEDULE (open items, in accomplishment order)
 
+**TAGS — what each open item actually requires.** Grep one to fill a session:
+`[DESK]` self-contained, no fleet, no data wait — workable ANY day, today included.
+`[DESK→DEPLOY]` build is desk work but needs a bake to take effect → deploy Monday.
+`[DESK·DATA]` desk work, blocked only until enough sessions accrue.
+`[FLEET]` needs boxes up or a deploy pass — cannot be done from the desk.
+The DESK pile is the only part of this list under our direct control; DESK·DATA
+unblocks itself on the calendar. Drive DESK to zero and the freeze waits on data
+alone, not on us.
+
+
 ### EPOCH 1 — SCRUB & INSTRUMENT — Wed Jul 29 → Sun Aug 9
 
 *Goal: suite green, canaries current, time-critical data harvested, the two
@@ -366,7 +413,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   engine; (c) the canary set proves it can't return on a stale sync.
   **DEPLOY:** after the close with the day's other syncs — this needs a
   fleet restart and must not happen mid-session.
-- **W.1 — 🔴 QUARANTINE ALL PRE-2026-07-30 L2 DATA. The scope is the entire
+- `[DESK·DATA]` **W.1 — 🔴 QUARANTINE ALL PRE-2026-07-30 L2 DATA. The scope is the entire
   project history, not one session.** This item was written as "quarantine
   07-29" when we believed the L2.5 outage began with the 07-28 excavation. The
   v4.7 root cause proved otherwise: `_REGIME_ENGINE` was `.lower()`ed to `"l2"`
@@ -513,7 +560,8 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   From Sep 1, the live fill-quality audit takes over as the permanent validator.
 
 **⬜ Thu Jul 30 — AFTER THE CLOSE**
-- **Y — 🔴 LAND THE DURABLE FIX (3 parts, 2 repos, all committed code).** The
+- **Y — ✅ 2026-07-30. All three parts landed and verified: Y-a orchestrator v0.3.0→v0.3.2 (freshness guard + fallback repointed + mock guard), Y-b the live 09:00 timer AND the installer, Y-c `DTP_REPORT_JSON` in both `.env` and the install.sh heredoc. Confirmed live at the 07-30 wake: fresh brief-driven cohort with varying per-symbol strengths.** Original text follows.
+  🔴 LAND THE DURABLE FIX (3 parts, 2 repos, all committed code). The
   env-var-only version of this item was WRONG and is withdrawn: `install.sh`
   overwrites `~/market-brief/.env` wholesale from a heredoc, so a hand-edit dies
   at the next reinstall or on any new instance. Nothing load-bearing lives in a
@@ -556,7 +604,8 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   went 29 tickers → 28, so confirm nothing downstream assumes 29.
 - **Y.1 — ✅ folded into Y-a.** The unreachable fallback is fixed in the same
   patch rather than as a separate change.
-- **Y.2 — Optional hygiene in `market_brief_v1/report/emit.py`, whenever that
+- **Y.2 — ✅ 2026-07-30 as emit v1.5.0: `_default_path()` now resolves explicit `path=` → `$DTP_REPORT_JSON` → the CONSUMER (`~/day_trader_pro/data/report.json`) when that tree exists, with cwd surviving only for a standalone brief install. All three branches tested. No longer 'optional' — the cwd default is precisely what let two projects point at different files for 23 days in silence.** Original text follows.
+  Optional hygiene in `market_brief_v1/report/emit.py`, whenever that
   repo is next open.** `_default_path()` falls back to
   `os.getcwd()/report.json`. A producer defaulting to its own working directory
   is precisely how three weeks of reports went somewhere nothing read. Point the
@@ -568,7 +617,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
 - **X — ✅ SOLVED 2026-07-29 (same evening it was filed). See Part 3. Superseded
   by item Y below, which lands the fix.**
 
-- **D (service half) — Templatize `shadow-observer.service`.** The unit hardcodes
+- `[DESK→DEPLOY]` **D (service half) — Templatize `shadow-observer.service`.** The unit hardcodes
   `/home/ubuntu/options-trader`; sed the path at install time like `setup_ec2.sh`
   does for `optionsbot.service`. Zero behavior change on the fleet (canonical path
   matches); closes the last half of defect D before any non-standard-path deploy.
@@ -578,7 +627,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   with existing tooling — option 14 `systemctl cat shadow-observer | grep
   WorkingDirectory` fleet-wide, all 29 identical before and after. No dataset
   needed beyond the fleet's own units.
-- **E (build) — `VWAP_FILTER_ACTIVE` hard gate, on the TESTER.** The genesis
+- `[DESK]` **E (build) — `VWAP_FILTER_ACTIVE` hard gate, on the TESTER.** The genesis
   constant that was never wired: VWAP misalignment today costs 11 points against a
   55 bar and cannot veto (a short into strength still fires at Grade B).
   `crypto_trader` learned this the hard way — shorts above VWAP / longs below VWAP
@@ -598,7 +647,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   rejection ledger's forward outcomes label every block dodged-a-loss vs
   missed-a-winner. If blocked trades aren't net-negative on the holdout, the gate
   ships OFF as a log-only counter — evidence decides, per house rule.
-- **F (build) — `MIN_RRR` floor, on the TESTER.** Second genesis constant, same
+- `[DESK]` **F (build) — `MIN_RRR` floor, on the TESTER.** Second genesis constant, same
   story. The ORB's RRR is structural and varies per setup, currently ungated. Build
   the floor env-tunable, applied at scoring for non-ORB paths; log-only counter for
   the ORB first (measure how often a structural ORB would fail it before gating a
@@ -612,7 +661,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   is a distribution + outcome question `conditional_tables` can answer (RRR decile
   × win rate × expectancy), and the Aug 1 retro ledger reconstructs RRR for
   historical trades via the replay harness (real engines, as-of stops/targets).
-- **N.2 — NEW: journal `rrr` + gate-block dispositions (instrumentation for E + F,
+- `[DESK→DEPLOY]` **N.2 — NEW: journal `rrr` + gate-block dispositions (instrumentation for E + F,
   built with them, deploys Mon Aug 3).** Verified at HEAD: `scored` events carry
   quote context and vwap but **no risk-reward number**, and `disposition` has no
   gate-block reason vocabulary — so E and F would fire (or not) invisibly, and
@@ -623,7 +672,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   the same Aug 3 pass so the distribution accumulates from day one.
   **VALIDATE:** self-validating on day one (fields present in the harvested
   jsonl); becomes the substrate for the Aug 18 / L3.2 / L3.4 gate audits.
-- **N.3 — NEW: capture `closes_beyond` at entry on sweep trade rows
+- `[DESK→DEPLOY]` **N.3 — NEW: capture `closes_beyond` at entry on sweep trade rows
   (instrumentation for the Aug 18 evidence day, built today, deploys Mon Aug 3).**
   Verified at HEAD: trades.db carries adx/conviction/flat-angle/level_strength but
   **not** the reclaim's `closes_beyond` count — yet the Aug 18 "reclaim looseness"
@@ -637,7 +686,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   the retro replay (approximate) cross-checks the capture on the overlap.
 
 **⬜ Sat Aug 1**
-- **E + F tester proof.** Replay both gates over the banked 07-13→07-31 tape:
+- `[DESK·DATA]` **E + F tester proof.** Replay both gates over the banked 07-13→07-31 tape:
   enumerate every historical trade each gate would have blocked, with outcomes.
   DONE = a would-have-blocked ledger showing the gates remove net-negative trades
   (if they don't, the defaults ship OFF and the gates ship as log-only counters —
@@ -650,7 +699,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   **VALIDATE:** the ledger IS the validation artifact — per gate: n blocked, net
   P&L of blocked, win rate of blocked vs admitted, on fit and holdout separately.
   Ship-ON bar: blocked population net-negative on the HOLDOUT, not just the fit.
-- **S / L1.9 — BOOKMARK build starts, on the TESTER.** Rolling ~15-session window
+- `[DESK]` **S / L1.9 — BOOKMARK build starts, on the TESTER.** Rolling ~15-session window
   of **bars** per symbol (bars, not engine state — the engines are stateless),
   load+append+roll each EOD, score today warm. This unblocks honest offline
   TRENDING and everything L1.6/L1.11 need.
@@ -669,7 +718,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   is proven when that gap closes without RANGING/COMPRESSION shares moving.
 
 **⬜ Sun Aug 2**
-- **L1.9 bookmark tester proof.** Run against copies of real `ohlc/<date>/`
+- `[DESK]` **L1.9 bookmark tester proof.** Run against copies of real `ohlc/<date>/`
   folders; prove byte-inert on the diary for warm-irrelevant days and prove the
   EOD conductor chain is untouched. The conductor is finally flawless — it stays
   that way.
@@ -677,7 +726,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   conductor untouched proven by a full dry-run of the chain on the tester with the
   bookmark grafted onto a *copy* of validate_regime.sh, diffing every artifact
   path it writes.
-- **M.3 — Dedicated Telegram bot for options-trader notifications.** Promoted from
+- `[DESK→DEPLOY]` **M.3 — Dedicated Telegram bot for options-trader notifications.** Promoted from
   nice-to-have to **go-live requirement**: live trading needs its own paging channel
   before Aug 31. Build today, live-test Thu Aug 27.
   **HOW:** new bot token; fleet-wide .env rotation via the existing
@@ -700,14 +749,14 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   from `conditional_tables` (existing nightly artifact); gate-block dispositions
   visible in that night's harvested journal = the gates are alive; N.3 column
   populating on any sweep = capture alive.
-- **TC.4 (T+1wk) — readiness digest check.** `_trend_credit_spread` journal has
+- `[DESK·DATA]` **TC.4 (T+1wk) — readiness digest check.** `_trend_credit_spread` journal has
   been accumulating since 07-28; confirm fleet-wide capture is clean.
   **HOW/VALIDATE:** run `readiness_digest` over the harvested journal; per-symbol
   row counts > 0 on every traded box, impulse-SD distribution non-degenerate.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
-- **L1.9 — Graft the proven bookmark onto `validate_regime.sh`**, then run
+- `[DESK]` **L1.9 — Graft the proven bookmark onto `validate_regime.sh`**, then run
   `regime_backfill --rebuild` to re-score all dated diary rows warm. DONE = the
   diary reads TRENDING honestly on the days live boxes did.
   **HOW:** graft = the proven copy from Aug 2 replaces the live script (full-file,
@@ -717,7 +766,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   under-report signature is gone on the days the live boxes trended (e.g. the
   07-17+ AVGO sessions), with chop days unchanged. Both series are on control;
   the check is a query.
-- **TC.4 — SD-bounds fit PR.** Run `readiness_digest`, fit
+- `[DESK·DATA]` **TC.4 — SD-bounds fit PR.** Run `readiness_digest`, fit
   aware/established/screaming SD bounds + room/extension bounds + corroborator
   weights from the observed distribution. Priors → calibrated knobs (env flips, no
   bake). The firing engine stays unbuilt — gated on the L1 excavation and the
@@ -734,7 +783,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   danger band. All from the existing readiness journal + OHLC; no gap.
 
 **⬜ Wed Aug 5**
-- **Historical ADX reconstruction.** Timestamp-join `regime_log` → trades to
+- `[DESK]` **Historical ADX reconstruction.** Timestamp-join `regime_log` → trades to
   backfill `adx_at_entry` on pre-07-27 rows (deferred at the 07-24 fix; the warm
   rebuild makes it worth doing now). Offline, control-side.
   **HOW:** nearest-preceding-timestamp join per symbol, tolerance ≤ 60s, off the
@@ -745,7 +794,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   reconstruction error distribution on that overlap qualifies (or disqualifies)
   the backfill. |err| p90 < 2 ADX points = trustworthy; worse = tag the backfilled
   rows excluded from calibration queries.
-- **L1.6 (first pass) — flat-angle sweep.** 16–26° against the rebuilt multi-day
+- `[DESK·DATA]` **L1.6 (first pass) — flat-angle sweep.** 16–26° against the rebuilt multi-day
   diary (07-14 → 08-04) with the rotating 30% holdout — never off one day. Output:
   the candidate frozen cut, staged for the Aug 10 deploy.
   **HOW:** sweep the cut over the warm-rebuilt diary, scoring each candidate on
@@ -758,7 +807,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   wins on its fit set is unproven and the 20° default stands.
 
 **⬜ Thu Aug 6**
-- **Level hierarchy + Overnight High/Low — build on the TESTER** (queued 07-24).
+- `[DESK]` **Level hierarchy + Overnight High/Low — build on the TESTER** (queued 07-24).
   Add `overnight_high`/`overnight_low` (extremes across the Asia+London span) to
   LiquidityMap as a named tier; replace the flat `is_named` bool with graded
   `level_strength` per the stated hierarchy: **ON H/L ≈ PDH/PDL (top) > historic
@@ -775,7 +824,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   tier). Expect ON-tier n to be thin by Aug 18 — the tier's *rank* is revisable at
   the Sep 7 analysis day when n supports it. The hierarchy's non-ON tiers ARE
   retro-checkable from banked sweeps (level_strength captured since 07-24).
-- **N.6 — NEW: extended-hours-bars audit (gates the ON H/L source).** Verified at
+- `[FLEET]` **N.6 — NEW: extended-hours-bars audit (gates the ON H/L source).** Verified at
   HEAD that nothing asserts the feed_store contains non-RTH bars: candle_feed
   backfills by calendar start-times (so ETH bars for equities likely arrive from
   DXFeed), but `market_data` session-scopes 1m and the OHLC CSVs are RTH-only —
@@ -788,21 +837,21 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   the ON tier degrades to PDH/PDL for those symbols by design, and if the tier is
   wanted fleet-wide a boot-time DXFeed ETH history pull gets scheduled as its own
   post-freeze item rather than silently shipping empty levels.
-- **Sweep level_strength — first look.** 07-27→08-06 sweeps bucketed by
+- `[DESK·DATA]` **Sweep level_strength — first look.** 07-27→08-06 sweeps bucketed by
   `level_strength` (the capture shipped 07-24). Observation checkpoint only; n is
   still small. No action.
   **VALIDATE:** existing capture + conditional_tables; checkpoint records n per
   bucket so Aug 18's power is known in advance.
 
 **⬜ Fri Aug 7**
-- **Level hierarchy tester proof complete.** Inert where it should be; the
+- `[DESK]` **Level hierarchy tester proof complete.** Inert where it should be; the
   postmortem buckets become meaningful only once the tiered value flows.
   **HOW/VALIDATE:** replay banked sessions through the tester mapper — every
   sweep that fired at HEAD still fires with the graded value, `is_named`-shim
   parity 100% (byte-inert on decisions, richer on capture). Fixture = the banked
   07-24→08-06 sweep set with recorded level_strength; the graded scorer must
   reproduce the recorded coarse values on the overlap.
-- **L1.7 Tier-B ledger check.** With the warm rebuild + three weeks of labels:
+- `[DESK·DATA]` **L1.7 Tier-B ledger check.** With the warm rebuild + three weeks of labels:
   which rows close? TRENDING should now be closable if any labeled trend day
   exists 07-14→08-07; SWEEP needs one mapper-confirmed named-zone reclaim;
   COMPRESSION needs a coil-into-pin session; BREAKOUT needs one more clean hold
@@ -811,13 +860,13 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   **HOW/VALIDATE:** pure evidence review over collected artifacts — warm diary ×
   auto_label labels; each Tier-B row's bar is stated in VALIDATION.md §2 and the
   diary prints the numbers. No new framework; the framework is why these close.
-- **G (data checkpoint).** Snapshot the `retest_depth` distribution (3 weeks
+- `[DESK·DATA]` **G (data checkpoint).** Snapshot the `retest_depth` distribution (3 weeks
   accumulated). No decision yet — that's Aug 22.
   **VALIDATE:** existing `retest_check` journal events since 07-18; snapshot =
   histogram + n, so the Aug 22 decision knows its power.
 
 **⬜ Sat Aug 8 – Sun Aug 9 (weekend calibration fit)**
-- **L2.4 — Fit the integrator priors offline.** θ_commit/θ_hold/δ_displace,
+- `[DESK·DATA]` **L2.4 — Fit the integrator priors offline.** θ_commit/θ_hold/δ_displace,
   dt_max/τ_stale, per-regime τ_up/τ_dn0/λ — recomputed from the labeled-tape
   bar-count distributions (the RANGING τ_up=780 template), judged on the churn
   metric, never P&L. This closes the L2.5-shipped-ahead-of-L2.4 inversion the
@@ -831,7 +880,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   the N.1-harvested regime_log, nightly, against the offline prediction. A live
   churn that diverges from the offline fit within 3 sessions = the fit was
   overfit; the freeze-window clean/broken verdict cites this number.
-- **L1.11 — Fit the remaining ramps** (`flat_s` on its conditional population;
+- `[DESK·DATA]` **L1.11 — Fit the remaining ramps** (`flat_s` on its conditional population;
   `adx_s`/`align_val` from warm-bookmark or live `feed_store.db` depth — the L1.9
   gate is now open). Stage into the same calibration PR.
   **HOW:** `ramp_calibration.py` (existing) over the warm-rebuilt diary — the
@@ -870,7 +919,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   verdict on Aug 21 is written from them, not from impressions.
 
 **⬜ Tue Aug 11**
-- **L3.1 close-out.** Confirm `signal_journal` jsonl captures full fleet sessions;
+- `[FLEET]` **L3.1 close-out.** Confirm `signal_journal` jsonl captures full fleet sessions;
   the harvest pull landed 07-27 (v0.5.0) — verify the conductor phase reports it
   and the manifest counts match boxes-run. Log-only; freeze-safe.
   **HOW/VALIDATE:** per-box event counts × session from the harvested jsonl;
@@ -879,7 +928,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   end-to-end.
 
 **⬜ Wed Aug 12**
-- **P3 phase 1 — index-context broadcast, log-only.** Control-side writer pushes
+- `[DESK→DEPLOY]` **P3 phase 1 — index-context broadcast, log-only.** Control-side writer pushes
   SPX/QQQ regime+conviction via the existing `brief_flags.json` pattern; one
   journaled field on every `scored` event. `conditional_tables.py` grows the
   index-confluence dimension for free. Ungated, freeze-safe.
@@ -894,7 +943,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   of a session.
 
 **⬜ Thu Aug 13**
-- **L3.2 — rejection ledger build starts.** `analysis/rejection_ledger.py` +
+- `[DESK]` **L3.2 — rejection ledger build starts.** `analysis/rejection_ledger.py` +
   `reports/rejection_summary_<date>.jsonl` + digest. Class (a) threshold near-miss
   consolidation from L3.1 events; prove the forward-outcome join leak-free on a
   known session (outcomes only from post-decision bars). Version-hash every row.
@@ -909,7 +958,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   raw journal reject counts. All inputs already harvested nightly.
 
 **⬜ Fri Aug 14**
-- **P5.3 — run `chain_reconstruction_check`** on ~3 weeks of archive. PASS → build
+- `[DESK·DATA]` **P5.3 — run `chain_reconstruction_check`** on ~3 weeks of archive. PASS → build
   ChainReplay (post-freeze); PARTIAL → grid restricted to the validated moneyness
   band, stated in the header; FAIL → the missing piece is named by the `+vega·ΔIV`
   column (IV-path model vs cadence) and gets a date before any harness work.
@@ -917,7 +966,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   its inside-spread rate, stratified by moneyness/hour/|ΔS|, is the verdict — and
   it only runs because P5.1/N.1's harvest landed Jul 30. Whatever the verdict, it
   is written into the ROADMAP P5 header the same day.
-- **N.4 — NEW: paper-fill realism audit (validates T.2 + the R slippage default,
+- `[DESK·DATA]` **N.4 — NEW: paper-fill realism audit (validates T.2 + the R slippage default,
   before any live fill exists).** The framework to test paper-fill honesty against
   reality was missing until the chain archive reached control; it exists now.
   **HOW:** offline control-side tool (conditional_tables idiom, stdlib): for every
@@ -932,7 +981,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   the same comparison schema so paper-vs-live divergence is one diff.
 
 **⬜ Sat Aug 15 – Sun Aug 16**
-- **L3.2 finish.** Class (b) coverage-gap scan (per strategy: was a live setup
+- `[DESK·DATA]` **L3.2 finish.** Class (b) coverage-gap scan (per strategy: was a live setup
   present during its target condition with no signal formed?); both classes
   populating across a fleet session. Pre-freeze rows tagged gap-finder grade;
   post-freeze rows will be calibration grade.
@@ -945,7 +994,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   it unprompted. Finding the known gap = the scanner works; then fleet-wide.
 
 **⬜ Mon Aug 17** *(no deploy — freeze holds)*
-- **K — re-arm decision, on paper.** Decide between the current deliberate
+- `[DESK·DATA]` **K — re-arm decision, on paper.** Decide between the current deliberate
   hand-off-to-sweep and the unified rule ("re-arm on any invalidation before
   11:00; the origin gate decides whether a break is real" — the v3.5 origin gate
   makes runaway re-arm safe by construction). Write the decision here; any code is
@@ -957,7 +1006,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   pattern); the decision memo cites n, win share, and net R of the counterfactual
   entries. Thin n → keep the current handoff (rule 12: thin samples find
   mechanisms, not conclusions).
-- **I — butterfly cutoff branch decision.** `can_enter(is_butterfly=...)` is
+- `[DESK]` **I — butterfly cutoff branch decision.** `can_enter(is_butterfly=...)` is
   unreachable; either fix the `main.py` call site (if a 15:00 butterfly cutoff is
   ever wanted) or delete the branch so config and code stop disagreeing. Decision
   today; code post-freeze.
@@ -965,7 +1014,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   distribution (trades.db). If no fill has ever wanted the 15:00 window, delete
   the branch (loose-code principle); if late entries exist and lost, wire the call
   site. Data decides a two-line decision.
-- **AA checkpoint.** Any two-sided condor with both legs near-simultaneous since
+- `[DESK·DATA]` **AA checkpoint.** Any two-sided condor with both legs near-simultaneous since
   07-17? Post-fix sample was 7 legs at last count. If clean through ~4 weeks,
   close AA as superseded-by-Y+rich-triggers; if recurred, it gets a forensic slot
   Aug 22.
@@ -974,18 +1023,18 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   identical underlying_entry. Existing data (and now date-clean).
 
 **⬜ Tue Aug 18 — sweep evidence day (the decision the whole sweep track waits on)**
-- **Level-conviction lead:** win-rate/expectancy by `level_strength` bucket at
+- `[DESK·DATA]` **Level-conviction lead:** win-rate/expectancy by `level_strength` bucket at
   ~3 weeks of current-engine data. If equal-H/L sweeps are the losers → a
   level_strength floor on the sweep gate is confirmed.
   **VALIDATE:** existing capture (07-24) × conditional_tables cells with Wilson
   intervals; the Aug 6 checkpoint already told us the per-bucket n, so today's
   verdict is stated with its power, not just its point estimate.
-- **Reclaim looseness:** do losing sweeps carry higher `closes_beyond` than
+- `[DESK·DATA]` **Reclaim looseness:** do losing sweeps carry higher `closes_beyond` than
   winners? If yes → require `closes_beyond == 0` post-reclaim (or hold-N-candles).
   **VALIDATE:** **N.3's exact per-trade capture** (live since Aug 3, ~2 weeks) +
   the replay-reconstructed values for older trades on the overlap. This question
   was unanswerable from collected data before N.3 — that was the point of N.3.
-- **Exit asymmetry / washout fingerprint:** does 75%-win/negative-net hold on the
+- `[DESK·DATA]` **Exit asymmetry / washout fingerprint:** does 75%-win/negative-net hold on the
   current engine? Stop-width vs winners' realized magnitude; washout-day regime
   tags.
   **VALIDATE:** existing MFE/MAE telemetry (max/min_premium_seen) + excursion
@@ -997,7 +1046,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   hasn't convicted.
 
 **⬜ Wed Aug 19**
-- **Build the confirmed sweep changes on the TESTER** (level_strength floor and/or
+- `[DESK→DEPLOY]` **Build the confirmed sweep changes on the TESTER** (level_strength floor and/or
   reclaim tightening and/or stop tightening — only what Aug 18 convicted). Mapper/
   strategy logic → tester-first, deploy Mon Aug 24.
   **HOW:** each convicted change behind its own env knob (`OT_SWEEP_LS_FLOOR`,
@@ -1009,7 +1058,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   validator for every gate this file ships.
 
 **⬜ Thu Aug 20**
-- **L3.3 — gate matrix behind a flag, built + tester.** `fires iff regime ∈
+- `[DESK]` **L3.3 — gate matrix behind a flag, built + tester.** `fires iff regime ∈
   permissive AND C ≥ bar(trade_type)` in dispatch; provisional bars ORB/sweep
   ~0.40, condor ~0.65, butterfly ~0.70; flag-off byte-identical to today. Deploys
   Mon Aug 24, paper.
@@ -1021,7 +1070,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   flag-on paper week → blocked set enumerated in the L3.2 ledger with forward
   outcomes; bars judged on L3.4's marginal-expectancy curve (conditional_tables,
   holdout enforced Aug 22) on BOTH precision and recall axes.
-- **N.5 — NEW: fill-latency telemetry (the TC.2 stop-trigger dataset — must exist
+- `[DESK→DEPLOY]` **N.5 — NEW: fill-latency telemetry (the TC.2 stop-trigger dataset — must exist
   before the live week that is supposed to produce it).** Verified at HEAD:
   FillResult carries confirmation but **no submit→fill timing**, and trades.db has
   no latency columns — yet Sep 1–4's plan says "ladder fill-latency logged" and
@@ -1050,7 +1099,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   (the only rows that are decision-grade).
 
 **⬜ Sat Aug 22 – Sun Aug 23**
-- **G — decision.** Feed `retest_depth` into `orb_quality` or drop it: 5 weeks of
+- `[DESK·DATA]` **G — decision.** Feed `retest_depth` into `orb_quality` or drop it: 5 weeks of
   distribution + the Phase-3 ROI buckets now exist to answer it. Decide from the
   data; the measurement gates nothing until then.
   **HOW/VALIDATE:** join `retest_check`/`retest_depth_px` (journal, since 07-18)
@@ -1058,7 +1107,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   units. Monotone edge with n per bucket ≥ the min-n bar → feed into the A/B
   grade; flat → drop the field from scoring (keep the capture). The join is the
   framework and both sides are already collected.
-- **L3.5 — enforce the holdout in the bucketer.** Fit sessions ≠ acceptance
+- `[DESK]` **L3.5 — enforce the holdout in the bucketer.** Fit sessions ≠ acceptance
   sessions inside `conditional_tables.py`; slippage-haircut P&L only. The Aug 31
   descent bars come from held-out cells or they don't come.
   **HOW:** session-hash split inside the tool (deterministic, seeded), every
@@ -1066,7 +1115,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   haircut if it landed.
   **VALIDATE:** self-demonstrating — the tool's own report shows the same cell on
   both splits; a cell that collapses on holdout is the guard working.
-- **Live shakedown prep:** broker account funded · `configure.sh` mode-switch
+- `[FLEET]` **Live shakedown prep:** broker account funded · `configure.sh` mode-switch
   dry-run (defect-Q archive machinery fires, `trades_<mode>_<stamp>.db` lands) ·
   tiny-size live config staged (1-contract sizing, SPX + QQQ only) · **J
   (disposition):** the 07-23 header audit restored title/changelog sync; accept
@@ -1089,7 +1138,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   gate-matrix blocks with forward outcomes.
 
 **⬜ Tue Aug 25**
-- **Mode-isolation live-switch rehearsal on ONE box.** Switch paper→live→paper;
+- `[FLEET]` **Mode-isolation live-switch rehearsal on ONE box.** Switch paper→live→paper;
   verify defect-Q end-to-end: archives created, mode-scoped queries return zero
   cross-mode rows, no paper row visible to the live loop, breaker reads only live
   P&L.
@@ -1100,7 +1149,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   Existing machinery under test; the seeded-row check is the addition.
 
 **⬜ Wed Aug 26**
-- **Entry/exit path shakedown vs the resolved audit (N/O/P).** Re-run
+- `[DESK]` **Entry/exit path shakedown vs the resolved audit (N/O/P).** Re-run
   `test_entry_fill_confirmation`, `test_roll_is_real`, `test_mode_isolation` at
   HEAD; walk the order_confirm deadlines, cancel-and-walk-away, partial booking,
   and paging paths against the tiny-account config on paper.
@@ -1110,12 +1159,12 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   before it matters.
 
 **⬜ Thu Aug 27**
-- **M.3 — Telegram bot live test** (built Aug 2): pages route to the dedicated
+- `[FLEET]` **M.3 — Telegram bot live test** (built Aug 2): pages route to the dedicated
   options-trader channel; half-complete-roll and phantom-P&L pages verified.
   **VALIDATE:** the Aug 2 drill plan executed — induced half-complete roll page,
   induced phantom-P&L page, fallback-channel test. Transcript archived in the
   runbook.
-- **M.1/M.2 — Windows residue documented.** Ghost folder on tarball extraction +
+- `[DESK]` **M.1/M.2 — Windows residue documented.** Ghost folder on tarball extraction +
   `setup_ec2.bat` security warning: fix if trivial, else document the workaround
   in the deploy README and close as documented-known.
   **HOW/VALIDATE:** one clean-Windows extraction attempt decides trivial-vs-not;
@@ -1137,7 +1186,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   **VALIDATE:** both rollback paths *executed* on the rehearsal box, not read.
 
 **⬜ Mon Aug 31 — GO LIVE, RTH (tiny size)** 🎯
-- **L3.6 descent, step 0:** live, minimum size, SPX + QQQ, bars one bucket above
+- `[FLEET]` **L3.6 descent, step 0:** live, minimum size, SPX + QQQ, bars one bucket above
   the paper crossing. This is the tiny-account live shakedown that has gated the
   fill-confirmation work since 07-15 — now with the whole scrub list behind it.
 
@@ -1147,7 +1196,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   one diff) · phantom-P&L reconcile check at each close · ladder fill-latency
   read from the **N.5 columns** (this is the TC.2 stop-trigger dataset — the −40%
   trigger vs 35%/25% question gets answered by these numbers, not by guessing).
-- **Fri Sep 4:** week-1 live review — divergence report, latency distribution,
+- `[DESK·DATA]` **Fri Sep 4:** week-1 live review — divergence report, latency distribution,
   descent decision drafted.
   **VALIDATE:** all three daily checks read collected rows (trades.db + N.5 +
   broker_reconcile records + chain archive); nothing in the review depends on a
