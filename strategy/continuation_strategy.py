@@ -91,6 +91,19 @@ v1.3.1 — 2026-07-29 — HOTFIX. v1.3 deleted the BB-midline block (which defin
         installable in the sandbox, so only the extracted block was exercised. A
         compile check does not catch an unbound name on a branch that never ran.
         The canary must import and CALL the strategy on a box before deploy.
+
+v1.3.2 — 2026-07-30 — LOG THE DECLINES. v1.3/v1.3.1 had THREE silent `return
+        None` paths, so a box in TRENDING_BULL printed only "STRATEGY: NO TRADE"
+        with no way to tell whether the structure/df_1m plumbing was missing, no
+        unfilled FVG existed in the trend direction, or the wick simply did not
+        reach the gap. Observed on AMZN 2026-07-30: a full session of
+        TRENDING_BULL (100% conviction), zero trades, zero explanation. Each
+        branch now logs its inputs -- including gap bounds, the wick, and
+        missed_by, so "it declined correctly" and "it is broken" are
+        distinguishable at a glance. No behaviour change; observability only.
+        (Third instance of this pattern: butterfly gates at DEBUG, ORB's
+        "1 named level(s)", now continuation. A gate that cannot say why it
+        declined cannot be diagnosed.)
 """
 # v-runaway-fix (2026-07-24) — accepts runaway handoff_direction so it can enter on a flipped-off-trending label; conviction floor steps aside when the runaway (not the label) is the directional evidence.
 
@@ -181,6 +194,10 @@ class ContinuationStrategy(BaseOptionsStrategy):
         # proximal edge without filling deep. Midline logic REMOVED entirely.
         atr = getattr(vol_state, "atr_current", 0.0)
         if atr <= 0 or df_1m is None or structure is None:
+            logger.info(
+                f"[continuation] no eval: atr={atr:.2f} "
+                f"df_1m={'ok' if df_1m is not None else 'MISSING'} "
+                f"structure={'ok' if structure is not None else 'MISSING'}")
             return None
 
         fvgs = [g for g in getattr(structure, "fvgs", []) if not getattr(g, "filled", False)]
@@ -196,6 +213,13 @@ class ContinuationStrategy(BaseOptionsStrategy):
             elif direction == "short" and g.bottom > current_price:  # gap sits above
                 cands.append(g)
         if not cands:
+            _all = len(getattr(structure, "fvgs", []) or [])
+            _unf = len(fvgs)
+            logger.info(
+                f"[continuation] no FVG in favor: dir={direction} want={want} "
+                f"px={current_price:.2f} fvgs_total={_all} unfilled={_unf} "
+                f"(need an unfilled {want} gap "
+                f"{'below' if direction == 'long' else 'above'} price)")
             return None
         # nearest unfilled gap in favor: for a long, the highest such gap top;
         # for a short, the lowest such gap bottom (the one price is closest to).
@@ -215,6 +239,14 @@ class ContinuationStrategy(BaseOptionsStrategy):
         else:
             tagged = last_high >= (gap.bottom + CONTINUATION_FVG_TAG_MIN)
         if not tagged:
+            _edge = gap.top if direction == "long" else gap.bottom
+            _wick = last_low if direction == "long" else last_high
+            _miss = abs(_wick - _edge)
+            logger.info(
+                f"[continuation] FVG not tagged: gap={gap.bottom:.2f}-{gap.top:.2f} "
+                f"edge={_edge:.2f} wick={_wick:.2f} missed_by={_miss:.2f} "
+                f"(need {'low<=' if direction == 'long' else 'high>='}"
+                f"{_edge - CONTINUATION_FVG_TAG_MIN if direction == 'long' else _edge + CONTINUATION_FVG_TAG_MIN:.2f})")
             return None
 
         # ── 3. ENTRY (LOW BAR): momentum flipping back toward the trend ─────
