@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.19
+# docs/BACKLOG.md — v3.20
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -117,6 +117,47 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
 
 **✅ Thu Jul 30 — AFTER THE CLOSE — Y · Y.1 · Y.2 all resolved, see PART 3.**
 **⬜ Fri Jul 31**
+- `[DESK→DEPLOY]` **AG — 🔴 CONDOR CANCELS ITSELF ON A COMPRESSION FLIP. A neutral
+  trade belongs MOST in compression; cancelling there is backwards.** Found
+  2026-07-30 by reading CVX's bot.log directly after three rounds of counting
+  got the wrong answer. The actual sequence, three times in one session:
+  `15:11 CONDOR PLANNED ... 15:30 Condor CANCELLED before Leg 1: regime flipped
+  to COMPRESSION`, rebuilt 15:33, cancelled 15:51, rebuilt 15:53, cancelled
+  16:05. Each plan lived ~19 minutes and none survived to the cutoff — which is
+  ALSO why `NEVER1=0`: the "past cutoff, Leg 1 never fired — abandoned" branch
+  was never the operative path, so the absence of that line meant the opposite
+  of what it looked like.
+  **MECHANISM (operator, and this is the whole case):** RANGING and COMPRESSION
+  are not opposed for a neutral position — compression is a TIGHTENING range,
+  i.e. the condition in which a short-premium neutral structure is most
+  comfortable. Cancelling a planned condor because the range tightened is a
+  category error, the same shape as the VWAP-blocks-sweep finding: a gate
+  applied from the wrong side of the trade's thesis.
+  **HOW:** treat COMPRESSION as a PERMITTED hold state for an existing plan
+  rather than a cancellation trigger. Cancel on a flip to a DIRECTIONAL regime
+  (TRENDING_*/BREAKOUT_VOLATILE), where the neutral thesis genuinely breaks.
+  Leg 2's own pause-on-non-RANGING logic already models the right idea — it
+  HOLDS the plan rather than killing it (`Condor Leg 2 PAUSED: regime != RANGING
+  — plan held, Leg 1 remains open`). Leg 1 should behave the same way.
+  **VALIDATE:** the same grep on a box after deploy — `CONDOR PLANNED` should be
+  followed by a trigger, a hold, or a cutoff abandonment, and NOT by
+  `CANCELLED ... regime flipped to COMPRESSION`. A plan surviving a compression
+  flip is the pass condition.
+  **RELATED, NOT THE SAME ITEM:** the trigger GEOMETRY (see AI). Fixing the
+  cancel does not by itself make a leg fire.
+- `[DESK]` **AI — condor trigger geometry: the midpoint is wrong, and that is
+  the real design question.** From the same CVX log: spot ~190, `bb_upper=190.93`,
+  and the call trigger sat at **193** — the 0.80xEM dual floor put the short at
+  195 and 0.65 of that distance lands well OUTSIDE the band. So the plan needed a
+  breakout-sized move during RANGING, a regime defined by the absence of one.
+  Operator's read, recorded because it frames the fix: Bollinger boundaries fired
+  too often; expected-move-from-spot is too far to reach; what is actually needed
+  is expected move measured from a MIDPOINT that has not been identified yet.
+  **This is pitchfork work** — a sloped median line gives a midpoint that moves
+  with structure, where BB is a lagging envelope and EM-from-spot assumes no
+  drift. **Do NOT re-tune 0.65 or 0.80 in isolation**; that is the category-3
+  optimisation the operator does not want. The geometry decides whether the
+  strategy is salvageable, and the pitchfork is the instrument.
 - `[DESK]` **AC — silent-decline punch list (named in v3.18, never dated).** A
   sweep of `strategy/` found 26 `return None` paths. Most are regime-mismatch
   gates that fire every tick and are silent deliberately. **Three can refuse a
@@ -219,6 +260,36 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   the retro replay (approximate) cross-checks the capture on the overlap.
 
 **⬜ Sat Aug 1**
+- `[DESK·DATA]` **AH — ORB in RANGING: is the flagship firing in a regime that
+  contradicts its own thesis? (weekend work, deliberately — no trading day is
+  spent on this).** First evidence 2026-07-30 from `tests/backtest_harness.py`
+  over 14 spliced CVX sessions: **10 setups detected, 10 fired, 0 blocked by the
+  regime gate**, exits `TARGET 1 / STRUCTURE_STOP 8 / EOD_FLAT 1`, underlying
+  expectancy **-1.56R**, and the regime labels those fired under were
+  **RANGING 7, UNKNOWN 2, TRENDING_BEAR 1**.
+  **MECHANISM (why this is worth a weekend, not a P&L observation):** an opening
+  range BREAKOUT is a directional continuation bet — it wagers price leaving the
+  range keeps going. RANGING is definitionally mean-reverting. A breakout inside
+  a ranging tape is not a low-quality signal, it is a STRUCTURALLY false one, and
+  8-of-10 STRUCTURE_STOP is the fingerprint: the structural stop sits at
+  invalidation and a range routinely trades back through it. This reopens defect
+  V deliberately — V un-gated ORB on the reasoning that break-and-retest
+  confirmation IS the filter; this says confirmation may not be sufficient in a
+  range.
+  **DO NOT ACT ON THIS YET.** One symbol, ten trades, and CVX was **51% RANGING**
+  over the window — unusually range-bound, so "7 of 10 in RANGING" may describe
+  CVX more than it describes ORB. ORB is the only strategy currently earning;
+  changing its gating on this evidence would be the exact mistake this backlog
+  keeps recording.
+  **PREREQUISITE:** `backtest_harness.py` prints only `fired[:8]` per symbol, so
+  per-trade R BY REGIME cannot be pooled across symbols yet. Needs a `--json` or
+  `--all` flag first — ~10 minutes — then a per-symbol sweep (NOT a cross-symbol
+  splice: intraday frames are session-scoped and safe, but HTF is CONTINUOUS by
+  design, so splicing CVX at $195 onto QQQ at $560 corrupts exactly the 1h depth
+  the multi-day splice exists to build).
+  **VALIDATE:** if ORB-in-RANGING is consistently negative across 6+ symbols,
+  that is a mechanism finding and a regime gate is justified. If CVX is the
+  outlier, it is a symbol characteristic and ORB stays as written.
 - `[DESK·DATA]` **E + F tester proof.** Replay both gates over the banked 07-13→07-31 tape:
   enumerate every historical trade each gate would have blocked, with outcomes.
   DONE = a would-have-blocked ledger showing the gates remove net-negative trades
@@ -1095,6 +1166,28 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.20 — 2026-07-30 — THE CONDOR DROUGHT HAS A CAUSE, AND IT IS NOT THE
+  TRIGGER.** Reading CVX's bot.log directly — after counting greps produced two
+  wrong answers — showed condor plans being **CANCELLED three times by a flip to
+  COMPRESSION**, each surviving ~19 minutes. New **AG** (Fri Jul 31): a neutral
+  trade belongs most in a tightening range, so cancelling there is a category
+  error; treat COMPRESSION as a permitted hold, cancel only on a flip to a
+  DIRECTIONAL regime, mirroring Leg 2's existing pause-and-hold behaviour. New
+  **AI**: the trigger geometry is the deeper question — spot ~190, bb_upper
+  190.93, call trigger at **193**, i.e. a plan needing a breakout-sized move
+  during a regime defined by its absence. The missing piece is a MIDPOINT, and
+  that is pitchfork work; explicitly NOT a re-tune of 0.65/0.80.
+  New **AH** (Sat Aug 1, weekend by operator's choice): first evidence that ORB
+  may be firing in a regime contradicting its own thesis — 14 CVX sessions, 10
+  fired, 0 gate-blocked, **-1.56R**, 8-of-10 STRUCTURE_STOP, **7 of 10 under
+  RANGING**. Recorded with an explicit DO-NOT-ACT: one symbol, ten trades, and
+  CVX was 51% RANGING. Needs a harness `--all` flag and a per-symbol sweep first.
+  **Method note worth keeping:** three rounds of `grep -c` gave confident wrong
+  answers (the dual floor "never rejects" — true but irrelevant; `NEVER1=0`
+  read as "no abandonment" when the real meaning was "the plan never lived long
+  enough to reach that branch"). Reading twenty log lines settled it in one
+  pass. Counts test a hypothesis you already have; the log tells you which
+  hypothesis to have.
 - **v3.19 — 2026-07-30 — THREE THINGS THAT EXISTED ONLY AS PROSE ARE NOW DATED
   ITEMS, and AB is recorded as resolved.** v3.18 correctly captured the
   continuation finding, but three of its consequences lived only in the
