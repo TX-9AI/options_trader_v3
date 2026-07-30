@@ -1,6 +1,39 @@
-# docs/BACKLOG.md — v3.9
+# docs/BACKLOG.md — v3.10
 
 **CHANGELOG**
+- **v3.10 — 2026-07-30 — THURSDAY CLOSED. L2.5 committed a regime label in
+  production for the first time ever.** Verified live: `STATE=yes` on all 15
+  woken boxes (that state file had never existed on any box), and
+  `RECOVERED=1` fleet-wide — every box warmed through the opening window and
+  began committing. XOM led with 7 L2 transitions.
+  **Items resolved today:** **W.0** (main v4.7 deployed, L2.5 reachable);
+  **W.2** delivered as `tests/swallow_audit.py` AND promoted to a nightly
+  conductor phase; **V** as push.sh v1.7 (prefers the caller's directory,
+  announces its resolved target and remote before acting — the 07-29 near-miss
+  wrote nothing only by luck); **T.2** found already shipped in main v4.1, with
+  the missing half — the documented model — added to MECHANICS; **Y** complete
+  across all three parts and two repos.
+  **Built today beyond the list:** main **v4.8** — the ~25-minute opening
+  window where RANGING and COMPRESSION cannot compute now logs INFO as designed
+  behaviour instead of a WARNING that fired on 13 of 15 boxes, and
+  `regime_log.engine` / `trades.regime_engine` stamp L2-vs-v13 provenance into
+  the row rather than leaving it recoverable only from a bot.log tag.
+  orchestrator **v0.4.0** — fleet/origin parity reported in the morning ack
+  (drift is named, never auto-pulled: a 09:15 pull would deploy unverified code
+  fifteen minutes before the open, which is precisely how the 07-28 rewire took
+  out the 07-29 session). conductor **v1.8.0** — phases 10 and 11.
+  **NEW STANDING RULE, and it changed what shipped today:** anything that must
+  happen around the EOD chain belongs IN the conductor, never in a command
+  someone has to remember — *including a one-time check* — and every such
+  addition is documented in the version header and changelog for posterity. Two
+  things I had handed over as manual commands became phases under it: the
+  nightly silent-failure census (warns when the swallow count RISES, i.e. when
+  a new silent handler is added) and the VWAP orientation ledger, so item E's
+  evidence accrues whether or not anyone remembers to gather it.
+  **Consequence for Friday:** E is no longer a build. The ledger runs nightly,
+  so Friday premarket is a DECISION on evidence — including the open question
+  of whether a trend-following filter belongs on a mean-reversion strategy at
+  all.
 - **v3.9 — 2026-07-30 — W.1 REWRITTEN TO ITS TRUE SCOPE, and W.2 answered.**
   W.1 was scoped as "quarantine 07-29" on the belief that the L2.5 outage began
   with the 07-28 excavation. The v4.7 reachability proof widened it to the whole
@@ -265,7 +298,9 @@ the tester. Nothing behavior-changing deploys except on Mon Aug 3.*
   **check_versions v4.3** (+ failure-count DONE banner). Deliberate-failure
   test passed. **Sync after RTH close (~16:30 ET) with today's other deploys.**
 
-**⬜ Thu Jul 30**
+**✅ Thu Jul 30 — DAY CLOSED at v3.10. L2.5 ran in production for the first
+time in the project's history.** Every item below is resolved; the day's own
+work is recorded in the changelog and the Part 3 register.
 - **W.0 — 🔴🔴 BEFORE THE OPEN: deploy main v4.7.** The fleet is currently
   stopped on v4.6, in which L2.5 is still unreachable. Until v4.7 is on the
   boxes, Thursday runs the v1.3 classifier exactly like every session before
@@ -1163,6 +1198,25 @@ file: everything above either ✅ or explicitly re-dated below.
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
 `docs/HISTORY.md` and the audits. Resolution date + fixing versions + the why.*
 
+- **W.0 / W.2 / V / T.2 ✅ 2026-07-30 — Thursday's four, with two found already
+  shipped.** W.0: main v4.7 deployed fleet-wide, and L2.5 committed its first
+  production label at ~09:55 ET after the designed 25-bar warm-up — the first in
+  the project's history. W.2: `tests/swallow_audit.py` — 139 swallowing handlers
+  in options_trader_v3 (81 silent) and 48 in day_trader_pro (42 silent), tiered
+  by consequence so the ~20 that sit in risk/orders/record paths are separable
+  from the guarded imports and date parsers that are correctly silent; `--json`
+  emits a stable snapshot, and conductor phase 10 now diffs it nightly. V:
+  push.sh v1.7, all three resolution paths tested against a scratch $HOME with
+  two bot-shaped directories. T.2: the unification shipped in main v4.1 back on
+  07-22 — only the documentation was missing, now in MECHANICS with the reason
+  recorded so it is not re-litigated (a mid limit is a reasonable expectation;
+  the residual is no-fill risk, and no-fill risk cannot be modelled as a price
+  haircut).
+  **Pattern worth carrying: this is the FOURTH time this week the backlog
+  trailed the repo** — T.1, T.3 and U on Wednesday, T.2 today. Every item's
+  premise gets re-verified at HEAD on the day it is worked, never trusted from
+  this file. It cost nothing on any of the four only because the check happened
+  first.
 - **X ✅ 2026-07-29 — the morning wake picked the same 13 discretionary names
   every day: the report it ranks on was FROZEN AT 2026-07-06.** Filed and solved
   the same evening. The brief regenerates correctly every morning at 09:15 and
