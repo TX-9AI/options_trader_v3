@@ -1,306 +1,22 @@
-# docs/BACKLOG.md — v3.13
+# docs/BACKLOG.md — v3.14
 
-**CHANGELOG**
-- **v3.13 — 2026-07-30 — EVM instrumented, and the first reading closed both
-  late DESK items.** `tests/evm_status.py` reports earned value against this
-  file, with the adaptation that makes it honest here: **schedule variance is
-  split by cause.** SPI(all) is calendar truth; **SPI(desk) is accountability**
-  — of the work that was ours to move, how much moved. A late `[DESK·DATA]`
-  item is a DC&A dependency, not an execution failure, and averaging the two
-  produces a number that cannot be acted on.
-  First run found two things immediately. It reported **SPI 2.53** — impossible,
-  and the cause was that PART 3's resolved register duplicates every item
-  already marked ✅ in PART 1, so earned value exceeded the baseline. A metric
-  that can exceed its own BAC is measuring the document, not the project; the
-  parser now reads the schedule only. **That duplication is real and still
-  present in this file** — it is what makes it balloon, and it is worth removing
-  in a later pass.
-  Corrected reading: **BAC 64 · PV 15 · EV 15 · SV 0 · SPI(all) 1.00** — on
-  plan. But **SPI(desk) was 0.00**: both DESK items due were open. **Y** was
-  simply never marked (it landed and was verified at the 07-30 wake) and **Y.2**
-  was genuinely outstanding — now shipped as emit **v1.5.0**. Both closed, so
-  the controllable index is clean.
-  Gate pressure, stated plainly: 13 DESK items fall on or before the **Aug 21
-  freeze**, 22 days out — **0.59/day, which the tool rates TIGHT.** DESK·DATA
-  and FLEET unblock themselves; the DESK pile does not.
-- **v3.12 — 2026-07-30 — EVERY OPEN ITEM TAGGED BY WHAT IT REQUIRES. Dates and
-  order untouched** — the trajectory is the plan and it stays exactly as it was.
-  All 49 open items now carry `[DESK]` / `[DESK→DEPLOY]` / `[DESK·DATA]` /
-  `[FLEET]`, so filling a light session is a grep instead of a reading exercise.
-  **The split: 16 DESK · 7 DESK→DEPLOY · 20 DESK·DATA · 6 FLEET.**
-  The point of the tagging: **DESK is the only bucket under our control.**
-  DESK·DATA unblocks itself on the calendar and FLEET waits for a window — so
-  the 16 DESK items are the whole of what effort can move. Drive them to zero
-  and the Aug 21 freeze waits on data alone rather than on us.
-  Flagged while classifying: **item I is an UNREACHABLE BRANCH**
-  (`can_enter(is_butterfly=...)` — the main.py call site never passes it),
-  scheduled Aug 17 as a tidy-up. That is the same defect class as
-  `_REGIME_ENGINE == "L2"`, which cost the entire L2.5 history. Two of these in
-  one week is a pattern, and `swallow_audit` does not catch it — it answers
-  "does it say so when it fails?", not "does it run at all?"
-- **v3.11 — 2026-07-30 — MARKER CORRECTION (caught by the user).** v3.10 wrote
-  a day header asserting "every item below is resolved" and left every
-  individual bullet unmarked — W.0 still reading 🔴🔴 — while W.1 was in fact
-  still open. A summary claim is not a status. Each item now carries its own ✅
-  inline with the evidence, the original text is preserved beneath it, and the
-  day header says what is true: **closed EXCEPT W.1**, which carries forward to
-  the Aug 10 calibration-epoch start because the quarantine cannot complete
-  until enough real L2 data exists to compare against. **This is the fifth
-  stale-marker instance this week** and the only one I introduced: T.1, T.3, U
-  and T.2 were all cases of the file trailing the repo; this one was the file
-  contradicting itself. Rule reinforced — mark the ITEM, never the day.
-- **v3.10 — 2026-07-30 — THURSDAY'S WORK. L2.5 committed a regime label in
-  production for the first time ever.** Verified live: `STATE=yes` on all 15
-  woken boxes (that state file had never existed on any box), and
-  `RECOVERED=1` fleet-wide — every box warmed through the opening window and
-  began committing. XOM led with 7 L2 transitions.
-  **Items resolved today:** **W.0** (main v4.7 deployed, L2.5 reachable);
-  **W.2** delivered as `tests/swallow_audit.py` AND promoted to a nightly
-  conductor phase; **V** as push.sh v1.7 (prefers the caller's directory,
-  announces its resolved target and remote before acting — the 07-29 near-miss
-  wrote nothing only by luck); **T.2** found already shipped in main v4.1, with
-  the missing half — the documented model — added to MECHANICS; **Y** complete
-  across all three parts and two repos.
-  **Built today beyond the list:** main **v4.8** — the ~25-minute opening
-  window where RANGING and COMPRESSION cannot compute now logs INFO as designed
-  behaviour instead of a WARNING that fired on 13 of 15 boxes, and
-  `regime_log.engine` / `trades.regime_engine` stamp L2-vs-v13 provenance into
-  the row rather than leaving it recoverable only from a bot.log tag.
-  orchestrator **v0.4.0** — fleet/origin parity reported in the morning ack
-  (drift is named, never auto-pulled: a 09:15 pull would deploy unverified code
-  fifteen minutes before the open, which is precisely how the 07-28 rewire took
-  out the 07-29 session). conductor **v1.8.0** — phases 10 and 11.
-  **NEW STANDING RULE, and it changed what shipped today:** anything that must
-  happen around the EOD chain belongs IN the conductor, never in a command
-  someone has to remember — *including a one-time check* — and every such
-  addition is documented in the version header and changelog for posterity. Two
-  things I had handed over as manual commands became phases under it: the
-  nightly silent-failure census (warns when the swallow count RISES, i.e. when
-  a new silent handler is added) and the VWAP orientation ledger, so item E's
-  evidence accrues whether or not anyone remembers to gather it.
-  **Consequence for Friday:** E is no longer a build. The ledger runs nightly,
-  so Friday premarket is a DECISION on evidence — including the open question
-  of whether a trend-following filter belongs on a mean-reversion strategy at
-  all.
-- **v3.9 — 2026-07-30 — W.1 REWRITTEN TO ITS TRUE SCOPE, and W.2 answered.**
-  W.1 was scoped as "quarantine 07-29" on the belief that the L2.5 outage began
-  with the 07-28 excavation. The v4.7 reachability proof widened it to the whole
-  project history: the L2 block was never once executed, so **every regime label
-  and conviction value ever logged came from the v1.3 classifier**. First real
-  L2.5 data is 2026-07-30 from ~09:55 ET. The item now names exactly what is
-  affected (conditional_tables, L2.4 churn, L1.11 ramp, the readiness conv_val
-  ramp — plus the correction that 07-28's "L2 integrator saturation" was
-  actually v1.3's conviction band) and, deliberately, what is NOT: ORB, all
-  fill/friction/latency work, the harvest and conductor plumbing, the morning
-  selection chain, push.sh. **These proceed on their own merits — it is not an
-  if/then cascade.** Timeline assessed rather than assumed: ~16 trading sessions
-  of L2 data exist by the Aug 21 freeze, inside the original two-week intent, so
-  the schedule is tight but not derailed; the real constraint is per-symbol
-  depth, to be re-checked at the Aug 10 calibration start.
-  **W.2 delivered** as `tests/swallow_audit.py` — a repeatable, tiered census of
-  every exception handler that swallows without re-raising. 139 in
-  options_trader_v3 (81 silent) and 48 in day_trader_pro (42 silent), but tiered
-  by consequence only ~20 sit in risk/orders/record paths, and most of those are
-  correctly silent guarded imports and date parsers. `--json` emits a stable
-  snapshot so "did we add a new silent failure?" becomes a diff instead of a
-  memory exercise. The tool's docstring carries all seven of the week's
-  silent-failure defects and the line that ties them: every check we had asked
-  whether the code WORKS; none asked whether it RUNS, and whether it SAYS SO
-  when it does not.
-- **v3.8 — 2026-07-29 (late) — Y REWRITTEN: the env-var fix was a band-aid, and
-  the user caught it.** `install.sh` overwrites `~/market-brief/.env` from a
-  heredoc, so the one-line fix would have died at the next reinstall or on any
-  new instance — permanent-looking and not permanent. Y is now three committed
-  changes across two repos: **orchestrator v0.3.0** (freshness guard on the
-  report's `date` + `move_ranked` shape, Telegram alert, provenance stamped onto
-  the selection, and the never-resolving `~/market_brief/out/report.json`
-  fallback repointed at the reporter's real drop — this is what makes the fix
-  survive a rebuild), **install.sh 09:15 → 09:00** (the wake fired the same
-  minute the brief started; measured brief runtime ~75s, so 09:00 turns a race
-  into a 15-minute margin), and **`DTP_REPORT_JSON` provisioned in the .env
-  heredoc**. Deliberate-failure test passed against the real 2026-07-06 payload.
-  Also new: **`day_trader_pro/docs/ARCHITECTURE.md`** records the target layout —
-  Day_Trader_Pro as the over-arching project with `market_brief` and
-  `options_trader` as nested, independently-installable modules — plus the
-  modularity contract, an inventory of all five coupling seams, and the rule this
-  day earned: a file seam between two independently-scheduled processes must
-  carry a freshness stamp that the consumer checks, because it is the one seam
-  class that fails silently. It also flags that **`push.sh` must be fixed
-  (item V) BEFORE any migration**, since its `$HOME` scan becomes ambiguous once
-  two modules share a parent.
-- **v3.7 — 2026-07-29 (late) — ITEM X SOLVED THE SAME EVENING IT WAS FILED, and
-  it was neither of the two explanations X proposed.** The morning wake has been
-  ranking off a report frozen at **2026-07-06** — 23 days stale. The scorer is
-  not broken and there is no silent model fallback: `$DTP_REPORT_JSON` was never
-  set, so `report/emit.py` took its `os.getcwd()` fallback and has written
-  `~/market-brief/report.json` every morning while orchestrator read a different,
-  static file. Full diagnosis in Part 3; the one-line fix is **Y** (Thu Jul 30
-  after the close, deliberately NOT stacked on L2.5's first live session), with
-  **Y.1** repairing orchestrator's unreachable `~/market_brief/out/report.json`
-  fallback (underscore instead of hyphen, plus a non-existent `out/`).
-  **Also newly known: the brief's signed sentiment has never reached trading.**
-  `brief_strength` feeds the Stage-3 setup nudge and has been a constant 0.30 for
-  every name every day, because the frozen report predates the `move_ranked`
-  sidecar. Sixth silent-default finding of the day — the tally is now the L2
-  import guard, the discarded scp return values, the conductor's OHLC-only
-  completeness check, selector's EXACTLY-N backfill, the unreachable
-  `_REGIME_ENGINE` gate, and this. Every one of them produced plausible output
-  while doing nothing. **W.2 is the most valuable item in this file.**
-- **v3.6 — 2026-07-29 (evening) — L2.5 HAS NEVER RUN. NOT ONCE.** The day's
-  chase ended somewhere none of the earlier hypotheses reached. A fleet-wide
-  grep of `bot.log` on all 29 boxes — 34k to 138k lines each — returned
-  **L2=0, FAILED=0, STALE=0**, and `integrator_state.json` had never been
-  written on any box. Cause: `_REGIME_ENGINE` is built with `.lower()`, so it is
-  always `"l2"`, while **both** gate sites compared it to the uppercase literal
-  `"L2"` — the tick override and the startup warm-load that calls
-  `_l2_integ.load`/`save`. `"l2" == "L2"` is False, so the entire L2.5 block has
-  been unreachable dead code since v4.0 wired it, and **no environment variable
-  could ever have helped, because the default itself failed the comparison.**
-  Today's earlier fixes were real and both irrelevant to reachability: v4.5
-  repaired an import into a block that never executed, and v4.6 added reporting
-  to a branch never entered. Fixed as **main v4.7** (lowercase at both gates, a
-  start-up assert that refuses to boot on an unrecognised engine value, and a
-  start-up line naming the active engine), **check_versions v4.7** (absence
-  canary on the uppercase literal), and three reachability tests — suite 45/45,
-  deliberate-failure test passed.
-  **Why nothing caught it for weeks:** a gate that never opens raises nothing,
-  logs nothing, alerts nothing, and breaks no test. Every check we had asked
-  "does this code work?" — none asked "does this code run?". That is the fifth
-  and worst instance of today's recurring shape, after the L2 import guard, the
-  discarded scp return values, the conductor's OHLC-only completeness check and
-  the scorer's EXACTLY-N backfill. **W.2 is no longer a scoping pass; it is the
-  most valuable item on this backlog.**
-  **The calibration consequence is the big one.** Every regime label and every
-  conviction value this fleet has ever logged came from the v1.3 classifier. The
-  contamination is not 07-29 — it is the **entire history**. W.1's quarantine
-  widens accordingly, and any L2-derived prior (L2.4 churn fits,
-  `conditional_tables`, the L1.11 ramp) has never had real L2.5 data behind it.
-  **Thu Jul 30 will be the first session L2.5 has ever actually run**, which
-  makes it Day Zero for the L2 dataset and pushes every L2-dependent freeze date
-  out by however long the real baseline takes. Do not re-fit anything L2-derived
-  against pre-07-30 data.
-- **v3.5 — 2026-07-29 — new item X on Fri Jul 31 (light day): the morning
-  scorer looks like it picks the same 15 symbols every session.** Found while
-  back-harvesting 07-27/28/29 — all three reported an identical discretionary
-  cohort. Either the scorer is working and 14 boxes simply never contribute
-  tape (a calibration-breadth problem before the Aug 21 freeze), or the model
-  call is failing into `selector`'s EXACTLY-N backfill and selection has
-  degraded to reporter rank while still looking normal — the same
-  silent-fallback shape as the L2 guard, the discarded scp return values and
-  the conductor's OHLC-only completeness check. `selection_log.jsonl` already
-  holds the evidence to tell the two apart, so the item is a read, not a
-  build. Also recorded here: **07-29 ran the v1.3 fallback classifier for the
-  ENTIRE session** — a fleet-wide `bot.log` grep found every REGIME line tagged
-  `[v13]` and not one `[L2` line, so L2.5 never produced a committed label that
-  day (main v4.5 reached the boxes only at the ~17:05 fan-out, after the
-  close). W.1's quarantine therefore covers the whole day with no per-box
-  bracketing needed, and the afternoon's P&L recovery cannot be attributed to
-  L2.5. The fix remains UNPROVEN in production until `[L2 c=...]` tags appear
-  on REGIME lines after an open.
-- **v3.4 — 2026-07-29 — 07-29 FLEET INCIDENT: items W, W.1, W.2 at the top of
-  Thu Jul 30.** Zero trades fleet-wide until ~10:05 ET (continuation v1.3
-  orphaned `mid` → NameError every tick; hotfixed as v1.3.1, `dd0d097`), and a
-  second, still-live defect: all 15 boxes running the v1.3 classifier instead
-  of L2.5. Root cause diagnosed and **differs from the initial read** —
-  `RANGE_WINDOW_BARS` was never in `conviction_integrator`; main.py imported it
-  through a re-export tuple that the 07-28 excavation trimmed, and main.py's L2
-  guard swallowed the ImportError into a per-start WARNING. Fix built and
-  tested (main v4.5, alert_manager v1.7, check_versions v4.5,
-  tests/test_l2_import_contract.py — suite 42/42), deploying after the close.
-  **W.1 quarantines the day's conviction data** — it is off-engine and must not
-  feed any fit until the contaminated window is bounded from the logs. W.2
-  opens the systemic question: two silent-degradation faults in one morning,
-  both invisible because trading continued. That pattern, not either bug, is
-  the go-live risk.
-- **v3.3 — 2026-07-29 — new item V on the Thu Jul 30 punch list: `push.sh`
-  resolves its target by scanning `$HOME` and ignoring the caller's cwd.**
-  Surfaced when a push from the correct directory reported the wrong repo's
-  remote. Both remotes were correct — the tool had cd'd elsewhere. Dormant now
-  that the borrowed futures checkout is off the box, which is exactly why it is
-  written down: nothing will show it is still broken until the next time two
-  projects share `$HOME`. Same file ships in futures_trader_v1.
-- **v3.2 — 2026-07-29 — check_versions v4.4 (glyph fix) + a path convention
-  worth writing down.** First control-side run of v4.3 surfaced an inherited
-  defect: status glyphs were emitted as literal `\u2713` / `\u2717` (bash
-  `echo` does not interpret `\u`), so they have never rendered. Fixed as
-  **v4.4**, literal UTF-8, no logic change — it rides the same commit as v4.3
-  since neither has been pushed. Also recorded, because it has now cost one
-  failed command: **the control checkout is `~/options-trader-v3`; the bot
-  boxes are `~/options-trader`.** Control-side verification commands take the
-  suffix, fleet/menu commands do not.
-- **v3.1 — 2026-07-29 — JUL 29 DAY CLOSED; T.1/T.3 FOUND ALREADY RESOLVED AT
-  HEAD.** Working the day's items against a fresh clone (working-agreement
-  rule 8) found T.1 and T.3 were **already shipped in the 07-22 defect-T pass**
-  and never registered here: the old `test_paper_entries_mirror_live_friction`
-  no longer exists — replaced by `test_paper_entries_book_the_mark_by_default`
-  + `test_paper_friction_knob_applies_to_every_path`, which is exactly T.1's
-  HOW clause — and the suite runs **37/37 green** at HEAD (the "36/36" target
-  was stale; a test was added since). position_manager is at v3.9 (07-22) with
-  the import gone and the removal changelogged. **U** was likewise 95% shipped:
-  check_versions v3.1 (07-22) closed the fingerprint gap under the name "audit
-  defect U" and v3.2–v4.2 extended it to 125 checks covering every item in U's
-  list. The one genuinely missing piece — the README **parity invariant**
-  (checkout commit vs origin HEAD) — is delivered today as **check_versions
-  v4.3**, with a failure-count DONE banner (one greppable line per box on an
-  option-23 pass) and a passed deliberate-failure test (token deletion → 2
-  MISSING; diverged HEAD → PARITY RED). All three moved to Part 3 with
-  evidence. Lesson standing: this file trailed the repo by a week on three
-  items — an item's premise is re-verified at HEAD *the day it's worked*, not
-  trusted from the file.
-- **v3.0 — 2026-07-29 — HOW + VALIDATE AMENDMENT.** Every open item now carries a
-  **HOW** (the proposed fix, concretely) and a **VALIDATE** clause naming the exact
-  dataset *already collected* that will confirm or disprove the fix — trades.db
-  observability columns (adx/conviction/flat-angle/level_strength/MFE-MAE),
-  `signal_journal` jsonl (incl. vwap + price_vs_vwap, verified at HEAD),
-  `chain_snapshots` (harvest v0.5.1 pulls them since 07-27), `session_labels.jsonl`
-  (auto_label), the regime diary/replay, `conditional_tables`, the readiness
-  journal, excursion reports, and the shadow corpus. Where the framework to
-  validate a fix does **not** exist, a new instrumentation item is scheduled early
-  enough to be in place before the fix it validates: **N.1** regime_log harvest
-  (Jul 30 → validates L1.9, powers Aug 5 ADX reconstruction and the Aug 10 live
-  churn watch) · **N.2** `rrr` + gate-block dispositions in the signal journal
-  (Jul 31 build → validates E/F live via L3.2) · **N.3** `closes_beyond` captured
-  on sweep trade rows (Jul 31 build → arms the Aug 18 reclaim-looseness verdict)
-  · **N.4** paper-fill realism audit off the chain archive (Aug 14 → validates T.2
-  and the R slippage default before any live fill exists) · **N.5** fill-latency
-  telemetry on FillResult (Aug 20 build → the live-week dataset TC.2's
-  stop-trigger decision requires) · **N.6** extended-hours-bars audit
-  (Aug 6 → gates whether Overnight H/L is computable from the feed_store or needs
-  its own capture). Capture-claims verified against HEAD 2026-07-29, not memory
-  (working-agreement rule 8): harvest already at v0.5.1, so P5.1's Jul 30 slot is
-  re-scoped from *build* to *deploy-verify + completeness manifest*.
-- **v2.0 — 2026-07-29 — SCHEDULED REWRITE.** The whole backlog re-ordered into the
-  sequence the work can actually be accomplished, with a target date per item, driven
-  by the go-live clock: **live trading by the first week of September, full position
-  sizes by mid-September.** Four ~2-week epochs, deliverables checkable daily
-  (weekends included for builds/analysis — markets closed is when tester-first work
-  is safest), and every trade-behavior-changing deploy lands **fresh on a Monday
-  RTH.** Open items carry their original defect/observation IDs. The resolved
-  register (A–D, G–H, L, N–R, V–Y and the resolved observations) is preserved in
-  PART 3 in condensed form — resolution date + fixing versions + the why — so no fix
-  gets quietly reverted; full forensic text lives in git history at the pre-v2.0
-  commit of this file. Stale framing removed: the "Part 1 / Part 2 consolidated from
-  README + OBSERVATIONS.md" structure is superseded by the schedule.
-- v1.0 — 2026-07-28 — Consolidated from `README.md`'s defect register (items A–AA)
-  and `docs/OBSERVATIONS.md`, both preserved verbatim.
 
-**Status motif:** `✅ RESOLVED` · `🔄 IN PROGRESS` · `⚠️ OPEN` · `⬜ NOT STARTED / scheduled`
+**Read top-down.** The clock sets the dates, PART 1 is the open schedule in
+accomplishment order — that trajectory is the plan and does not get reshuffled —
+PART 2 is what is parked, PART 3 is what is done, and the document's own history
+sits at the bottom where it belongs.
 
-**How to read a v3.0 item:** the v2.0 scheduling text stands; **HOW** = the
-proposed mechanism of the fix; **VALIDATE** = the evidence contract — which
-*already-collected* dataset confirms or disproves it, and by what metric. A fix
-whose VALIDATE clause points at a dataset that doesn't exist yet points instead at
-the N-item that creates it, and that N-item is dated *before* the fix's own
-decision date. Evidence decides; the schedule just makes sure the evidence is
-waiting when the decision arrives.
-
----
+**TAGS on every open item — grep one to fill a session:**
+`[DESK]` no fleet, no data wait, workable today · `[DESK→DEPLOY]` build now, bake
+Monday · `[DESK·DATA]` blocked only until sessions accrue · `[FLEET]` needs boxes
+up or a deploy window. **DESK is the only bucket effort can move**; the rest
+unblock on the calendar. Earned value: `python3 tests/evm_status.py`.
 
 ## PART 0 — THE CLOCK
 
 | Anchor | Date | What |
 |---|---|---|
-| Today | **Wed Jul 29** | Epoch 1 begins immediately |
+| Epoch 1 start | **Wed Jul 29** | Epoch 1 began (label was "Today" — stale by 07-30) |
 | Deploy Monday 1 | **Mon Aug 3** | Hard gates (E, F) + friction unification (T.2) + N.2/N.3 captures go live on the fleet, RTH |
 | Deploy Monday 2 | **Mon Aug 10** | THE calibration deploy (level hierarchy, L2.4 priors, L1.6 flat cut, L1.11 ramps) — **L2.6 freeze-candidate window opens** |
 | Freeze declared | **Fri Aug 21 EOD** | L2.6 frozen baseline, if the window ran clean |
@@ -1401,3 +1117,312 @@ stated sample size; deferred means deferred; resolved items are kept, not
 deleted; when an OBSERVING item earns action it gets a date in PART 1, not a
 silent fix. Added at v3.0: no fix ships without a VALIDATE clause pointing at
 data that exists — or at the dated N-item that creates it first.*
+
+
+---
+
+## PART 4 — CHANGELOG (document history, newest first)
+
+*Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
+opening the file showed history before it showed anything still to do.*
+
+- **v3.14 — 2026-07-30 — CHANGELOG MOVED TO THE BOTTOM (PART 4).** The open
+  schedule is now what the file opens with. Nothing in PART 0–3 was reordered:
+  the date trajectory is the plan and it is untouched. Added a short orientation
+  header with the tag legend, so a light session starts with a grep rather than
+  a read. Also fixed a stale anchor — PART 0's clock still labelled Wed Jul 29
+  as "Today".
+- **v3.13 — 2026-07-30 — EVM instrumented, and the first reading closed both
+  late DESK items.** `tests/evm_status.py` reports earned value against this
+  file, with the adaptation that makes it honest here: **schedule variance is
+  split by cause.** SPI(all) is calendar truth; **SPI(desk) is accountability**
+  — of the work that was ours to move, how much moved. A late `[DESK·DATA]`
+  item is a DC&A dependency, not an execution failure, and averaging the two
+  produces a number that cannot be acted on.
+  First run found two things immediately. It reported **SPI 2.53** — impossible,
+  and the cause was that PART 3's resolved register duplicates every item
+  already marked ✅ in PART 1, so earned value exceeded the baseline. A metric
+  that can exceed its own BAC is measuring the document, not the project; the
+  parser now reads the schedule only. **That duplication is real and still
+  present in this file** — it is what makes it balloon, and it is worth removing
+  in a later pass.
+  Corrected reading: **BAC 64 · PV 15 · EV 15 · SV 0 · SPI(all) 1.00** — on
+  plan. But **SPI(desk) was 0.00**: both DESK items due were open. **Y** was
+  simply never marked (it landed and was verified at the 07-30 wake) and **Y.2**
+  was genuinely outstanding — now shipped as emit **v1.5.0**. Both closed, so
+  the controllable index is clean.
+  Gate pressure, stated plainly: 13 DESK items fall on or before the **Aug 21
+  freeze**, 22 days out — **0.59/day, which the tool rates TIGHT.** DESK·DATA
+  and FLEET unblock themselves; the DESK pile does not.
+- **v3.12 — 2026-07-30 — EVERY OPEN ITEM TAGGED BY WHAT IT REQUIRES. Dates and
+  order untouched** — the trajectory is the plan and it stays exactly as it was.
+  All 49 open items now carry `[DESK]` / `[DESK→DEPLOY]` / `[DESK·DATA]` /
+  `[FLEET]`, so filling a light session is a grep instead of a reading exercise.
+  **The split: 16 DESK · 7 DESK→DEPLOY · 20 DESK·DATA · 6 FLEET.**
+  The point of the tagging: **DESK is the only bucket under our control.**
+  DESK·DATA unblocks itself on the calendar and FLEET waits for a window — so
+  the 16 DESK items are the whole of what effort can move. Drive them to zero
+  and the Aug 21 freeze waits on data alone rather than on us.
+  Flagged while classifying: **item I is an UNREACHABLE BRANCH**
+  (`can_enter(is_butterfly=...)` — the main.py call site never passes it),
+  scheduled Aug 17 as a tidy-up. That is the same defect class as
+  `_REGIME_ENGINE == "L2"`, which cost the entire L2.5 history. Two of these in
+  one week is a pattern, and `swallow_audit` does not catch it — it answers
+  "does it say so when it fails?", not "does it run at all?"
+- **v3.11 — 2026-07-30 — MARKER CORRECTION (caught by the user).** v3.10 wrote
+  a day header asserting "every item below is resolved" and left every
+  individual bullet unmarked — W.0 still reading 🔴🔴 — while W.1 was in fact
+  still open. A summary claim is not a status. Each item now carries its own ✅
+  inline with the evidence, the original text is preserved beneath it, and the
+  day header says what is true: **closed EXCEPT W.1**, which carries forward to
+  the Aug 10 calibration-epoch start because the quarantine cannot complete
+  until enough real L2 data exists to compare against. **This is the fifth
+  stale-marker instance this week** and the only one I introduced: T.1, T.3, U
+  and T.2 were all cases of the file trailing the repo; this one was the file
+  contradicting itself. Rule reinforced — mark the ITEM, never the day.
+- **v3.10 — 2026-07-30 — THURSDAY'S WORK. L2.5 committed a regime label in
+  production for the first time ever.** Verified live: `STATE=yes` on all 15
+  woken boxes (that state file had never existed on any box), and
+  `RECOVERED=1` fleet-wide — every box warmed through the opening window and
+  began committing. XOM led with 7 L2 transitions.
+  **Items resolved today:** **W.0** (main v4.7 deployed, L2.5 reachable);
+  **W.2** delivered as `tests/swallow_audit.py` AND promoted to a nightly
+  conductor phase; **V** as push.sh v1.7 (prefers the caller's directory,
+  announces its resolved target and remote before acting — the 07-29 near-miss
+  wrote nothing only by luck); **T.2** found already shipped in main v4.1, with
+  the missing half — the documented model — added to MECHANICS; **Y** complete
+  across all three parts and two repos.
+  **Built today beyond the list:** main **v4.8** — the ~25-minute opening
+  window where RANGING and COMPRESSION cannot compute now logs INFO as designed
+  behaviour instead of a WARNING that fired on 13 of 15 boxes, and
+  `regime_log.engine` / `trades.regime_engine` stamp L2-vs-v13 provenance into
+  the row rather than leaving it recoverable only from a bot.log tag.
+  orchestrator **v0.4.0** — fleet/origin parity reported in the morning ack
+  (drift is named, never auto-pulled: a 09:15 pull would deploy unverified code
+  fifteen minutes before the open, which is precisely how the 07-28 rewire took
+  out the 07-29 session). conductor **v1.8.0** — phases 10 and 11.
+  **NEW STANDING RULE, and it changed what shipped today:** anything that must
+  happen around the EOD chain belongs IN the conductor, never in a command
+  someone has to remember — *including a one-time check* — and every such
+  addition is documented in the version header and changelog for posterity. Two
+  things I had handed over as manual commands became phases under it: the
+  nightly silent-failure census (warns when the swallow count RISES, i.e. when
+  a new silent handler is added) and the VWAP orientation ledger, so item E's
+  evidence accrues whether or not anyone remembers to gather it.
+  **Consequence for Friday:** E is no longer a build. The ledger runs nightly,
+  so Friday premarket is a DECISION on evidence — including the open question
+  of whether a trend-following filter belongs on a mean-reversion strategy at
+  all.
+- **v3.9 — 2026-07-30 — W.1 REWRITTEN TO ITS TRUE SCOPE, and W.2 answered.**
+  W.1 was scoped as "quarantine 07-29" on the belief that the L2.5 outage began
+  with the 07-28 excavation. The v4.7 reachability proof widened it to the whole
+  project history: the L2 block was never once executed, so **every regime label
+  and conviction value ever logged came from the v1.3 classifier**. First real
+  L2.5 data is 2026-07-30 from ~09:55 ET. The item now names exactly what is
+  affected (conditional_tables, L2.4 churn, L1.11 ramp, the readiness conv_val
+  ramp — plus the correction that 07-28's "L2 integrator saturation" was
+  actually v1.3's conviction band) and, deliberately, what is NOT: ORB, all
+  fill/friction/latency work, the harvest and conductor plumbing, the morning
+  selection chain, push.sh. **These proceed on their own merits — it is not an
+  if/then cascade.** Timeline assessed rather than assumed: ~16 trading sessions
+  of L2 data exist by the Aug 21 freeze, inside the original two-week intent, so
+  the schedule is tight but not derailed; the real constraint is per-symbol
+  depth, to be re-checked at the Aug 10 calibration start.
+  **W.2 delivered** as `tests/swallow_audit.py` — a repeatable, tiered census of
+  every exception handler that swallows without re-raising. 139 in
+  options_trader_v3 (81 silent) and 48 in day_trader_pro (42 silent), but tiered
+  by consequence only ~20 sit in risk/orders/record paths, and most of those are
+  correctly silent guarded imports and date parsers. `--json` emits a stable
+  snapshot so "did we add a new silent failure?" becomes a diff instead of a
+  memory exercise. The tool's docstring carries all seven of the week's
+  silent-failure defects and the line that ties them: every check we had asked
+  whether the code WORKS; none asked whether it RUNS, and whether it SAYS SO
+  when it does not.
+- **v3.8 — 2026-07-29 (late) — Y REWRITTEN: the env-var fix was a band-aid, and
+  the user caught it.** `install.sh` overwrites `~/market-brief/.env` from a
+  heredoc, so the one-line fix would have died at the next reinstall or on any
+  new instance — permanent-looking and not permanent. Y is now three committed
+  changes across two repos: **orchestrator v0.3.0** (freshness guard on the
+  report's `date` + `move_ranked` shape, Telegram alert, provenance stamped onto
+  the selection, and the never-resolving `~/market_brief/out/report.json`
+  fallback repointed at the reporter's real drop — this is what makes the fix
+  survive a rebuild), **install.sh 09:15 → 09:00** (the wake fired the same
+  minute the brief started; measured brief runtime ~75s, so 09:00 turns a race
+  into a 15-minute margin), and **`DTP_REPORT_JSON` provisioned in the .env
+  heredoc**. Deliberate-failure test passed against the real 2026-07-06 payload.
+  Also new: **`day_trader_pro/docs/ARCHITECTURE.md`** records the target layout —
+  Day_Trader_Pro as the over-arching project with `market_brief` and
+  `options_trader` as nested, independently-installable modules — plus the
+  modularity contract, an inventory of all five coupling seams, and the rule this
+  day earned: a file seam between two independently-scheduled processes must
+  carry a freshness stamp that the consumer checks, because it is the one seam
+  class that fails silently. It also flags that **`push.sh` must be fixed
+  (item V) BEFORE any migration**, since its `$HOME` scan becomes ambiguous once
+  two modules share a parent.
+- **v3.7 — 2026-07-29 (late) — ITEM X SOLVED THE SAME EVENING IT WAS FILED, and
+  it was neither of the two explanations X proposed.** The morning wake has been
+  ranking off a report frozen at **2026-07-06** — 23 days stale. The scorer is
+  not broken and there is no silent model fallback: `$DTP_REPORT_JSON` was never
+  set, so `report/emit.py` took its `os.getcwd()` fallback and has written
+  `~/market-brief/report.json` every morning while orchestrator read a different,
+  static file. Full diagnosis in Part 3; the one-line fix is **Y** (Thu Jul 30
+  after the close, deliberately NOT stacked on L2.5's first live session), with
+  **Y.1** repairing orchestrator's unreachable `~/market_brief/out/report.json`
+  fallback (underscore instead of hyphen, plus a non-existent `out/`).
+  **Also newly known: the brief's signed sentiment has never reached trading.**
+  `brief_strength` feeds the Stage-3 setup nudge and has been a constant 0.30 for
+  every name every day, because the frozen report predates the `move_ranked`
+  sidecar. Sixth silent-default finding of the day — the tally is now the L2
+  import guard, the discarded scp return values, the conductor's OHLC-only
+  completeness check, selector's EXACTLY-N backfill, the unreachable
+  `_REGIME_ENGINE` gate, and this. Every one of them produced plausible output
+  while doing nothing. **W.2 is the most valuable item in this file.**
+- **v3.6 — 2026-07-29 (evening) — L2.5 HAS NEVER RUN. NOT ONCE.** The day's
+  chase ended somewhere none of the earlier hypotheses reached. A fleet-wide
+  grep of `bot.log` on all 29 boxes — 34k to 138k lines each — returned
+  **L2=0, FAILED=0, STALE=0**, and `integrator_state.json` had never been
+  written on any box. Cause: `_REGIME_ENGINE` is built with `.lower()`, so it is
+  always `"l2"`, while **both** gate sites compared it to the uppercase literal
+  `"L2"` — the tick override and the startup warm-load that calls
+  `_l2_integ.load`/`save`. `"l2" == "L2"` is False, so the entire L2.5 block has
+  been unreachable dead code since v4.0 wired it, and **no environment variable
+  could ever have helped, because the default itself failed the comparison.**
+  Today's earlier fixes were real and both irrelevant to reachability: v4.5
+  repaired an import into a block that never executed, and v4.6 added reporting
+  to a branch never entered. Fixed as **main v4.7** (lowercase at both gates, a
+  start-up assert that refuses to boot on an unrecognised engine value, and a
+  start-up line naming the active engine), **check_versions v4.7** (absence
+  canary on the uppercase literal), and three reachability tests — suite 45/45,
+  deliberate-failure test passed.
+  **Why nothing caught it for weeks:** a gate that never opens raises nothing,
+  logs nothing, alerts nothing, and breaks no test. Every check we had asked
+  "does this code work?" — none asked "does this code run?". That is the fifth
+  and worst instance of today's recurring shape, after the L2 import guard, the
+  discarded scp return values, the conductor's OHLC-only completeness check and
+  the scorer's EXACTLY-N backfill. **W.2 is no longer a scoping pass; it is the
+  most valuable item on this backlog.**
+  **The calibration consequence is the big one.** Every regime label and every
+  conviction value this fleet has ever logged came from the v1.3 classifier. The
+  contamination is not 07-29 — it is the **entire history**. W.1's quarantine
+  widens accordingly, and any L2-derived prior (L2.4 churn fits,
+  `conditional_tables`, the L1.11 ramp) has never had real L2.5 data behind it.
+  **Thu Jul 30 will be the first session L2.5 has ever actually run**, which
+  makes it Day Zero for the L2 dataset and pushes every L2-dependent freeze date
+  out by however long the real baseline takes. Do not re-fit anything L2-derived
+  against pre-07-30 data.
+- **v3.5 — 2026-07-29 — new item X on Fri Jul 31 (light day): the morning
+  scorer looks like it picks the same 15 symbols every session.** Found while
+  back-harvesting 07-27/28/29 — all three reported an identical discretionary
+  cohort. Either the scorer is working and 14 boxes simply never contribute
+  tape (a calibration-breadth problem before the Aug 21 freeze), or the model
+  call is failing into `selector`'s EXACTLY-N backfill and selection has
+  degraded to reporter rank while still looking normal — the same
+  silent-fallback shape as the L2 guard, the discarded scp return values and
+  the conductor's OHLC-only completeness check. `selection_log.jsonl` already
+  holds the evidence to tell the two apart, so the item is a read, not a
+  build. Also recorded here: **07-29 ran the v1.3 fallback classifier for the
+  ENTIRE session** — a fleet-wide `bot.log` grep found every REGIME line tagged
+  `[v13]` and not one `[L2` line, so L2.5 never produced a committed label that
+  day (main v4.5 reached the boxes only at the ~17:05 fan-out, after the
+  close). W.1's quarantine therefore covers the whole day with no per-box
+  bracketing needed, and the afternoon's P&L recovery cannot be attributed to
+  L2.5. The fix remains UNPROVEN in production until `[L2 c=...]` tags appear
+  on REGIME lines after an open.
+- **v3.4 — 2026-07-29 — 07-29 FLEET INCIDENT: items W, W.1, W.2 at the top of
+  Thu Jul 30.** Zero trades fleet-wide until ~10:05 ET (continuation v1.3
+  orphaned `mid` → NameError every tick; hotfixed as v1.3.1, `dd0d097`), and a
+  second, still-live defect: all 15 boxes running the v1.3 classifier instead
+  of L2.5. Root cause diagnosed and **differs from the initial read** —
+  `RANGE_WINDOW_BARS` was never in `conviction_integrator`; main.py imported it
+  through a re-export tuple that the 07-28 excavation trimmed, and main.py's L2
+  guard swallowed the ImportError into a per-start WARNING. Fix built and
+  tested (main v4.5, alert_manager v1.7, check_versions v4.5,
+  tests/test_l2_import_contract.py — suite 42/42), deploying after the close.
+  **W.1 quarantines the day's conviction data** — it is off-engine and must not
+  feed any fit until the contaminated window is bounded from the logs. W.2
+  opens the systemic question: two silent-degradation faults in one morning,
+  both invisible because trading continued. That pattern, not either bug, is
+  the go-live risk.
+- **v3.3 — 2026-07-29 — new item V on the Thu Jul 30 punch list: `push.sh`
+  resolves its target by scanning `$HOME` and ignoring the caller's cwd.**
+  Surfaced when a push from the correct directory reported the wrong repo's
+  remote. Both remotes were correct — the tool had cd'd elsewhere. Dormant now
+  that the borrowed futures checkout is off the box, which is exactly why it is
+  written down: nothing will show it is still broken until the next time two
+  projects share `$HOME`. Same file ships in futures_trader_v1.
+- **v3.2 — 2026-07-29 — check_versions v4.4 (glyph fix) + a path convention
+  worth writing down.** First control-side run of v4.3 surfaced an inherited
+  defect: status glyphs were emitted as literal `\u2713` / `\u2717` (bash
+  `echo` does not interpret `\u`), so they have never rendered. Fixed as
+  **v4.4**, literal UTF-8, no logic change — it rides the same commit as v4.3
+  since neither has been pushed. Also recorded, because it has now cost one
+  failed command: **the control checkout is `~/options-trader-v3`; the bot
+  boxes are `~/options-trader`.** Control-side verification commands take the
+  suffix, fleet/menu commands do not.
+- **v3.1 — 2026-07-29 — JUL 29 DAY CLOSED; T.1/T.3 FOUND ALREADY RESOLVED AT
+  HEAD.** Working the day's items against a fresh clone (working-agreement
+  rule 8) found T.1 and T.3 were **already shipped in the 07-22 defect-T pass**
+  and never registered here: the old `test_paper_entries_mirror_live_friction`
+  no longer exists — replaced by `test_paper_entries_book_the_mark_by_default`
+  + `test_paper_friction_knob_applies_to_every_path`, which is exactly T.1's
+  HOW clause — and the suite runs **37/37 green** at HEAD (the "36/36" target
+  was stale; a test was added since). position_manager is at v3.9 (07-22) with
+  the import gone and the removal changelogged. **U** was likewise 95% shipped:
+  check_versions v3.1 (07-22) closed the fingerprint gap under the name "audit
+  defect U" and v3.2–v4.2 extended it to 125 checks covering every item in U's
+  list. The one genuinely missing piece — the README **parity invariant**
+  (checkout commit vs origin HEAD) — is delivered today as **check_versions
+  v4.3**, with a failure-count DONE banner (one greppable line per box on an
+  option-23 pass) and a passed deliberate-failure test (token deletion → 2
+  MISSING; diverged HEAD → PARITY RED). All three moved to Part 3 with
+  evidence. Lesson standing: this file trailed the repo by a week on three
+  items — an item's premise is re-verified at HEAD *the day it's worked*, not
+  trusted from the file.
+- **v3.0 — 2026-07-29 — HOW + VALIDATE AMENDMENT.** Every open item now carries a
+  **HOW** (the proposed fix, concretely) and a **VALIDATE** clause naming the exact
+  dataset *already collected* that will confirm or disprove the fix — trades.db
+  observability columns (adx/conviction/flat-angle/level_strength/MFE-MAE),
+  `signal_journal` jsonl (incl. vwap + price_vs_vwap, verified at HEAD),
+  `chain_snapshots` (harvest v0.5.1 pulls them since 07-27), `session_labels.jsonl`
+  (auto_label), the regime diary/replay, `conditional_tables`, the readiness
+  journal, excursion reports, and the shadow corpus. Where the framework to
+  validate a fix does **not** exist, a new instrumentation item is scheduled early
+  enough to be in place before the fix it validates: **N.1** regime_log harvest
+  (Jul 30 → validates L1.9, powers Aug 5 ADX reconstruction and the Aug 10 live
+  churn watch) · **N.2** `rrr` + gate-block dispositions in the signal journal
+  (Jul 31 build → validates E/F live via L3.2) · **N.3** `closes_beyond` captured
+  on sweep trade rows (Jul 31 build → arms the Aug 18 reclaim-looseness verdict)
+  · **N.4** paper-fill realism audit off the chain archive (Aug 14 → validates T.2
+  and the R slippage default before any live fill exists) · **N.5** fill-latency
+  telemetry on FillResult (Aug 20 build → the live-week dataset TC.2's
+  stop-trigger decision requires) · **N.6** extended-hours-bars audit
+  (Aug 6 → gates whether Overnight H/L is computable from the feed_store or needs
+  its own capture). Capture-claims verified against HEAD 2026-07-29, not memory
+  (working-agreement rule 8): harvest already at v0.5.1, so P5.1's Jul 30 slot is
+  re-scoped from *build* to *deploy-verify + completeness manifest*.
+- **v2.0 — 2026-07-29 — SCHEDULED REWRITE.** The whole backlog re-ordered into the
+  sequence the work can actually be accomplished, with a target date per item, driven
+  by the go-live clock: **live trading by the first week of September, full position
+  sizes by mid-September.** Four ~2-week epochs, deliverables checkable daily
+  (weekends included for builds/analysis — markets closed is when tester-first work
+  is safest), and every trade-behavior-changing deploy lands **fresh on a Monday
+  RTH.** Open items carry their original defect/observation IDs. The resolved
+  register (A–D, G–H, L, N–R, V–Y and the resolved observations) is preserved in
+  PART 3 in condensed form — resolution date + fixing versions + the why — so no fix
+  gets quietly reverted; full forensic text lives in git history at the pre-v2.0
+  commit of this file. Stale framing removed: the "Part 1 / Part 2 consolidated from
+  README + OBSERVATIONS.md" structure is superseded by the schedule.
+- v1.0 — 2026-07-28 — Consolidated from `README.md`'s defect register (items A–AA)
+  and `docs/OBSERVATIONS.md`, both preserved verbatim.
+
+**Status motif:** `✅ RESOLVED` · `🔄 IN PROGRESS` · `⚠️ OPEN` · `⬜ NOT STARTED / scheduled`
+
+**How to read a v3.0 item:** the v2.0 scheduling text stands; **HOW** = the
+proposed mechanism of the fix; **VALIDATE** = the evidence contract — which
+*already-collected* dataset confirms or disproves it, and by what metric. A fix
+whose VALIDATE clause points at a dataset that doesn't exist yet points instead at
+the N-item that creates it, and that N-item is dated *before* the fix's own
+decision date. Evidence decides; the schedule just makes sure the evidence is
+waiting when the decision arrives.
+
+---
