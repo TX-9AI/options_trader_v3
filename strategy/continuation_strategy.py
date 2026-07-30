@@ -92,7 +92,7 @@ v1.3.1 — 2026-07-29 — HOTFIX. v1.3 deleted the BB-midline block (which defin
         compile check does not catch an unbound name on a branch that never ran.
         The canary must import and CALL the strategy on a box before deploy.
 
-v1.3.2 — 2026-07-30 — LOG THE DECLINES. v1.3/v1.3.1 had THREE silent `return
+v1.3.3 — 2026-07-30 — LOG THE DECLINES (all of them). v1.3/v1.3.1 had THREE silent `return
         None` paths, so a box in TRENDING_BULL printed only "STRATEGY: NO TRADE"
         with no way to tell whether the structure/df_1m plumbing was missing, no
         unfilled FVG existed in the trend direction, or the wick simply did not
@@ -101,6 +101,13 @@ v1.3.2 — 2026-07-30 — LOG THE DECLINES. v1.3/v1.3.1 had THREE silent `return
         branch now logs its inputs -- including gap bounds, the wick, and
         missed_by, so "it declined correctly" and "it is broken" are
         distinguishable at a glance. No behaviour change; observability only.
+        v1.3.3 extends this to every decline that can refuse a QUALIFYING
+        setup: the bare `except Exception` around the df_1m tag read (which
+        returned None on EVERY tick if the frame's columns were not what was
+        expected -- silent, and a prime suspect for AMZN), plus the conviction
+        floor, the 5m momentum vote, and the 5m direction agreement.
+        Regime-mismatch gates are deliberately left silent -- they fire every
+        tick and would drown the log.
         (Third instance of this pattern: butterfly gates at DEBUG, ORB's
         "1 named level(s)", now continuation. A gate that cannot say why it
         declined cannot be diagnosed.)
@@ -182,6 +189,7 @@ class ContinuationStrategy(BaseOptionsStrategy):
         # skip the floor in that specific case. A still-trending handoff keeps it.
         _label_trending = rgm in (Regime.TRENDING_BULL, Regime.TRENDING_BEAR)
         if _label_trending and regime.conviction < conv_floor:
+            logger.info(f"[continuation] declined: conviction={regime.conviction:.3f} < floor={conv_floor:.3f}")
             return None
 
         # ── 2. PULLBACK = 1-min WICK TAGS the nearest unfilled 5-min FVG ───────
@@ -232,7 +240,12 @@ class ContinuationStrategy(BaseOptionsStrategy):
         try:
             last_low  = float(df_1m["low"].iloc[-1])
             last_high = float(df_1m["high"].iloc[-1])
-        except Exception:
+        except Exception as _e:
+            logger.warning(
+                f"[continuation] FVG tag test FAILED reading df_1m: {type(_e).__name__}: {_e} "
+                f"| cols={list(getattr(df_1m, 'columns', []))} "
+                f"rows={len(df_1m) if df_1m is not None else 'None'} "
+                f"— this returns None EVERY tick until fixed")
             return None
         if direction == "long":
             tagged = last_low <= (gap.top - CONTINUATION_FVG_TAG_MIN)
@@ -258,6 +271,7 @@ class ContinuationStrategy(BaseOptionsStrategy):
         # and getattr silently returned "", hard-blocking this trade forever.
         momentum = getattr(trend, "primary_momentum", "") or ""
         if not momentum:
+            logger.info("[continuation] declined: no 5m momentum vote this tick")
             return None          # no 5m vote this tick — unknown is not a green light
         # Real vocabulary: ACCELERATING / DECELERATING / FLAT.
         #   standalone -> must be ACCELERATING (self-sourced, so demand thrust)
@@ -274,8 +288,10 @@ class ContinuationStrategy(BaseOptionsStrategy):
         # direction agreement between regime and trend engine (cheap sanity)
         tdir = (getattr(trend, "overall_direction", "") or "").upper()
         if direction == "long"  and tdir not in ("BULLISH", "BULL", "UP"):
+            logger.info(f"[continuation] declined: dir=long but 5m trend={tdir}")
             return None
         if direction == "short" and tdir not in ("BEARISH", "BEAR", "DOWN"):
+            logger.info(f"[continuation] declined: dir=short but 5m trend={tdir}")
             return None
 
         # ── 4. Build the signal (debit directional) ────────────────────────
