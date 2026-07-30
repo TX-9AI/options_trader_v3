@@ -29,6 +29,19 @@
 #   bash push.sh "your commit message"  — push with a custom message
 #   bash push.sh --deploy               — fetch + reset --hard + restart (pull side)
 #   bash push.sh --deploy --no-restart  — deploy without restarting the service
+# v1.7 — 2026-07-30 — TARGET RESOLUTION: prefer the caller's directory over the
+#         $HOME scan, and ANNOUNCE the resolved target + remote before acting.
+#         The old block ignored $PWD entirely and took the first $HOME entry
+#         containing main.py+config.py — invisible on a bot box (one bot per
+#         home), wrong on the control server. Run from ~/options-trader-v3 with
+#         a futures_trader_v1 checkout present, it cd'd into FUTURES and refused
+#         with a message naming the wrong project's remote; refusing was luck,
+#         since a successful push would have written options_trader files into
+#         the futures repo. Order is now: exported $BOT_DIR -> $PWD if it looks
+#         like a bot checkout -> $HOME scan (with a loud warning when the
+#         fallback is what resolved it). Prerequisite for the nested-module
+#         layout in docs/ARCHITECTURE.md, where the scan becomes ambiguous by
+#         construction rather than by accident.
 # =============================================================================
 
 BOLD='\033[1m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
@@ -56,20 +69,63 @@ echo -e "${BOLD}${CYAN}╚══════════════════
 echo ""
 
 # ── Detect which bot and repo ─────────────────────────────────────────────────
-BOT_DIR=""
-for dir in "$HOME"/*/; do
-    [[ "$dir" == *"-deploy"* ]] && continue
-    if [ -f "${dir}main.py" ] && [ -f "${dir}config.py" ]; then
-        BOT_DIR="${dir%/}"
-        break
-    fi
-done
+# v1.7 — PREFER THE CALLER'S DIRECTORY. This block used to go straight to the
+# $HOME scan below, ignoring where it was invoked from. On a bot box that is
+# invisible (one bot per $HOME); on the CONTROL server it picks whichever
+# project sorts first. On 2026-07-29, run from ~/options-trader-v3 with a
+# futures_trader_v1 checkout also present, it cd'd into FUTURES and refused
+# with "Could not detect repo from git remote" — naming the wrong project's
+# remote. Refusing was lucky: a successful push would have written
+# options_trader files into the futures repo.
+#
+# It also has to be fixed BEFORE the nested-module layout in
+# docs/ARCHITECTURE.md, because once market_brief/ and options_trader/ share a
+# parent the scan is ambiguous by construction, not just by accident.
+#
+# Resolution order: an explicit $BOT_DIR override -> the current directory when
+# it looks like a bot checkout -> the $HOME scan as a last resort.
+_looks_like_bot() {   # $1 = dir
+    [ -f "${1}/main.py" ] && [ -f "${1}/config.py" ]
+}
+
+BOT_DIR="${BOT_DIR:-}"          # honour an explicit override if one is exported
+HOW=""
+INVOKED_FROM="$PWD"             # captured BEFORE the cd below, or the warning
+                                # at the end can never fire (it would be
+                                # comparing $PWD to itself)
+if [ -n "$BOT_DIR" ] && _looks_like_bot "$BOT_DIR"; then
+    HOW="\$BOT_DIR override"
+elif _looks_like_bot "$PWD"; then
+    BOT_DIR="$PWD"; HOW="current directory"
+else
+    for dir in "$HOME"/*/; do
+        [[ "$dir" == *"-deploy"* ]] && continue
+        if [ -f "${dir}main.py" ] && [ -f "${dir}config.py" ]; then
+            BOT_DIR="${dir%/}"; HOW="\$HOME scan"
+            break
+        fi
+    done
+fi
 
 if [ -z "$BOT_DIR" ]; then
-    echo -e "${YELLOW}  ⚠  Could not detect bot directory. Run from bot home.${RESET}"
+    echo -e "${YELLOW}  ⚠  Could not detect bot directory. Run from a bot"
+    echo -e "     checkout (one containing main.py and config.py), or export"
+    echo -e "     BOT_DIR=/path/to/checkout.${RESET}"
     exit 1
 fi
 cd "$BOT_DIR" || exit 1
+
+# SAY WHICH PROJECT WE PICKED, ALWAYS. The 07-29 incident was survivable only
+# because the remote mismatch happened to trip a guard; the operator had no way
+# to know the script had silently changed directory. Announce it before acting.
+echo -e "  ${CYAN}target:${RESET} $BOT_DIR  ${CYAN}(via ${HOW})${RESET}"
+echo -e "  ${CYAN}remote:${RESET} $(git remote get-url origin 2>/dev/null || echo '(none)')"
+if [ "$HOW" = "\$HOME scan" ] && [ "$INVOKED_FROM" != "$BOT_DIR" ]; then
+    echo -e "  ${YELLOW}⚠  invoked from $INVOKED_FROM, which is not a bot"
+    echo -e "     checkout — fell back to scanning \$HOME. VERIFY the target"
+    echo -e "     above is the project you meant.${RESET}"
+fi
+echo ""
 
 # ── If a previous run left a rebase in progress, clear it before continuing ──
 if [ -d ".git/rebase-merge" ] || [ -d ".git/rebase-apply" ]; then
