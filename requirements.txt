@@ -18,3 +18,4 @@ pytz>=2024.1
 # Alerts: Telegram only (notifications/telegram_sender.py). Twilio/SMS was removed
 # in v2.0 but the dependency was left behind until v3.1 — it is not imported by any
 # module in this tree.
+pyflakes  # tests/test_no_undefined_names.py — the 07-29/07-30 NameError gate

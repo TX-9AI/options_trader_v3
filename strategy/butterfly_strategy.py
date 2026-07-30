@@ -1,5 +1,13 @@
 """
-strategy/butterfly_strategy.py — Debit butterfly for RANGING/COMPRESSION regimes. v3.2
+strategy/butterfly_strategy.py — Debit butterfly for RANGING/COMPRESSION regimes. v3.3
+v3.3 — 2026-07-30 — NameError: `_mult` referenced on line 190 after the
+        conviction-scaled proximity multiplier was reverted to a fixed 1x EM and
+        the variable removed. Raised on EVERY butterfly evaluation, but only a
+        box in COMPRESSION reaches that gate — so IWM restarted twice while the
+        other 14 boxes ran the same code without a scratch. Second orphaned-
+        variable NameError in two days (continuation `mid`, 07-29); both were
+        caught only by a live box crashing. `tests/test_no_undefined_names.py`
+        now fails the suite on any undefined name, which catches both.
 v3.0 — original release
 v3.1 — 2026-07-12 — DOC SYNC (no logic change): the header described
         BUTTERFLY_ENTRY_CUTOFF_ET as a "hard exit at 2:00 PM". It is an ENTRY
@@ -181,7 +189,16 @@ class ButterflyStrategy(BaseOptionsStrategy):
         # this gate would admit nothing. Left as-is deliberately.)
         _conv = float(getattr(regime, "conviction", 0.0) or 0.0)
         _em   = self._expected_move(current_price, macro.vix)
-        proximity_threshold = _em
+        # v3.3 — _mult is the multiplier ACTUALLY in force. The conviction-scaled
+        # version was reverted to a fixed 1x EM (see the comment above), the
+        # variable was deleted, and the log line below kept referencing it —
+        # NameError on every butterfly evaluation. It only ever fired on a box in
+        # COMPRESSION, so 14 of 15 boxes never reached it: IWM crash-looped on
+        # 2026-07-30 while the rest ran clean. Kept as a named constant rather
+        # than dropped from the f-string so the ledger's field schema is stable
+        # if the multiplier is ever scaled again.
+        _mult = 1.0
+        proximity_threshold = _mult * _em
         distance_from_pin   = abs(current_price - pin_strike)
 
         # logged on EVERY evaluation (accept or reject) so the ledger can fit the

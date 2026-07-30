@@ -395,6 +395,13 @@ try:
 except Exception:
     _readiness = None
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:                     # v4.9 — resolves the quoted annotation on
+    from strategy.base_strategy import OptionsSignal   # _execute_condor_leg; a
+                                      # forward reference never evaluates at
+                                      # runtime, so this is lint-clean at zero
+                                      # cost and lets the undefined-name gate
+                                      # run at ZERO tolerance instead of one.
 from strategy.orb_strategy import ORBStrategy
 from strategy.sweep_reversal_strategy import SweepReversalStrategy
 from strategy.butterfly_strategy import ButterflyStrategy
