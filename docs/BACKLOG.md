@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.16
+# docs/BACKLOG.md — v3.17
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -283,6 +283,25 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   danger band. All from the existing readiness journal + OHLC; no gap.
 
 **⬜ Wed Aug 5**
+- `[DESK]` **L1.CAL.2 — post-graft ramp re-read (verifies the L1.CAL correction
+  before L1.11 fits anything).** L1.9 grafts the bookmark onto
+  `validate_regime.sh` on Tue Aug 4 and re-scores the diary. The day after,
+  re-run `python3 tests/ramp_calibration.py` over the rebuilt corpus and check
+  ONE thing: **did `align_frac`'s distribution actually widen?** If p25/p50 lift
+  off 0.67, the bookmark did its job and L1.11 can fit `align_val` on Aug 8–9
+  against real spread. If they are still pinned at 0.67 with only the p95 tail
+  reaching 1.00, the graft did not restore HTF depth and **L1.11 must fit the
+  other terms and leave `align_val` alone** rather than fitting a compressed
+  input and calling it calibrated.
+  **TWO BIRDS:** L1.6's flat-angle sweep (16–26°) is already on this date and
+  reads the same rebuilt diary — and `flat_s` is the term with the clearest fit
+  (67.6% pegged, `lo=12` at input p52). Do them in one sitting; the L1.6 cut
+  sweep and the `flat_s` ramp refit are the hard veto and the soft credit ramp
+  of the same angle measurement, and fitting either without the other is how
+  you end up with a veto and a ramp that disagree.
+  **VALIDATE:** the pull_val rule — accept a bound only where the raw
+  distribution spans the behaviour the factor measures. Angle does
+  (p5 1.09° → p99 47.14°). `align_frac` currently does not.
 - `[DESK]` **Historical ADX reconstruction.** Timestamp-join `regime_log` → trades to
   backfill `adx_at_entry` on pre-07-27 rows (deferred at the 07-24 fix; the warm
   rebuild makes it worth doing now). Offline, control-side.
@@ -392,20 +411,28 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   cannot be trusted. Also: `load()` held every record of every session (~300MB
   for a fortnight) and the 13-session auto-discover run died producing NO OUTPUT
   — now streams per line, keeping only sampled floats.
-  **THE FINDING THAT REORDERS L1.11 — `align_frac` IS A CONSTANT.** Across
-  11,295 ticks its p25 = p50 = p95 = **0.67**. Since
-  `align_val = max(align_frac, ramp(adx, ...))`, one arm is frozen and TRENDING's
-  "corroborator" is ADX measured twice — `adx_s` and `align_val` peg at the
-  identical 54.2%. regime_confluence line 86 already says why: *"align_frac never
-  exceeds 0.67 in replay — blocked on L1.9 bookmark"*. **No ramp fit repairs a
-  constant input**, so **L1.11 cannot fit `align_val` until L1.9 lands.** That
-  dependency was nowhere in this file and would have surfaced on Aug 8.
-  **What IS fittable now:** `flat_s` pegs high 61.7% with real spread beneath it
-  (angle p5 1.4° → p99 41.9°); `adx_s` pegs high 54.2% but is DERIVED, so it
-  needs a hand fit. **`room_s` is the control case** — 78.5% graded, healthy,
-  and healthy *because* it was already re-fitted in the v1.3 pass
-  (LO 0.05→0.17, HI 0.20→1.00). Proof the process works when the tool reports
-  honestly.
+  **CORRECTED against the full corpus — I overstated this from one session.**
+  The single-session read (11,295 ticks) showed `align_frac` p25 = p50 = p95 =
+  0.67 and I called it a hard constant, concluding L1.11 could not fit
+  `align_val` at all until L1.9 landed. **Across all 13 sessions (134,137 ticks)
+  p95 = 1.00** — it does reach full alignment, in roughly the top 5% of ticks.
+  So `align_val` is SEVERELY COMPRESSED, not structurally dead: its pegged-1.0
+  rate is 43.0% with 57.0% graded. The L1.9 bookmark WIDENS that tail rather
+  than being a precondition for the factor existing. regime_confluence line 86
+  (*"align_frac never exceeds 0.67 in replay"*) is itself a single-window
+  observation and should be re-read after the graft.
+  **The schedule already handles the dependency** — L1.9 grafts Tue Aug 4,
+  L1.11 fits Sat Aug 8–9. No reordering needed; what is needed is a
+  VERIFICATION between them, dated below.
+  **Full-corpus readings (13 sessions) supersede the single-day numbers:**
+  `flat_s` pegs 67.6% — WORSE than the one-day 61.7%, and `lo=12` sits at input
+  **p52**, so over half of all ticks already take full flat credit while angle
+  spans p5 1.09° → p99 47.14°. Clearest fit on the board.
+  `adx_s` pegs 37.6% (was 54.2% on one day) — less urgent than it looked; still
+  DERIVED, still needs a hand fit.
+  `room_s` 66.2% graded and `osc_s` 59.6% graded — **both healthy, both already
+  re-fitted in the v1.3 pass.** They are the control cases proving the tool
+  reports honestly and that a refit works.
   **VALIDATE:** re-run over the full corpus once streaming is deployed; a fit is
   only accepted where the raw distribution spans the behaviour the factor
   measures (the pull_val rule), which one session cannot establish.
@@ -993,6 +1020,19 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.17 — 2026-07-30 — L1.CAL CORRECTED, and a verification dated.** The
+  "align_frac is a constant" claim came from ONE session; the full 13-session
+  corpus (134,137 ticks) shows p95 = 1.00, so the factor is severely compressed
+  rather than dead and L1.9 widens its tail rather than gating its existence.
+  The existing schedule already sequences this correctly — L1.9 grafts Aug 4,
+  L1.11 fits Aug 8–9 — so nothing moves; instead **L1.CAL.2 lands Wed Aug 5** to
+  verify the graft actually widened the distribution before anything is fitted
+  to it, paired with L1.6's flat-angle sweep because both read the same rebuilt
+  diary and `flat_s` is the same measurement's soft ramp. Full-corpus numbers
+  replace the single-day ones throughout: `flat_s` 67.6% pegged with `lo=12` at
+  input p52 (worse than the one-day read, and the clearest fit available),
+  `adx_s` 37.6% (better), `room_s` and `osc_s` both healthy and both already
+  re-fitted — the control cases.
 - **v3.16 — 2026-07-30 — L1 RAMP CALIBRATION: tool fixed, and it found that
   L1.11 has an unrecorded dependency on L1.9.** `align_frac` is a CONSTANT 0.67
   across 11,295 ticks, so `align_val` contributes nothing independent and cannot
