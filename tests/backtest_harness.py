@@ -1,5 +1,16 @@
 """
 tests/backtest_harness.py — offline multi-day backtest over spliced 1-minute tape.
+v1.1 — 2026-07-30 — +STRATEGY ATTEMPT CENSUS. v1.0 drove ORB only, so "how often
+        does each strategy even get a setup" could not be answered offline —
+        which is how ContinuationStrategy went weeks building signals with
+        strike=0 that main rejected every tick, with nobody noticing. Now also
+        drives Continuation, SweepReversal and IronCondor over the same tape,
+        against a chain MODELLED with this file's own Black-Scholes pricer, and
+        reports setups / valid / invalid / raised plus the regime each setup
+        occurred under. Occurrence only — marks are theoretical and there is no
+        fill model, so these are NOT P&L. Butterfly is excluded deliberately: it
+        needs a GEX pin and modelling one would manufacture setups. --no-census
+        restores exact v1.0 behaviour.
 v1.0 — 2026-07-11
 
 Drives the REAL deployed engines over a multi-day 1-minute OHLC file (per symbol),
@@ -132,7 +143,75 @@ class PremiumModel:
 
 
 # ───────────────────────── regime timeline ─────────────────────────
-def build_regime_timeline(df, vix_df, fed_days, cadence_min):
+class _BarClock:
+    """Make a strategy's datetime.now(ET) return the BAR's time, not wall clock.
+
+    IronCondor.decide() gates on datetime.now(ET) against an 11:11-14:00 ET
+    entry window, and butterfly does the same for its own cutoff. In a backtest
+    that reads real wall clock, so a run started at 18:00 sees every bar as
+    "past cutoff" and reports zero setups forever — which looks exactly like a
+    broken strategy and is not one. Patch per evaluation so the strategy sees
+    the simulated time it is actually being asked about.
+    """
+
+    def __init__(self, module, ts):
+        self.module, self.ts = module, ts
+
+    def __enter__(self):
+        real = self.module.datetime
+        ts = self.ts
+
+        class _DT(real):
+            @classmethod
+            def now(cls, tz=None):
+                return ts.astimezone(tz) if tz is not None else ts
+
+        self._real = real
+        self.module.datetime = _DT
+        return self
+
+    def __exit__(self, *a):
+        self.module.datetime = self._real
+
+
+def _synth_chain(bs, spot, vix, now_ts):
+    """A modelled 0DTE chain, priced with the SAME Black-Scholes model the
+    harness already uses for --model-premium.
+
+    WHY THIS EXISTS: continuation, sweep and condor all need a chain — for
+    strike selection and for the ATM-straddle expected move. A price-only tape
+    has none, which is why v1.0 could only evaluate ORB. Modelling the chain
+    lets their ENTRY LOGIC be exercised over real tape.
+
+    WHAT THIS IS NOT: a fill model. Marks here are theoretical, spreads are
+    synthetic, and liquidity is assumed. Treat every non-ORB number as
+    "how often did the entry conditions occur", NEVER as P&L. Butterfly is
+    deliberately still excluded — it needs a GEX pin, which cannot be modelled
+    from price alone, and faking one would invent setups that never existed.
+    """
+    from data.options_chain import OptionsChain, OptionContract
+    vixv = float(vix or 16.0)
+    iv = max(0.05, vixv / 100.0)
+    step = 1.0 if spot < 100 else (5.0 if spot > 1000 else 2.5)
+    calls, puts = [], []
+    for k in [round((spot + i * step) / step) * step for i in range(-12, 13)]:
+        for side, bucket in (("call", calls), ("put", puts)):
+            try:
+                mk = bs.price(spot, k, vixv, now_ts, call=(side == "call"))
+            except Exception:                                   # noqa: BLE001
+                mk = max(0.01, (spot - k) if side == "call" else (k - spot))
+            mk = round(max(0.01, mk), 2)
+            bucket.append(OptionContract(
+                symbol=f"SYN{k}{side[0].upper()}", underlying="SYN",
+                expiry="", option_type=side, strike=float(k),
+                bid=round(max(0.01, mk - 0.02), 2), ask=round(mk + 0.02, 2),
+                mark=mk, delta=0.5, gamma=0.05, theta=-0.1, vega=0.08, iv=iv,
+                open_interest=5000, volume=2000, streamer_symbol=""))
+    return OptionsChain(underlying="SYN", expiry="", spot_price=spot,
+                        iv_rank=50.0, calls=calls, puts=puts)
+
+
+def build_regime_timeline(df, vix_df, fed_days, cadence_min, _census=None):
     """Returns {timestamp -> (regime_label, RegimeState, confluence_dict)} at cadence."""
     d5c, d15c, d1hc = resample(df, "5min"), resample(df, "15min"), resample(df, "1h")
     d4hc, d1dc = resample(df, "4h"), resample(df, "1D")
@@ -171,6 +250,49 @@ def build_regime_timeline(df, vix_df, fed_days, cadence_min):
                 rc = clf.classify(vs, tr, st, lq, macro=macro, trigger="backtest")
             except Exception:
                 continue
+            # ── v1.1: STRATEGY ATTEMPT CENSUS ───────────────────────────
+            # v1.0 drove ORB only, so "how often does each strategy actually
+            # get a setup" was unanswerable offline — which is exactly how
+            # ContinuationStrategy went weeks without ever producing a valid
+            # signal and nobody noticed. Everything these need (vs/tr/st/lq/rc)
+            # is already computed above; only the chain was missing, and that
+            # is now modelled. Butterfly stays excluded on purpose: it requires
+            # a GEX pin, and inventing one would manufacture setups.
+            if _census is not None:
+                _sc = _synth_chain(_census["bs"], price, macro.vix, t)
+                _df1 = df[(df.index >= sess_start) & (df.index <= t)]
+                for _name, _fn in (
+                    ("Continuation", lambda: _census["cont"].generate_signal(
+                        regime=rc, vol_state=vs, trend=tr, chain=_sc,
+                        current_price=price, structure=st, df_1m=_df1,
+                        macro=macro)),
+                    ("SweepReversal", lambda: _census["sweep"].generate_signal(
+                        regime=rc, vol_state=vs, structure=st, liq_map=lq,
+                        chain=_sc, macro=macro, df_1m=_df1, current_price=price)),
+                    ("IronCondor", lambda: _census["condor_run"](rc, vs, _sc,
+                                                                 macro, price, t)),
+                ):
+                    _c = _census["stats"][_name]
+                    _c["evals"] += 1
+                    try:
+                        _sig = _fn()
+                    except Exception as _e:                       # noqa: BLE001
+                        _c["raised"] += 1
+                        _c["last_error"] = f"{type(_e).__name__}: {_e}"
+                        continue
+                    if _sig is None:
+                        continue
+                    _c["setups"] += 1
+                    _c["by_regime"][str(rc.primary_regime)] = \
+                        _c["by_regime"].get(str(rc.primary_regime), 0) + 1
+                    _iv = getattr(_sig, "is_valid", None)
+                    _ok = bool(_iv() if callable(_iv) else _iv) \
+                        if _iv is not None else True
+                    if _ok:
+                        _c["valid"] += 1
+                    else:
+                        _c["invalid"] += 1
+
             cdict = None
             if conf is not None:
                 try:
@@ -292,6 +414,8 @@ def main():
     ap.add_argument("--model-premium", action="store_true", help="add modeled BS premium P&L")
     ap.add_argument("--dte", type=int, default=0, help="days to expiry for the premium model (0=0DTE)")
     ap.add_argument("--fed-days", default="", help="comma YYYY-MM-DD FOMC dates")
+    ap.add_argument("--no-census", action="store_true",
+                    help="skip the non-ORB strategy attempt census (v1.0 behaviour)")
     args = ap.parse_args()
 
     sym = os.path.splitext(os.path.basename(args.symbol))[0].split("_")[0]
@@ -310,7 +434,35 @@ def main():
 
     # 1) regime timeline
     cad = max(REGIME_REASSESS_MINUTES, 1)
-    timeline = build_regime_timeline(df, vix_df, fed_days, cad)
+    # v1.1 — strategy attempt census. Built here so the loop stays hot; None
+    # disables it entirely (--no-census) and the harness behaves exactly as v1.0.
+    _census = None
+    if not args.no_census:
+        try:
+            from strategy.continuation_strategy import ContinuationStrategy
+            from strategy.sweep_reversal_strategy import SweepReversalStrategy
+            from strategy.iron_condor_strategy import IronCondorStrategy
+            _census = {
+                "bs": PremiumModel(dte=args.dte),
+                "cont": ContinuationStrategy(),
+                "sweep": SweepReversalStrategy(),
+                "condor": IronCondorStrategy(),
+                "condor_mod": sys.modules["strategy.iron_condor_strategy"],
+                "stats": {n: {"evals": 0, "setups": 0, "valid": 0, "invalid": 0,
+                              "raised": 0, "last_error": "", "by_regime": {}}
+                          for n in ("Continuation", "SweepReversal", "IronCondor")},
+            }
+            def _condor_run(rc_, vs_, sc_, macro_, price_, ts_):
+                with _BarClock(_census["condor_mod"], ts_):
+                    return _census["condor"].decide(
+                        regime=rc_, vol_state=vs_, chain=sc_, macro=macro_,
+                        current_price=price_)
+            _census["condor_run"] = _condor_run
+        except Exception as exc:                                  # noqa: BLE001
+            print(f"  (census disabled — {type(exc).__name__}: {exc})")
+            _census = None
+
+    timeline = build_regime_timeline(df, vix_df, fed_days, cad, _census)
     dist = Counter(v[0] for v in timeline.values())
     tot = sum(dist.values())
     print(f"\n── REGIME DISTRIBUTION ({tot} evals @ {cad}-min) ──")
@@ -331,6 +483,22 @@ def main():
         res = simulate_trade(df, vix_df, s, pm=pm)
         s.update(res)
         fired.append(s)
+
+    if _census is not None:
+        print(f"\n── STRATEGY ATTEMPTS (modelled chain — occurrence, NOT P&L) ──")
+        for _n, _c in _census["stats"].items():
+            _pct = 100.0 * _c["setups"] / max(1, _c["evals"])
+            print(f"  {_n:<14} evals {_c['evals']:>5}   setups {_c['setups']:>4} "
+                  f"({_pct:4.1f}%)   valid {_c['valid']:>4}   "
+                  f"invalid {_c['invalid']:>3}   raised {_c['raised']:>4}")
+            if _c["by_regime"]:
+                _top = sorted(_c["by_regime"].items(), key=lambda kv: -kv[1])[:4]
+                print(f"                 under: "
+                      + "  ".join(f"{k}={v}" for k, v in _top))
+            if _c["raised"]:
+                print(f"                 !! {_c['last_error'][:78]}")
+        print(f"  Butterfly       excluded — needs a GEX pin; price-only tape "
+              f"cannot provide one")
 
     print(f"\n── ORB (gate applied) ──")
     print(f"  setups detected: {len(setups)}   fired: {len(fired)}   blocked by regime gate: {blocked}")
