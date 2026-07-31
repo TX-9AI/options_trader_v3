@@ -1,4 +1,21 @@
 """
+v-holdcompression + v-selfdiag — 2026-07-30 — TWO CHANGES, both about a plan
+  that dies without saying anything.
+  (1) HOLD ON COMPRESSION. Any non-RANGING tick used to cancel an un-filled
+      plan; CVX lost three in one session to COMPRESSION alone, each after ~19
+      minutes, so none reached the entry cutoff. Compression is a TIGHTENING
+      range — where a neutral short-premium structure most belongs — so it is
+      now a HOLD, as are SWEEP_REVERSAL and UNKNOWN. Only TRENDING_*/BREAKOUT
+      cancel. Mirrors Leg 2's pause-and-hold since v3.2.
+  (2) SELF-DIAGNOSING ABANDONMENT. The cutoff line now reports how far price
+      travelled toward each trigger, the high-water marks, and EM at plan vs at
+      abandonment — because holding through compression means waiting to sell
+      into CONTRACTING premium, and strikes are validated against EM once and
+      never re-checked. Makes the anchor question (VWAP? pitchfork median?)
+      answerable with a number instead of an argument.
+  ORDERING: the cutoff check sits ABOVE the regime block on purpose — the first
+  cut had HOLD first, which meant a held plan returned early every tick and never
+  reached the cutoff at all. Caught by test, not by reasoning.
 v-dualfloor + v-indep-legs — 2026-07-28 — TWO FIXES to strike selection and legging.
   (1) STRIKE FLOOR: short strike must clear BOTH 0.80*expected_move from spot
       AND the BB band (whichever is farther). The old code anchored to the BB
@@ -149,6 +166,12 @@ class CondorPlan:
     leg1_credit: float = 0.0
     leg2_credit: float = 0.0
 
+    # v-selfdiag 2026-07-30 — high-water marks while a plan is HELD, so an
+    # abandoned plan reports how close price actually came to firing. Before
+    # this a plan that never triggered left nothing behind, which is why the
+    # condor drought had to be diagnosed by inference.
+    max_price_seen: float = 0.0
+    min_price_seen: float = 0.0
     state: str = CondorState.IDLE
     decided_at: str = ""
     leg1_filled_at: str = ""
@@ -431,6 +454,39 @@ class IronCondorStrategy(BaseOptionsStrategy):
         )
         return plan
 
+    def _abandon_past_cutoff(self, plan, chain, current_price):
+        """Close out an un-filled plan at the cutoff — loudly, with numbers.
+
+        Reports how far price travelled toward EACH trigger as a fraction, and
+        expected move at plan time vs now. The second matters because a plan
+        HELD through a tightening range waits to sell into decayed premium: the
+        strikes are validated against EM exactly once, at plan time, and never
+        re-checked. A short at 1.0x EM when EM was $5.00 is at 1.25x EM if EM
+        decays to $4.00 — which would FAIL the 1.2x guardrail if planned fresh.
+        """
+        _s0 = plan.underlying_at_decision or current_price
+        _em0 = plan.expected_move or 0.0
+        try:
+            _em1 = self._expected_move_from_straddle(chain, current_price)
+        except Exception:                                          # noqa: BLE001
+            _em1 = 0.0
+        _cd = plan.call_trigger_price - _s0
+        _pd = _s0 - plan.put_trigger_price
+        _ca = ((plan.max_price_seen - _s0) / _cd) if _cd > 0 else 0.0
+        _pa = ((_s0 - plan.min_price_seen) / _pd) if _pd > 0 else 0.0
+        logger.info(
+            f"Condor: past cutoff, Leg 1 never fired — abandoned | "
+            f"approach call {_ca:.0%} (max ${plan.max_price_seen:.2f} vs trig "
+            f"${plan.call_trigger_price:.2f}) · put {_pa:.0%} (min "
+            f"${plan.min_price_seen:.2f} vs trig ${plan.put_trigger_price:.2f})"
+            f" · spot@plan ${_s0:.2f} · EM ${_em0:.2f}->${_em1:.2f} "
+            f"({((_em1 / _em0 - 1) * 100) if _em0 else 0:+.0f}%) · strikes "
+            f"{plan.short_put_strike:g}/{plan.short_call_strike:g}"
+        )
+        plan.state = CondorState.CANCELLED
+        self._plan = None
+        return None
+
     def check_leg_triggers(self, regime: RegimeState,
                             chain: OptionsChain,
                             current_price: float) -> Optional[OptionsSignal]:
@@ -443,13 +499,48 @@ class IronCondorStrategy(BaseOptionsStrategy):
         if plan is None:
             return None
 
-        # Invalidation: regime flipped away from RANGING
+        # v-selfdiag: record the extremes this plan actually saw. Cheap, and it
+        # turns an abandoned plan from silence into a measurement.
+        if plan.max_price_seen <= 0.0:
+            plan.max_price_seen = plan.min_price_seen = current_price
+        plan.max_price_seen = max(plan.max_price_seen, current_price)
+        plan.min_price_seen = min(plan.min_price_seen, current_price)
+
+        # ORDERING MATTERS: the cutoff is evaluated BEFORE the regime block.
+        # If HOLD came first, a plan held through COMPRESSION would return early
+        # every tick and NEVER reach the cutoff — sitting alive to end of session
+        # and producing exactly the silence this change exists to remove.
+        _now = datetime.now(ET)
+        if (_now.hour, _now.minute) >= CONDOR_ENTRY_CUTOFF_ET \
+                and plan.state == CondorState.DECIDED:
+            return self._abandon_past_cutoff(plan, chain, current_price)
+
+        # Invalidation: regime flipped to a DIRECTIONAL regime.
+        #
+        # v-holdcompression 2026-07-30 — CANCELLING ON COMPRESSION WAS BACKWARDS.
+        # Any flip off RANGING used to kill an un-filled plan. On 2026-07-30 CVX
+        # built three plans and lost all three the same way — PLANNED 15:11 ->
+        # CANCELLED 15:30, rebuilt 15:33 -> 15:51, rebuilt 15:53 -> 16:05. Each
+        # lived ~19 minutes; none reached the cutoff, which is also why the
+        # "Leg 1 never fired" line never appeared and the drought looked like a
+        # trigger problem.
+        # MECHANISM (operator): compression is a TIGHTENING range — where a
+        # short-premium NEUTRAL structure is most comfortable, not least. Only a
+        # DIRECTIONAL regime breaks the neutral thesis. Leg 2 has held rather
+        # than cancelled since v3.2; Leg 1 never got the same treatment.
+        _DIRECTIONAL = (Regime.TRENDING_BULL, Regime.TRENDING_BEAR,
+                        Regime.BREAKOUT_VOLATILE)
         if regime.primary_regime != Regime.RANGING:
             if plan.state == CondorState.DECIDED:
-                # Leg 1 never fired — abandon everything
+                if regime.primary_regime not in _DIRECTIONAL:
+                    logger.debug(
+                        f"Condor Leg 1 HELD: regime {regime.primary_regime} is "
+                        f"non-directional — plan alive, awaiting trigger"
+                    )
+                    return None
                 logger.info(
                     f"Condor CANCELLED before Leg 1: regime flipped to "
-                    f"{regime.primary_regime}"
+                    f"{regime.primary_regime} (directional)"
                 )
                 plan.state = CondorState.CANCELLED
                 self._plan = None

@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.21
+# docs/BACKLOG.md — v3.22
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -117,40 +117,21 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
 
 **✅ Thu Jul 30 — AFTER THE CLOSE — Y · Y.1 · Y.2 all resolved, see PART 3.**
 **⬜ Fri Jul 31**
-- `[DESK→DEPLOY]` **AG — 🔴 CONDOR CANCELS ITSELF ON A COMPRESSION FLIP. A neutral
-  trade belongs MOST in compression; cancelling there is backwards.** Found
-  2026-07-30 by reading CVX's bot.log directly after three rounds of counting
-  got the wrong answer. The actual sequence, three times in one session:
-  `15:11 CONDOR PLANNED ... 15:30 Condor CANCELLED before Leg 1: regime flipped
-  to COMPRESSION`, rebuilt 15:33, cancelled 15:51, rebuilt 15:53, cancelled
-  16:05. Each plan lived ~19 minutes and none survived to the cutoff — which is
-  ALSO why `NEVER1=0`: the "past cutoff, Leg 1 never fired — abandoned" branch
-  was never the operative path, so the absence of that line meant the opposite
-  of what it looked like.
-  **MECHANISM (operator, and this is the whole case):** RANGING and COMPRESSION
-  are not opposed for a neutral position — compression is a TIGHTENING range,
-  i.e. the condition in which a short-premium neutral structure is most
-  comfortable. Cancelling a planned condor because the range tightened is a
-  category error, the same shape as the VWAP-blocks-sweep finding: a gate
-  applied from the wrong side of the trade's thesis.
-  **HOW:** treat COMPRESSION as a PERMITTED hold state for an existing plan
-  rather than a cancellation trigger. Cancel on a flip to a DIRECTIONAL regime
-  (TRENDING_*/BREAKOUT_VOLATILE), where the neutral thesis genuinely breaks.
-  Leg 2's own pause-on-non-RANGING logic already models the right idea — it
-  HOLDS the plan rather than killing it (`Condor Leg 2 PAUSED: regime != RANGING
-  — plan held, Leg 1 remains open`). Leg 1 should behave the same way.
-  **VALIDATE:** the same grep on a box after deploy — `CONDOR PLANNED` should be
-  followed by a trigger, a hold, or a cutoff abandonment, and NOT by
-  `CANCELLED ... regime flipped to COMPRESSION`. A plan surviving a compression
-  flip is the pass condition.
-  **RELATED, NOT THE SAME ITEM:** the trigger GEOMETRY (see AI). Fixing the
-  cancel does not by itself make a leg fire.
-  **BASELINE TO MEASURE THE FIX AGAINST (2026-07-30 census):**
-  `IronCondor  27566 evals  141 setups  141 VALID  0 invalid  0 raised` — about
-  one plan per symbol every three sessions across 14 sessions x 29 symbols. So
-  `decide()` is healthy and plan CREATION is not the bottleneck; 141 plans is the
-  population AG is protecting. After the fix, plans surviving a COMPRESSION flip
-  should rise toward that number instead of being cancelled ~19 minutes in.
+- `[DESK·DATA]` **AG.2 — verify the compression HOLD on live tape (AG shipped
+  2026-07-30 night, see PART 3).** The fix is in; what it produces is not yet
+  observed. **EXPECT:** `CONDOR PLANNED` followed by plans SURVIVING to the 14:00
+  cutoff, and the new `Condor: past cutoff, Leg 1 never fired — abandoned` line
+  appearing with its excursion figures. **DO NOT EXPECT CONDOR TRADES** — the
+  trigger geometry (AI) is untouched, so a longer-lived plan still has to reach a
+  trigger that sat 2+ points outside a 1.3-point band on 07-30.
+  **VALIDATE:** `grep -c "regime flipped to COMPRESSION"` should now be ZERO
+  (only directional flips cancel), and `grep -c "never fired — abandoned"` should
+  be NON-ZERO for the first time in the project's history.
+  **THE NUMBER THAT MATTERS** is `approach call NN%` on that line. Cluster at
+  70-90% => the trigger is nearly reachable and a modest anchor change fires it.
+  Cluster at 20% => no anchor tweak saves it and AI/pitchfork is the only answer.
+  Also watch `EM $X->$Y` — that is the premium decay cost of holding through a
+  tightening range, and it is the open question AG deliberately traded into.
 - `[DESK]` **AI — condor trigger geometry: the midpoint is wrong, and that is
   the real design question.** From the same CVX log: spot ~190, `bb_upper=190.93`,
   and the call trigger sat at **193** — the 0.80xEM dual floor put the short at
@@ -161,7 +142,28 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   is expected move measured from a MIDPOINT that has not been identified yet.
   **This is pitchfork work** — a sloped median line gives a midpoint that moves
   with structure, where BB is a lagging envelope and EM-from-spot assumes no
-  drift. **Do NOT re-tune 0.65 or 0.80 in isolation**; that is the category-3
+  drift.
+  **ANCHOR CANDIDATES CONSIDERED 2026-07-30 (record so they are not re-litigated):**
+  *GEX pin* — REJECTED for condor. main.py:1049 assigns condor as the "RANGING
+  fallback when no GEX pin"; condor is never even passed a gex object. Anchoring
+  to the pin folds condor into butterfly's territory, and butterfly has 27
+  lifetime trades against condor's 362 — it would inherit that rarity.
+  *VWAP* — LIVE CANDIDATE. Always available (no pin gate), already computed in
+  VolatilityState (`vwap`, `price_vs_vwap`), volume-weighted so it marks where
+  trade actually happened rather than where price averaged, and in a trending
+  session it sits BEHIND price — which skews the structure toward the drift, the
+  direction a sloped median would too. Condor references it zero times today.
+  **OPERATOR DOCTRINE ON DATA (2026-07-30):** "I'd rather have a pool of some
+  data than the damn thing won't fire and we're getting no data." A strategy that
+  fires often and loses is worth more right now than one that is theoretically
+  correct and silent — collect wide on paper, then place the gate at the
+  fee-adjusted-ROI zero crossing, which is exactly the substrate
+  conditional_tables.py was built to produce. **Constraint:** the loose version is
+  NOT unmeasured — the pre-dualfloor code sold with no minimum distance and "bled
+  P&L for ~3 weeks". Widening the floor back out re-runs a known-losing
+  experiment. What is unmeasured is the MIDDLE: an anchor where it fires AND
+  works. **Calendar:** go-live Aug 31 — collect through August, locate the
+  crossing by the third week, leave a week to bake the chosen threshold. **Do NOT re-tune 0.65 or 0.80 in isolation**; that is the category-3
   optimisation the operator does not want. The geometry decides whether the
   strategy is salvageable, and the pitchfork is the instrument.
 - `[DESK]` **AC — silent-decline punch list (named in v3.18, never dated).** A
@@ -969,6 +971,30 @@ file: everything above either ✅ or explicitly re-dated below.
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
 `docs/HISTORY.md` and the audits. Resolution date + fixing versions + the why.*
 
+- **AG ✅ 2026-07-30 — condor cancelled itself on a COMPRESSION flip; Leg 1 now
+  HOLDS.** Diagnosed by reading CVX's bot.log directly after three rounds of
+  `grep -c` produced two confident wrong answers. Three plans in one session,
+  each killed ~19 minutes in by a flip to COMPRESSION, none reaching the cutoff —
+  which is also why `NEVER1=0` looked like "no abandonment" when it actually
+  meant "the plan never lived long enough to reach that branch". Shipped as
+  `v-holdcompression`: only TRENDING_BULL/TRENDING_BEAR/BREAKOUT_VOLATILE cancel
+  an un-filled plan; COMPRESSION, SWEEP_REVERSAL and UNKNOWN HOLD, mirroring the
+  pause-and-hold Leg 2 has had since v3.2. Verified across all six regimes.
+  Shipped WITH `v-selfdiag` (see below) because a longer-lived plan is only
+  useful if it reports what happened to it.
+  **Live verification is open as AG.2.**
+- **v-selfdiag ✅ 2026-07-30 — an abandoned condor plan now reports WHY.** The
+  cutoff line carries the excursion toward each trigger as a percentage, the
+  high-water marks, and expected move at plan time vs at abandonment. That last
+  figure exists because holding through compression means waiting to sell into
+  CONTRACTING premium, and strikes are validated against EM exactly once, at plan
+  time, then never re-checked — a short at 1.0x EM becomes 1.25x EM if EM decays
+  20%, which would fail the 1.2x guardrail if planned fresh. The tension is real
+  and is now measured rather than argued.
+  **A bug the test caught and reasoning did not:** the first cut put the HOLD
+  branch above the cutoff check, so a plan held through COMPRESSION returned
+  early every tick and would have sat alive to end of session — producing exactly
+  the silence the change exists to remove. Cutoff now sits above the regime block.
 - **AB ✅ 2026-07-30 — the deploy gate could not see undefined names.** The
   box-side gate is `python -c "import ast"` (working agreement, after repeated
   wrong-venv/no-pytest burns). `ast.parse` proves a file COMPILES — an undefined
@@ -1184,6 +1210,25 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.22 — 2026-07-30 — AG SHIPPED THE SAME NIGHT IT WAS FOUND, plus the
+  instrumentation that makes it worth shipping.** Condor Leg 1 no longer cancels
+  on a COMPRESSION flip — compression is a tightening range and that is where a
+  neutral short-premium structure most belongs; only DIRECTIONAL regimes cancel.
+  Paired with `v-selfdiag`, so the abandonment line reports excursion toward each
+  trigger plus EM decay — because holding longer trades a fast death for a slow
+  drift, and the drift needed measuring rather than assuming.
+  **Set expectations honestly: this will probably not produce condor TRADES
+  tomorrow.** The trigger geometry (AI) is untouched. What it produces is the
+  first excursion data this strategy has ever generated, which is what decides
+  whether the anchor question is a tweak or a redesign. Live verification is
+  **AG.2** (Fri Jul 31).
+  **AI now records the anchor candidates** so they are not re-litigated: GEX pin
+  REJECTED (condor is architecturally the no-pin fallback; adopting the pin folds
+  it into butterfly, which has 27 lifetime trades vs condor's 362), VWAP LIVE
+  (always available, already computed, sits behind price in a trend). Plus the
+  operator's data doctrine — collect wide on paper, place the gate at the ROI
+  crossing — with the standing constraint that the loose version is NOT
+  unmeasured: pre-dualfloor sold with no minimum distance and bled for ~3 weeks.
 - **v3.21 — 2026-07-30 — CONTINUATION v1.4 PROVEN OFFLINE; condor baseline
   recorded; sweep is genuinely rare.** `backtest_harness` v1.1 added a strategy
   attempt census (continuation / sweep / condor driven over the same tape against
