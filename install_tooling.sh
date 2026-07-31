@@ -1,6 +1,9 @@
 #!/bin/bash
 # =============================================================================
 # install_tooling.sh — make a CHECKOUT's tooling runnable, with no controller.
+# v1.1 — 2026-07-30 — +pytest. It was never in requirements.txt nor verified
+#        here, so `python -m pytest tests/` on control failed repeatedly with
+#        "No module named pytest" — a provisioning gap, not a command mistake.
 # v1.0 — 2026-07-30
 #
 # WHY THIS EXISTS
@@ -68,8 +71,13 @@ fi
 # Verify the tools this repo's OWN scripts depend on. Listed explicitly rather
 # than inferred, so a silent drop from requirements.txt is caught here instead of
 # at the moment some script needs it.
+#
+# pytest is here because control kept failing `python -m pytest tests/` with
+# "No module named pytest" through late July. Root cause was never a bad command:
+# ~/.bashrc activates the day_trader_pro venv, otv3's suite runs in that shell,
+# and NOTHING had ever installed pytest into it. Provisioning beats remembering.
 FAILED=0
-for mod in pyflakes; do
+for mod in pyflakes pytest; do
     if "$PY" -c "import $mod" 2>/dev/null; then
         echo -e "  ${GREEN}✓  $mod importable${RESET}"
     else

@@ -19,3 +19,8 @@ pytz>=2024.1
 # in v2.0 but the dependency was left behind until v3.1 — it is not imported by any
 # module in this tree.
 pyflakes  # tests/test_no_undefined_names.py — the 07-29/07-30 NameError gate
+pytest    # tests/ suite. NOT the box deploy gate (that is `python -c "import ast"`
+          # by design), but control needs it or `python -m pytest tests/` fails
+          # with "No module named pytest" — which it did repeatedly through late
+          # July because nothing provisioned it and ~/.bashrc activates the
+          # day_trader_pro venv by default.
