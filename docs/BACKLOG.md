@@ -203,27 +203,52 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   × win rate × expectancy), and the Aug 1 retro ledger reconstructs RRR for
   historical trades via the replay harness (real engines, as-of stops/targets).
 **⬜ Sat Aug 1**
-- `[DESK·DATA]` **AJ — 🔴 continuation's two ENTRY paths have opposite signs.
-  Complementary to v4.10's BOS work, which fixed the EXIT side.**
+- `[DESK·DATA]` **AJ — 🔴 THE HANDOFF PATH IS THE CHASE-VS-RETEST ANSWER, and it
+  has been collecting data since July under a different name. Candidate outcome:
+  retire the standalone path and run handoff-only — NOT before ~2 more weeks.**
   `trend_continuation_handoff     50 trades  56% WR  +$1,333.50  avg +$26.67`
-  `trend_continuation_standalone  49 trades  47% WR  -$2,024.00  avg -$41.31`
-  Same strategy, same exit ladder, same session, near-identical N.
-  **RELATIONSHIP TO v4.10 (read this first).** The BOS structural stop addresses
-  the 31 trades that ran entry-to-floor with 2-3% MFE — a trade that never worked
-  now has something between entry and the 25% floor. That is the EXIT half. AJ is
-  the ENTRY half: why does one path produce trades that never work at nearly
-  twice the rate of the other? **These are not the same finding and neither
-  supersedes the other** — but v4.10 WILL change the standalone P&L, so the
-  numbers above are the **pre-BOS baseline** and must not be compared directly
-  against post-Aug-3 sessions.
-  **INVESTIGATE:** (1) do the paths differ in regime distribution or conviction
-  at entry? (2) does standalone account for the TRENDING_BEAR concentration
-  (22 trades / 32% / -$1,533.50)? (3) after v4.10 deploys, how many of
-  standalone's losers exit `bos_exit` instead of `max_loss_floor` — i.e. is the
-  entry genuinely worse, or was it only the exit that was missing?
-  **DO NOT GATE OFF STANDALONE ON ONE SESSION.** The question is what
-  distinguishes them, not which to delete — and with v4.10 landing Monday, one
-  more session of data answers (3) directly.
+  `trend_continuation_standalone  49 trades  46% WR  -$2,024.00  avg -$41.31`
+  **WHAT HANDOFF ACTUALLY IS** (`main.py:980`):
+  `_is_runaway = getattr(orb, "invalidation_reason", "") == "runaway"`.
+  A handoff fires on exactly the setups **ORB had to discard**: the range broke,
+  price ran away, never returned for the retest, and the ORB was invalidated as
+  `runaway`. Continuation then picks the move up on a pullback.
+  **THIS IS THE COUNTERFACTUAL.** ORB's state machine only promotes ARMED ->
+  OPEN when price RETURNS to the broken level; a strong trend is precisely when
+  it does not, so the retest requirement systematically discards the breaks that
+  worked (see AH). "What would those have returned if taken?" was believed
+  unmeasurable — the assistant said so explicitly on 07-30 — and it was wrong:
+  the handoff path is that measurement, running since July.
+  **THE PRECISE FINDING, which is better than "chasing works":** handoff still
+  requires a PULLBACK (1m wick tagging an unfilled 5m FVG). It is not
+  entry-at-the-break. It is *runaway confirms the directional force, then enter
+  on a SHALLOW pullback rather than a full retest.* That is a third option, not
+  either of the two the question was framed around.
+  **CONFOUND — state it every time these numbers are cited.** Handoff also runs a
+  LOOSER momentum gate (accepts ACCELERATING **or** FLAT; standalone demands
+  ACCELERATING). Two variables differ, not one. The direction is what makes it
+  interesting: the looser gate is the winning one, which says the prior runaway
+  is doing more filtering work than momentum strictness ever did. A clean read
+  needs handoff-with-strict-momentum, or standalone-with-loose — neither exists
+  in the data yet.
+  **SECOND CONFOUND:** `exit_engine` v4.10's BOS stop lands Mon Aug 3 and will
+  move standalone's P&L specifically (its losses concentrate in
+  `max_loss_floor`, which is the hole BOS fills). **The numbers above are the
+  PRE-BOS baseline and are not comparable to post-Aug-3 sessions.**
+  **DECISION PATH (operator, 2026-07-31): retire standalone and run handoff-only
+  is the candidate outcome — but NOT on one session.** Gate the decision on:
+  (1) ~2 more weeks of sessions, i.e. **review ~Aug 14**, after v4.10 has been
+  live long enough that standalone is being judged WITH its structural stop, not
+  without it; (2) does standalone still lose once `bos_exit` replaces
+  `max_loss_floor` on its never-worked trades? If BOS rescues it, the entry was
+  never the problem; (3) does standalone account for the TRENDING_BEAR
+  concentration (22 trades / 32% / -$1,533.50 fleet-wide on 07-31)? If its losses
+  are one-sided, the answer may be a direction gate rather than deletion.
+  **DO NOT DELETE A PATH THAT IS STILL THE ONLY SOURCE OF SETUPS IN ITS REGIME.**
+  Handoff requires a prior runaway ORB; on days with no runaway there is no
+  handoff. Retiring standalone means accepting zero continuation trades on those
+  days — quantify that cost before cutting: count sessions in the banked corpus
+  with zero runaways.
 - `[DESK·DATA]` **AH — ORB in RANGING: is the flagship firing in a regime that
   contradicts its own thesis? (weekend work, deliberately — no trading day is
   spent on this).** First evidence 2026-07-30 from `tests/backtest_harness.py`
@@ -606,6 +631,33 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   raw journal reject counts. All inputs already harvested nightly.
 
 **⬜ Fri Aug 14**
+- `[DESK·DATA]` **AJ.2 — THE DECISION: retire continuation's standalone path, or
+  keep it?** Opened 2026-07-31 with a deliberate two-week wait. Baseline that day:
+  handoff 50 trades / 56% / +$1,333.50 against standalone 49 / 46% / -$2,024.00.
+  **WHY THE WAIT WAS DELIBERATE, not caution for its own sake:** `exit_engine`
+  v4.10's BOS structural stop deployed Mon Aug 3, and standalone's losses
+  concentrated in `max_loss_floor` — the exact hole BOS fills. Judging standalone
+  on pre-BOS data would condemn it for an exit defect that has since been fixed.
+  Everything before Aug 3 is a different strategy.
+  **THE QUESTION TO ANSWER, in order:**
+  (1) Post-Aug-3 only: is standalone still net-negative once its never-worked
+      trades exit `bos_exit` instead of riding to the 25% floor? If BOS rescues
+      it, the entry path was never the problem and this item closes as "keep".
+  (2) Is standalone's loss one-sided by direction? On 07-31 TRENDING_BEAR ran
+      22 trades / 32% / -$1,533.50 fleet-wide. If standalone owns most of that,
+      the fix is a direction gate, not deletion.
+  (3) **THE COST OF DELETION — quantify before cutting.** Handoff requires a
+      prior runaway ORB (`orb.invalidation_reason == "runaway"`). On sessions
+      with no runaway there is NO handoff, so retiring standalone means accepting
+      zero continuation trades that day. Count zero-runaway sessions in the
+      banked corpus first: if that is 1 day in 10 the cost is trivial, if it is
+      4 in 10 it is not.
+  (4) The confound from AJ still stands unless someone has broken it: handoff
+      also runs a looser momentum gate (ACCELERATING **or** FLAT vs standalone's
+      ACCELERATING-only). Two variables. A clean A/B needs one of the two mixed
+      configurations, which does not exist in the data unless built.
+  **DECIDE, do not defer again.** By Aug 14 there are ~9 post-BOS sessions; that
+  is enough to act or to say explicitly what would change the answer.
 - `[DESK·DATA]` **P5.3 — run `chain_reconstruction_check`** on ~3 weeks of archive. PASS → build
   ChainReplay (post-freeze); PARTIAL → grid restricted to the validated moneyness
   band, stated in the header; FAIL → the missing piece is named by the `+vega·ΔIV`
@@ -1216,12 +1268,18 @@ opening the file showed history before it showed anything still to do.*
   read as "never rejects" instead of "rejects silently". **N.2 + N.3** added
   `rrr`, `closes_beyond` and `sweep_age_bars` to the journal — factor columns,
   done today rather than Monday because they cannot be backfilled.
-  **New AJ (Sat Aug 1)** — continuation's handoff path made +$1,333.50 over 50
-  trades while standalone lost $2,024.00 over 49. **This is the ENTRY-side twin
-  of v3.23's BOS work:** v4.10 fixed the exit hole that let 31 trades run to the
-  floor; AJ asks why one entry path produces never-worked trades at twice the
-  rate. The AJ numbers are a **pre-BOS baseline** — v4.10 will move them, so they
-  are not comparable to post-Aug-3 sessions.
+  **New AJ (Sat Aug 1) — and it turned out to be the chase-vs-retest answer.**
+  Continuation's handoff path made +$1,333.50 over 50 trades while standalone
+  lost $2,024.00 over 49. Then the mechanism: `_is_runaway = orb.invalidation_
+  reason == "runaway"`, so **a handoff fires on exactly the setups ORB had to
+  discard because price never returned for the retest**. That is the
+  counterfactual the assistant declared unmeasurable on 07-30 — it has been
+  running since July under a different name. The runaways are the profitable
+  half. Precise version: not "chasing works", but *runaway confirms force, then
+  enter on a shallow pullback instead of a full retest.* Two confounds recorded
+  in the item (handoff also runs a looser momentum gate; v4.10's BOS stop lands
+  Aug 3 and will move standalone specifically). **Candidate outcome — retire
+  standalone, run handoff-only — reviewed ~Aug 14, not before.**
 - **v3.23 — 2026-07-31 — CONTINUATION GAINS A STRUCTURAL STOP (BOS), and the
   excursion LEASH section was silently printing nothing.**
   **(1) BREAK OF STRUCTURE — `exit_engine` v4.10, step 2b, UNGATED.**
