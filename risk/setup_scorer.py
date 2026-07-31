@@ -1,5 +1,19 @@
 """
 risk/setup_scorer.py — Scores and grades options trade signals A/B.
+v1.6 — 2026-07-31 — F: MIN_RRR FLOOR. Second genesis constant (`MIN_RRR = 1.3
+        # UNWIRED`), read by nothing since the beginning. MEASURED premise: a
+        setup with rrr = 1.00 scores 0.84 and grades **A** — a 1:1 risk-reward
+        trade is currently a top-grade fire, because the 5-dimension scorer has
+        no RRR input at all. Hard floor on the scored path; **ORB is
+        COUNTER-ONLY, never blocked** — its RRR is structural (stop = range
+        boundary, target = measured move), so a narrow range mechanically
+        produces a low ratio without the setup being worse, and gating the only
+        strategy currently earning on a ratio it does not control is not a trade
+        we make on zero evidence. Measure first. rrr of None (no planned stop or
+        target) is INERT, not a violation: absence of evidence must not collapse
+        into "worst possible trade". Ships DEFAULT OFF (`OT_MIN_RRR_ACTIVE`),
+        floor `OT_MIN_RRR` default 1.3 — the genesis value, explicitly a PRIOR
+        awaiting the Aug 1 fit, not a fitted number.
 v1.5 — 2026-07-31 — E: VWAP HARD GATE. `vwap_alignment` scores 0.11 against a
         0.55 grade-B bar, so misalignment could never veto — a long BELOW vwap
         scored 0.73 and graded B (measured, not hypothesised). The gate now
@@ -87,7 +101,8 @@ from analysis.structure_analyzer import StructureMap
 from analysis.liquidity_mapper import LiquidityMap
 from data.macro_data import MacroSnapshot
 from config import (GRADE_SIZE_MULTIPLIER, GRADE_A_MIN_SCORE,
-                    GRADE_B_MIN_SCORE, VWAP_FILTER_ACTIVE)
+                    GRADE_B_MIN_SCORE, VWAP_FILTER_ACTIVE,
+                    MIN_RRR, MIN_RRR_ACTIVE)
 try:
     from config import BRIEF_CONVICTION_WEIGHT
 except Exception:
@@ -350,6 +365,38 @@ class SetupScorer:
                                          f"would have graded {_would_grade}")
                 return None
 
+        # ── F — MIN_RRR FLOOR (2026-07-31) ────────────────────────────────────
+        # Second genesis constant. `MIN_RRR = 1.3  # UNWIRED` sat in config from
+        # the beginning, read by nothing. Placed here for the same reason as E:
+        # after the score is final, so a blocked setup's journal row records what
+        # it WOULD have graded and the floor can be fitted from its own
+        # rejections rather than guessed.
+        #
+        # rrr is None when the signal has no planned stop or target. That is NOT
+        # a floor violation — it is an absence of evidence, and treating it as
+        # 0.0 would veto every such signal. Inert.
+        _rrr = self._rrr_of(signal)
+        if _rrr is not None and _rrr < MIN_RRR:
+            _would_grade = ("A" if total >= grade_a
+                            else "B" if total >= grade_b else "REJECT")
+            breakdown["rrr"] = round(_rrr, 3)
+            breakdown["rrr_gate"] = "BLOCK" if MIN_RRR_ACTIVE else "would_block"
+            logger.info(
+                f"RRR floor {'BLOCK' if MIN_RRR_ACTIVE else 'WOULD BLOCK'}: "
+                f"{name} rrr={_rrr:.2f} < {MIN_RRR:.2f} — "
+                f"setup scored {total:.2f} ({_would_grade})"
+            )
+            if MIN_RRR_ACTIVE:
+                self._journal_scored(signal, regime, vol_state, macro,
+                                     total, f"GATE_BLOCK_RRR({_would_grade})",
+                                     breakdown, grade_a, grade_b, session)
+                self._journal_gate_block(signal, regime, vol_state, "rrr",
+                                         f"rrr={_rrr:.2f} < floor {MIN_RRR:.2f}, "
+                                         f"would have graded {_would_grade}")
+                return None
+        elif _rrr is not None:
+            breakdown["rrr"] = round(_rrr, 3)
+
         # ── Grade — A or B only. No C grade exists. ─────────────────────────────
         if total >= grade_a:
             grade = "A"
@@ -384,6 +431,24 @@ class SetupScorer:
                              total, grade, breakdown,
                              grade_a, grade_b, session)
         return result
+
+    @staticmethod
+    def _rrr_of(signal):
+        """Reward:risk from the planned underlying levels — the SAME computation
+        signal_journal writes onto every scored event (N.2), imported rather than
+        re-derived so the gate can never disagree with its own audit trail.
+
+        Returns None, not 0.0, when levels are missing. That distinction is the
+        whole point: "no stop planned" and "worst possible trade" must not
+        collapse into the same number, or the floor would veto every signal that
+        simply did not populate a stop.
+        """
+        if _journal is None:
+            return None
+        try:
+            return _journal._rrr(signal)
+        except Exception:                                          # noqa: BLE001
+            return None
 
     @staticmethod
     def _journal_gate_block(signal, regime, vol_state, gate: str, detail: str):
@@ -477,6 +542,22 @@ class SetupScorer:
         # Journal it like any other scored signal (REJECT path is unreachable
         # for the ORB, so grade is always A or B here). total is reported as
         # the multiplier for a stable numeric field; there is no weighted sum.
+        # F — ORB IS COUNTER-ONLY, NEVER BLOCKED. The ORB's RRR is structural:
+        # the stop is the range boundary and the target is a measured move, so a
+        # narrow range mechanically produces a low rrr without the setup being
+        # worse. Gating a mechanical trade on a ratio it does not control is how
+        # you delete the only strategy currently earning. Measure first: how
+        # often WOULD a confirmed ORB fail the floor, and did those trades lose?
+        # Only that answer justifies ever gating it.
+        _orb_rrr = self._rrr_of(signal)
+        if _orb_rrr is not None:
+            breakdown["rrr"] = round(_orb_rrr, 3)
+            if _orb_rrr < MIN_RRR:
+                breakdown["rrr_gate"] = "counter_only"
+                logger.info(
+                    f"RRR floor COUNTER (ORB never blocked): rrr={_orb_rrr:.2f} "
+                    f"< {MIN_RRR:.2f} — grade {grade}, trading anyway"
+                )
         self._journal_scored(signal, regime, vol_state, macro,
                              float(multiplier), grade, breakdown,
                              grade_a=None, grade_b=None,

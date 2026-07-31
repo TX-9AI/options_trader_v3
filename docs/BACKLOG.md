@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.26
+# docs/BACKLOG.md — v3.27
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -168,20 +168,6 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   with existing tooling — option 14 `systemctl cat shadow-observer | grep
   WorkingDirectory` fleet-wide, all 29 identical before and after. No dataset
   needed beyond the fleet's own units.
-- `[DESK]` **F (build) — `MIN_RRR` floor, on the TESTER.** Second genesis constant, same
-  story. The ORB's RRR is structural and varies per setup, currently ungated. Build
-  the floor env-tunable, applied at scoring for non-ORB paths; log-only counter for
-  the ORB first (measure how often a structural ORB would fail it before gating a
-  mechanical trade).
-  **HOW:** compute RRR at scoring time from the setup's planned stop and target
-  (both known at decision for every scored strategy), floor at `OT_MIN_RRR`
-  (default from the Aug 1 fit, not a guess); non-ORB hard, ORB counter-only.
-  **VALIDATE:** here the framework was MISSING — nothing journals the computed
-  RRR, so the floor could never be fitted or audited from collected data. Closed
-  by **N.2** (below): once `rrr` is on every `scored` event, the floor's placement
-  is a distribution + outcome question `conditional_tables` can answer (RRR decile
-  × win rate × expectancy), and the Aug 1 retro ledger reconstructs RRR for
-  historical trades via the replay harness (real engines, as-of stops/targets).
 **⬜ Sat Aug 1**
 - `[DESK·DATA]` **AJ — 🔴 THE HANDOFF PATH IS THE CHASE-VS-RETEST ANSWER, and it
   has been collecting data since July under a different name. Candidate outcome:
@@ -973,6 +959,30 @@ file: everything above either ✅ or explicitly re-dated below.
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
 `docs/HISTORY.md` and the audits. Resolution date + fixing versions + the why.*
 
+- **F ✅ 2026-07-31 — MIN_RRR floor wired (setup_scorer v1.6), SHIPS OFF, ORB
+  counter-only.** Same shape as E and the same kind of measured premise: a setup
+  with **rrr = 1.00 scores 0.84 and grades A**. A 1:1 risk-reward trade is
+  currently a top-grade fire, because the 5-dimension scorer has no RRR input at
+  all — it was never one of the dimensions.
+  **ORB IS COUNTER-ONLY, NEVER BLOCKED — and that is a design decision, not
+  timidity.** The ORB's RRR is structural: stop = range boundary, target =
+  measured move. A narrow opening range mechanically produces a low ratio
+  without the setup being any worse. Gating the only strategy currently earning
+  (10 trades / 80% / +$4,385.50 on 07-31) on a ratio it does not control, with
+  zero evidence that low-rrr ORBs actually lose, is exactly the category-3 move
+  the house rules forbid. It logs `RRR floor COUNTER (ORB never blocked)` and
+  trades anyway. If the Aug 1 ledger shows low-rrr ORBs are net-negative, THEN
+  gating it becomes a decision with evidence behind it.
+  **rrr of None is INERT.** A signal with no planned stop or target has an
+  UNKNOWN ratio, not a bad one; treating it as 0.0 would veto every such signal.
+  Verified: no-stop signal passes with the flag ON.
+  **Ships DEFAULT OFF** (`OT_MIN_RRR_ACTIVE=0`), floor `OT_MIN_RRR` default 1.3.
+  **That 1.3 is the genesis value and is explicitly a PRIOR, not a fit** — the
+  Aug 1 ledger sets it from the rrr-decile / outcome distribution that N.2's
+  journaling now makes computable. Do not defend 1.3; it was a guess in the
+  original config and remains one until fitted.
+  **Reuses `_journal._rrr`** rather than re-deriving, so the gate can never
+  disagree with its own audit trail.
 - **E ✅ 2026-07-31 — VWAP hard gate wired (setup_scorer v1.5), SHIPS OFF.**
   The premise is now measured, not argued: a `ContinuationStrategy` long with
   price **BELOW** VWAP scores **0.73 and grades B** — it fires. `vwap_alignment`
@@ -1293,6 +1303,16 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.27 — 2026-07-31 — F WIRED. Both genesis constants are finally read by
+  something.** Measured premise, same as E's: **rrr = 1.00 scores 0.84 and grades
+  A** — a 1:1 trade is a top-grade fire, because RRR was never one of the five
+  scoring dimensions. Hard floor on the scored path, **ORB counter-only** (its
+  RRR is structural — narrow range mechanically means low ratio — and gating the
+  only earning strategy on a ratio it does not control, with no evidence low-rrr
+  ORBs lose, is the category-3 move the house rules forbid). rrr of None is
+  inert. Ships OFF; the 1.3 floor is the genesis guess and is explicitly a PRIOR
+  awaiting the Aug 1 fit.
+  **Saturday is now unblocked** — "E + F tester proof" needed both to exist.
 - **v3.26 — 2026-07-31 — the E ledger must be split PER STRATEGY, or it can
   give the wrong verdict in both directions.** E applies to exactly two
   strategies and they relate to VWAP oppositely: continuation is trend-following
