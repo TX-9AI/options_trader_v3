@@ -1,5 +1,9 @@
 """
-strategy/butterfly_strategy.py — Debit butterfly for RANGING/COMPRESSION regimes. v3.3
+strategy/butterfly_strategy.py — Debit butterfly for RANGING/COMPRESSION regimes. v3.4
+v3.4 — 2026-07-31 — AC: find_strike's "no liquid contract" path was a SILENT
+        return, killing a butterfly that had already cleared the GEX-pin and
+        regime gates. It now logs the target strike, how many contracts were
+        examined, and that none were priced.
 v3.3 — 2026-07-30 — NameError: `_mult` referenced on line 190 after the
         conviction-scaled proximity multiplier was reverted to a fixed 1x EM and
         the variable removed. Raised on EVERY butterfly evaluation, but only a
@@ -235,6 +239,17 @@ class ButterflyStrategy(BaseOptionsStrategy):
             # Nearest liquid strike
             liquid = [c for c in contracts_list if c.mark > 0]
             if not liquid:
+                # AC 2026-07-31 — was a SILENT return. This kills a butterfly
+                # that has ALREADY passed the GEX-pin gate and the regime gate,
+                # i.e. a qualifying setup, and said nothing about it. Butterfly
+                # has 27 lifetime trades against sweep's 985; if some of that
+                # scarcity is chain liquidity rather than gate strictness, this
+                # is the line that shows it.
+                logger.info(
+                    f"Butterfly: no liquid strike near {target:g} — "
+                    f"{len(contracts_list)} contracts examined, none with "
+                    f"mark > 0. SKIP"
+                )
                 return None
             return min(liquid, key=lambda c: abs(c.strike - target))
 

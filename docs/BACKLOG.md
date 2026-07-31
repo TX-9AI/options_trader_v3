@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.23
+# docs/BACKLOG.md — v3.24
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -117,21 +117,6 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
 
 **✅ Thu Jul 30 — AFTER THE CLOSE — Y · Y.1 · Y.2 all resolved, see PART 3.**
 **⬜ Fri Jul 31**
-- `[DESK·DATA]` **AG.2 — verify the compression HOLD on live tape (AG shipped
-  2026-07-30 night, see PART 3).** The fix is in; what it produces is not yet
-  observed. **EXPECT:** `CONDOR PLANNED` followed by plans SURVIVING to the 14:00
-  cutoff, and the new `Condor: past cutoff, Leg 1 never fired — abandoned` line
-  appearing with its excursion figures. **DO NOT EXPECT CONDOR TRADES** — the
-  trigger geometry (AI) is untouched, so a longer-lived plan still has to reach a
-  trigger that sat 2+ points outside a 1.3-point band on 07-30.
-  **VALIDATE:** `grep -c "regime flipped to COMPRESSION"` should now be ZERO
-  (only directional flips cancel), and `grep -c "never fired — abandoned"` should
-  be NON-ZERO for the first time in the project's history.
-  **THE NUMBER THAT MATTERS** is `approach call NN%` on that line. Cluster at
-  70-90% => the trigger is nearly reachable and a modest anchor change fires it.
-  Cluster at 20% => no anchor tweak saves it and AI/pitchfork is the only answer.
-  Also watch `EM $X->$Y` — that is the premium decay cost of holding through a
-  tightening range, and it is the open question AG deliberately traded into.
 - `[DESK]` **AI — condor trigger geometry: the midpoint is wrong, and that is
   the real design question.** From the same CVX log: spot ~190, `bb_upper=190.93`,
   and the call trigger sat at **193** — the 0.80xEM dual floor put the short at
@@ -166,44 +151,6 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   crossing by the third week, leave a week to bake the chosen threshold. **Do NOT re-tune 0.65 or 0.80 in isolation**; that is the category-3
   optimisation the operator does not want. The geometry decides whether the
   strategy is salvageable, and the pitchfork is the instrument.
-- `[DESK]` **AC — silent-decline punch list (named in v3.18, never dated).** A
-  sweep of `strategy/` found 26 `return None` paths. Most are regime-mismatch
-  gates that fire every tick and are silent deliberately. **Three can refuse a
-  QUALIFYING setup and say nothing**, which is how continuation sat dead for its
-  entire life and how AMZN passed a textbook TRENDING_BULL session without an
-  explanation: `butterfly_strategy.py:238` (find_strike — no liquid strike, the
-  butterfly dies with no reason given), `condor_roll.py:131`,
-  `iron_condor_strategy.py:288`.
-  **HOW:** each gets a single log line naming what it rejected and why, at the
-  level the surrounding path already uses. No behaviour change — a setup that is
-  declined today is still declined, it just says so.
-  **VALIDATE:** the line appears in `bot.log` the next time each path is taken.
-  For butterfly:238 that needs a COMPRESSION box with an illiquid chain, so it
-  may sit unproven for days — acceptable; the point is that when it happens
-  there is a record instead of silence.
-- `[DESK·DATA]` **AD — continuation v1.4: LOGIC PROVEN offline, live fill still
-  unconfirmed. Downgraded from "unverified" — the strike selection works.**
-  Evidence 2026-07-30, `backtest_harness` v1.1 census over 29 symbols x 14
-  sessions, **82,698 strategy evaluations**:
-  `Continuation  27566 evals   158 setups   158 VALID   0 invalid   0 raised`
-  **158 of 158 signals pass `is_valid()`** — the exact check main.py applies and
-  the exact check that rejected 100% of continuation's output for weeks. Before
-  v1.4 that number was structurally ZERO (strike=0, entry_premium=0). The
-  EM-anchored ADX+conviction strike selection does what it was written to do.
-  **THE SIZE OF THE HOLE THIS CLOSED:** 158 setups is **63% of ORB's entire
-  volume** (252) over the same window. Continuation is the second-largest source
-  of setups in the fleet and it contributed nothing for weeks. The trade drought
-  was never mainly a market-conditions problem.
-  **WHAT IS STILL NOT PROVEN — and why this stays open:** the census runs against
-  a chain MODELLED with Black-Scholes, with assumed liquidity and theoretical
-  marks. Strike selection succeeding there proves the LOGIC, not the FILL. On a
-  real chain some fraction of those 158 will find no contract with a valid mark
-  (`butterfly_strategy.py:238` is the same failure shape, and it is on the AC
-  punch list). No `[continuation] strike` line has yet appeared on live tape.
-  **VALIDATE (unchanged):** `grep -c "\[continuation\] strike"` on the fleet.
-  A **`no strike: no expected move`** line is the failure signature — the ATM
-  straddle lookup returning nothing, which the modelled chain cannot surface
-  because it always has one.
 - `[DESK]` **AE — `futures_trader_v1` carries the same `push.sh` and still has
   the undefined-name hole.** The gate shipped here as push.sh v1.8/v1.9 plus
   `install_tooling.sh` (see AB in PART 3). futures_trader_v1 ships the same file
@@ -255,31 +202,28 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   is a distribution + outcome question `conditional_tables` can answer (RRR decile
   × win rate × expectancy), and the Aug 1 retro ledger reconstructs RRR for
   historical trades via the replay harness (real engines, as-of stops/targets).
-- `[DESK→DEPLOY]` **N.2 — NEW: journal `rrr` + gate-block dispositions (instrumentation for E + F,
-  built with them, deploys Mon Aug 3).** Verified at HEAD: `scored` events carry
-  quote context and vwap but **no risk-reward number**, and `disposition` has no
-  gate-block reason vocabulary — so E and F would fire (or not) invisibly, and
-  L3.2 could not consolidate their rejections.
-  **HOW:** signal_journal +2 fields: `rrr` (float, every scored event) and
-  disposition reasons `gate_block:vwap` / `gate_block:rrr` emitted whenever either
-  gate vetoes. Log-only, freeze-safe, ~10 lines across setup_scorer/main; ships in
-  the same Aug 3 pass so the distribution accumulates from day one.
-  **VALIDATE:** self-validating on day one (fields present in the harvested
-  jsonl); becomes the substrate for the Aug 18 / L3.2 / L3.4 gate audits.
-- `[DESK→DEPLOY]` **N.3 — NEW: capture `closes_beyond` at entry on sweep trade rows
-  (instrumentation for the Aug 18 evidence day, built today, deploys Mon Aug 3).**
-  Verified at HEAD: trades.db carries adx/conviction/flat-angle/level_strength but
-  **not** the reclaim's `closes_beyond` count — yet the Aug 18 "reclaim looseness"
-  question is *do losing sweeps carry higher closes_beyond than winners*, which is
-  unanswerable from collected data as-is (only reconstructable by replay,
-  approximately).
-  **HOW:** the proven v-obs pattern — one ALTER-TABLE auto-migrated column
-  (`closes_beyond_at_entry INT`), threaded from the sweep confirmation object at
-  entry exactly like `level_strength` was on 07-24. Observability only.
-  **VALIDATE:** self-validating; by Aug 18 there are ~2 weeks of exact values, and
-  the retro replay (approximate) cross-checks the capture on the overlap.
-
 **⬜ Sat Aug 1**
+- `[DESK·DATA]` **AJ — 🔴 continuation's two ENTRY paths have opposite signs.
+  Complementary to v4.10's BOS work, which fixed the EXIT side.**
+  `trend_continuation_handoff     50 trades  56% WR  +$1,333.50  avg +$26.67`
+  `trend_continuation_standalone  49 trades  47% WR  -$2,024.00  avg -$41.31`
+  Same strategy, same exit ladder, same session, near-identical N.
+  **RELATIONSHIP TO v4.10 (read this first).** The BOS structural stop addresses
+  the 31 trades that ran entry-to-floor with 2-3% MFE — a trade that never worked
+  now has something between entry and the 25% floor. That is the EXIT half. AJ is
+  the ENTRY half: why does one path produce trades that never work at nearly
+  twice the rate of the other? **These are not the same finding and neither
+  supersedes the other** — but v4.10 WILL change the standalone P&L, so the
+  numbers above are the **pre-BOS baseline** and must not be compared directly
+  against post-Aug-3 sessions.
+  **INVESTIGATE:** (1) do the paths differ in regime distribution or conviction
+  at entry? (2) does standalone account for the TRENDING_BEAR concentration
+  (22 trades / 32% / -$1,533.50)? (3) after v4.10 deploys, how many of
+  standalone's losers exit `bos_exit` instead of `max_loss_floor` — i.e. is the
+  entry genuinely worse, or was it only the exit that was missing?
+  **DO NOT GATE OFF STANDALONE ON ONE SESSION.** The question is what
+  distinguishes them, not which to delete — and with v4.10 landing Monday, one
+  more session of data answers (3) directly.
 - `[DESK·DATA]` **AH — ORB in RANGING: is the flagship firing in a regime that
   contradicts its own thesis? (weekend work, deliberately — no trading day is
   spent on this).** First evidence 2026-07-30 from `tests/backtest_harness.py`
@@ -971,6 +915,59 @@ file: everything above either ✅ or explicitly re-dated below.
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
 `docs/HISTORY.md` and the audits. Resolution date + fixing versions + the why.*
 
+- **AD ✅ 2026-07-31 — CONTINUATION TRADED. First trades since it was written.**
+  v1.4's strike selection works on a real chain, not just a modelled one.
+  Fleet-wide **99 trades, 52% WR, -$690.50**, on a day the fleet netted +$3,581
+  across 116. Real strikes and fills (CVX C 195, ORCL C 129/132/133). The
+  `no strike: no expected move` failure signature did NOT appear.
+  **The finding worth more than the P&L — the two entry paths diverge:**
+  `trend_continuation_handoff     50 trades  56% WR  +$1,333.50`
+  `trend_continuation_standalone  49 trades  47% WR  -$2,024.00`
+  Balanced N, opposite signs, split along a DESIGNED boundary. Carried as **AJ**.
+  By regime the same session: TRENDING_BULL 75/63%/+$3,440.50 against
+  TRENDING_BEAR 22/32%/-$1,533.50 — long-biased, hurt on the short side.
+  **METHOD NOTE:** the first read was ORCL alone — 3 trades, 0% WR, -$1,341 —
+  and the assistant called it a problem with the strategy. The fleet said 52%
+  and roughly flat. Three trades on one symbol is not a result; the operator
+  called that correctly.
+- **AG.2 ✅ 2026-07-31 — the compression HOLD works.** `COMPCANCEL=0` on both CVX
+  and ORCL, against three cancels on CVX alone the day before. A plan survived,
+  fired **Leg 1 as a put credit spread**, and carried to `hard_close_15:45`.
+  `ABAND=0` follows from that — it did not need abandoning because it entered.
+  **Consequence for AI:** the `approach call NN%` figure still has not been
+  observed, since no plan has yet reached the cutoff un-filled. AI keeps waiting
+  on it, but the urgency drops — a condor DID fire, so the trigger geometry is
+  not categorically unreachable. Fleet condor for the day: 6 trades, 33%, -$25.50.
+- **AC ✅ 2026-07-31 — the three silent declines now speak.** Of 26 `return None`
+  paths in `strategy/`, most are regime-mismatch gates that are correctly silent.
+  These three could refuse a QUALIFYING setup and say nothing:
+  `butterfly_strategy.find_strike` (v3.4) — no liquid contract, killing a fly
+  that had ALREADY cleared the GEX-pin and regime gates. Butterfly has 27
+  lifetime trades against sweep's 985; this line shows whether any of that
+  scarcity is chain liquidity rather than gate strictness.
+  `condor_roll` (v1.1) — no mark for the untested vertical. The most
+  consequential: it declines a roll on a LIVE position with one side tested, and
+  the roll IS the risk-reduction step. Now names the missing leg.
+  `iron_condor_strategy._pick_short` (v-declineloud) — nothing clears the
+  0.80*EM/BB dual floor. **This one had already cost a wrong conclusion:** on
+  07-30 `grep -c "no liquid strike"` returned 0 across all history and was read
+  as "the dual floor never rejects" when it meant "rejects in silence".
+  No behaviour change — a setup declined today is still declined, it just says so.
+- **N.2 + N.3 ✅ 2026-07-31 — factor columns that cannot be backfilled.**
+  `signal_ctx` (signal_journal v1.1) now carries **`rrr`** on every scored,
+  disposition and readiness event — reward:risk from the underlying levels,
+  returning **None rather than 0.0** when levels are absent, because "no stop"
+  and "worst possible trade" must stay distinguishable in any distribution built
+  from this. Without it, item F's MIN_RRR floor would veto INVISIBLY: no record
+  of what the rrr was on the trades it blocked, so the floor could never be
+  calibrated from its own rejections.
+  **N.3:** sweep signals carry **`closes_beyond`** and `sweep_age_bars` at ENTRY.
+  The liquidity mapper has computed closes_beyond since v1.3 and shadow/registry
+  gates on it, but it never reached a trade row. It is the cleanest
+  sweep-vs-breakout discriminator available: a level swept and RECLAIMED is a
+  sweep; a level closed beyond repeatedly is a breakout wearing a sweep's
+  clothes. Captured at entry because the bar window has moved on by exit.
+  Both log-only and freeze-safe. **Deploy Mon Aug 3** with E and F.
 - **AG ✅ 2026-07-30 — condor cancelled itself on a COMPRESSION flip; Leg 1 now
   HOLDS.** Diagnosed by reading CVX's bot.log directly after three rounds of
   `grep -c` produced two confident wrong answers. Three plans in one session,
@@ -1210,6 +1207,21 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.24 — 2026-07-31 — FRIDAY CLEARED: five items closed, and the entry-side
+  twin of v3.23's finding is opened.** **AD** (continuation traded — 99 trades,
+  52% WR fleet-wide) and **AG.2** (compression HOLD works, COMPCANCEL=0, a condor
+  Leg 1 actually filled) both verified on live tape. **AC** gave the three
+  consequential silent declines a voice, including the dual-floor one that had
+  already produced a wrong conclusion the day before when a zero grep count was
+  read as "never rejects" instead of "rejects silently". **N.2 + N.3** added
+  `rrr`, `closes_beyond` and `sweep_age_bars` to the journal — factor columns,
+  done today rather than Monday because they cannot be backfilled.
+  **New AJ (Sat Aug 1)** — continuation's handoff path made +$1,333.50 over 50
+  trades while standalone lost $2,024.00 over 49. **This is the ENTRY-side twin
+  of v3.23's BOS work:** v4.10 fixed the exit hole that let 31 trades run to the
+  floor; AJ asks why one entry path produces never-worked trades at twice the
+  rate. The AJ numbers are a **pre-BOS baseline** — v4.10 will move them, so they
+  are not comparable to post-Aug-3 sessions.
 - **v3.23 — 2026-07-31 — CONTINUATION GAINS A STRUCTURAL STOP (BOS), and the
   excursion LEASH section was silently printing nothing.**
   **(1) BREAK OF STRUCTURE — `exit_engine` v4.10, step 2b, UNGATED.**

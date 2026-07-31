@@ -1,4 +1,9 @@
 """
+v-declineloud — 2026-07-31 — AC: the "no liquid strike beyond dual floor" path
+  was a SILENT return. On 2026-07-30 `grep -c "no liquid strike"` returned 0
+  across all history and was read as "the dual floor never rejects" — it
+  actually meant "the dual floor rejects in silence". Now logs the floor level,
+  how many contracts were priced, and the nearest priced strike.
 v-holdcompression + v-selfdiag — 2026-07-30 — TWO CHANGES, both about a plan
   that dies without saying anything.
   (1) HOLD ON COMPRESSION. Any non-RANGING tick used to cancel an un-filled
@@ -285,6 +290,21 @@ class IronCondorStrategy(BaseOptionsStrategy):
                     if c.mark > 0.01 and
                     (c.strike >= floor_level if side == "call" else c.strike <= floor_level)]
         if not eligible:
+            # AC 2026-07-31 — was a SILENT return. The floor is the 0.80*EM /
+            # BB dual floor; when nothing clears it the condor dies with no
+            # reason given. `grep -c "no liquid strike"` returned 0 across the
+            # whole log history on 2026-07-30 — which was read as "the floor
+            # never rejects" when it actually meant "the floor rejects in
+            # silence". That cost a round of wrong conclusions.
+            _priced = [c for c in contracts if c.mark > 0.01]
+            _near = (min((c.strike for c in _priced),
+                         key=lambda k: abs(k - floor_level)) if _priced else None)
+            logger.info(
+                f"Condor: no liquid {side} strike beyond dual floor "
+                f"{floor_level:.2f} — {len(_priced)}/{len(contracts)} priced, "
+                f"nearest priced strike {_near if _near is not None else 'n/a'}. "
+                f"SKIP"
+            )
             return None
         # most liquid; tie-break to the one nearest the floor (richest still-safe).
         def liq(c):

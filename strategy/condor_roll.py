@@ -1,5 +1,10 @@
 """
-strategy/condor_roll.py — Broken-wing roll of a live iron condor.
+strategy/condor_roll.py — Broken-wing roll of a live iron condor. v1.1
+v1.1 — 2026-07-31 — AC: the missing-mark path was a SILENT return. This one
+        declines a roll on a LIVE position with one side already tested — the
+        roll IS the risk-reduction step, so a quiet refusal is the most
+        consequential of the three silent declines. Now names which leg had no
+        mark and states the position was left as-is.
 v3.8 — 2026-07-22 — paper roll credit routed through limit_ladder
         .paper_fill_credit (audit defect T): the rolled vertical applied
         PAPER_FILL_SLIPPAGE_PCT inline, one of the two credit paths that kept
@@ -128,6 +133,17 @@ def find_risk_free_roll(tested_leg: dict, untested_leg: dict, chain,
     old_short_m = _mark_at(u_list, untested_leg["short_strike"])
     old_long_m  = _mark_at(u_list, untested_leg["long_strike"])
     if old_short_m is None or old_long_m is None:
+        # AC 2026-07-31 — was a SILENT return. This refuses a roll on a LIVE
+        # position with one side tested: the roll is the risk-reduction step,
+        # so declining it quietly is the worst of the three silent declines.
+        _missing = ("short" if old_short_m is None else "") + \
+                   ("/long" if old_long_m is None else "")
+        logger.info(
+            f"Condor roll SKIPPED: no mark for the untested {untested_side} "
+            f"vertical ({_missing.strip('/')} leg) — strikes "
+            f"{untested_leg['short_strike']:g}/{untested_leg['long_strike']:g}, "
+            f"{len(u_list)} contracts in chain. Position left as-is."
+        )
         return None
     close_cost = max(old_short_m - old_long_m, 0.0)
 

@@ -209,6 +209,16 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         _touches  = getattr(getattr(sweep, "pool", None), "touch_count", 0) or 0
         signal.swept_level_name = _lvl_name
         signal.level_strength   = min(1.0, (0.6 if _lvl_name else 0.2) + min(_touches, 4) * 0.1)
+        # N.3 2026-07-31 — closes_beyond AT ENTRY. The liquidity mapper computes
+        # it (v1.3 reclaim rule) and shadow/registry gates on it, but it never
+        # reached a trade row — so "did sweeps with more closes beyond the level
+        # perform worse" was unanswerable after the fact. It is the single
+        # cleanest sweep-vs-breakout discriminator available: a level swept and
+        # RECLAIMED is a sweep; a level closed beyond repeatedly is a breakout
+        # wearing a sweep's clothes. Captured at entry because it CANNOT be
+        # reconstructed later — the bar window has moved on by exit.
+        signal.closes_beyond = int(getattr(sweep, "closes_beyond", 0) or 0)
+        signal.sweep_age_bars = int(getattr(sweep, "bars_ago", 0) or 0)
         # ── Confluence ────────────────────────────────────────────────────────
         self._add_confluence(signal,
             f"Low sweep confirmed ({sweep.rejection_pct:.1%} rejection)"

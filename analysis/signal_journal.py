@@ -1,5 +1,13 @@
 """
 analysis/signal_journal.py — signal-time instrumentation (LOG-ONLY, never trades).
+v1.1 — 2026-07-31 — N.2 + N.3: signal_ctx now carries `rrr` (reward:risk from the
+        underlying levels, None when levels are absent — NOT 0.0, since "no stop"
+        and "worst possible trade" must stay distinguishable), plus sweep-only
+        `closes_beyond` and `sweep_age_bars`. These are FACTOR COLUMNS: they
+        cannot be backfilled, so every session without them is a session of
+        conditional data that will never exist. rrr in particular is what makes
+        item F's MIN_RRR floor calibratable from its own rejections rather than
+        vetoing invisibly.
 v1.0 — 2026-07-18 — initial release.
 
 WHY THIS EXISTS (ROADMAP Phase 3.1, verbatim):
@@ -105,6 +113,25 @@ def contract_ctx(c) -> dict:
         return None
 
 
+def _rrr(signal):
+    """Reward:risk from the underlying levels. None when levels are absent.
+
+    None is deliberate and NOT 0.0: a signal with no stop has an UNKNOWN rrr,
+    and recording that as zero would make it look like the worst possible trade
+    in any later distribution. The two must stay distinguishable.
+    """
+    try:
+        e = float(getattr(signal, "underlying_entry", 0.0) or 0.0)
+        st = float(getattr(signal, "underlying_stop", 0.0) or 0.0)
+        tg = float(getattr(signal, "underlying_target", 0.0) or 0.0)
+        if e <= 0 or st <= 0 or tg <= 0:
+            return None
+        risk, reward = abs(e - st), abs(tg - e)
+        return round(reward / risk, 4) if risk > 0 else None
+    except Exception:                                          # noqa: BLE001
+        return None
+
+
 def signal_ctx(signal) -> dict:
     """Everything the OptionsSignal knows at signal time. None-safe."""
     if signal is None:
@@ -119,6 +146,18 @@ def signal_ctx(signal) -> dict:
             "underlying_stop":  _round(getattr(signal, "underlying_stop", 0.0), 4),
             "underlying_target": _round(getattr(signal, "underlying_target", 0.0), 4),
             "entry_premium":    _round(getattr(signal, "entry_premium", 0.0), 4),
+            # N.2 2026-07-31 — risk:reward at SIGNAL time, computed here so every
+            # consumer of signal_ctx gets it (scored, disposition, readiness).
+            # Without this, item F's MIN_RRR floor would veto invisibly: there
+            # would be no record of what the rrr WAS on the trades it blocked,
+            # so the floor could never be calibrated from its own rejections.
+            # This is a factor column — it cannot be backfilled, so every session
+            # it is missing is a session of conditional data that never exists.
+            "rrr":              _rrr(signal),
+            # N.3 — sweep-only fields; absent (None) on every other strategy,
+            # which is the honest encoding rather than a misleading 0.
+            "closes_beyond":    getattr(signal, "closes_beyond", None),
+            "sweep_age_bars":   getattr(signal, "sweep_age_bars", None),
             "conviction":       _round(getattr(signal, "conviction", 0.0), 4),
             "confluence":       list(getattr(signal, "confluence_factors", []) or []),
             "notes":            getattr(signal, "notes", ""),

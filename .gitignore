@@ -55,3 +55,4 @@ data/shadow/
 data/signal_journal/
 *.patch
 data/chain_snapshots/
+MANIFEST.txt
