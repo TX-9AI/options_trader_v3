@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.27
+# docs/BACKLOG.md — v3.28
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -151,23 +151,6 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   crossing by the third week, leave a week to bake the chosen threshold. **Do NOT re-tune 0.65 or 0.80 in isolation**; that is the category-3
   optimisation the operator does not want. The geometry decides whether the
   strategy is salvageable, and the pitchfork is the instrument.
-- `[DESK]` **AE — `futures_trader_v1` carries the same `push.sh` and still has
-  the undefined-name hole.** The gate shipped here as push.sh v1.8/v1.9 plus
-  `install_tooling.sh` (see AB in PART 3). futures_trader_v1 ships the same file
-  and has neither. Its checkout was removed from control 07-29, so this needs a
-  clone. Not urgent — that project is dormant — but it must not resume without
-  the gate, since the two NameErrors that motivated it took a full ORB window and
-  an hour of one box.
-- `[DESK→DEPLOY]` **D (service half) — Templatize `shadow-observer.service`.** The unit hardcodes
-  `/home/ubuntu/options-trader`; sed the path at install time like `setup_ec2.sh`
-  does for `optionsbot.service`. Zero behavior change on the fleet (canonical path
-  matches); closes the last half of defect D before any non-standard-path deploy.
-  **HOW:** as stated — install-time sed of `WorkingDirectory`/`ExecStart` from the
-  install target, mirroring the optionsbot unit's pattern; shadow_devtools bump.
-  **VALIDATE:** tester install at a non-standard path runs; fleet no-op proven
-  with existing tooling — option 14 `systemctl cat shadow-observer | grep
-  WorkingDirectory` fleet-wide, all 29 identical before and after. No dataset
-  needed beyond the fleet's own units.
 **⬜ Sat Aug 1**
 - `[DESK·DATA]` **AJ — 🔴 THE HANDOFF PATH IS THE CHASE-VS-RETEST ANSWER, and it
   has been collecting data since July under a different name. Candidate outcome:
@@ -959,6 +942,38 @@ file: everything above either ✅ or explicitly re-dated below.
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
 `docs/HISTORY.md` and the audits. Resolution date + fixing versions + the why.*
 
+- **AE ✅ 2026-07-31 — RESOLVED, and the item's premise was WRONG.**
+  `futures_trader_v1` does **not** ship `push.sh` — it has no push script at all
+  (verified against a fresh clone). So there was no hole of the kind AE
+  described. The repo was also already **clean**: 0 undefined names across 63
+  tracked files.
+  **The underlying concern was still valid**, so the portable half shipped:
+  `tests/test_no_undefined_names.py` ported over, plus pyflakes in
+  requirements.txt. **It is MORE load-bearing there than here** — options_trader_v3
+  runs this gate in two places (suite + push.sh) and futures_trader_v1 has only
+  the suite, so there is no second net. Verified: passes clean on the repo as-is,
+  and fails with file and line on a deliberately reintroduced orphan.
+  **Note for whoever resumes that project:** the gate exists now but nothing
+  enforces running it — no push.sh means no chokepoint. If a deploy script is
+  ever added there, the pyflakes gate belongs in it (see AB).
+- **D ✅ 2026-07-31 — shadow-observer.service templatized (shadow_devtools v1.3),
+  closing the last half of defect D.** The unit hardcoded
+  `/home/ubuntu/options-trader` in both `WorkingDirectory` and `ExecStart`, so it
+  pointed at the canonical path from ANY checkout — a silent no-op on the fleet
+  (which uses that path) and a **broken observer anywhere else**, including the
+  tester. That is the same shape as defect D's first half, which the v1.2 script
+  fixed for itself but not for the unit it manages.
+  **HOW:** template now carries `__INSTALL_DIR__`; new **option 11** substitutes
+  `$REPO` at install time, mirroring `setup_ec2.sh`'s `${INSTALL_DIR}` pattern
+  for optionsbot.service. **Refuses to arm the unit if the placeholder survives
+  substitution** — a half-written unit is worse than none, and this is the class
+  of failure that shows up as "the service is running" while pointing somewhere
+  wrong. Verified at a non-standard path (`/opt/tester/options-trader`), and the
+  refusal path verified against an unsubstituted template.
+  **FLEET IMPACT: ZERO** — canonical path matches, so nothing changes until the
+  unit is reinstalled. Prove with option 14:
+  `systemctl cat shadow-observer | grep WorkingDirectory` — all 29 identical
+  before and after.
 - **F ✅ 2026-07-31 — MIN_RRR floor wired (setup_scorer v1.6), SHIPS OFF, ORB
   counter-only.** Same shape as E and the same kind of measured premise: a setup
   with **rrr = 1.00 scores 0.84 and grades A**. A 1:1 risk-reward trade is
@@ -1303,6 +1318,13 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.28 — 2026-07-31 — FRIDAY IS CLEAR. AE resolved (premise was wrong) and D
+  closed.** AE assumed `futures_trader_v1` shipped the same `push.sh`; a fresh
+  clone shows it has **no push script at all**, and the repo was already clean —
+  0 undefined names across 63 files. Ported the suite gate anyway, where it is
+  more load-bearing than here because there is no second net. D templatized
+  `shadow-observer.service` with `__INSTALL_DIR__` + option 11 substitution,
+  refusing to arm a unit with the placeholder still in it. Zero fleet impact.
 - **v3.27 — 2026-07-31 — F WIRED. Both genesis constants are finally read by
   something.** Measured premise, same as E's: **rrr = 1.00 scores 0.84 and grades
   A** — a 1:1 trade is a top-grade fire, because RRR was never one of the five

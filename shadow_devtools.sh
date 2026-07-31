@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# shadow_devtools.sh v1.2 — operator menu for the SHADOW subsystem (live on the QQQ paper box).
+# shadow_devtools.sh v1.3 — operator menu for the SHADOW subsystem (live on the QQQ paper box).
+# v1.3 — 2026-07-31 — item D, SERVICE HALF. deploy/shadow-observer.service had
+#        /home/ubuntu/options-trader hardcoded in WorkingDirectory and ExecStart,
+#        so the unit pointed at the canonical path from ANY checkout — a silent
+#        no-op on the fleet and a broken observer anywhere else. The template now
+#        carries __INSTALL_DIR__ and new option 11 substitutes $REPO at install
+#        time, mirroring setup_ec2.sh's ${INSTALL_DIR} pattern for
+#        optionsbot.service. Refuses to arm the unit if the placeholder survives.
 # Run from anywhere: the script self-locates its repo (defect D remainder —
 # v1.2 — 2026-07-23 — shadow-start/shadow-stop timers RETIRED (2026-07-22,
 #        fleet-wide): edge-triggered timers fired while overnight-stopped boxes
@@ -75,6 +82,7 @@ while true; do
   3) Restart observer              8) Tail observer journal (live)
   4) View today's shadow log       9) Verify isolation
   5) Would-fire summary (today)   10) Timer schedule (next fire)
+                                  11) Install/refresh the unit (this checkout)
   0) Exit
 MENU
   read -rp "> " c
@@ -94,6 +102,25 @@ MENU
     9) verify_isolation; pause ;;
     10) echo "start (RETIRED 2026-07-22 — disabled is the healthy state):"; systemctl list-timers shadow-start.timer --no-pager 2>/dev/null | head -2
         echo "stop:";  systemctl list-timers shadow-stop.timer  --no-pager 2>/dev/null | head -2; pause ;;
+    11) # D — install the unit with THIS checkout's path substituted in.
+        # The template ships with __INSTALL_DIR__ rather than a hardcoded
+        # /home/ubuntu/options-trader, which used to make the unit point at the
+        # canonical path from any checkout: a no-op on the fleet and a silently
+        # broken observer on the tester or any non-standard install.
+        _src="$REPO/deploy/shadow-observer.service"
+        if [ ! -f "$_src" ]; then echo "template missing: $_src"; pause; continue; fi
+        echo "installing $OBS with WorkingDirectory=$REPO"
+        sudo sed "s|__INSTALL_DIR__|$REPO|g" "$_src" \
+             | sudo tee /etc/systemd/system/$OBS >/dev/null
+        if grep -q "__INSTALL_DIR__" /etc/systemd/system/$OBS; then
+            echo "REFUSED: placeholder survived substitution — unit not armed"
+        else
+            sudo systemctl daemon-reload
+            echo "installed. WorkingDirectory now:"
+            grep -E "WorkingDirectory|ExecStart" /etc/systemd/system/$OBS
+            echo "NOTE: Environment= lines still need copying from optionsbot.service"
+        fi
+        pause ;;
     0) exit 0 ;;
     *) ;;
   esac
