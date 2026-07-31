@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.22
+# docs/BACKLOG.md — v3.23
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -1210,6 +1210,64 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.23 — 2026-07-31 — CONTINUATION GAINS A STRUCTURAL STOP (BOS), and the
+  excursion LEASH section was silently printing nothing.**
+  **(1) BREAK OF STRUCTURE — `exit_engine` v4.10, step 2b, UNGATED.**
+  Continuation's ladder was hard-close → regime-flip → −25% floor → theta-bleed →
+  trail, and **gates 4 and 5 both require the trade to have worked first**
+  (theta needs a gain band; the trail needs a resumption gain to arm). So a trade
+  that never worked had *nothing* between entry and the floor. MEASURED
+  (excursion 2026-07-31, 116 trades): **31 continuation trades ran from entry
+  straight to the −25% floor with MFE of only 2–3%** — `max_loss_floor_25pct`
+  n=17, `_24pct` n=11, `_26pct` n=2, `_23pct` n=1, all 0% win. ORB has had a
+  structure stop all along; continuation never did.
+  `BOSTracker` already existed but was wired **only into the sweep path**. It now
+  runs for continuation too: every new closing high promotes that candle's LOW to
+  the protected higher-low, and a 1m **close** below it breaks the HH/HL sequence
+  (mirrored for shorts on closing lows / protected lower-high). Uses `iloc[-2]`,
+  the last fully closed candle. New exit reason on continuation: `bos_exit`.
+  **Deliberately UNGATED.** Sweep's copy is gated on `pnl_pct > 0` ("don't BOS
+  out of a healthy retest that hasn't moved yet"). That gate is precisely what
+  would have MISSED all 31 of these — they never went positive. A third
+  must-work-first gate would have left the same hole.
+  **WHY BOS AND NOT THE FVG STOP (operator's call).** `underlying_stop` is
+  stamped on every continuation record since v1.3.1 (long `gap.bottom − 0.5·atr`)
+  and has never been read — but wiring *that* in was rejected on the reasoning
+  that **a gap fill is not trend failure**: gaps fill routinely inside healthy
+  trends, so the FVG level invalidates the *entry* rather than the *thesis*. It
+  is also **static**, fixed at entry, so it protects nothing once the trade
+  works. BOS is **dynamic** — the protected level ratchets up as the trend makes
+  new highs, so it both invalidates on real structure failure and trails the gain
+  structurally. **The FVG remains the ENTRY** (exploited repeatedly and
+  profitably on 2026-07-31: `continuation_trail` n=48, 83% win, +15% realized);
+  it is simply not the exit. The stop *types* in this system are the operator's
+  design; this was a wiring gap, not a new rule.
+  **The −25% floor is NOT widened.** Same report's FLOOR VERDICT: **0 of 59
+  winners ever breached −25% and recovered**, so a wider floor would have saved
+  nothing. The MAE separation also argues BOS will not be over-restrictive —
+  winners **−5%**, floor-losers **−29%**, a wide clean gap.
+  **(2) LEASH VERDICT was silently empty — `excursion_report` v2.3
+  (day_trader_pro).** The section iterated a hardcoded tuple
+  `("trail_stop_hit","post_target_trail","bos_exit","theta_bleed")`. On
+  2026-07-31 **none of those four occurred** — the day's trail exits were
+  `continuation_trail` (n=48), `orb_trail_stop` (n=7), `orb_fvg_trail_stop`
+  (n=1) — so every iteration hit `continue` and the block printed nothing, on the
+  day it was most needed. Now derived from the data, sorted by giveback
+  descending (loosest leash first), with an explicit "nothing to compare" line
+  instead of silence. First reading: `continuation_trail` gives back **20% of a
+  35% MFE (57% of peak)**, `condor_stop` **31% of 38% (84%)**, while
+  `orb_fvg_trail_stop` gave back **47% of 152% (31% — best)**; one trade, but the
+  first live datapoint favouring the FVG-anchored trail in the TC.2 bake-off.
+  **ALSO ESTABLISHED (no action possible).** MFE/MAE **cannot be recomputed
+  retroactively** — `max_premium_seen`/`min_premium_seen` are written tick-by-tick
+  while a position is open. `fleet_trades_2026-07-13.json` verified to contain
+  **zero** rows with telemetry; that date predates the v3.8 columns entirely.
+  Reports that appeared to show 07-13 telemetry were the cumulative-file bug
+  surfacing *recent* trades under an old date. Separately,
+  `excursion_report.load_day()` prefers `trades/<date>/*.db` whenever the folder
+  exists and only falls back to the JSON — so a harvest backfilling an old date
+  folder silently switches that date's source to schema-less DBs. Noted, not
+  changed.
 - **v3.22 — 2026-07-30 — AG SHIPPED THE SAME NIGHT IT WAS FOUND, plus the
   instrumentation that makes it worth shipping.** Condor Leg 1 no longer cancels
   on a COMPRESSION flip — compression is a tightening range and that is where a

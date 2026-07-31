@@ -1307,6 +1307,40 @@ class ExitEngine:
             decision.exit_reason = f"regime_flip ({regime})"
             return decision
 
+        # 2b. BREAK OF STRUCTURE (v4.10) — the structural stop continuation
+        #     never had. Operator's rule: the trade is defined by the trend, so
+        #     the trend's structure failing is the exit — not a premium level.
+        #     BOSTracker ratchets: every new closing high (long) promotes that
+        #     candle's LOW to the protected higher-low; a 1m CLOSE below it means
+        #     the HH/HL sequence is broken. Mirrors for shorts on closing lows /
+        #     protected lower-high. Uses iloc[-2], the last FULLY CLOSED candle.
+        #
+        #     UNGATED, deliberately. Sweep's copy of this exit is gated on
+        #     `pnl_pct > 0` ("don't BOS out of a healthy retest that hasn't moved
+        #     yet"). That gate is exactly what would MISS the failure mode this is
+        #     for: measured 2026-07-31, 31 continuation trades ran from entry
+        #     straight to the -25% floor with MFE of only 2-3% — they never went
+        #     positive, so a profit-gated BOS would never have fired. Gates 4
+        #     (theta bleed) and 5 (trail) already require the trade to have worked
+        #     first; a third such gate would leave the same hole.
+        #
+        #     CHOSEN OVER THE FVG STOP. `underlying_stop` is stamped on the record
+        #     (gap.bottom - 0.5*atr for longs) and has never been read, but a gap
+        #     fill is NOT trend failure — gaps fill routinely inside healthy
+        #     trends. The FVG level is also STATIC, fixed at entry, so it protects
+        #     nothing once the trade works. BOS is dynamic: the protected level
+        #     ratchets up as the trend makes new highs, so it invalidates on
+        #     actual structure failure and trails the gain structurally. The FVG
+        #     remains the ENTRY (proven repeatedly on 2026-07-31); it is not the
+        #     exit.
+        if df_1m is not None:
+            _bos = self._get_bos_tracker(trade_id, str(record.get("direction", "")).lower(),
+                                         float(record.get("underlying_entry", 0.0) or 0.0))
+            if _bos.update(df_1m):
+                decision.should_exit = True
+                decision.exit_reason = f"bos_exit pnl={pnl_pct:.1%}"
+                return decision
+
         # 3. HARD FLOOR — 25% premium loss (v4.0; was the blanket 40%).
         #    Disaster backstop only: regime-flip above is the real stop and
         #    normally fires first. Existing rows keep the stop_premium written
