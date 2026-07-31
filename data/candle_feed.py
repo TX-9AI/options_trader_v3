@@ -1,5 +1,25 @@
 """
-data/candle_feed.py — addendum v3.8 (see below); original header follows.
+data/candle_feed.py — addendum v3.9 (see below); original header follows.
+v3.9 — 2026-08-01 — RTH GATE on the reconnect loop. The feed had NO time gate
+        (Restart=always, no timer), so while a box was up it held a DXLink socket
+        continuously. Invisible on a normal day — phase_report stops the
+        instances at EOD — but every MAINTENANCE wake put 29 boxes back on the
+        wire for work needing no market data. Now sleeps outside RTH and holds no
+        subscriptions at all.
+        SAFE FOR CHAIN ARCHIVAL, which is what made this look risky: Greeks and
+        Quote ride this same socket, so idling also stops draining chain_marks —
+        but chain_snapshot.snapshot() takes the chain as an ARGUMENT and runs
+        inside main.py's tick loop, which already returns early on not is_rth()
+        (main.py:1268). Archival only ever happens during RTH.
+        Connects OT_FEED_WARM_LEAD_S (default 1200s = 20 min) BEFORE the open,
+        covering the 09:15 fleet wake, because fetch_candles refuses on a stale
+        heartbeat and a feed connecting at exactly 09:30 serves nothing for its
+        first cycles.
+        BOTH EDGES, not just the start. The top-of-loop gate decides whether to
+        CONNECT; a second check on the existing flush cadence DISCONNECTS when
+        the session ends, so a box left up overnight releases its subscriptions
+        instead of streaming until something drops it. Buffered bars are flushed
+        immediately before the break, so nothing is lost.
 
 v3.8 — 2026-07-15 — SUBSCRIPTION FAULT-ISOLATION + EXCEPTIONGROUP UNWRAP.
         Each candle subscribe is now independent: one failing (symbol,tf)
@@ -172,6 +192,14 @@ FLUSH_INTERVAL_S  = 2.0              # buffer -> SQLite cadence (also heartbeat)
 PRUNE_FACTOR      = 4                # keep count*FACTOR rows per interval
 PRUNE_EVERY_S     = 300
 RECONNECT_MIN_S   = 3
+
+# Seconds BEFORE the RTH open at which the feed connects, so candle frames are
+# warm when the bot's first tick asks for them. 20 min covers the 09:15 fleet
+# wake. OT_FEED_WARM_LEAD_S=0 makes the gate exact-open; a large value
+# effectively restores the old always-on behaviour.
+from utils.time_utils import is_rth, seconds_until_rth_open   # RTH gate, 2026-08-01
+
+FEED_WARM_LEAD_S = float(os.environ.get("OT_FEED_WARM_LEAD_S", "1200"))
 RECONNECT_MAX_S   = 60
 VIX_SYMBOL        = os.environ.get("OT_DXFEED_VIX", "VIX")
 VIX_INTERVALS     = ("1m", "1d")
@@ -587,6 +615,45 @@ class CandleFeed:
         session = get_session()
         backoff = RECONNECT_MIN_S
         while True:
+            # ── RTH GATE (2026-08-01) ─────────────────────────────────────────
+            # Do not hold a DXLink socket when there is no session to serve it.
+            #
+            # WHY: this loop had no time gate at all — `Restart=always`, no timer
+            # — so while a box was UP the feed subscribed continuously. That is
+            # invisible on a normal day (phase_report stops the instances at EOD,
+            # so nothing is running), but it means every MAINTENANCE wake put 29
+            # boxes back on the wire at once for work that needs no market data.
+            #
+            # WHY THIS IS SAFE FOR CHAIN ARCHIVAL — the thing that made this
+            # look risky. Greeks/Quote for the option chain ride this same
+            # socket ("one producer, many readers"), so idling here also stops
+            # draining chain_marks. But `analysis.chain_snapshot.snapshot()`
+            # takes the chain as an ARGUMENT and is called from inside main.py's
+            # tick loop — which ALREADY returns early on `not is_rth()`
+            # (main.py:1268). Chain archival therefore only ever happens during
+            # RTH. Gating here cannot cost a snapshot.
+            #
+            # The bot has had exactly this sleep-and-continue since it was
+            # written; the feed simply never got the same treatment.
+            #
+            # LEAD-IN, not a hard 09:30: the bot's fetch_candles refuses on a
+            # stale heartbeat, so a feed that connects exactly at the open serves
+            # nothing for its first cycles. Connect FEED_WARM_LEAD_S early
+            # (default 20 min, covering the 09:15 fleet wake) so the frames are
+            # warm when the first tick asks.
+            if not is_rth():
+                _until = seconds_until_rth_open()
+                if _until > FEED_WARM_LEAD_S:
+                    _nap = min(60.0, _until - FEED_WARM_LEAD_S)
+                    logger.info(
+                        f"Feed idle — outside RTH, no subscriptions held. "
+                        f"Open in {_until/60:.0f} min (connecting "
+                        f"{FEED_WARM_LEAD_S/60:.0f} min early). Sleeping "
+                        f"{_nap:.0f}s."
+                    )
+                    await asyncio.sleep(_nap)
+                    continue
+                # inside the lead-in window: fall through and connect warm
             try:
                 async with DXLinkStreamer(session) as streamer:
                     # v3.4: fresh socket — chain subscriptions must be rebuilt
@@ -642,6 +709,25 @@ class CandleFeed:
                             last_flush = now
                             if n:
                                 logger.debug("flushed %d bars", n)
+
+                            # v3.9 — SESSION IS OVER: drop the socket. The gate at
+                            # the top of the reconnect loop only decides whether
+                            # to CONNECT; without this the feed would stream on
+                            # past 16:00 for as long as the box happened to stay
+                            # up. That is the case that matters — the operator
+                            # must be able to FORGET a box is up and have it not
+                            # be a problem, which is this project's standing rule
+                            # about anything depending on someone remembering.
+                            # Rides the existing flush cadence rather than adding
+                            # a timer: we are already here, once per cycle.
+                            # Flushed first (above), so no buffered bar is lost.
+                            if not is_rth():
+                                logger.info(
+                                    "RTH over — closing DXLink socket and "
+                                    "releasing all subscriptions until the next "
+                                    "session."
+                                )
+                                break
                             self._log_backfill_depth()
                             if once and quiet_since is not None and (now - quiet_since) > 8.0:
                                 logger.info("--once: backfill drained, exiting")

@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.29
+# docs/BACKLOG.md — v3.30
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -957,6 +957,46 @@ file: everything above either ✅ or explicitly re-dated below.
   **Note for whoever resumes that project:** the gate exists now but nothing
   enforces running it — no push.sh means no chokepoint. If a deploy script is
   ever added there, the pyflakes gate belongs in it (see AB).
+- **candle_feed RTH gate ✅ 2026-08-01 (v3.9) — 29 boxes no longer sit on
+  DXFeed with no session to serve.** The feed had **no time gate at all** —
+  `Restart=always`, no timer, no clock check in the reconnect loop — so while a
+  box was up it held a DXLink socket continuously. Invisible on a normal day
+  (phase_report stops the instances at EOD, so nothing runs), but every
+  MAINTENANCE wake put all 29 back on the wire for work that needs no market
+  data. Now sleeps outside RTH holding **zero subscriptions**.
+  **WHY THIS LOOKED RISKY AND IS NOT.** Greeks/Quote for the option chain ride
+  this SAME socket (v3.1's "one producer, many readers"), so idling the loop also
+  stops draining `chain_marks` — and `chain_snapshot` is what P5.3 and N.4 both
+  depend on. Resolved by reading rather than assuming:
+  `chain_snapshot.snapshot()` takes the chain as an **argument** and is called
+  from inside main.py's tick loop, which **already returns early on
+  `not is_rth()`** (main.py:1268). Archival therefore only ever happens during
+  RTH. The gate cannot cost a snapshot. **The bot has had this exact
+  sleep-and-continue since it was written; the feed simply never got it** — the
+  same asymmetry as condor Leg 1 vs Leg 2.
+  **WARM LEAD-IN, not a hard 09:30.** `fetch_candles` refuses on a stale
+  heartbeat, so a feed connecting exactly at the open serves nothing for its
+  first cycles. Connects `OT_FEED_WARM_LEAD_S` early — default **1200s (20 min)**,
+  which covers the 09:15 fleet wake. Verified across the clock: idle at 03:00 /
+  08:00 / 09:05, **CONNECT (warm lead-in)** from 09:10, **CONNECT (in RTH)**
+  09:35–15:59, idle again from 16:05.
+  **BOTH EDGES, because the point is that a forgotten box is not a problem.**
+  The top-of-loop gate only decides whether to CONNECT — on its own the feed
+  would stream past 16:00 for as long as the box stayed up, which is exactly the
+  evening-maintenance case this exists for. A second check rides the EXISTING
+  flush cadence (no new timer, no new mechanism — we are already in that block
+  once per cycle) and breaks the socket when the session ends, returning to the
+  outer gate which then sleeps. Buffered bars are flushed immediately before the
+  break, so nothing is lost.
+  **Operator's framing, recorded because it is the general rule:** *"I would like
+  to be able to forget that I left them up and it not be a problem."* Same
+  principle as the conductor rule — anything that depends on someone remembering
+  will eventually not happen.
+  **Full cycle verified:** idle 17:00 / 21:00 / 06:00 / 09:05 -> CONNECT 09:12
+  (warm lead) -> streaming 09:31–15:58 -> **DISCONNECT 16:01** -> idle 16:30 /
+  19:00. Both edges, one day-night cycle.
+  **TUNABLE both ways:** `OT_FEED_WARM_LEAD_S=0` makes the gate exact-open; a
+  very large value restores the old always-on behaviour without a code change.
 - **D ✅ 2026-07-31 — shadow-observer.service templatized (shadow_devtools v1.3),
   closing the last half of defect D.** The unit hardcoded
   `/home/ubuntu/options-trader` in both `WorkingDirectory` and `ExecStart`, so it
@@ -1328,6 +1368,17 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.30 — 2026-08-01 — candle_feed gets an RTH gate (v3.9).** No time gate had
+  ever existed on the reconnect loop, so a box that was up held a DXLink socket
+  regardless of hour — harmless on a normal day, but every maintenance wake put
+  29 boxes on the wire for nothing. The blocker was that chain Greeks/Quote share
+  that socket; resolved by reading the call path rather than reasoning about it —
+  `chain_snapshot.snapshot()` runs inside a tick loop that already gates on
+  `is_rth()`, so archival is unaffected. Connects 20 min before the open
+  (`OT_FEED_WARM_LEAD_S`) because fetch_candles refuses a stale heartbeat, and
+  DISCONNECTS at the close on the existing flush cadence — both edges, so a box
+  left up overnight releases its subscriptions instead of streaming until
+  something drops it.
 - **v3.29 — 2026-07-31 — E's FIRST LEDGER RUN: sweep says do not ship.**
   `gate_ledger.py` over 10 sessions, 194 of 208 scored events joined to trades.
   **The trades E would have refused on SweepReversal won 78% and made $1,781.18
