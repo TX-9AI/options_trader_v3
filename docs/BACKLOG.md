@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.20
+# docs/BACKLOG.md — v3.21
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -145,6 +145,12 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   flip is the pass condition.
   **RELATED, NOT THE SAME ITEM:** the trigger GEOMETRY (see AI). Fixing the
   cancel does not by itself make a leg fire.
+  **BASELINE TO MEASURE THE FIX AGAINST (2026-07-30 census):**
+  `IronCondor  27566 evals  141 setups  141 VALID  0 invalid  0 raised` — about
+  one plan per symbol every three sessions across 14 sessions x 29 symbols. So
+  `decide()` is healthy and plan CREATION is not the bottleneck; 141 plans is the
+  population AG is protecting. After the fix, plans surviving a COMPRESSION flip
+  should rise toward that number instead of being cancelled ~19 minutes in.
 - `[DESK]` **AI — condor trigger geometry: the midpoint is wrong, and that is
   the real design question.** From the same CVX log: spot ~190, `bb_upper=190.93`,
   and the call trigger sat at **193** — the 0.80xEM dual floor put the short at
@@ -173,17 +179,29 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   For butterfly:238 that needs a COMPRESSION box with an illiquid chain, so it
   may sit unproven for days — acceptable; the point is that when it happens
   there is a record instead of silence.
-- `[DESK·DATA]` **AD — continuation v1.4 LIVE-FIRE verification (unproven).**
-  v1.4 landed ~14:00 ET 07-30 and closed the `Invalid signal` rejection path —
-  confirmed by zero occurrences in the hour after deploy. **The strategy actually
-  producing a signal is NOT proven**: no `[continuation] strike` line has ever
-  appeared, because the required conjunction (TRENDING + a 1m wick tagging an
-  unfilled 5m FVG) has not occurred since the fix.
-  **HOW/VALIDATE:** `echo "$(grep -c "\[continuation\] strike" ~/options-trader/bot.log)"`
-  across the fleet. A **`no strike: no expected move`** line is the failure
-  signature — it means the ATM straddle lookup returns nothing and the fix is
-  incomplete. Until a strike line appears, treat continuation as still untested,
-  not as fixed.
+- `[DESK·DATA]` **AD — continuation v1.4: LOGIC PROVEN offline, live fill still
+  unconfirmed. Downgraded from "unverified" — the strike selection works.**
+  Evidence 2026-07-30, `backtest_harness` v1.1 census over 29 symbols x 14
+  sessions, **82,698 strategy evaluations**:
+  `Continuation  27566 evals   158 setups   158 VALID   0 invalid   0 raised`
+  **158 of 158 signals pass `is_valid()`** — the exact check main.py applies and
+  the exact check that rejected 100% of continuation's output for weeks. Before
+  v1.4 that number was structurally ZERO (strike=0, entry_premium=0). The
+  EM-anchored ADX+conviction strike selection does what it was written to do.
+  **THE SIZE OF THE HOLE THIS CLOSED:** 158 setups is **63% of ORB's entire
+  volume** (252) over the same window. Continuation is the second-largest source
+  of setups in the fleet and it contributed nothing for weeks. The trade drought
+  was never mainly a market-conditions problem.
+  **WHAT IS STILL NOT PROVEN — and why this stays open:** the census runs against
+  a chain MODELLED with Black-Scholes, with assumed liquidity and theoretical
+  marks. Strike selection succeeding there proves the LOGIC, not the FILL. On a
+  real chain some fraction of those 158 will find no contract with a valid mark
+  (`butterfly_strategy.py:238` is the same failure shape, and it is on the AC
+  punch list). No `[continuation] strike` line has yet appeared on live tape.
+  **VALIDATE (unchanged):** `grep -c "\[continuation\] strike"` on the fleet.
+  A **`no strike: no expected move`** line is the failure signature — the ATM
+  straddle lookup returning nothing, which the modelled chain cannot surface
+  because it always has one.
 - `[DESK]` **AE — `futures_trader_v1` carries the same `push.sh` and still has
   the undefined-name hole.** The gate shipped here as push.sh v1.8/v1.9 plus
   `install_tooling.sh` (see AB in PART 3). futures_trader_v1 ships the same file
@@ -1166,6 +1184,29 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.21 — 2026-07-30 — CONTINUATION v1.4 PROVEN OFFLINE; condor baseline
+  recorded; sweep is genuinely rare.** `backtest_harness` v1.1 added a strategy
+  attempt census (continuation / sweep / condor driven over the same tape against
+  a modelled chain; butterfly excluded — it needs a GEX pin). Swept across 29
+  symbols x 14 sessions = **82,698 strategy evaluations, ZERO raised**, which is
+  its own robustness signal after a week that produced two NameErrors.
+  **Continuation 158 setups, 158 valid, 0 invalid** — AD downgraded from
+  unverified to logic-proven; the remaining gap is fill on a REAL chain, since
+  the census chain is Black-Scholes with assumed liquidity.
+  **IronCondor 141 plans** — recorded on AG as the baseline the compression-cancel
+  fix is protecting; plan creation was never the bottleneck.
+  **SweepReversal 26 setups (0.09%)** — genuinely rare offline, and worth a
+  flag: CVX ran FOUR profitable sweeps live the same day, so live detection
+  finds more than the harness does. Likely because the harness's liquidity
+  engine reads resampled 5m/15m rather than live 1m. Not a defect; it means the
+  backtest UNDERSTATES sweep and should not be used to judge it.
+  **Method note:** the first sweep run silently omitted the whole census section
+  because the strategy imports failed under control's venv
+  (`ModuleNotFoundError: tastytrade`) — the harness guard correctly said so per
+  symbol, but backtest_sweep printed nothing rather than surfacing that 29 runs
+  had come back degraded. A missing block looked identical to a block of zeros.
+  Same failure class this file has been cataloguing all week, in code written the
+  same hour. Fix: the sweep must banner `CENSUS DISABLED on N/29`.
 - **v3.20 — 2026-07-30 — THE CONDOR DROUGHT HAS A CAUSE, AND IT IS NOT THE
   TRIGGER.** Reading CVX's bot.log directly — after counting greps produced two
   wrong answers — showed condor plans being **CANCELLED three times by a flip to
