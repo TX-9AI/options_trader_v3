@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.28
+# docs/BACKLOG.md — v3.29
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -219,54 +219,20 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   CVX more than it describes ORB. ORB is the only strategy currently earning;
   changing its gating on this evidence would be the exact mistake this backlog
   keeps recording.
-  **PREREQUISITE:** `backtest_harness.py` prints only `fired[:8]` per symbol, so
-  per-trade R BY REGIME cannot be pooled across symbols yet. Needs a `--json` or
-  `--all` flag first — ~10 minutes — then a per-symbol sweep (NOT a cross-symbol
+  **PREREQUISITE ✅ DONE 2026-07-31** — harness **v1.2** gained `--all` (lifts the
+  8-trade display cap) and `--json PATH` (appends every fired trade as jsonl:
+  symbol, ts, long/short, regime, entry, stop, outcome, under_R). Sweep **v1.3**
+  threads them through, so one command pools all 29 symbols:
+  `python3 tests/backtest_sweep.py --json /tmp/orb_trades.jsonl`
+  Then group by regime and average `under_R`. The cap mattered because the first
+  8 fires chronologically is not a random sample — it is the start of the window.
+  Still a per-symbol sweep (NOT a cross-symbol
   splice: intraday frames are session-scoped and safe, but HTF is CONTINUOUS by
   design, so splicing CVX at $195 onto QQQ at $560 corrupts exactly the 1h depth
   the multi-day splice exists to build).
   **VALIDATE:** if ORB-in-RANGING is consistently negative across 6+ symbols,
   that is a mechanism finding and a regime gate is justified. If CVX is the
   outlier, it is a symbol characteristic and ORB stays as written.
-- `[DESK·DATA]` **E + F tester proof.** Replay both gates over the banked 07-13→07-31 tape:
-  enumerate every historical trade each gate would have blocked, with outcomes.
-  DONE = a would-have-blocked ledger showing the gates remove net-negative trades
-  (if they don't, the defaults ship OFF and the gates ship as log-only counters —
-  evidence decides, per house rule).
-  **HOW:** E's ledger is a journal+trades join (vwap alignment is already on every
-  scored event — no replay needed for the journaled window); pre-07-18 trades and
-  all RRR values come from the replay harness driving the real engines as-of.
-  Split the verdict by the rotating 30% session holdout so the gate defaults are
-  fit on one set and accepted on another (L3.5 discipline applies to gates too).
-  **VALIDATE:** the ledger IS the validation artifact — per gate: n blocked, net
-  P&L of blocked, win rate of blocked vs admitted, on fit and holdout separately.
-  Ship-ON bar: blocked population net-negative on the HOLDOUT, not just the fit.
-  **SPLIT THE VERDICT PER STRATEGY, NOT JUST PER GATE (added 2026-07-31 while
-  wiring E).** A pooled number can be wrong in both directions here. E applies to
-  exactly two strategies — continuation and sweep (butterfly/condor are
-  `neutral` and inert; ORB is exempt by construction) — and they have OPPOSITE
-  relationships to VWAP:
-  *Continuation* is trend-following, so misalignment is genuine evidence the
-  entry is wrong-sided. That is the case E was reasoned from.
-  *SweepReversal is a FADE.* A low sweep produces a LONG, and at that moment
-  price has just swept a low — it is very likely still BELOW VWAP. The strategy
-  itself treats VWAP recovery as a CONFLUENCE BONUS, not a requirement
-  (`"Recovered above VWAP"`, sweep_reversal_strategy.py:231). So a valid sweep
-  long that has not yet reclaimed VWAP is misaligned BY DESIGN, and this gate
-  would block it.
-  **The stakes are asymmetric:** sweep is the fleet's highest-volume strategy
-  (985 lifetime trades) and among its best (9/9 on ORCL and 5/5 on CVX on 07-31).
-  If the pooled ledger says "ship" while sweep's blocked population is
-  net-POSITIVE, turning the flag on guts the best strategy in the system.
-  **Three outcomes, decide explicitly:** both net-negative -> ship ON for both;
-  continuation negative but sweep positive -> **exempt sweep the way ORB is
-  exempt** and ship for continuation only; both positive -> stays OFF, and the
-  counter is the finding.
-  **FORWARD CONFIRMATION:** from Mon Aug 3 the live `vwap_gate: would_block`
-  counter and `gate_block:vwap` dispositions accumulate on real sessions. If
-  tomorrow's retro n is thin on the holdout, do NOT ship on a thin fit — carry
-  it to **Tue Aug 18** (sweep evidence day, which is already the decision point
-  for the sweep track) and decide there with both streams.
 - `[DESK]` **S / L1.9 — BOOKMARK build starts, on the TESTER.** Rolling ~15-session window
   of **bars** per symbol (bars, not engine state — the engines are stateless),
   load+append+roll each EOD, score today warm. This unblocks honest offline
@@ -698,6 +664,41 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   identical underlying_entry. Existing data (and now date-clean).
 
 **⬜ Tue Aug 18 — sweep evidence day (the decision the whole sweep track waits on)**
+- `[DESK·DATA]` **E + F gate verdict — the single run.** `python3
+  tests/gate_ledger.py` on control (day_trader_pro). Read-only; analyses journal
+  + trades already harvested, gathers nothing, changes nothing. Both gates ship
+  OFF, so the cost of waiting is only that they stay counters — their designed
+  state.
+  **FIRST READ ALREADY DONE — 2026-07-31, 10 sessions (07-20 → 07-31), 208
+  scored events, 194 joined to a trade (93%). START FROM THIS, do not re-derive:**
+  `E FIT   SweepReversal          n=27  net=+$1,781.18  wr=78%`
+  `E FIT   ContinuationStrategy   n=8   net=-$  928.50  wr=25%`
+  `E HOLDOUT (sweep only)         n=6   net=-$  140.58  wr=50%   THIN`
+  `F everything                   n=0   (rrr coverage 0/208 — see below)`
+  **NO FORMAL VERDICT** — the holdout is n=6 and contains no continuation at all.
+  But the shape is unambiguous, and it matches the mechanism reasoned from the
+  code BEFORE any data was read: **the trades E would refuse on sweep won 78% of
+  the time and made $1,781.** That is the setup working as designed — a low sweep
+  produces a LONG while price is still under VWAP, and sweep treats VWAP recovery
+  as a confluence BONUS, not a requirement. Blocking them blocks sweep's thesis.
+  Continuation points the other way (25%, -$928.50), which is E's premise
+  holding, but n=8 is not a finding.
+  **SO THE LEADING ANSWER IS THE THIRD BRANCH — EXEMPT SWEEP, then judge
+  continuation on its own n.** Arrive expecting that and test it; do not reopen
+  ship-or-abandon from zero.
+  **WHY F HAS NOTHING:** `rrr` only began being journaled 2026-07-31 (N.2), so
+  F's population is empty by construction until sessions accumulate. That is the
+  whole reason this run is dated here.
+  **SHIP-ON BAR: the HOLDOUT, not the fit.** The tool refuses a verdict below
+  n=20 and prints THIN. A thin holdout is a legitimate "no verdict — carry
+  forward", never a reason to ship on the fit.
+  **F's floor of 1.3 is the genesis GUESS, not a fit.** If F has n by today, set
+  it from the rrr-decile / outcome distribution. If not, say so and leave it.
+  **A BUG THE FIRST RUN CAUGHT — keep the fix.** gate_ledger v1.0 counted
+  ORBStrategy in the blocked population; ORB was +$3,343 of a +$4,196 total,
+  dominating a verdict for trades the gate can never refuse (it short-circuits to
+  `_grade_orb`). v1.1 excludes it. Any future gate: check its exempt set before
+  trusting a ledger number.
 - `[DESK·DATA]` **Level-conviction lead:** win-rate/expectancy by `level_strength` bucket at
   ~3 weeks of current-engine data. If equal-H/L sweeps are the losers → a
   level_strength floor on the sweep gate is confirmed.
@@ -974,6 +975,15 @@ file: everything above either ✅ or explicitly re-dated below.
   unit is reinstalled. Prove with option 14:
   `systemctl cat shadow-observer | grep WorkingDirectory` — all 29 identical
   before and after.
+- **E + F tester proof ✅ 2026-07-31 — done the night it was scheduled for,
+  ahead of the operator travelling Saturday.** Built `tests/gate_ledger.py`
+  (day_trader_pro, read-only) and ran it: 10 sessions, 208 scored events, **194
+  joined to a trade (93%)** — the ts_et join works, which was the main
+  uncertainty. Verdict and numbers recorded on the **Aug 18** item, which is now
+  the single decision point rather than a fresh analysis. Headline: the trades E
+  would refuse on SweepReversal won **78%** and made **+$1,781.18** (n=27), so
+  the leading answer is exempt-sweep, not ship-or-abandon. F is empty by
+  construction (rrr journaled only from 07-31).
 - **F ✅ 2026-07-31 — MIN_RRR floor wired (setup_scorer v1.6), SHIPS OFF, ORB
   counter-only.** Same shape as E and the same kind of measured premise: a setup
   with **rrr = 1.00 scores 0.84 and grades A**. A 1:1 risk-reward trade is
@@ -1318,6 +1328,17 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.29 — 2026-07-31 — E's FIRST LEDGER RUN: sweep says do not ship.**
+  `gate_ledger.py` over 10 sessions, 194 of 208 scored events joined to trades.
+  **The trades E would have refused on SweepReversal won 78% and made $1,781.18
+  (n=27)** — the gate is wrong for that strategy, exactly as the mechanism
+  predicted before any data was read. Continuation goes the other way (n=8, 25%,
+  -$928.50) on a sample too thin to call. Holdout is n=6 and sweep-only, so there
+  is NO formal verdict — but the leading answer is now **exempt sweep and judge
+  continuation separately**, not ship-or-abandon. Recorded on the Aug 18 item so
+  it is not re-derived. F is 0/208 on rrr, as designed.
+  **gate_ledger v1.1** — v1.0 counted ORB in the blocked population (+$3,343 of a
+  +$4,196 total) for a gate ORB never reaches. Caught on the first real run.
 - **v3.28 — 2026-07-31 — FRIDAY IS CLEAR. AE resolved (premise was wrong) and D
   closed.** AE assumed `futures_trader_v1` shipped the same `push.sh`; a fresh
   clone shows it has **no push script at all**, and the repo was already clean —

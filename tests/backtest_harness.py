@@ -1,5 +1,11 @@
 """
 tests/backtest_harness.py — offline multi-day backtest over spliced 1-minute tape.
+v1.2 — 2026-07-31 — `--all` and `--json PATH`. The fired listing was capped at
+        `fired[:8]`, which is fine for reading one symbol and fatal for pooling:
+        per-trade R BY REGIME across 29 symbols was impossible, and the first 8
+        chronologically is not a random sample — it is the start of the window.
+        `--json` appends one object per fired trade so a sweep can concatenate
+        them. Item AH's stated prerequisite.
 v1.1 — 2026-07-30 — +STRATEGY ATTEMPT CENSUS. v1.0 drove ORB only, so "how often
         does each strategy even get a setup" could not be answered offline —
         which is how ContinuationStrategy went weeks building signals with
@@ -414,6 +420,11 @@ def main():
     ap.add_argument("--model-premium", action="store_true", help="add modeled BS premium P&L")
     ap.add_argument("--dte", type=int, default=0, help="days to expiry for the premium model (0=0DTE)")
     ap.add_argument("--fed-days", default="", help="comma YYYY-MM-DD FOMC dates")
+    ap.add_argument("--all", action="store_true",
+                    help="show every fired trade, not just the first 8")
+    ap.add_argument("--json", default="",
+                    help="APPEND every fired trade as jsonl to this path "
+                         "(for pooling across symbols; delete the file first)")
     ap.add_argument("--no-census", action="store_true",
                     help="skip the non-ORB strategy attempt census (v1.0 behaviour)")
     args = ap.parse_args()
@@ -521,11 +532,41 @@ def main():
                   f"mean {st.mean(pnls):+.0f}%  median {st.median(pnls):+.0f}%  "
                   f"[modeled — not fill-accurate; VIX-vol proxy]")
         print(f"\n  sample fired setups:")
-        for s in fired[:8]:
+        # v1.2 — `--all` lifts the 8-trade display cap. The cap is fine for a
+        # human reading one symbol; it makes per-trade R BY REGIME impossible to
+        # pool across 29 symbols, which is exactly what item AH needs.
+        _show = fired if args.all else fired[:8]
+        if args.all and len(fired) > 8:
+            print(f"    (--all: showing all {len(fired)})")
+        for s in _show:
             extra = f" prem {s['prem_pnl_pct']:+.0f}%" if pm else ""
             print(f"    {s['t'].strftime('%m-%d %H:%M')} {'L' if s['long'] else 'S'} "
                   f"{str(s['regime']):16} entry={s['entry']:.2f} stop={s['stop']:.2f} "
                   f"-> {s['outcome']:14} {s['under_R']:+.2f}R{extra}")
+
+        # v1.2 — `--json PATH` writes EVERY fired trade as one JSON object per
+        # line. Text output is for reading; this is for pooling. Without it AH's
+        # question ("is ORB-in-RANGING negative ACROSS symbols?") can only be
+        # answered from a truncated sample, and a truncated sample of the first 8
+        # chronologically is not a random sample — it is the start of the window.
+        if args.json:
+            import json as _json
+            with open(args.json, "a") as _fh:
+                for s in fired:
+                    _fh.write(_json.dumps({
+                        "symbol": sym,
+                        "ts": s["t"].isoformat(),
+                        "long": bool(s["long"]),
+                        "regime": str(s["regime"]),
+                        "entry": round(float(s["entry"]), 4),
+                        "stop": round(float(s["stop"]), 4),
+                        "outcome": s["outcome"],
+                        "under_R": round(float(s["under_R"]), 4),
+                        "prem_pnl_pct": (round(float(s["prem_pnl_pct"]), 2)
+                                         if pm and s.get("prem_pnl_pct") is not None
+                                         else None),
+                    }) + "\n")
+            print(f"    [--json] appended {len(fired)} trade(s) to {args.json}")
 
 
 if __name__ == "__main__":
