@@ -1,5 +1,19 @@
 """
 risk/setup_scorer.py — Scores and grades options trade signals A/B.
+v1.5 — 2026-07-31 — E: VWAP HARD GATE. `vwap_alignment` scores 0.11 against a
+        0.55 grade-B bar, so misalignment could never veto — a long BELOW vwap
+        scored 0.73 and graded B (measured, not hypothesised). The gate now
+        blocks, placed AFTER the score is final so the journal records what the
+        blocked setup WOULD have graded; blocking earlier would save microseconds
+        and destroy the evidence the retro ledger needs. Ships DEFAULT OFF
+        (`OT_VWAP_FILTER_ACTIVE`) as a log-only counter until blocked trades are
+        shown net-negative — evidence decides. ORB exempt by construction (it
+        short-circuits to _grade_orb and never reaches here), matching defect V.
+        Inert when `price_vs_vwap == "NONE"` (the 07-17 SPX zero-volume case:
+        VWAP undefined is not VWAP misaligned) and on neutral direction.
+        +`_journal_gate_block()` emitting N.2's `gate_block:<gate>` disposition —
+        without it a gate vetoes invisibly and can never be calibrated from its
+        own rejections.
 v1.4 — 2026-07-22 — ORB IS A GEOMETRY GATE, NOT A WEIGHTED SCORE. The ORB
         was being run through the same 5-dimension weighted sum as every
         other strategy (regime_conviction, orb_quality, vwap_alignment,
@@ -72,7 +86,8 @@ from analysis.volatility_engine import VolatilityState
 from analysis.structure_analyzer import StructureMap
 from analysis.liquidity_mapper import LiquidityMap
 from data.macro_data import MacroSnapshot
-from config import GRADE_SIZE_MULTIPLIER, GRADE_A_MIN_SCORE, GRADE_B_MIN_SCORE
+from config import (GRADE_SIZE_MULTIPLIER, GRADE_A_MIN_SCORE,
+                    GRADE_B_MIN_SCORE, VWAP_FILTER_ACTIVE)
 try:
     from config import BRIEF_CONVICTION_WEIGHT
 except Exception:
@@ -286,6 +301,55 @@ class SetupScorer:
                 total += nudge
                 breakdown["brief_nudge"] = round(nudge, 4)
 
+        # ── E — VWAP HARD GATE (2026-07-31) ───────────────────────────────────
+        # Placed AFTER the score is final, deliberately: the journal then records
+        # what the blocked setup WOULD have graded, which is exactly what the
+        # retro ledger needs to answer "did this gate block winners?". Blocking
+        # earlier would save a few microseconds and destroy the evidence.
+        #
+        # Scoring alone cannot veto: misalignment costs 0.11 against a 0.55 bar,
+        # so a short into strength still grades B and fires. This makes it a
+        # block. ORB never reaches here (short-circuits to _grade_orb at the top
+        # of score()), which is the defect-V exemption for free.
+        #
+        # THREE WAYS THIS DELIBERATELY DOES NOT FIRE:
+        #  1. VWAP_FILTER_ACTIVE defaults OFF — it counts and journals but does
+        #     not block until the retro ledger convicts. Evidence decides.
+        #  2. price_vs_vwap == "NONE" means VWAP is UNDEFINED, not misaligned.
+        #     That is the 07-17 zero-volume case: SPX cash prints volume=0, so
+        #     VWAP is NaN and every index setup would be vetoed by an
+        #     unmeasurable condition. Inert, never a false veto.
+        #  3. direction "neutral" (butterfly/condor) has no VWAP side to be on.
+        _misaligned = (
+            vol_state.vwap > 0
+            and getattr(vol_state, "price_vs_vwap", "NONE") in ("ABOVE", "BELOW")
+            and signal.direction in ("long", "short")
+            and not ((signal.direction == "long"
+                      and vol_state.price_vs_vwap == "ABOVE")
+                     or (signal.direction == "short"
+                         and vol_state.price_vs_vwap == "BELOW"))
+        )
+        if _misaligned:
+            _would_grade = ("A" if total >= grade_a
+                            else "B" if total >= grade_b else "REJECT")
+            breakdown["vwap_gate"] = ("BLOCK" if VWAP_FILTER_ACTIVE
+                                      else "would_block")
+            logger.info(
+                f"VWAP gate {'BLOCK' if VWAP_FILTER_ACTIVE else 'WOULD BLOCK'}: "
+                f"{name} {signal.direction} with price "
+                f"{vol_state.price_vs_vwap} VWAP {vol_state.vwap:.2f} — "
+                f"setup scored {total:.2f} ({_would_grade})"
+            )
+            if VWAP_FILTER_ACTIVE:
+                self._journal_scored(signal, regime, vol_state, macro,
+                                     total, f"GATE_BLOCK_VWAP({_would_grade})",
+                                     breakdown, grade_a, grade_b, session)
+                self._journal_gate_block(signal, regime, vol_state, "vwap",
+                                         f"{signal.direction} with price "
+                                         f"{vol_state.price_vs_vwap} VWAP, "
+                                         f"would have graded {_would_grade}")
+                return None
+
         # ── Grade — A or B only. No C grade exists. ─────────────────────────────
         if total >= grade_a:
             grade = "A"
@@ -320,6 +384,31 @@ class SetupScorer:
                              total, grade, breakdown,
                              grade_a, grade_b, session)
         return result
+
+    @staticmethod
+    def _journal_gate_block(signal, regime, vol_state, gate: str, detail: str):
+        """N.2 — `gate_block:<gate>` disposition, emitted whenever a hard gate
+        vetoes a setup that had already been scored.
+
+        WHY THIS IS NOT OPTIONAL: without it a gate vetoes INVISIBLY. There would
+        be no record of what was blocked, so the gate could never be calibrated
+        from its own rejections, and L3.2 could not label a block as
+        dodged-a-loss vs missed-a-winner. A gate that cannot be audited is a
+        guess that compounds.
+        """
+        if _journal is None:
+            return
+        try:
+            _journal.journal(
+                "disposition",
+                outcome = f"gate_block:{gate}",
+                signal  = _journal.signal_ctx(signal),
+                regime  = _journal.regime_ctx(regime),
+                vol     = _journal.vol_ctx(vol_state),
+                gate    = {"name": gate, "detail": detail},
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _journal_scored(signal, regime, vol_state, macro,

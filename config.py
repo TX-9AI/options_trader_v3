@@ -496,8 +496,24 @@ LIQUIDITY_BUFFER_PCT        = 0.003
 #                        learned the opposite lesson the hard way — shorts above
 #                        VWAP / longs below VWAP had to become HARD blocks. That
 #                        lesson is NOT ported here. Open decision.
-MIN_RRR                     = 1.3    # UNWIRED
-VWAP_FILTER_ACTIVE          = True   # UNWIRED
+# E + F (2026-07-31) — WIRED AT LAST. Both were declared here at genesis and
+# never read by anything; `VWAP_FILTER_ACTIVE = True` in particular sat as a
+# hardcoded True that nothing consulted, so "the filter is on" was true in the
+# config and false in the code for months.
+#
+# Both now ship env-tunable and DEFAULT OFF, which is a deliberate downgrade from
+# the True above: house rule is evidence-decides, and neither has yet been
+# convicted on collected data. They run as log-only counters until the retro
+# ledger (signal_journal has carried vwap + price_vs_vwap since 07-18, and rrr
+# since 07-31 via N.2) shows the blocked trades are net-negative. If they are
+# not, these stay off and the counter IS the finding.
+#
+# A duplicate VWAP_FILTER_ACTIVE was briefly added higher in this file on 07-31
+# and was silently overridden by this line — later assignment wins. Caught by a
+# test asserting the default was False when it read True. One definition only.
+MIN_RRR                     = float(os.environ.get("OT_MIN_RRR", "1.3"))
+MIN_RRR_ACTIVE              = os.environ.get("OT_MIN_RRR_ACTIVE", "0") == "1"
+VWAP_FILTER_ACTIVE          = os.environ.get("OT_VWAP_FILTER_ACTIVE", "0") == "1"
 
 # ─── STRUCTURE ANALYSIS ───────────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.24
+# docs/BACKLOG.md — v3.26
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -168,26 +168,6 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   with existing tooling — option 14 `systemctl cat shadow-observer | grep
   WorkingDirectory` fleet-wide, all 29 identical before and after. No dataset
   needed beyond the fleet's own units.
-- `[DESK]` **E (build) — `VWAP_FILTER_ACTIVE` hard gate, on the TESTER.** The genesis
-  constant that was never wired: VWAP misalignment today costs 11 points against a
-  55 bar and cannot veto (a short into strength still fires at Grade B).
-  `crypto_trader` learned this the hard way — shorts above VWAP / longs below VWAP
-  became hard blocks after a relaxed validator produced consecutive losses. Port the
-  lesson: hard block, env-tunable, **ORB exempted** (defect V made the ORB
-  deliberately regime/VWAP-agnostic — the gate applies to the scored strategies).
-  **HOW:** hard block in the scored-strategy path (setup_scorer/dispatch): short
-  requires price ≤ VWAP, long requires price ≥ VWAP; `OT_VWAP_FILTER_ACTIVE`
-  env-tunable, default ON only if the Aug 1 ledger convicts; ORB exempt (defect V);
-  **index guard** — when `price_vs_vwap == "NONE"` (the 07-17 zero-volume fix:
-  SPX cash volume=0) the gate is inert, never a false veto.
-  **VALIDATE:** two-stage, both on data we already hold. *Retro (Aug 1):*
-  `signal_journal` `scored` events have carried `vwap` + `price_vs_vwap` since
-  07-18 (verified at HEAD) — join scored-and-fired signals to trades.db outcomes
-  and split by alignment; the would-have-blocked ledger is a query, not a replay.
-  *Forward (live proof):* N.2's `gate_block:vwap` disposition rows + the L3.2
-  rejection ledger's forward outcomes label every block dodged-a-loss vs
-  missed-a-winner. If blocked trades aren't net-negative on the holdout, the gate
-  ships OFF as a log-only counter — evidence decides, per house rule.
 - `[DESK]` **F (build) — `MIN_RRR` floor, on the TESTER.** Second genesis constant, same
   story. The ORB's RRR is structural and varies per setup, currently ungated. Build
   the floor env-tunable, applied at scoring for non-ORB paths; log-only counter for
@@ -292,6 +272,32 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   **VALIDATE:** the ledger IS the validation artifact — per gate: n blocked, net
   P&L of blocked, win rate of blocked vs admitted, on fit and holdout separately.
   Ship-ON bar: blocked population net-negative on the HOLDOUT, not just the fit.
+  **SPLIT THE VERDICT PER STRATEGY, NOT JUST PER GATE (added 2026-07-31 while
+  wiring E).** A pooled number can be wrong in both directions here. E applies to
+  exactly two strategies — continuation and sweep (butterfly/condor are
+  `neutral` and inert; ORB is exempt by construction) — and they have OPPOSITE
+  relationships to VWAP:
+  *Continuation* is trend-following, so misalignment is genuine evidence the
+  entry is wrong-sided. That is the case E was reasoned from.
+  *SweepReversal is a FADE.* A low sweep produces a LONG, and at that moment
+  price has just swept a low — it is very likely still BELOW VWAP. The strategy
+  itself treats VWAP recovery as a CONFLUENCE BONUS, not a requirement
+  (`"Recovered above VWAP"`, sweep_reversal_strategy.py:231). So a valid sweep
+  long that has not yet reclaimed VWAP is misaligned BY DESIGN, and this gate
+  would block it.
+  **The stakes are asymmetric:** sweep is the fleet's highest-volume strategy
+  (985 lifetime trades) and among its best (9/9 on ORCL and 5/5 on CVX on 07-31).
+  If the pooled ledger says "ship" while sweep's blocked population is
+  net-POSITIVE, turning the flag on guts the best strategy in the system.
+  **Three outcomes, decide explicitly:** both net-negative -> ship ON for both;
+  continuation negative but sweep positive -> **exempt sweep the way ORB is
+  exempt** and ship for continuation only; both positive -> stays OFF, and the
+  counter is the finding.
+  **FORWARD CONFIRMATION:** from Mon Aug 3 the live `vwap_gate: would_block`
+  counter and `gate_block:vwap` dispositions accumulate on real sessions. If
+  tomorrow's retro n is thin on the holdout, do NOT ship on a thin fit — carry
+  it to **Tue Aug 18** (sweep evidence day, which is already the decision point
+  for the sweep track) and decide there with both streams.
 - `[DESK]` **S / L1.9 — BOOKMARK build starts, on the TESTER.** Rolling ~15-session window
   of **bars** per symbol (bars, not engine state — the engines are stateless),
   load+append+roll each EOD, score today warm. This unblocks honest offline
@@ -967,6 +973,34 @@ file: everything above either ✅ or explicitly re-dated below.
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
 `docs/HISTORY.md` and the audits. Resolution date + fixing versions + the why.*
 
+- **E ✅ 2026-07-31 — VWAP hard gate wired (setup_scorer v1.5), SHIPS OFF.**
+  The premise is now measured, not argued: a `ContinuationStrategy` long with
+  price **BELOW** VWAP scores **0.73 and grades B** — it fires. `vwap_alignment`
+  contributes 0.11 against a 0.55 bar, so misalignment could never veto no matter
+  how wrong the side was. The gate makes it a block.
+  **PLACED AFTER SCORING, deliberately.** The journal records what the blocked
+  setup WOULD have graded (`GATE_BLOCK_VWAP(B)`), which is exactly what the
+  retro ledger needs to answer "did this gate block winners?". Blocking earlier
+  would save microseconds and destroy the evidence.
+  **DEFAULT OFF** (`OT_VWAP_FILTER_ACTIVE=0`) — log-only counter until blocked
+  trades are shown net-negative on collected data. House rule: evidence decides.
+  **Three deliberate no-fires:** ORB is exempt BY CONSTRUCTION (short-circuits to
+  `_grade_orb` before this path — defect V for free, verified: ORB long below
+  VWAP with the gate ON still passes grade A); `price_vs_vwap == "NONE"` is
+  inert, because VWAP UNDEFINED is not VWAP misaligned (the 07-17 SPX
+  zero-volume case, where every index setup would otherwise be vetoed by an
+  unmeasurable condition); `direction == "neutral"` has no VWAP side to be on.
+  **Also closes N.2's second half:** `_journal_gate_block()` emits
+  `gate_block:vwap` dispositions. Without it a gate vetoes invisibly and could
+  never be calibrated from its own rejections.
+  **A REAL BUG THIS SURFACED — `VWAP_FILTER_ACTIVE` was declared TWICE.** The
+  genesis block (config.py:518) had `VWAP_FILTER_ACTIVE = True  # UNWIRED`
+  sitting as a hardcoded True that nothing read; a new definition added higher in
+  the file was silently overridden by it, since the later assignment wins. The
+  gate would have shipped **ON** — the opposite of what this item specifies.
+  Caught by a test asserting the default was False when it read True. Now one
+  definition only, wired in place, env-tunable. `MIN_RRR` sat in the same block
+  with the same problem and is now wired for F.
 - **AD ✅ 2026-07-31 — CONTINUATION TRADED. First trades since it was written.**
   v1.4's strike selection works on a real chain, not just a modelled one.
   Fleet-wide **99 trades, 52% WR, -$690.50**, on a day the fleet netted +$3,581
@@ -1259,6 +1293,28 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.26 — 2026-07-31 — the E ledger must be split PER STRATEGY, or it can
+  give the wrong verdict in both directions.** E applies to exactly two
+  strategies and they relate to VWAP oppositely: continuation is trend-following
+  (misalignment = wrong-sided, the case E was reasoned from), while
+  **SweepReversal is a FADE** — a low sweep produces a LONG while price is still
+  below VWAP, and the strategy treats VWAP recovery as a confluence BONUS, not a
+  requirement. So valid sweep longs are misaligned by design and this gate would
+  block them. Sweep is the highest-volume strategy in the fleet (985 lifetime)
+  and among the best performing. A pooled "ship it" would gut it. Three outcomes
+  now written into the Aug 1 tester proof, including "exempt sweep the way ORB is
+  exempt", plus a forward path to Aug 18 if tomorrow's holdout n is thin.
+- **v3.25 — 2026-07-31 — E WIRED, and it caught a duplicate constant that would
+  have shipped it backwards.** The VWAP gate blocks misaligned scored setups —
+  measured premise: a long BELOW vwap scores 0.73 and grades B, i.e. fires. Ships
+  DEFAULT OFF as a counter until the retro ledger convicts. ORB exempt by
+  construction, inert on undefined VWAP, inert on neutral direction. Closes N.2's
+  `gate_block` disposition half.
+  **The bug worth remembering:** `VWAP_FILTER_ACTIVE = True # UNWIRED` had sat in
+  the genesis block since the beginning — a hardcoded True nothing consulted, so
+  "the filter is on" was true in config and false in code for months. Adding a
+  second definition higher in the file was silently overridden by it. A test that
+  asserted the default was False is the only reason it did not ship ON.
 - **v3.24 — 2026-07-31 — FRIDAY CLEARED: five items closed, and the entry-side
   twin of v3.23's finding is opened.** **AD** (continuation traded — 99 trades,
   52% WR fleet-wide) and **AG.2** (compression HOLD works, COMPCANCEL=0, a condor
