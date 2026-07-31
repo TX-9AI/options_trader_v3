@@ -1,6 +1,13 @@
 #!/bin/bash
 # =============================================================================
 # install_tooling.sh — make a CHECKOUT's tooling runnable, with no controller.
+# v1.2 — 2026-07-31 — VERIFY THE REPO IMPORTS. v1.1 checked only that pyflakes
+#        and pytest were present and then printed "tooling ready" — while the
+#        venv could not import the repo at all, because `requests` was never
+#        declared in requirements.txt despite data/macro_data.py importing it.
+#        Result: pytest was installed, the suite failed at COLLECTION, and the
+#        symptom looked like a pytest problem for weeks. Now it imports data,
+#        analysis and risk and REFUSES to report ready if any of them fail.
 # v1.1 — 2026-07-30 — +pytest. It was never in requirements.txt nor verified
 #        here, so `python -m pytest tests/` on control failed repeatedly with
 #        "No module named pytest" — a provisioning gap, not a command mistake.
@@ -85,6 +92,31 @@ for mod in pyflakes pytest; do
         FAILED=1
     fi
 done
+
+# v1.2 — VERIFY THE REPO ITSELF IMPORTS, not just that two tools are present.
+# v1.1 checked pyflakes and printed "tooling ready" while the venv could not
+# import the repo's own modules: `requests` was undeclared in requirements.txt,
+# so data/macro_data.py failed, so every test that reaches the strategy layer
+# failed at COLLECTION. The bootstrap said green and the suite was unrunnable.
+# A tooling check that does not exercise the tooling's actual job is theatre.
+echo "  verifying the repo imports…"
+_IMPORT_ERR="$("$PY" -c "
+import sys
+sys.path.insert(0, '$REPO_DIR')
+try:
+    import data.macro_data, analysis.regime_classifier, risk.setup_scorer
+except Exception as e:
+    print(f'{type(e).__name__}: {e}')
+" 2>&1)"
+if [ -n "$_IMPORT_ERR" ]; then
+    echo -e "  ${RED}✗  the repo does NOT import in this environment:${RESET}"
+    echo -e "  ${RED}     $_IMPORT_ERR${RESET}"
+    echo -e "  ${YELLOW}     pyflakes/pytest being present does not make the suite"
+    echo -e "     runnable — a missing runtime dep fails at COLLECTION.${RESET}"
+    FAILED=1
+else
+    echo -e "  ${GREEN}✓  repo imports (data + analysis + risk)${RESET}"
+fi
 
 if [ "$FAILED" -ne 0 ]; then
     echo -e "  ${RED}✗  tooling incomplete — push.sh's undefined-name gate"
