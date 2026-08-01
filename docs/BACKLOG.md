@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.33
+# docs/BACKLOG.md — v3.34
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -233,7 +233,46 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   **VALIDATE:** if ORB-in-RANGING is consistently negative across 6+ symbols,
   that is a mechanism finding and a regime gate is justified. If CVX is the
   outlier, it is a symbol characteristic and ORB stays as written.
-- `[DESK]` **S / L1.9 — BOOKMARK build starts, on the TESTER.** Rolling ~15-session window
+- `[DESK·DATA]` **S / L1.9 — ◐ PARTLY RESOLVED 2026-08-01. THE BOOKMARK WAS
+  ALREADY BUILT (v1.2, 2026-07-21) — this item's premise was stale, the same
+  class as T.1/T.3 on Jul 29. What was actually wrong was a DEFECT INSIDE it,
+  and that is now fixed and tested (commits 0a0da3b, 380a1bd).**
+  **THE DEFECT — the bookmark warmed the 1m frame too, and 1m is the one frame
+  live deliberately does NOT warm.** v1.2 prepended prior sessions to `df1m` so
+  the RESAMPLED 5m/15m/1h would carry ADX/EMA history — correct, and still the
+  point. But `s1m` was then sliced from that same concatenated frame, so the
+  25-bar 1-minute close window handed to the scorer STRADDLED THE OVERNIGHT GAP
+  for the opening 25 bars of every replayed session. `market_data` v3.1
+  session-scopes 1m ONLY, on purpose, and `tests/test_market_data_contract.py`
+  already asserts that contract on the LIVE path — the replay violated the
+  identical contract. Live has <25 bars until ~09:55 and passes `closes=None`,
+  so RANGING and COMPRESSION go UNSCORED; the replay scored both from 09:30 off
+  a gap-spanning regression. Proven on a two-session fixture through the real
+  code path: **24 of the 25 window bars belonged to the PRIOR session and a
+  -1.14 gap sat inside the regression.** Fixed in **replay_confluence v2.1**;
+  guarded by `tests/test_replay_1m_session_scope.py` (6 tests, incl. a
+  source-level assert and a deliberate-failure check that reverting turns 3 red).
+  **WHY IT HID: the bookmark made the replay MORE correct on the frames anyone
+  was looking at** (ADX went 0.0 -> warm), so the fix that introduced the 1m
+  contamination was validated by the improvement it also delivered.
+  **SECOND DEFECT, found the same day — the frames were UNCAPPED.** Every warm
+  session added history no live engine ever receives, and the divergence grew
+  with `--warm-sessions`. It became load-bearing the moment AK woke the 15m vote
+  and left 1h asleep: at warm >= 7 the replay's 1h frame reaches 55+ bars and
+  VOTES, while live holds it at 50 and it stays NEUTRAL. **replay_confluence
+  v2.2** trims each resampled frame to `TIMEFRAMES[tf]["candles"]` — read from
+  config, so it cannot drift from what data_cache requests — and moves the warm
+  default 5 -> 8. **regime_backfill v1.2** adds a `--warm-sessions` passthrough,
+  because nothing in the chain ever passed one: every diary, backfill and
+  a2_characterise run to date used the old default of 5.
+  **WHAT REMAINS, and why this is now DESK·DATA not DESK:** validation criterion
+  (1) INERTNESS is met — `test_fix_is_inert_when_the_bookmark_is_off` proves the
+  change is a no-op at `--warm-sessions 0`. Criterion (2) HONESTY GAIN is NOT
+  met and cannot be until **N.1** puts regime_log on control and **AM** rebuilds
+  the corpus. Do not mark this ✅ on the strength of the defect fix alone.
+  *The original build spec and VALIDATE bar follow — the VALIDATE half is still
+  the standard this item is closed against, so it is kept verbatim rather than
+  summarised.* Rolling ~15-session window
   of **bars** per symbol (bars, not engine state — the engines are stateless),
   load+append+roll each EOD, score today warm. This unblocks honest offline
   TRENDING and everything L1.6/L1.11 need.
@@ -250,6 +289,120 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   control. Agreement% (offline label vs live label, per tick bucket) is the
   number; today's known signature is offline under-reporting TRENDING, so the fix
   is proven when that gap closes without RANGING/COMPRESSION shares moving.
+
+- `[DESK→DEPLOY]` **AK — 🔴 THREE OF FOUR TIMEFRAMES HAVE NEVER VOTED IN
+  PRODUCTION, and the 07-16 fix that was supposed to solve this only half
+  landed.** Found 2026-08-01 while sizing the replay's warm depth. Shipped in
+  380a1bd; **bakes Mon Aug 3**.
+  `trend_engine._analyze_single` bails to NEUTRAL below `EMA_SLOW + 5 = 55` bars.
+  Measured against live fetch depths — `TIMEFRAMES[tf]["candles"]`:
+  `1d=10  1h=50  15m=50  ->  NEUTRAL, DEAD      5m=100 -> the only frame that votes`
+  v3.1's reweight on 07-16 diagnosed exactly this for 1d/1h and moved the
+  direction weight onto **15m (0.30)** + 5m (0.35) — **but 15m fetches 50 bars
+  too**, so 0.30 of the weight it moved TO was already dead on arrival. The
+  symptom is a silent NEUTRAL, not an error, so nothing surfaced it for two weeks.
+  **WHAT IT DOES TO THE GATE.** NEUTRAL frames still contribute half-weight to
+  the denominator, so with only 5m voting `bull_score = 0.35c / 0.675 = 0.519c`
+  against a 0.30 gate: **the 5m vote needs conviction > 0.579 or
+  `overall_direction` is NEUTRAL — and NEUTRAL is a HARD VETO on TRENDING in
+  `_trending`.** Below that line TRENDING is structurally zero and argmax must
+  land elsewhere. Waking 15m in agreement drops the requirement to c > 0.381.
+  **CONSEQUENCE WORTH TESTING, NOT ASSUMING: the iron condor has been absorbing
+  the deficit.** It is the RANGING fallback (main.py:1049), so some share of its
+  362 lifetime fires were ticks that were actually trending and could not be
+  labelled that way — a mechanism for **AI**'s bleed that is not about strike
+  geometry at all. Same for **AH**: ORB's 65%-of-fires-in-RANGING may be partly a
+  labelling artifact, which would mean conditional_tables has been pooling trend
+  ORBs and range ORBs under one label. Continuation and trend_credit_spread move
+  most in fire count; sweep is untouched (SWEEP_REVERSAL does not read direction).
+  **THE FIX, and why 150 rather than 60** (config **v4.1**, 15m 50 -> 150):
+  clearing 55 wakes the vote but not usefully — the engine re-seeds the EMA on
+  whatever tail it is handed, and measured against a fully-warm EMA-50 the error
+  is **69% of a 0.30 bar at 55 bars, 49% at 60, 2.5% at 80, 0.3% at 150.** A
+  confident vote on a number dominated by its seed is worse than an honest
+  NEUTRAL. **Costs nothing in data:** candle_feed already prunes to
+  `max(need,60)*4 = 240` 15m bars, so the history was there and only the fetch cap
+  hid it.
+  **1h DELIBERATELY LEFT ASLEEP — operator's call, 2026-08-01:** *"the markets
+  respond more broadly to recent developments SINCE the close than they do to the
+  previous session's range — which is a point of reference in my opinion, not
+  necessarily a discriminator."* A live 1h vote in the morning is dominated by the
+  PRIOR session and would oppose the opening drive, suppressing TRENDING in
+  exactly the 09:30-10:40 window **A2.6** is studying. 15m carries more weight and
+  has no such lag pathology.
+  **WATCH ON THE FIRST BAKE:** TastyTrade's backfill reach is limited and the
+  cutoff is unknown, so a cold store may not be served 150 at once. It accrues
+  ~26 15m bars/session and the vote stays NEUTRAL until it fills — no worse than
+  today. `trend_engine` **v3.3** reports the real per-box depth from the first RTH
+  session (see AL for why that warning is throttled and RTH-gated). **Retreat
+  value if the store turns out to be wiped often: 80**, which is 2.5% error and
+  ~1 session of accrual.
+- `[DESK→DEPLOY]` **AL — 🔴 THE BOT COULD BE BLIND AND NOBODY WOULD KNOW.
+  Operator requirement, built and shipped the same day (380a1bd); bakes Mon Aug 3.**
+  *"If any condition happens where the bot is blinded — whether it's the feed, or
+  some other stale data, or the heartbeat, or anything else that is blinding it —
+  we need a notification immediately that I need to take a look at it."*
+  **THE HOLE.** `fetch_quote` was protected (it re-asserts bar age against
+  `QUOTE_MAX_AGE_S`, so a delayed bar is rejected). `fetch_candles` was NOT: it
+  gates on `_feed_alive()`, which reads a `__feed__/heartbeat` row — that proves
+  the PRODUCER is running, not that the BARS are current. **A feed writing
+  15-minute-stale bars has a perfectly fresh heartbeat**, so every engine reading
+  5m/15m/1h frames would consume delayed data with no signal anywhere. Not
+  sandbox-specific: any fault that keeps the writer alive while data lags (a
+  DXLink subscription silently ceasing on one interval, a partial fault after a
+  reconnect) produces it.
+  **BUILT ON THE SYMPTOM, NOT A CAUSE LIST** — a cause list only ever covers the
+  failures already thought of. `market_data` **v3.3** adds a bar-recency guard
+  (3x the timeframe's own bar width, RTH only) and funnels all six blind paths
+  through `record_blindness()`: `STORE_MISSING`, `HEARTBEAT_STALE`, `NO_BARS`,
+  `ALL_NAN`, `EMPTY_SESSION`, `BARS_STALE`. `utils/blindness_latch.py` **v1.0**
+  decides when to page (3 consecutive blind ticks AND >= 45s), `alert_manager`
+  **v1.8** sends it, `main.py` wires `_check_blindness()` into the RTH tick loop.
+  **The snapshot is captured at the FIRST blind tick, not when the latch trips** —
+  a feed that reconnects mid-outage would otherwise report healthy fields
+  alongside the alert, the worst possible forensic record.
+  **COMPLEMENTS the existing bot/service-down notification rather than duplicating
+  it:** that one fires when the bot STOPS; this fires when the bot KEEPS RUNNING
+  on data it cannot trust. Process alive, service green, trading blind was the
+  uncovered middle.
+  **TELEGRAM IS AN EMERGENCY SERVICES CHANNEL** (operator's framing, now
+  WORKING_AGREEMENT §17). Nothing routine goes there. Warnings and paging are
+  RTH-gated while DETECTION and the record stay on, so callers that legitimately
+  run outside the session still get a true answer — not fully dark, just not
+  paging. The first cut of the starvation warning logged EVERY TICK and buried
+  bot.log; it is now once per episode with a recovery notice, the same
+  one-time-per-key idiom `candle_feed._log_backfill_depth()` uses.
+  **DRILLABLE, because an alarm that has never fired is one nobody knows works.**
+  `tests/blind_alert_selftest.py` walks the real path (recorder -> latch ->
+  AlertManager -> Telegram) and asserts the things that rot silently: that it does
+  NOT page early, pages exactly once, holds the first snapshot, and that recovery
+  still carries duration and cause after the reset. **devtools 56** fans it to the
+  fleet with a dry-run prompt. Every drill message is prefixed `DRILL — NOT REAL`,
+  because a test that looks real IS a false alarm. Alerts also fire in PAPER
+  (tagged `[PAPER]`, no manage-manually line) so the path is exercised daily
+  before Aug 31. `tests/test_blindness_latch.py` — 10 tests.
+  **⬜ OPEN DECISION, deliberately not taken: `OT_BLIND_REFUSE` ships OFF.** A
+  stale frame is currently still SERVED with a warning. Refusing it would halt the
+  tick loop on a false positive — a trading-behaviour change. For live cash the
+  argument to turn it ON is strong (0DTE on 15-minute-old bars is worse than not
+  trading), but decide it on a few sessions of observed `BARS_STALE` frequency,
+  not before. **Revisit at the Aug 24 gate.**
+- `[DESK]` **AM — REBUILD THE REPLAY CORPUS at `--warm-sessions 8`, and retire
+  the numbers it supersedes.** Blocks **A2.6** and S's honesty-gain check.
+  `devtools 46` -> answer **y** to *"Rebuild ALL dated tapes"* (it is not
+  gap-fill-only; `--backfill --rebuild` re-scores every dated tape). Long job —
+  **run it in tmux** (WORKING_AGREEMENT §16).
+  **TWO CHANGES LAND AT ONCE and the result is not attributable to either alone:**
+  v2.1 alters only the opening 24 ticks per symbol-session (~6.7% of the corpus,
+  but ALL of it inside 09:30-09:55, exactly where the gap question lives), while
+  v2.2's frame caps + warm 8 change the HTF depth for EVERY tick. Isolating them
+  would cost a second full pass for a diagnostic we do not need — but it means
+  **the 4.02% A2 violation rate and the 45%-in-the-10:00-hour concentration from
+  v3.33 are SUPERSEDED and NOT comparable.** State the new baseline as new; do not
+  diff it against the old one.
+  **EXPECT NOISE ON THE FIRST PASS:** with 15m at 150 the corpus will log 15m
+  starvation until the warm depth fills it — the same signal Monday's live boxes
+  produce. That is the instrumentation working, not a fault.
 
 **⬜ Sun Aug 2**
 - `[DESK]` **A2.4 — 🔴 A2's REAL CAUSE IS A HORIZON MISMATCH, and the state it
@@ -304,7 +457,47 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   (flat midline = pin conditions), **condor is genuinely ambiguous** — low
   realised vol against still-elevated IV is attractive, but a paused trend
   RESOLVES, and a condor sold into a coiled spring is short the resolution.
-- `[DESK·DATA]` **A2.6 — `gap_pct`: the overnight gap is never MEASURED, and
+- `[DESK]` **A2.6 — ⬆️ PROMOTED 2026-08-01: BOTH TOOLS ARE BUILT, TESTED AND
+  SHIPPED (380a1bd). Startable the moment AM rebuilds the corpus — no sessions
+  to wait for.** Tag moved DESK·DATA -> DESK: the gap is backfillable, so the
+  only remaining dependency is our own regen, not the calendar.
+  `tests/gap_backfill.py` **v1.1** — computes gap_pct per (date,symbol) from
+  `~/day_trader_pro/ohlc/<date>/`, writes `reports/gap_pct.json`. It classifies
+  CONT/REV/FLAT against **the prior session's LAST 70 MINUTES**, not the whole
+  session, because 70 min IS the ADX-14-on-5m window the boundary bar perturbs —
+  whether the gap's DM reinforces or cancels depends on the accumulated DM in
+  *that* window. `prior_dir_day` is emitted alongside so the choice can be
+  checked rather than trusted. (v1.0 defaulted to a `data/OHLC` root that does
+  not exist; `~/day_trader_pro/data/` holds only instance_map/mock_state/
+  report.json and the harvest roots are its SIBLINGS.)
+  `tests/a2_partition.py` **v1.0** — the 3x3 grid {OPEN 09:30-10:40, DECAY
+  10:40-12:00, CLEAN 12:00-16:00} x {CONT, FLAT, REV}, reporting RATES with 95%
+  half-widths and **refusing any verdict on a cell under n=500** (a2_characterise
+  v1.0's lesson, asserted rather than remembered).
+  **WHY A GRID AND NOT A TIME HISTOGRAM.** Three mechanisms produce A2's 10:00
+  signature and time-of-day cannot separate them: **H1 horizon co-truth**
+  (structural, all day, genuine), **H2 opening drive** (H1 with a morning
+  density, genuine), **H3 gap artifact** (the impulse happened overnight, so a
+  pause flagged from it has nothing to resume). MEASURED by ablation on a
+  two-session fixture with the real trend_engine, only the boundary changed:
+  `zero gap  ADX 46.4 @09:40 -> 16.3 @12:30`
+  `gap WITH prior direction  52.0 -> 17.8   (inflated ~+17 at 10:30)`
+  `gap COUNTER to prior dir  26.1 -> 14.9   (SUPPRESSED ~20 pts)`
+  **A reversal gap DEPRESSES ADX. H1 and H2 can only ADD violations — neither
+  can produce a rate BELOW the midday baseline.** That deficit is H3's unique
+  fingerprint and is unfakeable by the other two. All three can light up at
+  once; that is the expected answer, not a muddle.
+  **PROVEN, not asserted:** `tests/test_a2_partition_recovers.py` plants four
+  worlds (H1-only, H1+H2, all three, thin cells) and asserts the tool recovers
+  each — including that a reversal deficit WITHOUT continuation inflation reads
+  **ANOMALOUS**, not CONFIRMED, and that sub-floor cells yield REFUSED with no
+  verdict anywhere in the output.
+  **WHAT IT DECIDES.** CLEAN x FLAT is an uncontaminated sample of the paused-
+  trend state — that is where **A2.5**'s forward edge gets evaluated per
+  strategy, before any of it touches a gate. Hold open the outcome that the
+  state is real, correctly identified, and still has no edge.
+  *Original framing follows.*
+- `[DESK]` **A2.6 — `gap_pct`: the overnight gap is never MEASURED, and
   unlike everything else this week it is fully BACKFILLABLE.** Operator's point,
   2026-08-01: *"the gaps you see overnight from previous close to current open
   are big and meaningful, and they have to be reflected somewhere."*
@@ -1569,6 +1762,57 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.34 — 2026-08-01 — THREE OF FOUR TIMEFRAMES HAVE NEVER VOTED, AND THE BOT
+  COULD HAVE GONE BLIND WITHOUT SAYING SO.** Two independent silent-degradation
+  faults found in one session, both shipped the same day (0a0da3b, 380a1bd).
+  **AK — the trend vote.** `_analyze_single` bails to NEUTRAL below
+  `EMA_SLOW+5 = 55` bars; live fetches 1d=10, 1h=50, **15m=50** — only 5m (100)
+  can vote. v3.1's 07-16 reweight moved the direction weight onto 15m believing
+  it would carry, and **15m was starved too**, so that fix only half landed. With
+  one voter the gate needs 5m conviction > 0.579 or direction is NEUTRAL, which
+  is a HARD VETO on TRENDING — so TRENDING has been structurally unreachable
+  below that line and the **condor, as the RANGING fallback, absorbed the
+  deficit.** config **v4.1** raises 15m to **150** (not 60: the EMA-50 is
+  re-seeded on the tail and is off by 69% of a bar at 55, 49% at 60, 2.5% at 80,
+  0.3% at 150). **1h left asleep on the operator's call** — the market responds
+  to developments since the close more than to the prior session's range, and a
+  live 1h vote would oppose the opening drive in exactly the window A2.6 studies.
+  **AL — the blind alert.** `_feed_alive()` proves the PRODUCER runs, not that
+  the BARS are current, so a feed writing 15-minute-stale bars passed every check
+  while every engine consumed delayed data. `market_data` **v3.3** adds a recency
+  guard and routes six blind paths through `record_blindness()`; `blindness_latch`
+  **v1.0** + `alert_manager` **v1.8** + main.py wiring page once per outage with
+  the snapshot captured at the FIRST blind tick. Built on the SYMPTOM, not a cause
+  list. **Telegram is an emergency-services channel** — RTH-gated, throttled once
+  per episode, drillable via devtools **56** with a `DRILL — NOT REAL` prefix.
+  `OT_BLIND_REFUSE` ships OFF pending stale-frequency evidence.
+  **S was already built, and had a defect inside it.** The bookmark shipped
+  2026-07-21; the real fault was that it warmed the **1m** frame too — the one
+  frame `market_data` v3.1 deliberately session-scopes — so the 25-bar angle
+  window straddled the overnight gap for the opening 25 bars of every replayed
+  session, scoring RANGING/COMPRESSION where live scores nothing. **v2.1** scopes
+  it; **v2.2** caps every resampled frame at `TIMEFRAMES[tf]["candles"]` (the
+  frames were UNCAPPED, and at warm >= 7 the offline 1h would have voted while
+  live's stays asleep) and moves the warm default 5 -> 8. **regime_backfill v1.2**
+  adds the passthrough — nothing in the chain had ever passed one, so every diary
+  and a2_characterise run used the old default of 5.
+  **A2.6 promoted to DESK** with both tools built and proven: `gap_backfill` v1.1
+  and `a2_partition` v1.0, the latter verified by planting four worlds and
+  asserting recovery. The discriminator is the **reversal-gap deficit** — H1 and
+  H2 can only ADD violations, so a rate BELOW the midday baseline is the gap
+  artifact's unfakeable fingerprint.
+  **New AM: rebuild the corpus at warm 8. The 4.02% A2 rate and the 45%-in-the-
+  10:00-hour concentration are SUPERSEDED** and must not be diffed against the new
+  baseline.
+  **WORKING_AGREEMENT gains §15-17:** delivery is a tarball plus one line with a
+  CONTENT-keyed supersession gate; long-running work goes in tmux; Telegram is an
+  emergency services channel.
+  **Two self-inflicted lessons worth the ink:** the starvation warning's first cut
+  logged every tick and buried the log — an alarm that spams is an alarm that gets
+  filtered, which is how three dead timeframes went unnoticed in the first place.
+  And the latch's `_reset()` wiped the outage duration a beat before the recovery
+  notice reported it, so the all-clear would have read "was blind 0s" — the one
+  number it exists to carry.
 - **v3.33 — 2026-08-01 — A2 IS A HORIZON MISMATCH, AND THE STATE IT FLAGS MAY BE
   TRADEABLE.** `a2_characterise` over 156,712 ticks: 6,303 violations (4.02%),
   adx p50 45.8 vs 29.6 clean, angle p50 6.8 vs 11.8 clean, adx direction 52/48
