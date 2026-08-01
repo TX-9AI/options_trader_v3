@@ -1,5 +1,29 @@
 #!/usr/bin/env python3
-# tests/replay_confluence.py — options_trader_v3 — v2.1
+# tests/replay_confluence.py — options_trader_v3 — v2.2
+# v2.2 — 2026-08-01 — FRAME CAPS FROM CONFIG, so the replay sees exactly what
+#         LIVE sees. The as-of slices were UNCAPPED — every warm session added
+#         history no live engine would ever receive, and the divergence grew with
+#         --warm-sessions. It became load-bearing the moment we decided to wake
+#         the 15m vote and leave 1h asleep (config v4.1): at warm >= 7 the
+#         replay's 1h frame reaches 55+ bars and VOTES, while live holds it at 50
+#         and it stays NEUTRAL. The offline corpus would have carried a
+#         directional vote production does not have.
+#         Each resampled frame is now trimmed to TIMEFRAMES[tf]["candles"], the
+#         same number data_cache passes to fetch_candles. Warm depth then only has
+#         to FILL the caps and anything beyond is inert — so the default moves
+#         5 -> 8, enough for a 150-bar 15m frame (~5.8 sessions) with margin.
+#         WHY 5 WAS WRONG: nothing in the chain ever passed --warm-sessions
+#         (regime_backfill invoked this module without it), so every diary,
+#         backfill and a2_characterise run has been at 5 — which starves the 15m
+#         frame the calibration now depends on.
+#         MEASURED, so the cap is not assumed to be free: ADX-14 on 5m is
+#         insensitive to depth past ~100 bars (identical to 2dp at 104/130/156
+#         bars), and bb_width_pct / atr_avg_20 are bounded-lookback by
+#         construction (BB-20, mean of last 20 ATR values) so extra frame length
+#         is unreachable to them. structure_sequence reads the whole frame and is
+#         the one engine that could shift — watch it first if a regen surprises.
+#         CONSEQUENCE: corpus numbers built before this are not comparable. The
+#         4.02% A2 rate and the 45%-in-the-10:00-hour concentration are superseded.
 # v2.1 — 2026-08-01 — THE BOOKMARK WAS WARMING THE 1m FRAME TOO, AND 1m IS THE ONE
 #         FRAME LIVE DELIBERATELY DOES NOT WARM. v1.2 prepended prior sessions to
 #         df1m so the RESAMPLED 5m/15m/1h would carry ADX/EMA history — correct, and
@@ -89,6 +113,11 @@ from analysis.volatility_engine import get_volatility_engine
 from analysis.trend_engine import get_trend_engine
 from analysis.structure_analyzer import get_structure_analyzer
 from analysis.liquidity_mapper import get_liquidity_mapper
+from config import TIMEFRAMES
+
+# v2.2 — live's per-timeframe fetch depth, read from config rather than copied,
+# so this can never drift from what data_cache actually requests.
+_CAP = {tf: TIMEFRAMES[tf]["candles"] for tf in ("5m", "15m", "1h")}
 from analysis.regime_confluence import (
     RegimeConfluenceScorer, REGIMES, RANGE_WINDOW_BARS,
     TRENDING_BULL, TRENDING_BEAR, RANGING, BREAKOUT_VOLATILE, COMPRESSION, SWEEP_REVERSAL,
@@ -206,7 +235,7 @@ def _prior_session_1m(path: str, sessions_back: int) -> Optional[pd.DataFrame]:
 
 
 def replay_symbol(path: str, warmup: int, use_v13: bool,
-                  warm_sessions: int = 5) -> Tuple[List[dict], str]:
+                  warm_sessions: int = 8) -> Tuple[List[dict], str]:
     sym = sym_of(path)
     df1m_today = load_ohlc(path)
     if df1m_today is None or len(df1m_today) < warmup + 5:
@@ -243,9 +272,12 @@ def replay_symbol(path: str, warmup: int, use_v13: bool,
             continue
         price = float(df1m["close"].iloc[i])
         # as-of slices (only bars that had closed by t)
-        s5  = d5[d5.index <= t]
-        s15 = d15[d15.index <= t]
-        s1h = d1h[d1h.index <= t]
+        # v2.2 — trimmed to live's fetch depth. data_cache passes
+        # TIMEFRAMES[tf]["candles"] to fetch_candles, so an uncapped as-of slice
+        # hands the engines history production never sees.
+        s5  = d5[d5.index <= t].tail(_CAP["5m"])
+        s15 = d15[d15.index <= t].tail(_CAP["15m"])
+        s1h = d1h[d1h.index <= t].tail(_CAP["1h"])
         # v2.1 — SESSION-SCOPED, matching market_data v3.1's no-overnight-padding
         # rule for 1m. Warm prior-session bars belong to the RESAMPLE (above), not
         # to the 25-bar close window: a regression must not span the gap.
@@ -438,7 +470,7 @@ def main():
     ap = argparse.ArgumentParser(description="Layer-1 confluence replay over DXFeed OHLC")
     ap.add_argument("paths", nargs="*", help="CSV files or a data/OHLC/<date>/ directory")
     ap.add_argument("--warmup", type=int, default=20, help="skip first N 1-min bars")
-    ap.add_argument("--warm-sessions", type=int, default=5, dest="warm_sessions",
+    ap.add_argument("--warm-sessions", type=int, default=8, dest="warm_sessions",
                     help="prior sessions of same-symbol 1m to prepend so ADX/EMA warm "
                          "from the open (0 = old single-day behaviour). Default 5 "
                          "matches the live feed store's 5m retention (~5 days).")

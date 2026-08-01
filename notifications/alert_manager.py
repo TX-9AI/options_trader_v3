@@ -26,6 +26,34 @@ v1.5 — 2026-07-07 — broker-reconcile alerts: send_adopted_alert() (a positio
         (DB rows the broker no longer shows, closed), and
         send_reconcile_unavailable_alert() (broker read failed/empty — fell back
         to DB-only recovery, closed nothing).
+v1.8 — 2026-08-01 — send_blind_alert() / send_sight_restored_alert(): the
+        operator's requirement is that ANY condition blinding the bot — the feed
+        going down, stale data, a dead heartbeat, or anything else — pages
+        IMMEDIATELY and logs the exact conditions that caused it. Defined on the
+        SYMPTOM rather than an enumerated cause list, because a cause list only
+        ever covers the failures already thought of.
+        The hole it closes: `_feed_alive()` proves the PRODUCER is running, not
+        that the BARS are current, so a feed writing 15-minute-stale bars passed
+        every check while every engine consumed delayed data (market_data v3.3).
+        Complements — does not duplicate — the existing bot/service-down
+        notification: that one fires when the bot STOPS, this one fires when the
+        bot KEEPS RUNNING on data it cannot trust. Process alive, service green,
+        trading blind was the uncovered middle.
+        With OPEN POSITIONS on a live-cash box the alert says to go to TastyTrade
+        and manage them by hand. Fires in PAPER too, tagged [PAPER] and without
+        that instruction — an alarm that has never fired is one nobody knows
+        works, and this exercises the path daily before go-live.
+        Telegram carries a compact "look now" summary; the forensic detail goes
+        to the log, captured at the FIRST blind tick rather than when the latch
+        trips, because by alert time the conditions have often already changed.
+        RTH-ONLY by construction: the tick loop only evaluates blindness inside
+        the session, so an expected outage (maintenance wake, a box deliberately
+        stopped, pre-open) never reaches this channel. The operator's framing is
+        that Telegram is an EMERGENCY SERVICES channel — nothing routine goes
+        there, or it stops being read. Detection and the record stay on outside
+        RTH; only the paging and the log level are gated.
+        drill=True prefixes an unmistakable DRILL marker and is used by
+        tests/blind_alert_selftest.py, which exercises this exact function.
 v1.7 — 2026-07-29 — send_regime_engine_degraded_alert(): the L2.5 integrator
         failing to import degraded all 15 boxes to the v1.3 classifier for a
         full session and announced it only as a WARNING in each box's log —
@@ -198,6 +226,66 @@ class AlertManager:
             f"running v1.3 fallback, NOT L2.5 | trading continues | "
             f"today's conviction data is NOT calibration-grade | "
             f"{fmt_et_short()}"
+        )
+
+    def send_blind_alert(self, instrument: str, snapshot: dict,
+                         open_positions: Optional[list] = None,
+                         paper: bool = True, blind_for_s: float = 0.0,
+                         drill: bool = False):
+        """The bot cannot see. Page immediately and log what caused it.
+
+        `snapshot` is market_data.last_blindness() — the record written at the
+        MOMENT of failure, not reconstructed here, so the reported values are the
+        ones that actually obtained when sight was lost.
+
+        Telegram gets a short actionable line; the full field dump goes to the
+        log, because a phone alert that needs scrolling is one that gets skimmed
+        during exactly the minutes it matters.
+        """
+        cause = snapshot.get("cause", "UNKNOWN")
+        tf = snapshot.get("timeframe", "?")
+        fields = snapshot.get("fields", {})
+        n_open = len(open_positions or [])
+
+        # forensics first — this lands even if Telegram is down
+        logger.error("BLIND ALERT | %s | cause=%s tf=%s blind_for=%.0fs "
+                     "open_positions=%d paper=%s | %s",
+                     instrument, cause, tf, blind_for_s, n_open, paper,
+                     " ".join(f"{k}={v}" for k, v in fields.items()))
+        for p in (open_positions or []):
+            logger.error("BLIND ALERT | open position: %s", p)
+
+        # A drill on an emergency-services channel must be UNMISTAKABLY a
+        # drill, or the test is itself a false alarm and costs the channel its
+        # credibility. Same code path as the real thing — that is the point of
+        # exercising it — with the prefix as the only difference.
+        tag = "\U0001F9EA DRILL — NOT REAL — " if drill else ""
+        tag += "[PAPER] " if paper else ""
+        why = f"{cause} on {tf}"
+        detail = " ".join(f"{k}={v}" for k, v in list(fields.items())[:3])
+        msg = (f"\U0001F534 {tag}BOT IS BLIND | {instrument} | {why} | "
+               f"blind {blind_for_s:.0f}s | {detail} | ")
+        if n_open and not paper:
+            # the only line in this file that asks for manual intervention
+            descs = "; ".join(str(p) for p in open_positions[:3])
+            msg += (f"\u26A0\uFE0F {n_open} OPEN POSITION(S): {descs} | "
+                    f"GO TO TASTYTRADE NOW AND MANAGE THEM | ")
+        elif n_open:
+            msg += f"{n_open} open (paper) | "
+        else:
+            msg += "no open positions | "
+        msg += fmt_et_short()
+        self._send(msg)
+
+    def send_sight_restored_alert(self, instrument: str, blind_for_s: float,
+                                  cause: str = "", drill: bool = False):
+        """Sight is back. Sent once per outage so a silent recovery never leaves
+        the operator believing the box is still blind."""
+        why = f" (was {cause})" if cause else ""
+        pre = "\U0001F9EA DRILL — NOT REAL — " if drill else ""
+        self._send(
+            f"\u2705 {pre}Sight restored{why} | {instrument} | "
+            f"was blind {blind_for_s:.0f}s | {fmt_et_short()}"
         )
 
     def send_short_leg_closed_alert(self, instrument: str,

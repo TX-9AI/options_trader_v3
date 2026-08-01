@@ -1,7 +1,28 @@
 """
-analysis/trend_engine.py — Trend detection via EMA stacks, ADX, momentum. v3.2
+analysis/trend_engine.py — Trend detection via EMA stacks, ADX, momentum. v3.3
 Operates on 5m, 15m, and 1H timeframes for multi-TF trend alignment.
 v1.0 — original release
+v3.3 — 2026-08-01 — STARVATION IS NO LONGER SILENT, and it was hiding a
+        half-landed fix. _analyze_single() bails to NEUTRAL below EMA_SLOW+5=55
+        bars and said NOTHING. Measured against live fetch depths
+        (TIMEFRAMES[tf]["candles"]): 1d=10, 1h=50, 15m=50 are ALL under 55, so
+        THREE OF FOUR timeframes have been voting NEUTRAL in production
+        permanently — only 5m (100) can vote at all.
+        That matters because v3.1's reweight on 07-16 diagnosed exactly this for
+        1d/1h and moved the direction weight onto 15m (0.30) + 5m (0.35) — but
+        15m fetches 50 bars too, so 0.30 of the weight it moved TO was already
+        dead. The fix only half-landed, and the symptom is a silent NEUTRAL
+        rather than an error, so nothing surfaced it for two weeks.
+        Consequence with only 5m voting: total_weight = 0.35 + half-weight for
+        each NEUTRAL frame = 0.675, so bull_score = 0.519*conviction and the
+        0.30 gate needs the 5m vote above 0.579 conviction. Below that,
+        overall_direction is NEUTRAL — which is a HARD VETO on TRENDING in
+        regime_confluence._trending — so TRENDING is structurally unreachable and
+        argmax necessarily lands on RANGING/COMPRESSION. Iron condor is the
+        RANGING fallback, so it has been absorbing that deficit.
+        This release adds the WARNING only; the fetch-depth change is config.py
+        (15m 50 -> 150, sized so the EMA-50 has actually converged — at 55-60
+        bars it is re-seeded on the tail and off by ~half a bar).
 v3.2 — 2026-07-22 — SURFACE primary_momentum ON TrendState (defect W).
         momentum was computed per-timeframe on TrendVote but NEVER aggregated
         onto TrendState, the object handed to the strategies. Any consumer
@@ -31,6 +52,7 @@ import pandas as pd
 
 from config import EMA_FAST, EMA_MID, EMA_SLOW, EMA_ANCHOR, ADX_TREND_THRESHOLD, ADX_RANGE_THRESHOLD
 from utils.math_utils import ema_series, adx_series, current_adx
+from utils.time_utils import is_rth        # v3.3: warnings are RTH-only
 
 logger = logging.getLogger(__name__)
 
@@ -78,13 +100,48 @@ class TrendEngine:
     Analyzes 1m, 5m, 15m, 1H and votes on direction.
     """
 
+    def __init__(self):
+        # v3.3: timeframes currently in a starvation episode, so the WARNING is
+        # emitted once per episode rather than once per tick.
+        self._starved_logged: set = set()
+
     def _analyze_single(self, df: pd.DataFrame, timeframe: str) -> TrendVote:
         """Run full trend analysis on a single timeframe DataFrame."""
         vote = TrendVote(timeframe=timeframe)
 
         if df is None or len(df) < EMA_SLOW + 5:
+            # v3.3 — say so. A starved frame is indistinguishable from a
+            # genuinely directionless one at the call site, and that is exactly
+            # how three dead timeframes went unnoticed. WARNING, not debug: this
+            # means a declared vote weight is silently contributing nothing.
+            # ONE line per timeframe per starvation episode, not per tick.
+            # v3.3.0 logged every tick and buried bot.log — an alarm that spams
+            # is an alarm that gets filtered, which is how this went unseen in
+            # the first place. Same one-time-per-key idiom as candle_feed's
+            # _log_backfill_depth(). Re-arms when the frame recovers below.
+            # RTH-ONLY. Outside the session a thin frame is arithmetic, not a
+            # fault — every pre-open and post-close cycle would otherwise emit
+            # a warning for a condition that is expected and harmless. Muted to
+            # DEBUG there so the record still exists without polluting the
+            # channel the operator actually watches.
+            if not is_rth():
+                logger.debug("trend vote starved %s outside RTH (%d bars) — "
+                             "expected, not warned",
+                             timeframe, 0 if df is None else len(df))
+            elif timeframe not in self._starved_logged:
+                self._starved_logged.add(timeframe)
+                logger.warning(
+                    "trend vote STARVED %s: %d bars, need %d (EMA_SLOW+5) — "
+                    "voting NEUTRAL, its declared weight contributes nothing "
+                    "(logged once per episode)",
+                    timeframe, 0 if df is None else len(df), EMA_SLOW + 5)
             vote.direction = "NEUTRAL"
             return vote
+
+        if timeframe in self._starved_logged:
+            self._starved_logged.discard(timeframe)
+            logger.info("trend vote RECOVERED %s: %d bars — voting again",
+                        timeframe, len(df))
 
         closes = df["close"]
         price  = float(closes.iloc[-1])

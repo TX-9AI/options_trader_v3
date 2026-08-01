@@ -424,6 +424,9 @@ from execution.entry_engine import get_entry_engine
 from execution.position_manager import get_position_manager
 
 from database.trade_logger import get_trade_logger
+from utils.blindness_latch import BlindnessLatch, ALERT as _BLIND_ALERT, \
+    RECOVERED as _BLIND_RECOVERED
+from data.market_data import last_blindness, clear_blindness
 from notifications.alert_manager import get_alert_manager
 
 
@@ -448,6 +451,9 @@ class BotState:
         self.orb_range_established_today: bool = False  # today's ORB range ESTABLISHED
         self.hard_close_alerted: bool = False   # alerted once on a failed 15:45 flatten
         self.last_reconcile_slot: Optional[str] = None  # last intraday broker-reconcile slot done
+        # v4.11: pages once per outage when the bot cannot see, and once when
+        # sight returns. Instantiated here so the latch state survives ticks.
+        self.blind_latch = BlindnessLatch()
 
 
 def run_analysis(state: BotState) -> dict:
@@ -1256,6 +1262,50 @@ def handle_hard_close(state: BotState):
         state.hard_close_alerted = True
 
 
+def _check_blindness(state: BotState):
+    """Page the operator when the bot cannot see, and again when it can.
+
+    Requirement (2026-08-01): ANY blinding condition — the feed down, stale data,
+    a dead heartbeat, or anything else — notifies immediately AND logs the exact
+    conditions, so the outage can be troubleshot rather than guessed at.
+
+    This COMPLEMENTS the existing bot/service-down notification rather than
+    duplicating it: that one fires when the bot STOPS, this one fires when the
+    bot KEEPS RUNNING on data it cannot trust. Process alive, service green,
+    trading blind was the uncovered middle.
+
+    The snapshot reported is the one the latch captured at the FIRST blind tick,
+    not the current state — by the time the latch trips, a feed that reconnected
+    mid-outage would otherwise report healthy fields alongside the alert.
+    """
+    verdict = state.blind_latch.update(last_blindness())
+    clear_blindness()          # this tick's fetches record fresh evidence
+
+    if verdict == _BLIND_ALERT:
+        instrument = os.environ.get("OT_INSTRUMENT", INSTRUMENT)
+        snap = state.blind_latch.snapshot or {}
+        try:
+            open_rows = get_trade_logger().get_open_trades_live()
+            descs = [getattr(r, "position_desc", None) or str(r) for r in open_rows]
+        except Exception as e:                                    # noqa: BLE001
+            # Never let the position read swallow the alert — a DB problem while
+            # blind is more reason to page, not less.
+            logger.error(f"blind alert: open-position read failed: {e}")
+            descs = ["<position read FAILED — check manually>"]
+        get_alert_manager().send_blind_alert(
+            instrument, snap, open_positions=descs,
+            paper=state.paper_trading,
+            blind_for_s=state.blind_latch.blind_for_s())
+
+    elif verdict == _BLIND_RECOVERED:
+        instrument = os.environ.get("OT_INSTRUMENT", INSTRUMENT)
+        # duration/cause come from the preserved fields — the latch has already
+        # reset its live state by the time RECOVERED is returned.
+        get_alert_manager().send_sight_restored_alert(
+            instrument, state.blind_latch.last_outage_s,
+            state.blind_latch.last_outage_cause)
+
+
 def main_loop(state: BotState):
     pos_mgr = get_position_manager(state.paper_trading)
 
@@ -1284,6 +1334,20 @@ def main_loop(state: BotState):
 
             # ── RTH session reset ──────────────────────────────────────────
             handle_session_reset(state)
+
+            # ── BLINDNESS WATCH (v4.11) ────────────────────────────────────
+            # Evaluates the record left by the PREVIOUS tick's data fetches,
+            # then clears it so this tick starts with a clean slate. The one-
+            # tick lag is immaterial — the latch waits several ticks and 45s
+            # before paging anyway — and reading it here means EVERY blind
+            # path is covered, including the ones that raise out of
+            # run_analysis before any later code could check.
+            #
+            # Deliberately keyed on the SYMPTOM (market_data could not serve
+            # current data) rather than an enumerated list of causes: a cause
+            # list only ever covers the failures already thought of, and the
+            # requirement is "anything else that is blinding it".
+            _check_blindness(state)
 
             # ── Intraday broker reconcile (LIVE + enabled) ─────────────────
             # Every 30 min across RTH, last sweep at 15:30 — catches a broker-

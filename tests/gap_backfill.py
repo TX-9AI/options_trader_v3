@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """
-tests/gap_backfill.py — v1.0 — 2026-08-01
+tests/gap_backfill.py — v1.1 — 2026-08-01
 
 BACKFILL THE OVERNIGHT GAP (item A2.6). Read-only over the tape; writes one
 lookup file.
+
+v1.1 — 2026-08-01 — TAPE ROOT CORRECTED. v1.0 defaulted to
+       ~/day_trader_pro/data/OHLC and ./data/OHLC; neither exists. The
+       consolidated tape root is ~/day_trader_pro/ohlc/<date>/ (validate_regime.sh
+       v2.1, regime_backfill v1.1) — note that ~/day_trader_pro/data/ holds only
+       instance_map.json, mock_state.json and report.json, and the harvest roots
+       are its SIBLINGS. Mine, caught on the box before it ever ran.
 
 WHY THIS EXISTS
     The overnight gap enters ATR through true range (`prev_close = close.shift(1)`
@@ -64,9 +71,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.replay_confluence import load_ohlc  # noqa: E402
 
+# The consolidated tape root. NOT ~/day_trader_pro/data/ — that holds only
+# instance_map.json / mock_state.json / report.json; ohlc/, trades/, reports/ and
+# the rest are SIBLINGS of it, one folder per KIND of artifact.
 DEFAULT_ROOTS = [
-    "~/day_trader_pro/data/OHLC",
-    "./data/OHLC",
+    "~/day_trader_pro/ohlc",
+    "./ohlc",
 ]
 DEFAULT_OUT = "~/day_trader_pro/reports/gap_pct.json"
 

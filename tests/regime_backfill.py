@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-# tests/regime_backfill.py — options_trader_v3
+# tests/regime_backfill.py — options_trader_v3 — v1.2
+# v1.2 — 2026-08-01 — --warm-sessions PASSTHROUGH. This module invoked
+#   replay_confluence without it, so EVERY diary, backfill and downstream
+#   analysis run has used the harness default — which was 5, a depth that
+#   starves the 15m frame the calibration now depends on (config v4.1 raises
+#   15m to 150 bars = ~5.8 sessions). The harness default moves to 8 in v2.2;
+#   this makes the depth EXPLICIT and overridable from the whole chain
+#   (validate_regime.sh -> here -> replay_confluence) instead of silently
+#   inherited. Recorded in the per-date banner so a corpus can be traced back to
+#   the depth it was built at.
 # v1.1 — 2026-07-14 — LAYOUT CONSOLIDATION: tape root defaults to
 #   ~/day_trader_pro/ohlc (dated subfolders, <SYM>_ohlc_<date>.csv — legacy
 #   _OHLC_ names still accepted), replay jsonl now written under reports/
@@ -73,12 +82,16 @@ def _run(mod_args: List[str]) -> int:
 
 
 def process_date(date: str, harvest_root: str, diary_dir: str,
-                 reports_dir: str) -> bool:
+                 reports_dir: str, warm_sessions: Optional[int] = None) -> bool:
     day_dir = os.path.join(harvest_root, date)
     os.makedirs(reports_dir, exist_ok=True)
     log = os.path.join(reports_dir, f"regime_replay_{date}.jsonl")
-    print(f"\n=== {date} ===")
-    rc = _run(["tests.replay_confluence", day_dir, "--no-v13", "--jsonl", log])
+    warm_note = f"  (warm-sessions {warm_sessions})" if warm_sessions is not None else ""
+    print(f"\n=== {date} ==={warm_note}")
+    mod_args = ["tests.replay_confluence", day_dir, "--no-v13", "--jsonl", log]
+    if warm_sessions is not None:
+        mod_args += ["--warm-sessions", str(warm_sessions)]
+    rc = _run(mod_args)
     if rc not in (0, 2):   # 0=all pass, 2=ran but an acceptance check failed (still valid data)
         print(f"  replay failed (rc={rc}) — skipping diary for {date}")
         return False
@@ -97,6 +110,10 @@ def main():
     ap.add_argument("--from", dest="date_from", default=None, help="lower bound YYYY-MM-DD (incl.)")
     ap.add_argument("--to", dest="date_to", default=None, help="upper bound YYYY-MM-DD (incl.)")
     ap.add_argument("--rebuild", action="store_true", help="re-run even dates already in the diary")
+    ap.add_argument("--warm-sessions", type=int, default=None, dest="warm_sessions",
+                    help="prior sessions of tape to prepend so the resampled HTF "
+                         "frames warm (passed through to replay_confluence; its "
+                         "own default applies when omitted)")
     ap.add_argument("--dry-run", action="store_true", help="list what would run; do nothing")
     args = ap.parse_args()
 
@@ -130,7 +147,8 @@ def main():
 
     ok = 0
     for d in todo:
-        if process_date(d, args.harvest, args.diary_dir, args.reports):
+        if process_date(d, args.harvest, args.diary_dir, args.reports,
+                        args.warm_sessions):
             ok += 1
     print(f"\nbackfill complete: {ok}/{len(todo)} dates diaried.")
     sys.exit(0)

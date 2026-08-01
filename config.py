@@ -1,5 +1,30 @@
 """
-config.py — options_trader v4.0
+config.py — options_trader v4.1
+v4.1 — 2026-08-01 — 15m FETCH DEPTH 50 -> 150, waking a vote that has never
+        fired. trend_engine._analyze_single bails to NEUTRAL below EMA_SLOW+5=55
+        bars, and 15m fetched 50 — so the 0.30 direction weight v3.1 moved ONTO
+        15m on 07-16 (to route around starved 1d/1h) was itself dead on arrival.
+        Only 5m (100 bars) has ever been able to vote.
+        WHY 150 AND NOT 60: clearing 55 wakes the vote but not usefully. The
+        engine re-seeds the EMA on whatever tail it is handed, so measured
+        against a fully-warm EMA-50 the error is 69% of a 0.30 bar at 55 bars and
+        49% at 60 — a confident vote on a number dominated by its seed, which is
+        worse than an honest NEUTRAL. At 80 bars the error is 2.5%, at 150 it is
+        0.3%. 150 15m bars is ~5.8 sessions.
+        COSTS NOTHING IN DATA: candle_feed prunes to max(need,60)*PRUNE_FACTOR,
+        so the store already retained 240 15m bars — only the fetch cap hid them.
+        Raising need to 150 raises retention to 600 automatically.
+        1h DELIBERATELY LEFT AT 50 (asleep). Operator's call: the market responds
+        more to developments since the close than to the prior session's range,
+        which is a reference point rather than a discriminator. A live 1h vote in
+        the morning is dominated by the PRIOR session and would oppose the
+        opening drive, suppressing TRENDING in exactly the 09:30-10:40 window
+        under study. 15m carries more weight and has no such lag pathology.
+        WATCH ON FIRST BAKE: TastyTrade's backfill reach is limited and the exact
+        cutoff is unknown, so a cold store may not be served 150 immediately. It
+        accumulates ~26 15m bars/session and the vote stays NEUTRAL until it
+        fills — no worse than today. trend_engine v3.3's STARVED warning reports
+        the real per-box depth from the first RTH session.
 v4.0 — 2026-07-27 — SWEEP STRIKE FLOOR. SWEEP_DELTA_STRONG 0.08 -> 0.12,
         paired unchanged with SWEEP_DELTA_WEAK 0.30. The inverse-delta
         scaling in strategy/sweep_reversal_strategy.py:_sweep_target_delta
@@ -564,7 +589,9 @@ FED_EVENT_KEYWORDS          = ["FOMC", "Fed", "Federal Funds Rate", "Powell"]
 TIMEFRAMES = {
     "1d":  {"candles": 10,  "role": "bias"},
     "1h":  {"candles": 50,  "role": "structure"},
-    "15m": {"candles": 50,  "role": "trend"},
+    # v4.1: 150, not 50. Below EMA_SLOW+5=55 the vote is NEUTRAL; below ~80 the
+    # EMA-50 is re-seeded on the tail and materially wrong. See the header.
+    "15m": {"candles": 150, "role": "trend"},
     "5m":  {"candles": 100, "role": "entry_context"},
     "1m":  {"candles": 60,  "role": "trigger"},
 }

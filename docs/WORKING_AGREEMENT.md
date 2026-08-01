@@ -162,6 +162,65 @@ subfolder, not a guess.)
 
 ---
 
+## 15. DELIVERY IS A TARBALL PLUS ONE LINE. Nothing lands by hand.
+Added 2026-08-01. Every presented file, patch or hotfix ships as **one archive**
+built with **`tar czf` (.tar.gz)** — Termius prefers compressed. It arrives in
+`/home/ubuntu` renamed `.tar` (the `.gz` is stripped in transit; verified by
+screenshot 2026-08-01, a 22 KB gzip payload named `...r2.tar`). That is harmless
+provided the extract is **`tar xf`**, which sniffs the compression — **never
+`tar xzf`**, because the arriving name lies. The 2026-07-25 breakage was the
+extract FLAG, not the compression.
+- Underscores survive the Termius upload; do NOT build glob-resolution for
+  spaces (that was a different transfer path, and predicting it here was wrong).
+- Archive filenames are **unique per delivery** (`_r2`, `_r3`). A second download
+  of a name already in `/home/ubuntu` has nowhere to land, so `tar xf` silently
+  re-extracts the FIRST archive and the fix appears not to have shipped.
+- The archive carries **no MANIFEST or scaffolding**, and the deploy line deletes
+  the archive itself. Nothing operational is left loose in the home directory.
+
+**The single line does the whole deploy**, semicolon-separated, cwd-independent,
+quoted filenames: pull HEAD → extract into the nested directories → verify
+supersession → stage → commit → push → clean up. Pull FIRST so the extract lands
+on true HEAD and a dirty tree fails loudly instead of quietly merging.
+
+**The supersession gate keys on CONTENT, not version strings.** Each file is
+grepped for BOTH its header/changelog line AND a distinctive line from the actual
+change, plus a NEGATIVE check that the superseded code is gone. A header bump
+with no real edit must fail. On any flag: **fail loudly, stop, stage nothing,
+keep the archive — never push.** This protects both sides and keeps the
+assistant honest about version headers and changelogs.
+
+## 16. LONG-RUNNING WORK GOES IN TMUX.
+Added 2026-08-01. Suite runs, corpus replays and regenerations, backfills — open
+them in a tmux session so a dropped mobile connection cannot kill the job. Give
+the tmux-wrapped form in the command itself, not as an afterthought. Do not pipe
+pytest through `tail`/`tee` inside an `&&` chain; redirect to a file and echo
+`rc=$?`, or the exit code is swallowed and the check is decorative.
+
+## 17. TELEGRAM IS AN EMERGENCY SERVICES CHANNEL.
+Added 2026-08-01, operator's framing, and it governs everything that pages.
+Nothing routine goes there — *"I just don't want to see it when I know it's down
+for a reason."* A condition that is EXPECTED (outside RTH, a maintenance wake, a
+box deliberately stopped) must never reach that channel, or it stops being read
+and fails the one time it matters.
+- **Gate the paging and the log level, not the detection.** Records stay accurate
+  outside RTH so callers that legitimately run then (`get_orb_range`, `status.py`,
+  the EOD chain) still get a true answer. Not fully dark — just not paging.
+- **A per-tick warning is spam, not observability.** Emit once per episode and
+  re-arm on recovery — the one-time-per-key idiom `candle_feed._log_backfill_depth()`
+  already uses. A first attempt at the trend-vote starvation warning logged every
+  tick and buried the log; an alarm that spams is an alarm that gets filtered,
+  which is how three dead timeframes went unnoticed in the first place.
+- **A drill must be unmistakably a drill.** Test alerts carry a `DRILL — NOT REAL`
+  prefix and exercise the REAL code path (`tests/blind_alert_selftest.py`, devtools
+  56). A test that looks real IS a false alarm, and a channel that has cried wolf
+  once gets read more slowly forever.
+- **An alarm that has never fired is one nobody knows works.** Alerts fire in
+  PAPER too (tagged `[PAPER]`, without the manage-manually line) so the path is
+  exercised daily before live capital depends on it.
+
+---
+
 ### Companion files
 - **OBSERVATIONS.md** — evidenced findings about the *system*, deferred fixes.
 - **ROADMAP.md** — the L1→L2→L3 build plan and where each piece stands.

@@ -1,6 +1,6 @@
 """
 options_trader_v3/data/market_data.py — Underlying price data (candles + live
-quote). v3.2
+quote). v3.3
 
 Candle history:    shared TastyTrade/DXFeed store (written by candle_feed.py —
                    the ONLY DXFeed subscription on the box)
@@ -48,6 +48,28 @@ v3.2 — 2026-07-13 — POISON-CANDLE GUARD (consumer side). DXFeed intermittent
         fetch_quote() and fetch_candles() now exclude non-positive prices and
         future-dated bars at the SQL layer, and fetch_quote re-asserts a
         non-negative age before returning. Feed-side fix: data/candle_feed.py v3.2.
+v3.3 — 2026-08-01 — BAR-RECENCY GUARD + BLINDNESS RECORD. The heartbeat proves
+        the PRODUCER is alive; it does NOT prove the BARS are current. A feed
+        writing 15-minute-stale bars has a perfectly fresh `__feed__/heartbeat`
+        row, so `_feed_alive()` passes and every engine reading 5m/15m/1h frames
+        consumes delayed data with NO signal anywhere. Only fetch_quote was
+        protected (QUOTE_MAX_AGE_S re-asserts bar age on the price path);
+        fetch_candles had no recency check at all. Not a sandbox-only concern —
+        any fault that keeps the writer running while data lags (a DXLink
+        subscription silently ceasing on one interval, a partial fault after a
+        reconnect) produces the same silent staleness.
+        Now: every fetch_candles return computes the newest bar's age against
+        that timeframe's own bar width and flags it past STALE_BAR_MULTIPLE
+        (default 3.0 widths) during RTH.
+        WARN-ONLY BY DEFAULT — a stale frame is still returned, because refusing
+        one would halt trading on a false positive. Set OT_BLIND_REFUSE=True to
+        return None instead; that is a trading-behaviour change and ships OFF.
+        Every blind condition (store missing, heartbeat stale, no bars, all-NaN,
+        empty session scope, stale bars) now also records a FORENSIC SNAPSHOT via
+        record_blindness() — cause code plus the measured fields — retrievable
+        with last_blindness(). The tick loop latches on it and alerts; the
+        snapshot is captured at the moment of failure, not at alert time, because
+        by the time a latch trips the conditions have often already changed.
 """
 
 import logging
@@ -62,6 +84,7 @@ import pandas as pd
 
 from data.tasty_client import get_session
 from data.candle_feed import feed_db_path, SESSION_OPEN_HM
+from utils.time_utils import is_rth        # v3.3: recency is judged in-session only
 from config import INSTRUMENT, TIMEFRAMES
 
 logger = logging.getLogger(__name__)
@@ -82,6 +105,67 @@ INTRADAY_SCOPE   = os.environ.get("OT_FEED_INTRADAY_SCOPE", "session").lower()
 # 5m/15m/1h therefore return continuous multi-session history, as in v2.
 INTRADAY_TFS     = ("1m",)
 QUOTE_MAX_AGE_S  = 180.0     # latest 1m bar older than this => not a live quote
+
+# ── v3.3 BAR RECENCY ─────────────────────────────────────────────────────────
+# Seconds per bar, so staleness is judged against the timeframe's OWN cadence:
+# a 5m frame whose newest bar is 12 minutes old is late; a 1h frame is not.
+TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1d": 86400}
+# How many bar-widths past the newest bar before the frame is called stale. 3.0
+# tolerates one missed bar plus jitter without crying wolf; a genuine 15-minute
+# delay on a 5m frame is 3x over even at this setting.
+STALE_BAR_MULTIPLE = float(os.environ.get("OT_STALE_BAR_MULTIPLE", "3.0"))
+# Ships OFF. True makes a stale frame return None (refuse to serve) instead of
+# serving it with a WARNING. This CHANGES TRADING BEHAVIOUR — a false positive
+# halts the tick loop — so it is opt-in and wants evidence before it is enabled.
+BLIND_REFUSE = os.environ.get("OT_BLIND_REFUSE", "False") == "True"
+
+# Forensic record of the most recent blind condition. The alert path reads this
+# instead of re-deriving the cause, so what gets reported is what was actually
+# measured at the moment of failure — see record_blindness().
+_last_blind: Optional[Dict] = None
+
+
+def record_blindness(cause: str, symbol: str, timeframe: str, **fields):
+    """Record WHY the bot could not see, with the measured values.
+
+    The operator's requirement (2026-08-01) is that any blinding condition —
+    feed down, stale data, dead heartbeat, or anything else — pages immediately
+    AND logs the exact conditions, so the outage can be troubleshot afterwards
+    rather than guessed at. Enumerating causes would only ever cover the
+    failures already thought of, so every return-None path in this module funnels
+    here and the tick loop latches on the symptom.
+    """
+    global _last_blind
+    _last_blind = {"cause": cause, "symbol": symbol, "timeframe": timeframe,
+                   "at": _time.time(), "fields": dict(fields)}
+    # The record is ALWAYS kept — callers that run outside the session
+    # (get_orb_range, status.py, the EOD chain) still get an accurate answer
+    # from last_blindness(). Only the LOG LEVEL is gated: before the open and
+    # after the close a missing or thin frame is expected, and warning about it
+    # every cycle trains the operator to ignore the one channel that matters
+    # during RTH.
+    detail = " ".join(f"{k}={v}" for k, v in fields.items())
+    if is_rth():
+        logger.warning("BLIND %s | %s %s | %s", cause, symbol, timeframe, detail)
+    else:
+        logger.debug("blind %s outside RTH | %s %s | %s",
+                     cause, symbol, timeframe, detail)
+
+
+def last_blindness() -> Optional[Dict]:
+    """The most recent blindness record, or None if nothing has failed."""
+    return _last_blind
+
+
+def clear_blindness():
+    """Called once the bot is seeing again, so a recovery notice can be sent."""
+    global _last_blind
+    _last_blind = None
+
+
+def _bar_age_s(df) -> float:
+    """Seconds since the newest bar in the frame closed."""
+    return _time.time() - (df.index[-1].timestamp())
 
 
 def _connect_ro() -> Optional[sqlite3.Connection]:
@@ -128,13 +212,13 @@ def fetch_candles(symbol: str, timeframe: str, count: int) -> Optional[pd.DataFr
     """
     conn = _connect_ro()
     if conn is None:
-        logger.warning(f"feed store missing — is candle-feed.service running? "
-                       f"({symbol} {timeframe})")
+        record_blindness("STORE_MISSING", symbol, timeframe,
+                         path=feed_db_path())
         return None
     try:
         if not _feed_alive(conn):
-            logger.warning(f"feed STALE (heartbeat > {FEED_STALE_S:.0f}s) — "
-                           f"refusing to serve {symbol} {timeframe}")
+            record_blindness("HEARTBEAT_STALE", symbol, timeframe,
+                             threshold_s=f"{FEED_STALE_S:.0f}")
             return None
 
         fetch_n = max(count * 3, count + 10)   # margin for NaN drops / scoping
@@ -153,7 +237,7 @@ def fetch_candles(symbol: str, timeframe: str, count: int) -> Optional[pd.DataFr
         conn.close()
 
     if not rows:
-        logger.warning(f"feed store has no bars for {symbol} {timeframe}")
+        record_blindness("NO_BARS", symbol, timeframe, rows=0)
         return None
 
     rows.reverse()                              # ascending
@@ -162,7 +246,7 @@ def fetch_candles(symbol: str, timeframe: str, count: int) -> Optional[pd.DataFr
     df.index = pd.DatetimeIndex(idx)
     df = df.dropna(subset=["open", "high", "low", "close"])
     if df.empty:
-        logger.warning(f"feed store bars for {symbol} {timeframe} all NaN")
+        record_blindness("ALL_NAN", symbol, timeframe, rows=len(rows))
         return None
 
     # Intraday scope: never pad the window across the overnight gap with the
@@ -174,11 +258,28 @@ def fetch_candles(symbol: str, timeframe: str, count: int) -> Optional[pd.DataFr
             last_ts.date(), dtime(*SESSION_OPEN_HM), tzinfo=ET)
         df = df[df.index >= session_open]
         if df.empty:
-            logger.warning(f"no bars in latest session for {symbol} {timeframe}")
+            record_blindness("EMPTY_SESSION", symbol, timeframe,
+                             session_open=str(session_open))
             return None
 
     if len(df) > count:
         df = df.iloc[-count:]
+
+    # v3.3 RECENCY. The heartbeat says the writer is alive; this says the DATA is
+    # current. Judged against the timeframe's own bar width, and only during RTH —
+    # outside the session every frame is legitimately old and flagging it would
+    # make the alarm meaningless exactly when nobody is trading.
+    width = TF_SECONDS.get(timeframe)
+    if width and is_rth():
+        age = _bar_age_s(df)
+        limit = width * STALE_BAR_MULTIPLE
+        if age > limit:
+            record_blindness("BARS_STALE", symbol, timeframe,
+                             newest_bar=str(df.index[-1]),
+                             age_s=f"{age:.0f}", limit_s=f"{limit:.0f}",
+                             bars=len(df), refused=BLIND_REFUSE)
+            if BLIND_REFUSE:
+                return None
 
     logger.debug(f"{symbol} {timeframe}: {len(df)} candles via feed store")
     return df
