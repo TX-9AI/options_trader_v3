@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.40
+# docs/BACKLOG.md — v3.41
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -692,6 +692,62 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   "long" hand-wave it was scheduled as. Budget it accordingly, and do not queue a
   test suite against the same box while it runs — the 79%-stall on the Aug 1
   suite was CPU contention with this process, not a hung test.
+
+- `[DESK]` **AU — ✅ THE BLIND ALERT WAS UNSENDABLE IN PRODUCTION, AND THE DRILL
+  BUILT TO CATCH THAT LIED FOUR TIMES BEFORE THE TRUTH GOT OUT.** 2026-08-01,
+  amends **AL**. Now verified end to end on 29/29 boxes: both the blind alert and
+  the recovery notice reach Telegram, and the drill asserts it rather than
+  asserting itself.
+  **THE PRODUCTION DEFECT, which is the part that mattered.** `TelegramSender`
+  posts with `parse_mode="HTML"`, so ANY unescaped `<`, `>` or `&` makes Telegram
+  reject the whole message with a 400. The blind alert interpolates forensic
+  fields from `record_blindness` AND live position descriptions from trades.db —
+  either can contain those characters. **Worse, main.py's own fallback string was
+  `"<position read FAILED — check manually>"`**, so a DB failure DURING a blind
+  alert produced an unsendable alert: the page died exactly when two things had
+  gone wrong at once, which is when it matters most. `alert_manager` **v1.10**
+  escapes in `_send`, so every alert is covered rather than the two that happened
+  to be under inspection. Verified first that nothing in notifications/ uses
+  intentional HTML markup, so no existing message changes appearance.
+  **THE FOUR LAYERS THAT HID IT.** Every one reported success:
+  1. **devtools 56 ran bare `python3`** — system python on the boxes has no
+     pandas, so the drill died at IMPORT on all 29. Third interpreter mismatch of
+     the day (day_trader_pro pytest, this, and the 07-31 saga).
+  2. **`; true` laundered the exit code.** Added to satisfy the exit-0 fan-out
+     convention, it discarded the drill's real return, so the menu printed
+     "29/29 succeeded" while nothing ran. stderr was not captured, so the
+     traceback vanished and every box showed "(no output)".
+  3. **`AlertManager._send` discarded a boolean that already existed.**
+     `TelegramSender.send()` has returned success/failure since v3.0; `_send`
+     threw it away, so no caller could distinguish "sent" from "silently
+     disabled". **Had that one boolean simply been returned, this would have been
+     one step instead of five.**
+  4. **The drill hardcoded `check("sent the DRILL blind alert", True)`.** My line.
+  **AND A FIFTH, environmental:** `setup_ec2.sh` bakes TELEGRAM_TOKEN /
+  TELEGRAM_CHAT_ID into the systemd unit as `Environment=` lines. systemd hands
+  them to the SERVICE; a non-interactive SSH command inherits none, so
+  `telegram_configured()` was False and `send()` returned False logging at DEBUG.
+  `blind_alert_selftest` **v1.2** now hydrates from the unit using the SAME
+  fallback `day_trader_pro/verify_creds_remote.py::_env()` already uses — which is
+  precisely why option 54 worked and this did not — and PRINTS that it recovered
+  them, so a real environment difference is stated rather than papered over.
+  **FIXES SHIPPED:** devtools **v1.26** (venv interpreter, `2>&1`, per-box verdict,
+  and the menu now says READ THE PER-BOX LINE NOT THE TALLY); `alert_manager`
+  **v1.9** (return delivery) then **v1.10** (escape); `blind_alert_selftest`
+  **v1.1** (assert the real return, ask `telegram_configured()` BEFORE claiming
+  anything sent) then **v1.2**; `main.py` fallback string; `check_versions.sh` gains
+  `def _send(self, msg: str) -> bool` so a revert to the discarding form fails the
+  version audit.
+  **THE RULE THIS EARNS, and it generalises past Telegram:** *a green produced by
+  a laundered exit code is worse than a red.* `; true` may stop a fan-out
+  discarding output, but it must never be the only thing reporting success — the
+  command has to print its own PASS/FAIL and stderr must be captured. And an
+  alarm-tester that cannot observe its own failure is worse than no tester: it
+  converts an unknown into a false assurance.
+  **HONEST NOTE ON HOW THIS WAS FOUND.** Not by inspection — by the operator
+  saying "I still did not get any telegram notifications" three separate times
+  while the tooling insisted everything passed. Each fix revealed the next layer.
+  The tooling was never going to surface it alone.
 
 **⬜ Sun Aug 2**
 - `[DESK]` **A2.4 — 🔴 A2's REAL CAUSE IS A HORIZON MISMATCH, and the state it
@@ -2088,6 +2144,19 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.41 — 2026-08-01 — THE BLIND ALERT COULD NOT BE SENT, AND FOUR LAYERS OF
+  TOOLING SAID IT COULD.** Filed as **AU**, amending AL. `parse_mode="HTML"` means
+  any unescaped `<`, `>` or `&` gets the whole message rejected with a 400 — and
+  the blind alert interpolates forensic fields and live position descriptions,
+  with main.py's own fallback being `"<position read FAILED>"`. So the page died
+  exactly in the compound failure it exists for. `alert_manager` **v1.10** escapes
+  in `_send`. Underneath it: bare `python3` on the boxes (no pandas), `; true`
+  laundering the exit code into "29/29 succeeded", `_send` discarding a boolean
+  TelegramSender has always returned, a hardcoded `check(..., True)`, and
+  credentials living in the systemd unit where an SSH run cannot see them.
+  Now verified on 29/29 with both messages arriving. Rule earned: **a green from a
+  laundered exit code is worse than a red**, and an alarm-tester that cannot
+  observe its own failure converts an unknown into a false assurance.
 - **v3.40 — 2026-08-01 — THE REGEN WAS STILL RUNNING WHILE WE MEASURED.** Filed
   as **AT**. `--backfill --rebuild` started 16:54 and was still on the last date
   at 21:31 — 4h37m. I called it finished because a2_partition reported "corpus
