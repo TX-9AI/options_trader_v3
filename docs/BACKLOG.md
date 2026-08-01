@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.30
+# docs/BACKLOG.md — v3.31
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -252,6 +252,58 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   is proven when that gap closes without RANGING/COMPRESSION shares moving.
 
 **⬜ Sun Aug 2**
+- `[DESK·DATA]` **A2.1 — CHARACTERISE the A2 violations. Query, not a build. Do
+  this before any fix; it can kill the whole plan.** A2 (TREND & RANGE not both
+  >0.5) fails on ~196 of 11,299 ticks (1.7%). Dump those ticks with their `adx`
+  and `angle` from the replay jsonl.
+  **THE HYPOTHESIS TO KILL:** post-move consolidation, where ADX-14 has not yet
+  decayed while the midline angle has already flattened. If that is what these
+  ticks are, the overlap is a **lag artifact of the measurement** and no
+  reformulation fixes it — the answer would be an ADX freshness term, not a
+  shared axis. **Evidence pointing at it:** raising `--warm-sessions` 5 -> 15 made
+  A2 WORSE (179 -> 196) while TRENDING dom% rose 30% -> 36%. Deeper history makes
+  ADX more confidently high; the angle is computed independently, so overlap grew
+  exactly as an uncoupled-ADX story predicts.
+  **VALIDATE:** the answer is a scatter of adx vs angle on violating ticks
+  against the same on non-violating ticks. If violators cluster at high-adx AND
+  low-angle with a recent-large-move signature, it is lag. If they are spread,
+  it is genuine co-occurrence and A2.2 is the right fix.
+- `[DESK]` **A2.2 — THE SHARED-AXIS FIX. Copy the structure that already makes A3
+  pass, rather than inventing one.** 🔴 The root cause is now identified and it is
+  structural, not a tuning problem:
+  `_breakout:    expand_val       = ramp(atr_ratio, LO, HI)`
+  `_compression: atr_contract_val = 1.0 - ramp(atr_ratio_c, LO, HI)`
+  **ONE measurement, TWO ends, one inverted** — which is exactly why **A3 passes
+  with ZERO violating ticks**. It is not luck; BREAKOUT and COMPRESSION are
+  mathematically unable to both be high.
+  Now the failing pair:
+  `_trending: adx_s  = ramp(adx, adx_trend - 5, ADX_STRONG_SOLO)     <- ADX`
+  `_ranging:  flat_s = ramp(FLAT_ANGLE_CUT_DEG - ang, 0, SOFT_DEG)   <- ANGLE`
+  **TWO unrelated measurements.** ADX and midline angle are correlated in the
+  market but NOTHING IN THE CODE COUPLES THEM, so both can be high on the same
+  tick. That is the entirety of A2.
+  **FIX:** give TREND/RANGE a shared inverted measurement in the same idiom.
+  Leading candidate: **Kaufman's Efficiency Ratio** — net displacement / total
+  path length, bounded [0,1]. It IS the trend-vs-chop spectrum as one number, so
+  `trend_s = ramp(ER, ...)` and `flat_s = 1 - that` from the SAME ER. Small,
+  matches existing style, provably reduces overlap.
+  **VALIDATE:** A2 violating-tick count on the same tape, before and after, at
+  identical --warm-sessions. Must fall sharply. Also confirm TRENDING dom% does
+  NOT collapse — the fix must decouple, not suppress.
+- `[DESK]` **A2.3 — THE LOG-ODDS REFORMULATION. The correct endpoint. HOLD UNTIL
+  AFTER GO-LIVE (Aug 31).** Operator's instinct, and it is right: treat
+  trend-vs-range as ONE latent axis in log-odds rather than two independent
+  scores. Each factor contributes a log-likelihood ratio, evidence ADDS in
+  log-odds space, then `TREND = sigmoid(L)` and `RANGE = sigmoid(-L) = 1 - TREND`.
+  **A2 then becomes IMPOSSIBLE TO VIOLATE rather than tested for** — the
+  invariant stops being an acceptance check and becomes a property of the
+  construction. Same reasoning generalises: any mutually-exclusive pair belongs
+  on one axis, and the current design only accidentally gets that right for
+  breakout/compression.
+  **WHY NOT NOW:** it is a rewrite of the regime scoring core four weeks before
+  live capital. Every ramp bound, every acceptance check and the entire L1.11
+  calibration track are fitted against the current formulation. Ship A2.2's
+  targeted fix for go-live; take A2.3 in September with time to re-fit.
 - `[DESK]` **L1.9 bookmark tester proof.** Run against copies of real `ohlc/<date>/`
   folders; prove byte-inert on the diary for warm-irrelevant days and prove the
   EOD conductor chain is untouched. The conductor is finally flawless — it stays
@@ -1368,6 +1420,24 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.31 — 2026-08-01 — A2's ROOT CAUSE IDENTIFIED, and the answer was already
+  in the codebase.** A3 (BREAKOUT & COMPRESSION not both >0.5) passes with ZERO
+  violations because those two read the SAME `atr_ratio` in OPPOSITE directions —
+  one measurement, two ends. A2 fails because TRENDING reads **ADX** and RANGING
+  reads **midline ANGLE**: two unrelated measurements with nothing coupling them,
+  so both can be high on the same tick. That is the whole of A2, and it is
+  structural rather than a tuning problem.
+  Staged as **A2.1** (characterise the 196 violating ticks first — if they are
+  post-move consolidation with undecayed ADX-14, it is a measurement LAG and no
+  reformulation helps), **A2.2** (shared inverted axis, Kaufman Efficiency Ratio
+  the leading candidate, matching A3's existing idiom — ship for go-live), and
+  **A2.3** (log-odds: TREND = sigmoid(L), RANGE = 1 - TREND, making A2 impossible
+  to violate rather than tested for — correct endpoint, HOLD until after Aug 31
+  since it re-bases every ramp bound and the whole L1.11 track).
+  **Corroborating evidence from tonight's warm-sessions experiment:** 5 -> 15
+  raised TRENDING dom% 30% -> 36% and made A2 WORSE (179 -> 196). Deeper history
+  makes ADX more confidently high while the angle is computed independently —
+  exactly what an uncoupled-ADX story predicts.
 - **v3.30 — 2026-08-01 — candle_feed gets an RTH gate (v3.9).** No time gate had
   ever existed on the reconnect loop, so a box that was up held a DXLink socket
   regardless of hour — harmless on a normal day, but every maintenance wake put
