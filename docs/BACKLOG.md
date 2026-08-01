@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.38
+# docs/BACKLOG.md — v3.39
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -598,6 +598,61 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   **⬜ NOT SUPPORTED:** the wrong-theta-sign hypothesis for continuation's
   −$2,024. Excursion is not materially lower on the diluted (real-time-knowable)
   measurement, so continuation is not being handed unusually still tape.
+
+- `[DESK]` **AS — 🔴 PF.1 HAS NO LIFECYCLE, SO I USED THE FORK AS A PER-BAR
+  INDICATOR — the one thing the persistence mandate says it is not. My bug, and
+  it is upstream of every pitchfork number taken so far.** Opened 2026-08-01.
+  **WHAT THE AUDIT ACTUALLY SHOWED.** 29 symbols, 95-111 hourly bars each, 2,297
+  build attempts, **156 forks built (6.8%)**. Rejections: SEPARATION 915 (39.8%),
+  STRUCTURAL_bull 637 (27.7%), STRUCTURAL_bear 491 (21.4%),
+  FEWER_THAN_3_ALTERNATING 77 (3.4%), SIGNIFICANCE 21 (0.9%).
+  **6.8% IS THE BIRTH RATE, NOT THE COVERAGE RATE.** `build_fork` is STATELESS —
+  it recomputes from scratch at every index. But **§5.2 says a fork HOLDS UNTIL
+  INVALIDATED**; that is the entire reason it is a persistent object rather than
+  an indicator. PF.1 deliberately deferred lifecycle ("this file computes geometry
+  and stops"), and then `a2_rail_drift` called build_fork per hourly bar and used
+  the result only when it returned non-None. **156 births across 29 symbols is ~5
+  anchor events per symbol in three weeks — entirely reasonable for a persistent
+  object.** With lifecycle, one fork born at hour 20 covers hours 20 → invalidation,
+  which can be days. Coverage should go from 6.8% to near-continuous and
+  **AR's Predictor 2 starvation (n=78, REFUSED at every horizon) likely
+  disappears without touching a single threshold.**
+  **MY AUDIT'S VERDICT WAS ALSO MIS-BINNED, corrected in v1.1.** It swept
+  STRUCTURAL_* into "filter tightness" and printed "FILTER TIGHTNESS (2064 vs
+  77)". `P2_not_above_P0` does NOT mean a threshold is too tight — it means the
+  last three pivots are not a directional structure, a CORRECT rejection of chop
+  with no parameter behind it. Honestly re-binned: **~52% no qualifying structure
+  exists** (STRUCTURAL 1,128 + fewer-than-3 77), **~41% parameter-sensitive**
+  (SEPARATION 915 + SIGNIFICANCE 21), 6.8% built. Three bins now, and the tool
+  prints the birth-vs-coverage caveat every run.
+  **WHAT IS GENUINELY WORTH EXAMINING AFTER LIFECYCLE — and it may not be a
+  parameter either.** SEPARATION at 39.8% interacts with the UNIQUENESS rule: the
+  implementation takes the three MOST RECENT alternating pivots and tests them, so
+  one close pair kills the fork outright rather than falling back to an older
+  qualifying triple. §4.3.5 reads *"the three most recent confirmed alternating
+  pivots SATISFYING 1-4"* — which arguably means scan back for the most recent
+  triple that satisfies the filters, not take-the-last-three-and-test. That is an
+  IMPLEMENTATION READING, not a threshold change, and it stays a deterministic
+  pure function with no search or best-fit. It could account for most of the 39.8%.
+  **ORDER OF OPERATIONS, and the middle step is the point:**
+  1. Build **§5 LIFECYCLE** — hold-until-invalidated, with the four invalidation
+     conditions (structural break beyond P0; adverse tine break N=2 closes past
+     the COUNTER-trend tine by >= 0.25 ATR; supersession by a newer qualifying
+     triple with materially different geometry; staleness OFF by default). Note
+     §5's key asymmetry: **breaking the TREND-SIDE tine is ACCELERATION, not
+     invalidation** — never kill a fork on strength.
+  2. **Re-run this audit and a2_rail_drift.** Coverage, not birth rate.
+  3. **ONLY THEN** look at separation/uniqueness. Loosening anything before step 2
+     would be tuning around a bug I introduced.
+  **DO NOT loosen any §4.3 prior yet.** §10 names the ten-parameter surface as a
+  headline overfitting risk, and right now we would be fitting to compensate for
+  missing lifecycle rather than to anything in the tape.
+  **CONSEQUENCE FOR AR:** its Predictor 2 result is a NON-RESULT, not a negative.
+  The median-line question has never been measured. Predictor 1 (elapsed
+  persistence) IS a real negative and stands — 12 cells, n 376-462 each against
+  ~98k control, no edge anywhere — which means **the `--persistent-only` edge was
+  look-ahead exactly as suspected, and A2.5 as a live drift factor is not
+  supported.**
 
 **⬜ Sun Aug 2**
 - `[DESK]` **A2.4 — 🔴 A2's REAL CAUSE IS A HORIZON MISMATCH, and the state it
@@ -1994,6 +2049,21 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.39 — 2026-08-01 — THE FORK HAS NO LIFECYCLE, SO I MEASURED ITS BIRTH RATE
+  AND CALLED IT COVERAGE.** The filter audit ran: 2,297 attempts, 156 forks built
+  (6.8%). But `build_fork` is stateless and §5.2 says a fork HOLDS UNTIL
+  INVALIDATED — 156 births across 29 symbols is ~5 anchor events per symbol in
+  three weeks, which is right for a persistent object. `a2_rail_drift` used the
+  fork as a per-bar indicator, the one thing the persistence mandate says it is
+  not, so **AR's Predictor 2 is a NON-RESULT rather than a negative.** New **AS**:
+  build §5 lifecycle first, re-run, and only then look at SEPARATION (39.8% of
+  rejections) — which may be an implementation reading of §4.3.5's uniqueness rule
+  rather than a threshold at all. The audit's own verdict was mis-binned and is
+  corrected in v1.1: STRUCTURAL_* is the engine correctly refusing chop, not a
+  tight filter, so the honest split is ~52% no-structure / ~41% parameter-
+  sensitive / 6.8% built. **Predictor 1 stands as a real negative** — elapsed
+  persistence does not predict drift, so A2.5 as a live drift factor is not
+  supported and the --persistent-only edge was look-ahead.
 - **v3.38 — 2026-08-01 — THE STATE IS A 2-BAR FLICKER, THE POOLED MEAN WAS THE
   WRONG STATISTIC, AND THE FORK IS THE PREDICTOR.** Median paused-trend episode is
   2 bars. `--persistent-only` showed drift AND stillness moving monotonically
