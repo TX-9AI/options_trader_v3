@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """
-tests/a2_characterise.py — v1.0 — 2026-08-01
+tests/a2_characterise.py — v1.1 — 2026-08-01
+v1.1 — TWO fixes, both found on the first real run against the corpus.
+       (a) The breakdown key is "TRENDING"; `res.scores` uses TRENDING_BULL /
+           TRENDING_BEAR but `res.breakdown` collapses them into one entry
+           (regime_confluence.py:738). v1.0 looked up the score keys, found no
+           adx at all, and STILL PRINTED A VERDICT — reaching "genuine
+           co-occurrence" purely from the symbol-spread branch with zero adx
+           evidence. Exactly the silent-degradation failure this tool exists to
+           detect, committed inside the tool itself.
+       (b) It now REFUSES a verdict when the discriminator did not run, instead
+           of falling through to a weaker branch.
+       Also promotes the hour histogram: a >=30% single-hour concentration is
+       itself evidence for the lag story and is now called out.
 
 WHAT ARE THE A2 VIOLATIONS, ACTUALLY?
 
@@ -122,8 +134,15 @@ def main(argv):
                 rng = float(sc.get("RANGING") or 0.0)
 
                 # adx lives on the TRENDING breakdown; angle on RANGING's
+                # v1.1 — THE BREAKDOWN KEY IS "TRENDING", NOT TRENDING_BULL.
+                # `res.scores` is keyed by TRENDING_BULL / TRENDING_BEAR but
+                # `res.breakdown` collapses both into a single "TRENDING" entry
+                # (regime_confluence.py:738). v1.0 looked up the SCORE keys in
+                # the breakdown, found nothing, and printed a verdict with the
+                # ADX evidence silently missing — the exact failure this tool
+                # exists to prevent, committed on its first real run.
                 adx = None
-                for k in TREND_KEYS:
+                for k in ("TRENDING",) + TREND_KEYS:
                     v = (bd.get(k) or {}).get("adx")
                     if isinstance(v, (int, float)):
                         adx = float(v)
@@ -192,6 +211,15 @@ def main(argv):
     if by_hour:
         print("    by hour: " + "  ".join(
             f"{h}:{n}" for h, n in sorted(by_hour.items())))
+        _pk_h, _pk_n = max(by_hour.items(), key=lambda kv: kv[1])
+        _share = 100.0 * _pk_n / max(1, sum(by_hour.values()))
+        if _share >= 30.0:
+            print(f"    !! {_share:.0f}% of all violations fall in the {_pk_h}:00 "
+                  f"hour alone.")
+            print(f"       A single-hour concentration is itself evidence for the")
+            print(f"       LAG story: the opening drive ends, the angle flattens,")
+            print(f"       and ADX-14 has not yet decayed. Weigh this against the")
+            print(f"       adx direction figure above, not instead of it.")
 
     # ── the verdict, stated as which fix the data supports ──────────────────
     print("\n" + "=" * 78)
@@ -200,6 +228,17 @@ def main(argv):
     vm_ang = statistics.fmean(viol_ang) if viol_ang else 0.0
     cm_ang = statistics.fmean(ok_ang) if ok_ang else 0.0
     fall_share = (adx_falling / tot) if tot else 0.0
+
+    # v1.1 — REFUSE a verdict when the discriminator did not run. v1.0 fell
+    # through to the "spread across symbols" branch with zero ADX samples and
+    # printed LEANS (2) as if it meant something.
+    if not viol_adx or not ok_adx:
+        print("  !! NO ADX SAMPLES — the lag discriminator did NOT run, so NO")
+        print("     VERDICT is possible. The angle and concentration figures")
+        print("     above are still valid; the trend/range call is not.")
+        print("     Check the breakdown key names against regime_confluence.py")
+        print("     before trusting anything below.")
+        return 1
 
     print("  READ:")
     print(f"    violating ticks average adx {vm_adx:.1f} vs {cm_adx:.1f} clean, "
