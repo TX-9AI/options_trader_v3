@@ -271,6 +271,20 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   would ERASE that signal rather than repair it. Record whether violators cluster
   on symbols/times where a daily and an hourly fork would plausibly disagree —
   this needs **PF.1** to exist, which is part of why PF.1 starts now.
+  **TOOL BUILT 2026-08-01 — just run it:** `python3 tests/a2_characterise.py`
+  (options_trader_v3, read-only, auto-discovers the replay corpus, streams it).
+  It separates the three stories and states which fix the data supports:
+  **(1) ADX LAG** — violators carry HIGH adx that is mostly FALLING while the
+  angle has flattened. Verdict: a shared axis papers over a MEASUREMENT problem;
+  build an adx freshness/decay term and **do NOT build A2.2 as specified**.
+  **(2) GENUINE CO-OCCURRENCE** — violations spread across many symbols.
+  Verdict: A2.2's shared axis (Kaufman ER) is the right fix.
+  **(3) MIXED/CONCENTRATED** — a few symbols carry most of them, pointing at
+  cross-horizon or a symbol artefact, neither of which a single-axis
+  reformulation should erase.
+  The discriminator is **the DIRECTION of adx on violating ticks**, not its
+  level: a decaying adx alongside a flattened angle is the post-move signature.
+  Both branches verified against purpose-built fixtures.
   **VALIDATE:** the answer is a scatter of adx vs angle on violating ticks
   against the same on non-violating ticks. If violators cluster at high-adx AND
   low-angle with a recent-large-move signature, it is lag. If they are spread,
