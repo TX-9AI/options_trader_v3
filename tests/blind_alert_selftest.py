@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-tests/blind_alert_selftest.py — v1.1 — 2026-08-01
+tests/blind_alert_selftest.py — v1.2 — 2026-08-01
 
 BLIND-ALERT DRILL. Runs ON A BOT BOX and fires the real alert path end to end.
 
@@ -146,7 +146,7 @@ def main(argv) -> int:
     clear_blindness()
     check("clean start: last_blindness() is None", last_blindness() is None)
     record_blindness(DRILL_CAUSE, instrument, "5m",
-                     newest_bar="<drill>", age_s="930", limit_s="900", bars=100)
+                     newest_bar="DRILL-SYNTHETIC", age_s="930", limit_s="900", bars=100)
     snap = last_blindness()
     check("record_blindness stored a record", snap is not None)
     check("cause round-tripped", (snap or {}).get("cause") == DRILL_CAUSE)

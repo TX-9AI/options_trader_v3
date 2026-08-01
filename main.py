@@ -1291,7 +1291,7 @@ def _check_blindness(state: BotState):
             # Never let the position read swallow the alert — a DB problem while
             # blind is more reason to page, not less.
             logger.error(f"blind alert: open-position read failed: {e}")
-            descs = ["<position read FAILED — check manually>"]
+            descs = ["position read FAILED — check manually"]   # v4.12: no angle brackets; see alert_manager v1.10
         get_alert_manager().send_blind_alert(
             instrument, snap, open_positions=descs,
             paper=state.paper_trading,

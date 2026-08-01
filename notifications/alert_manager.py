@@ -26,6 +26,24 @@ v1.5 — 2026-07-07 — broker-reconcile alerts: send_adopted_alert() (a positio
         (DB rows the broker no longer shows, closed), and
         send_reconcile_unavailable_alert() (broker read failed/empty — fell back
         to DB-only recovery, closed nothing).
+v1.10 — 2026-08-01 — HTML-ESCAPE EVERY OUTGOING MESSAGE. v1.9 made the drill
+        honest, and it immediately caught a real one: the DRILL recovery notice
+        reached Telegram on all 29 boxes while the DRILL blind alert failed on
+        all 29. Same _send, same credentials, same box — the only difference was
+        CONTENT. TelegramSender posts with parse_mode="HTML", so an unescaped
+        `<` in the payload makes Telegram reject the whole message with a 400.
+        The drill's synthetic `newest_bar=<drill>` was the trigger.
+        THIS IS A PRODUCTION BUG, NOT A DRILL ARTIFACT. The blind alert
+        interpolates forensic fields from record_blindness AND live position
+        descriptions from trades.db — any `<`, `>` or `&` in either kills it.
+        Worse, main.py's own fallback string was
+        "<position read FAILED — check manually>", so a DB failure DURING a blind
+        alert produced an unsendable alert: the page dies exactly when two things
+        have gone wrong at once, which is when it matters most.
+        Escaping is applied in _send so EVERY alert is covered, not just the two
+        I happened to be looking at. Verified first that nothing in
+        notifications/ uses intentional HTML markup (<b>, <code>, <a href>), so
+        this changes no existing message's appearance.
 v1.9 — 2026-08-01 — _send() RETURNS WHETHER IT ACTUALLY SENT. It never did, and
         TelegramSender.send() has returned a bool since v3.0 — _send simply threw
         it away. That discarded boolean is why the blind-alert DRILL reported
@@ -81,6 +99,7 @@ v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         change in this file.
 """
 
+import html
 import logging
 from typing import Optional
 from utils.time_utils import fmt_et_short
@@ -108,6 +127,11 @@ class AlertManager:
         Returning it changes nothing for existing callers and makes the drill
         able to fail honestly.
         """
+        # v1.10 — escape BEFORE sending. TelegramSender uses parse_mode="HTML",
+        # so a single unescaped `<` from a position description, a file path, or
+        # a forensic field rejects the entire message with a 400. Applied here
+        # rather than at each call site so no future alert can forget it.
+        msg = html.escape(msg, quote=False)
         sent = False
         if self._enabled and self._tg:
             try:
