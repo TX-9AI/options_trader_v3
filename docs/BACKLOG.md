@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.34
+# docs/BACKLOG.md — v3.35
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -403,6 +403,23 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   **EXPECT NOISE ON THE FIRST PASS:** with 15m at 150 the corpus will log 15m
   starvation until the warm depth fills it — the same signal Monday's live boxes
   produce. That is the instrumentation working, not a fault.
+
+- `[DESK]` **AP — THE DAILY FORK HAS NO DATA SOURCE, which also blocks the
+  overlay's highest-value signal.** Split out of **AN** 2026-08-01 so a real
+  blocker is not buried inside a resolved item.
+  §4.2 wants a 1d fork at k=2 with R=40 recency. `TIMEFRAMES["1d"]["candles"] =
+  10` — ten daily bars cannot yield a k=2 triple with 5-bar separation, let alone
+  40 bars of recency. The HOURLY fork works today; the daily one is unbuildable.
+  **CONSEQUENCE BEYOND THE MISSING FORK:** §6 names a daily rail within C*ATR of
+  an hourly rail — CONFLUENCE — as the highest-value signal the overlay produces.
+  With one fork there is nothing to confluence against, so the paper's headline
+  application cannot be measured at PF.3 no matter how well the hourly fork works.
+  **CANDIDATE SOURCE:** devtools 51 already fetches 21 days from yfinance, on an
+  isolated feed. ~60 daily bars would comfortably serve k=2/R=40. Note this is a
+  DIFFERENT feed from the DXLink store — worth confirming the two agree on daily
+  OHLC before anchoring a persistent object on it.
+  **NOT urgent for PF.3** (condor strikes are the first consumer and the hourly
+  fork serves them), but it must land before §6 is claimed as a capability.
 
 **⬜ Sun Aug 2**
 - `[DESK]` **A2.4 — 🔴 A2's REAL CAUSE IS A HORIZON MISMATCH, and the state it
@@ -1119,6 +1136,23 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   (the only rows that are decision-grade).
 
 **⬜ Sat Aug 22 – Sun Aug 23**
+
+- `[DESK]` **AO — 🔴 `find_swing_highs/lows` USES FLOAT EQUALITY, so equal highs
+  emit EVERY tied bar as a pivot.** Found 2026-08-01 during PF.1.
+  `utils/math_utils.py` tests `prices[i] == max(window)`. On a plateau every bar
+  in it is marked a pivot. Reproduction in
+  `tests/test_pitchfork_construct.py::test_shared_helper_emits_duplicate_pivots_on_a_plateau`.
+  **WHY IT IS NOT FIXED YET, and this is a scheduling call rather than a judgement
+  that it does not matter:** the helper feeds `StructureAnalyzer._find_swings` ->
+  `structure_sequence` -> a HARD VETO in `regime_confluence._trending` and the A4
+  invariant. Changing it changes what gets traded, three weeks before go-live and
+  inside the L2.6 behavioural freeze.
+  **WHAT IT MAY BE DOING TODAY:** duplicate pivots inflate swing counts, which
+  feeds `_find_sr_levels` and `_classify_sequence`. Whether that has been
+  distorting HH/HL/LH/LL classification is UNMEASURED — measure it on the
+  rebuilt corpus (**AM**) before deciding the fix's shape.
+  **POST-FREEZE (after Aug 21).** Do not fold it into an unrelated deploy.
+
 - `[DESK·DATA]` **G — decision.** Feed `retest_depth` into `orb_quality` or drop it: 5 weeks of
   distribution + the Phase-3 ROI buckets now exist to answer it. Decide from the
   data; the measurement gates nothing until then.
@@ -1337,6 +1371,26 @@ file: everything above either ✅ or explicitly re-dated below.
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
 `docs/HISTORY.md` and the audits. Resolution date + fixing versions + the why.*
 
+- **AN ✅ 2026-08-01 — PF.1 CONSTRUCT BUILT, and the white paper's §4.1 was
+  wrong about its own foundation.** `analysis/pitchfork.py` v1.0 +
+  `tests/test_pitchfork_construct.py` (24 tests). Weight 0, consumed by nothing —
+  outside L2.6 exactly as §13.1 argues. Deterministic anchors, three variants in
+  parallel, rails as `origin + slope*(bars from origin)`, confirmation lag
+  enforced structurally (`born_idx` is computed, never supplied, and the
+  bar-by-bar replay test asserts no fork appears before it).
+  §4.1 claimed LiquidityMapper already computes swing pivots. **It does not** — it
+  computes equal-high/low PRICE CLUSTERS, sweeps and named session levels. The
+  real fractal is `utils.math_utils.find_swing_highs/lows`, consumed by
+  StructureAnalyzer. **The paper is corrected in place with the superseded text
+  left visible.** The fork owns its own pivot definition so anchor evolution never
+  becomes a diff against the live trading path, and so it can be deleted if the
+  overlay does not earn its keep; `pivots_shared()` logs both sets during shadow
+  so PF.3 can attribute a credit win to geometry rather than to better pivots.
+  §3.2's Modified Schiff default is now MEASURED — andrews +0.70/bar puts its
+  median at 119.80 against a ~108 close, modified_schiff +0.26/bar at 111.53.
+  Slope is per BAR, not per second, because charts compress non-trading time.
+  Spawned **AO** (float-equality defect in the shared helper, post-freeze) and
+  **AP** (the daily fork has no 1d source, which blocks §6 confluence).
 - **AE ✅ 2026-07-31 — RESOLVED, and the item's premise was WRONG.**
   `futures_trader_v1` does **not** ship `push.sh` — it has no push script at all
   (verified against a fresh clone). So there was no hole of the kind AE
@@ -1762,6 +1816,21 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.35 — 2026-08-01 — PF.1 CONSTRUCT BUILT, AND THE WHITE PAPER WAS WRONG
+  ABOUT ITS OWN FOUNDATION.** `analysis/pitchfork.py` v1.0 + 24 tests. Weight 0,
+  outside the freeze. §4.1 claimed LiquidityMapper already computes swing pivots
+  — it does not; it computes equal-high/low price clusters. The real fractal is
+  in `utils.math_utils`, consumed by StructureAnalyzer. **The paper is corrected
+  in place with the superseded text left visible**, per the operator's rule that
+  an ugly truth gets adapted to rather than covered up.
+  The fork owns its own pivot definition (**AN**), chosen so anchor evolution
+  never becomes a diff against the live trading path — and so it can be deleted
+  if the overlay does not earn its keep. §3.2's Modified Schiff default is now
+  MEASURED rather than reasoned. **New AO: the shared helper's float-equality
+  defect**, reproduced in a test, filed for post-freeze because it feeds
+  TRENDING's veto. **The daily fork remains unbuildable** — `TIMEFRAMES["1d"]`
+  serves 10 bars and §4.2 needs k=2 with R=40, which also blocks §6's
+  daily/hourly confluence, the highest-value signal the overlay was to produce.
 - **v3.34 — 2026-08-01 — THREE OF FOUR TIMEFRAMES HAVE NEVER VOTED, AND THE BOT
   COULD HAVE GONE BLIND WITHOUT SAYING SO.** Two independent silent-degradation
   faults found in one session, both shipped the same day (0a0da3b, 380a1bd).

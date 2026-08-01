@@ -1,5 +1,5 @@
 # The Pitchfork Overlay — Design White Paper
-### options_trader v4.0 milestone · drafted 2026-07-23
+### options_trader v4.0 milestone · drafted 2026-07-23 · §4.1 corrected 2026-08-01 (PF.1)
 *Revision 2026-08-01 — §7 correction (application #2's target was removed on
 07-28), §7.3 A2 note promoted to a live hypothesis, and a four-phase build split
 added as §13. The design is unchanged; what changed is the schedule and one
@@ -108,8 +108,46 @@ pure function of the tape.**
 
 ### 4.1 Source
 
-`LiquidityMapper` already computes swing pivots. The overlay consumes those —
-it does **not** introduce a second, competing definition of a swing.
+> **CORRECTED 2026-08-01 during PF.1. The paragraph below was wrong, and it is
+> left visible rather than quietly rewritten.** It claimed `LiquidityMapper`
+> already computes swing pivots and that the overlay would consume them. Neither
+> is true at HEAD. LiquidityMapper computes equal-high/low **price clusters**
+> (`_find_pools`), sweeps and named session levels — there is no fractal pivot in
+> it. The real implementation is `utils.math_utils.find_swing_highs/lows`,
+> consumed by **StructureAnalyzer**. A price cluster and a fractal pivot are
+> different objects; anchoring on the wrong one would have produced a different
+> overlay than this document specifies.
+>
+> **The overlay therefore owns its own pivot definition, in `analysis/pitchfork.py`.**
+> Three reasons: (1) `find_swing_highs` feeds StructureAnalyzer →
+> `structure_sequence` → a HARD VETO in `_trending`, so putting anchor evolution
+> there makes every PF.2/PF.3 tweak a diff against the live trading path — a
+> definition this module owns can change freely and be deleted if the overlay
+> does not earn its keep; (2) L2.6 protects entry *behaviour*, and a weight-0
+> object is outside it while editing a helper the veto reads is arguably inside;
+> (3) it would be a different definition regardless — this document requires a
+> **fixed `k`**, whereas `_find_swings` uses `lb = min(SWING_LOOKBACK,
+> len(highs)//4)`, deriving fractal order from frame length, so anchors would
+> shift as the frame grows. That is §4.4's failure mode through another door.
+>
+> **Defect found in the shared helper and filed, not fixed:**
+> `find_swing_highs` tests `prices[i] == max(window)` — float equality — so on
+> equal highs it emits **every tied bar** as a pivot, destroying the alternation a
+> P0/P1/P2 triple depends on. It affects StructureAnalyzer's swing sets today, so
+> fixing it moves `structure_sequence` → TRENDING's veto → what gets traded. The
+> fix belongs post-freeze. `tests/test_pitchfork_construct.py` carries a
+> reproduction.
+>
+> **Attribution risk this creates:** if the fork uses different pivots, a credit
+> improvement at PF.3 could come from the pivots rather than the geometry.
+> Mitigated as §3.2 handles the variants — log **both** pivot sets in parallel
+> during shadow and record which triple each selects, so PF.3 attributes with
+> data. `pitchfork.pivots_shared()` exists for that comparison and for nothing
+> else.
+
+*Superseded original:* `LiquidityMapper` already computes swing pivots. The
+overlay consumes those — it does **not** introduce a second, competing
+definition of a swing.
 
 A swing high at bar `i` on timeframe `T` is confirmed when
 `high[i] > high[i-k .. i-1]` and `high[i] > high[i+1 .. i+k]`, for fractal order
