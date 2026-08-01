@@ -1,5 +1,27 @@
 #!/usr/bin/env python3
-# tests/replay_confluence.py — options_trader_v3
+# tests/replay_confluence.py — options_trader_v3 — v2.1
+# v2.1 — 2026-08-01 — THE BOOKMARK WAS WARMING THE 1m FRAME TOO, AND 1m IS THE ONE
+#         FRAME LIVE DELIBERATELY DOES NOT WARM. v1.2 prepended prior sessions to
+#         df1m so the RESAMPLED 5m/15m/1h would carry ADX/EMA history — correct, and
+#         still the point. But `s1m` was then sliced out of that same concatenated
+#         frame, so the 25-bar 1-minute close window handed to the scorer straddled
+#         the overnight gap for the first 25 bars of every replayed session.
+#         market_data v3.1 session-scopes 1m ONLY, on purpose ("no overnight
+#         padding"); tests/test_market_data_contract.py asserts that contract on the
+#         LIVE path. The replay violated the same contract, so:
+#           • live has < 25 one-minute bars until ~09:55 → passes closes=None →
+#             RANGING and COMPRESSION are NOT SCORED for the first 25 minutes;
+#           • replay scored both from 09:30, off a gap-spanning regression.
+#         Measured on a synthetic two-session fixture through this same code path:
+#         at the target day's first bar, 24 of the 25 window bars belonged to the
+#         PRIOR session and a -1.14 gap sat inside the regression.
+#         FIX: df1m stays warm for the RESAMPLE (unchanged, that is the bookmark);
+#         `s1m` is now scoped to the target session, and `closes` is built exactly
+#         as main.py:551 builds it — None below RANGE_WINDOW_BARS. HTF warming is
+#         untouched. Consequence to know when reading old artifacts: RANGING /
+#         COMPRESSION counts in the opening 25 minutes DROP to None, matching live;
+#         any acceptance or characterisation number computed over the old corpus
+#         included ticks live could never have produced.
 # v2.0 — 2026-07-12 — LAYER-2 TRACKS + drift merge.
 #   (a) MERGE: absorbs the control-box local mod (--report-only: rebuild + reprint
 #       the full report from a saved tick-log JSONL; no engines, no re-scoring)
@@ -224,7 +246,10 @@ def replay_symbol(path: str, warmup: int, use_v13: bool,
         s5  = d5[d5.index <= t]
         s15 = d15[d15.index <= t]
         s1h = d1h[d1h.index <= t]
-        s1m = df1m.iloc[: i + 1]
+        # v2.1 — SESSION-SCOPED, matching market_data v3.1's no-overnight-padding
+        # rule for 1m. Warm prior-session bars belong to the RESAMPLE (above), not
+        # to the 25-bar close window: a regression must not span the gap.
+        s1m = df1m.loc[score_start:t]
         if s5.empty:
             continue
         s1h_safe = s1h if not s1h.empty else s5
@@ -236,7 +261,12 @@ def replay_symbol(path: str, warmup: int, use_v13: bool,
         except Exception as e:            # engine hiccup on thin early tape — skip bar
             continue
 
-        closes = s1m["close"].tolist()[-RANGE_WINDOW_BARS:]
+        # v2.1 — byte-for-byte the shape main.py:551 passes. Below the window
+        # length live sends None and RANGING/COMPRESSION go unscored; the replay
+        # must do the same or the two engines are answering different questions.
+        closes = None
+        if len(s1m) >= RANGE_WINDOW_BARS:
+            closes = s1m["close"].tolist()[-RANGE_WINDOW_BARS:]
         atr = getattr(vol, "atr_current", None)
         res = scorer.score(vol, trend, structure, liq, closes=closes, atr=atr)
 
