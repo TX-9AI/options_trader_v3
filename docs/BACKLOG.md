@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.32
+# docs/BACKLOG.md — v3.33
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -252,6 +252,84 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   is proven when that gap closes without RANGING/COMPRESSION shares moving.
 
 **⬜ Sun Aug 2**
+- `[DESK]` **A2.4 — 🔴 A2's REAL CAUSE IS A HORIZON MISMATCH, and the state it
+  flags may be TRADEABLE rather than defective. Read this before building A2.2.**
+  Measured 2026-08-01 over 156,712 ticks / 15 sessions: **6,303 violations
+  (4.02%)** — more than double the 1.7% a single session suggested.
+  `VIOLATING  adx p50=45.8 mean=48.3   angle p50=6.8  mean=6.9`
+  `clean      adx p50=29.6 mean=31.4   angle p50=11.8 mean=13.7`
+  `adx direction on violators: falling 52% / rising 48%  <- LAG IS DEAD`
+  `by hour: 09:454  10:2853  11:1197  12:721  13:284  14:307  15:487`
+  **THE CAUSE — the two scores read different LOOKBACKS:**
+  `RANGING angle: df1m["close"][-25:]      -> 25 bars of 1-MINUTE = 25 min`
+  `TRENDING adx : primary_adx from 5m TF   -> ADX-14 x 5m         = 70 min`
+  TRENDING asks *"was the last 70 minutes directional?"*; RANGING asks *"are the
+  last 25 minutes flat?"* **Both can honestly be yes.** ADX 48 beside a 6.9°
+  midline stops being paradoxical: the last hour-plus was directional, the last
+  25 minutes are not. It also explains the 52/48 direction split (ADX is not
+  decaying — its window still CONTAINS the drive) and the **45% concentration in
+  the 10:00 hour** (the opening drive stays inside a 70-minute window until
+  ~10:40 while the 25-minute angle flattens within minutes of it ending).
+  **CONSEQUENCE FOR A2.2:** a shared axis only helps if computed on ONE horizon,
+  which silently discards the other. Kaufman ER over 25 bars and over 70 minutes
+  would disagree exactly as much as adx and angle do now. **The question is not
+  "how do we couple them" but "which horizon should A2 be stated on" — or whether
+  the invariant should be PER-HORIZON with cross-horizon disagreement expected
+  rather than forbidden.** That is strikingly close to what the pitchfork paper
+  already says about daily and hourly forks legitimately disagreeing (§7.3).
+  **CHEAP DECISIVE TEST:** recompute the angle on a 70-minute window (or adx on a
+  25-minute equivalent) and re-run `tests/a2_characterise.py`. If violations
+  collapse, it is horizon and nothing else.
+  **OPERATOR'S REFRAME (2026-08-01), and it may invert the whole item:** this
+  state — impulse still in ADX, midline gone flat — is a *pause in a live trend*.
+  A flag, a pennant, a pullback. It is a regularly-occurring, recognisable
+  condition, not a defect. *"That should be something we bank on."* The system
+  currently DESTROYS it: L1 scores both high, argmax picks one, and the fact that
+  BOTH were true — which is the signal — never reaches a consumer. **A2 has been
+  flagging the most informative tick class in the corpus as an error.**
+- `[DESK→DEPLOY]` **A2.5 — `paused_trend` as a FACTOR COLUMN, not a strategy
+  change.** Emit on every scored event: both TREND and RANGE > 0.5, plus the
+  magnitudes. Same shape and freeze-safety as N.2's `rrr` and N.3's
+  `closes_beyond`. Then `conditional_tables` answers what it is worth PER
+  STRATEGY and any gate is placed at the fee-adjusted ROI crossing rather than
+  from a story — the operator's own collect-wide doctrine, on infrastructure
+  that shipped 07-31.
+  **TESTABLE PRIOR, stated so it can be falsified:** continuation's **handoff**
+  path fires on a runaway ORB then enters on a shallow pullback — which IS this
+  state (ADX elevated from the runaway, angle flat during the pullback). Handoff
+  made **+$1,333.50 / 56%**; standalone lost **$2,024 / 46%**. **If A2-violating
+  ticks coincide with handoff entries and not standalone ones, this state is
+  already earning money and nobody knew it was measurable.** Join them and see.
+  Priors on the rest: continuation should love it, butterfly should love it
+  (flat midline = pin conditions), **condor is genuinely ambiguous** — low
+  realised vol against still-elevated IV is attractive, but a paused trend
+  RESOLVES, and a condor sold into a coiled spring is short the resolution.
+- `[DESK·DATA]` **A2.6 — `gap_pct`: the overnight gap is never MEASURED, and
+  unlike everything else this week it is fully BACKFILLABLE.** Operator's point,
+  2026-08-01: *"the gaps you see overnight from previous close to current open
+  are big and meaningful, and they have to be reflected somewhere."*
+  **WHERE IT IS REFLECTED:** ATR does see it — `atr_series` uses proper true
+  range with `prev_close = close.shift(1)` and 5m is CONTINUOUS, so the first 5m
+  bar after the open carries `|high - prev_close|` and a large gap spikes ATR
+  immediately. The 25-bar angle correctly never sees it (1m is session-scoped;
+  a regression must not span a gap). HTF bars carry it too.
+  **WHERE IT IS NOT:** nowhere is the gap MEASURED. No `gap_pct`, no `gap_size`,
+  nothing conditions on it. It enters as an anonymous ATR spike that decays over
+  14 periods, and the magnitude — the part that matters — is discarded.
+  **WHY THIS IS THE CHEAPEST FACTOR ON THE BOARD:** prior session close and
+  today's open are both already in `ohlc/<date>/` for every session. **Nothing
+  needs collecting** — compute it retroactively across the whole corpus. Unlike
+  `rrr`, `closes_beyond` or `paused_trend`, no session is lost by waiting.
+  **THE HYPOTHESIS, aimed at the flagship:** does gap magnitude predict ORB
+  outcome? An opening range forming AFTER a large repricing is a different animal
+  from one forming after a flat open — the overnight move already happened, so
+  the "breakout" may be continuation of something already spent. **AH** found ORB
+  at **-0.24R with 65% of fires in RANGING** across 252 trades; if gap size
+  separates the good ORB days from the bad, that is a conditioning variable with
+  the sample already banked.
+  **Also relates to the torque model:** a gap IS an impulse that occurred while
+  the intraday frames were asleep. ADX picks it up ~5 minutes later; the angle
+  never does. Likely part of why 45% of A2 violations land in the 10:00 hour.
 - `[DESK·DATA]` **A2.1 — CHARACTERISE the A2 violations. Query, not a build. Do
   this before any fix; it can kill the whole plan.** A2 (TREND & RANGE not both
   >0.5) fails on ~196 of 11,299 ticks (1.7%). Dump those ticks with their `adx`
@@ -1491,6 +1569,24 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.33 — 2026-08-01 — A2 IS A HORIZON MISMATCH, AND THE STATE IT FLAGS MAY BE
+  TRADEABLE.** `a2_characterise` over 156,712 ticks: 6,303 violations (4.02%),
+  adx p50 45.8 vs 29.6 clean, angle p50 6.8 vs 11.8 clean, adx direction 52/48
+  (**lag hypothesis dead**), 45% of violations in the 10:00 hour. Cause found in
+  the code: **RANGING's angle reads 25 bars of 1-MINUTE data (25 min) while
+  TRENDING's adx comes from the 5m frame at ADX-14 (70 min)** — the two scores
+  answer questions about different lookbacks, so both can honestly be true.
+  **This may INVERT A2.2:** a shared axis must pick one horizon and would discard
+  the other. New **A2.4** (the finding + the decisive 70-min-window test),
+  **A2.5** (`paused_trend` factor column — the operator's reframe: an impulse
+  that has paused is a flag/pennant, a recognisable tradeable state, and argmax
+  currently destroys the fact that both were true), **A2.6** (`gap_pct` — the
+  overnight gap enters ATR via true range but is never MEASURED; uniquely
+  BACKFILLABLE from data already on disk, and the first hypothesis is whether gap
+  size conditions ORB's -0.24R).
+  **The tool caught its own defect first:** v1.0 looked up `TRENDING_BULL` in a
+  breakdown keyed `TRENDING`, found zero adx, and printed a verdict anyway. v1.1
+  refuses a verdict when the discriminator did not run.
 - **v3.32 — 2026-08-01 — PITCHFORK SPLIT INTO FOUR PHASES; only the last needs
   L2.6.** The overlay had been gated whole behind Aug 21, which put construction
   ten days before live capital and left the condor broken through go-live.
