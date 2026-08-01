@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.39
+# docs/BACKLOG.md — v3.40
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -653,6 +653,45 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   ~98k control, no edge anywhere — which means **the `--persistent-only` edge was
   look-ahead exactly as suspected, and A2.5 as a live drift factor is not
   supported.**
+
+- `[DESK]` **AT — 🔴 EVERY A2 CORPUS NUMBER TAKEN 2026-08-01 IS PROVISIONAL. The
+  regen was still running while we measured, and I told the operator it had
+  finished.** Filed 2026-08-01 as a correction against **AQ** and **AR**.
+  **WHAT HAPPENED.** `validate_regime.sh --backfill --rebuild` started 16:54.
+  At 21:31 `ps aux` showed PID 92226 still alive — 4h37m elapsed, 51 min CPU,
+  working on `ohlc/2026-07-31`, the LAST date. It had never finished.
+  **MY ERROR, and it is the interesting part.** I concluded the regen was done
+  because `a2_partition` reported "corpus files: 15". But **all 15 files existed
+  the whole time** — the regen OVERWRITES them one at a time, so file COUNT is
+  invariant to progress. I inferred completion from an artifact that could not
+  distinguish the two states, and then stated it as fact rather than as an
+  inference. Same class as the 07-29 backlog-trails-repo finding: reading a
+  side-effect instead of checking the thing itself.
+  **WHAT IT CONTAMINATES.** a2_partition ran ~17:38, roughly 2-3 of 15 dates
+  rebuilt. a2_excursion and a2_rail_drift ran ~18:29, roughly 5. So the numbers
+  came off a **mostly-stale corpus with a handful of v2.2 dates mixed in** —
+  worse than either clean state, because nothing marks which date is which. This
+  is precisely the mixed-corpus condition **AM** warns about, and I was already
+  sitting in it while writing that warning.
+  **PROVISIONAL, must be re-run before anything is built on them:** the 4.14%
+  baseline; the entire partition grid INCLUDING the DECAY×FLAT 13.88% hump and
+  the H1/H2/H3 verdicts; the excursion distributions; the strike distance
+  (p90 0.231%) and stop floor (0.019/0.033/0.049%); the episode-duration
+  distribution (p50 2 bars); and **Predictor 1's negative** — which means "A2.5
+  as a live drift factor is not supported" is NOT yet established either.
+  **UNAFFECTED — stands on its own:** `pitchfork_filter_audit` and everything in
+  **AS**. That tool reads the 1m tape directly and never touches the corpus, so
+  the lifecycle finding and the 6.8%-is-a-birth-rate correction are unaffected.
+  **RE-RUN ORDER once the regen lands:** `gap_backfill.py` -> `a2_partition.py`
+  -> `a2_excursion.py` -> `a2_rail_drift.py`. Then update AQ and AR in place.
+  **THE RULE THIS EARNS:** *"the artifacts exist" is not "the job finished".*
+  Check the PROCESS — `ps aux`, `tmux ls` — not the output files, before calling
+  a long run complete. A rebuild-in-place job is invisible to every file-level
+  check there is.
+  **ALSO WORTH KNOWING:** a full regen is a **~5 hour** job on control, not the
+  "long" hand-wave it was scheduled as. Budget it accordingly, and do not queue a
+  test suite against the same box while it runs — the 79%-stall on the Aug 1
+  suite was CPU contention with this process, not a hung test.
 
 **⬜ Sun Aug 2**
 - `[DESK]` **A2.4 — 🔴 A2's REAL CAUSE IS A HORIZON MISMATCH, and the state it
@@ -2049,6 +2088,18 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.40 — 2026-08-01 — THE REGEN WAS STILL RUNNING WHILE WE MEASURED.** Filed
+  as **AT**. `--backfill --rebuild` started 16:54 and was still on the last date
+  at 21:31 — 4h37m. I called it finished because a2_partition reported "corpus
+  files: 15", but all 15 files existed throughout; the regen overwrites in place,
+  so file count cannot distinguish done from running. Every A2 number from
+  2026-08-01 therefore came off a mostly-stale corpus with a few v2.2 dates mixed
+  in: **the 4.14% baseline, the whole partition grid, the DECAY×FLAT hump, the
+  excursion distributions, the strike and stop numbers, the episode durations,
+  and Predictor 1's negative are all PROVISIONAL.** AS and the pitchfork audit are
+  unaffected — that tool reads the 1m tape, not the corpus. Rule earned: *"the
+  artifacts exist" is not "the job finished"* — check the process, not the files.
+  And a full regen is a ~5 hour job; do not run a suite against the same box.
 - **v3.39 — 2026-08-01 — THE FORK HAS NO LIFECYCLE, SO I MEASURED ITS BIRTH RATE
   AND CALLED IT COVERAGE.** The filter audit ran: 2,297 attempts, 156 forks built
   (6.8%). But `build_fork` is stateless and §5.2 says a fork HOLDS UNTIL
