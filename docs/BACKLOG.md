@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.36
+# docs/BACKLOG.md — v3.37
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -446,6 +446,89 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   built on CONTROL. PF.1/PF.2/PF.3 are offline work that runs there, so that is
   sufficient today — getting it onto the bot boxes is a **PF.4** problem and is
   NOT solved.
+
+- `[DESK]` **AQ — THE FLEET MAY BE DISPATCHING THE WRONG THETA SIGN INTO THE
+  PAUSED-TREND STATE, and no strategy exists that wants it.** Opened 2026-08-01
+  from the A2 partition result. `tests/a2_excursion.py` v1.0 built to settle it.
+  **THE PARTITION SETTLED THE DIAGNOSIS.** 150,517 ticks joined, 4.14%
+  violations (supersedes 4.02%). H1 horizon SUPPORTED, H2 drive SUPPORTED, H3 gap
+  **dead as a cause** — the reversal-gap deficit never appeared, and the ADX
+  medians point the wrong way (CONT 52.0 < FLAT 53.5, when a continuation-gap
+  inflation would need CONT highest). A2 names a real state. **Gap class proxies
+  for DAY TYPE, not for an ADX perturbation** — gap days are trend days,
+  flat-open days are range-ish.
+  **THE UNFLAGGED FINDING, and it is the strongest evidence for H2:**
+  DECAY×FLAT **13.88%** is the highest cell in the grid, ~6σ above OPEN×FLAT.
+  FLAT is the ONLY class that HUMPS (5.41 → 13.88 → 3.65); CONT and REV both
+  decay monotonically. On a flat open there is no overnight repricing, so the
+  day's first directional move is DISPLACED to ~10:40-12:00 and the violations
+  follow it. Move the drive in time and the violations move with it — nothing
+  else predicts a displaced hump.
+  **THE OPERATOR'S FRAMING, which is what the new tool measures:** *"If price is
+  going NOWHERE in that environment, that should be worked into our STOP logic.
+  If price is expected to go SOMEWHERE, let's guess WHERE and trade it."* And:
+  *"It should be relevant to whether we are long or short theta."*
+  **ONE NUMBER CANNOT ANSWER BOTH.** Signed drift answers the long-theta question
+  and tells a condor NOTHING — a session that runs +2% then -2% has zero drift and
+  would have blown through both wings. So:
+  theta NEGATIVE (continuation debit-directional, sweep naked OTM ~0.20d, orb) →
+  SIGNED return in the TRENDING direction plus time-to-arrive, because decay is
+  the clock it races. theta POSITIVE (iron_condor, butterfly) → MAX ABSOLUTE
+  EXCURSION and its DISTRIBUTION. **The butterfly is why THETA SIGN and not
+  credit/debit is the correct axis** — it is a debit structure that is
+  theta-positive near the body.
+  **THE HYPOTHESIS:** if paused_trend predicts LOW excursion, the fleet sends the
+  WRONG theta sign into it. A2 ticks have TRENDING > 0.5, so argmax tends TRENDING
+  → **continuation fires and pays decay to sit in tape that is not moving**, while
+  condor and butterfly are gated to RANGING/COMPRESSION and locked out of exactly
+  the state they would want. A mechanism-level candidate for continuation
+  standalone's -$2,024 at 46% WR that has nothing to do with its entry conditions.
+  **THE DISTRIBUTION IS A STRIKE RULE**, not just a verdict: p90 of |excursion|
+  says where a short strike belongs, priced from the state's own behaviour rather
+  than a fixed delta or a BB anchor — the pitchfork paper's rail-anchored-strike
+  argument arriving from a different direction and available sooner. And mean
+  ADVERSE excursion is the floor under a non-noise stop, which bears directly on
+  the premium-relative stop defect (25% of a $0.70 credit is 17.6c, inside the
+  0DTE bid/ask band).
+  **CONDITIONING — corrects a2_partition's own closing line.** It says evaluate on
+  CLEAN×FLAT as "uncontaminated". That cell is uncontaminated by GAP but SELECTED
+  ON DAY TYPE, and FLAT runs hotter in every window (CLEAN 3.65% vs 1.49/1.91).
+  Judging the state only there measures it on the least-trending days in the
+  corpus, exactly where a paused trend is least likely to resume. Use CLEAN across
+  ALL THREE classes with gap_class as a COVARIATE — n~95k, not ~6.5k.
+  **EPISODE DURATION IS A PREREQUISITE, found by running the tool rather than
+  reasoning about it.** The forward window spans N bars but nothing guarantees the
+  STATE persists across them; on a planted corpus, violations at HALF the control
+  volatility came back as p90 0.248% vs 0.245% — no signal — because the windows
+  overlapped non-violating tape. The tool now reports the duration distribution
+  FIRST and warns when a horizon exceeds the median episode. `--persistent-only`
+  is the clean version at the cost of sample. **Do not read any horizon longer
+  than the median episode as an edge.**
+  **⬜ THREE OUTCOMES, ALL USEFUL.** Resumes → long-theta entries have a target.
+  Flat → A2 is honest, correctly identified, and worth nothing; A2.5 becomes a
+  logging nicety and the invariant gets restated rather than acted on. **Negative
+  → the "pause" is EXHAUSTION**, a top/bottom, which inverts the item's assumption
+  and is worth more than a resume.
+  **⬜ THE DESIGN GAP.** If excursion is HIGH but drift is ~zero, that is a LONG
+  GAMMA / direction-agnostic environment and **nothing in the fleet trades it** —
+  all five strategies are directional or short-vol. If excursion is LOW, the
+  expression is a **DEFINED-RISK WIDE IRON CONDOR**, where spread width is the
+  sizing dial and `compute_condor_leg_size` already yields a real max_loss so the
+  session caps and session_guard keep their denominator.
+  **⬜ UNDEFINED-RISK STRUCTURES ARE OUT OF SCOPE — DECIDED, not deferred.** The
+  margin account permits selling strangles, but SPX's nominal size (~$640k per
+  contract at a 6,400 index) makes a naked strangle one indivisible bite far
+  larger than the per-trade risk budget. The operator's call: that constraint is
+  PROTECTIVE and is not to be engineered around. **Do NOT build the broker-margin
+  denominator into the risk layer** — it existed only to make undefined risk
+  sizeable, and the risk layer being unable to size a naked short is a FEATURE.
+  The risk layer has exactly two sizing paths and both assume defined risk
+  (`compute_size`: max_loss = premium paid; `compute_condor_leg_size`: max_loss =
+  (width - credit) × multiplier); a naked short has neither a debit nor a spread
+  width, so `max_loss` — which feeds the session caps and session_guard — would be
+  wrong or zero and break the whole downstream chain silently.
+  **SEQUENCING: this goes BEFORE A2.5.** Building a live factor column for a state
+  with no forward edge is work spent to confirm nothing.
 
 **⬜ Sun Aug 2**
 - `[DESK]` **A2.4 — 🔴 A2's REAL CAUSE IS A HORIZON MISMATCH, and the state it
@@ -1842,6 +1925,25 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.37 — 2026-08-01 — A2 IS A REAL STATE. THE QUESTION IS NOW WHETHER IT PAYS,
+  AND TO WHICH SIDE OF THETA.** The partition ran on the regenerated corpus:
+  150,517 ticks, 4.14% violations. H1 horizon and H2 drive SUPPORTED, **H3 gap
+  dead as a cause** — no reversal-gap deficit, and the ADX medians point the wrong
+  way. Gap class proxies for DAY TYPE. Strongest single finding, which the tool
+  did not flag: **DECAY×FLAT 13.88% is the highest cell in the grid**, and FLAT is
+  the only class that humps instead of decaying — on a flat open the drive is
+  displaced to ~10:40-12:00 and the violations follow it.
+  New **AQ** + `tests/a2_excursion.py` v1.0. Theta sign is the axis (the butterfly
+  is a debit structure that is theta-POSITIVE, which is why credit/debit is the
+  wrong split): signed drift for the long-theta book, max |excursion| and its
+  DISTRIBUTION for the short-theta book — the distribution IS a strike rule, and
+  mean adverse excursion is the floor under a non-noise stop. Corrects
+  a2_partition's own closing line: CLEAN×FLAT is gap-clean but DAY-TYPE-SELECTED.
+  **Episode duration is now reported first** — a horizon longer than the median
+  episode measures mostly out-of-state tape, found by running the tool rather than
+  reasoning about it. **Undefined-risk structures ruled OUT OF SCOPE**: SPX
+  nominal size makes a naked strangle unaffordable, the constraint is protective,
+  and the risk layer's inability to size one is a feature to preserve.
 - **v3.36 — 2026-08-01 — THE DAILY FORK GETS A SOURCE, AND IT IS OUR OWN TAPE.**
   `daily_bars.py` v1.0 + `eod_conductor` v1.11.0 phase 5b + 14 tests rebuild
   `daily/<SYM>.csv` nightly from the 1-minute tape harvest already lands. yfinance
