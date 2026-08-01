@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.35
+# docs/BACKLOG.md — v3.36
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -404,22 +404,48 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   starvation until the warm depth fills it — the same signal Monday's live boxes
   produce. That is the instrumentation working, not a fault.
 
-- `[DESK]` **AP — THE DAILY FORK HAS NO DATA SOURCE, which also blocks the
-  overlay's highest-value signal.** Split out of **AN** 2026-08-01 so a real
-  blocker is not buried inside a resolved item.
-  §4.2 wants a 1d fork at k=2 with R=40 recency. `TIMEFRAMES["1d"]["candles"] =
-  10` — ten daily bars cannot yield a k=2 triple with 5-bar separation, let alone
-  40 bars of recency. The HOURLY fork works today; the daily one is unbuildable.
-  **CONSEQUENCE BEYOND THE MISSING FORK:** §6 names a daily rail within C*ATR of
-  an hourly rail — CONFLUENCE — as the highest-value signal the overlay produces.
-  With one fork there is nothing to confluence against, so the paper's headline
-  application cannot be measured at PF.3 no matter how well the hourly fork works.
-  **CANDIDATE SOURCE:** devtools 51 already fetches 21 days from yfinance, on an
-  isolated feed. ~60 daily bars would comfortably serve k=2/R=40. Note this is a
-  DIFFERENT feed from the DXLink store — worth confirming the two agree on daily
-  OHLC before anchoring a persistent object on it.
-  **NOT urgent for PF.3** (condor strikes are the first consumer and the hourly
-  fork serves them), but it must land before §6 is claimed as a capability.
+- `[DESK]` **AP — ◐ SOURCE BUILT 2026-08-01; the fork itself ripens on its own.
+  The daily series now comes from OUR OWN TAPE, not a second feed.**
+  §4.2 wants a daily fork at k=2 with R=40. `TIMEFRAMES["1d"]["candles"] = 10`,
+  and ten daily bars cannot yield a k=2 triple with 5-bar separation. Worse than
+  a missing fork: §6 names a daily rail within C*ATR of an hourly rail —
+  CONFLUENCE — as the highest-value signal the overlay produces, so with one fork
+  the paper's headline application could not be measured at all.
+  **BUILT:** `day_trader_pro/daily_bars.py` v1.0 + `eod_conductor` **v1.11.0
+  phase 5b** + 14 tests. Rebuilds `daily/<SYM>.csv` from the 1-minute tape
+  `phase_harvest` already lands.
+  **WHY NOT YFINANCE — the operator's objection is the decisive one.** It was
+  purged for a large disparity against TastyTrade on low timeframes; it
+  normalises on the highest, but a fractal pivot anchors on HIGHS AND LOWS, and
+  daily H/L is exactly where a differing consolidated tape or pre/post-market
+  inclusion shows up. Its "30 day" 1m pull caps at **21 sessions**. And the
+  killer: **what happens when a fork INVALIDATES.** Re-anchoring selects a NEW
+  triple and needs bars current AT THAT MOMENT — a manual pull is stale the next
+  day, and a recurring one re-introduces the dependency the purge removed. Any
+  yfinance arrangement here is a band-aid. Aggregating our own tape extends
+  itself every night and keeps the fork reconstructible from tape, which is what
+  its determinism rests on.
+  **The agreement-check script was proposed and then DROPPED** — once the series
+  comes from our own tape, that test's result changes no decision either way, and
+  building it would put `import yfinance` back in the repo for no operational
+  purpose. A check that cannot change a decision is not worth running.
+  **DESIGN CALLS worth knowing before reading the series:** it REBUILDS rather
+  than appends (idempotent, and self-heals when a session is backfilled late,
+  which an append gets silently wrong forever); it runs **after phase_backfill**,
+  not after harvest, because backfill fetches candles for days the boxes never
+  handed over; sessions under 300 of ~390 minutes are marked `partial=1` rather
+  than dropped, because a short session's high/low are not the session's and a
+  pivot anchored on one is an artifact — but a dropped session is a hole nobody
+  can see.
+  **⬜ WHAT IS STILL OPEN.** (1) HISTORY: tape starts ~07-13, so ~15 sessions —
+  the floor for a k=2 triple (P2 confirmed at index 14) with ZERO margin.
+  Comfortable (~29) by the Aug 21 freeze, which is when PF.4 wiring happens
+  anyway, so the fork ripens on the schedule the overlay needs it. The phase
+  emits a conductor WARNING every night until it clears. Do not "fix" the short
+  history by reaching back to a second feed. (2) DISTRIBUTION: the series is
+  built on CONTROL. PF.1/PF.2/PF.3 are offline work that runs there, so that is
+  sufficient today — getting it onto the bot boxes is a **PF.4** problem and is
+  NOT solved.
 
 **⬜ Sun Aug 2**
 - `[DESK]` **A2.4 — 🔴 A2's REAL CAUSE IS A HORIZON MISMATCH, and the state it
@@ -1816,6 +1842,18 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.36 — 2026-08-01 — THE DAILY FORK GETS A SOURCE, AND IT IS OUR OWN TAPE.**
+  `daily_bars.py` v1.0 + `eod_conductor` v1.11.0 phase 5b + 14 tests rebuild
+  `daily/<SYM>.csv` nightly from the 1-minute tape harvest already lands. yfinance
+  was the obvious candidate and is the wrong one — purged for low-timeframe
+  disparity, capped at 21 sessions on 1m, and fatally: **re-anchoring an
+  invalidated fork needs bars current at that moment**, so a manual pull is stale
+  the next day and a recurring one restores the dependency the purge removed. The
+  agreement-check script was proposed and dropped: with the series coming from our
+  own tape its result changes no decision. Rebuild-not-append so late backfills
+  self-heal; after phase_backfill so the tape is complete; partial sessions
+  flagged rather than dropped. **AP is ◐ not ✅** — ~15 sessions is the floor with
+  zero margin, and distribution to the boxes is a PF.4 problem.
 - **v3.35 — 2026-08-01 — PF.1 CONSTRUCT BUILT, AND THE WHITE PAPER WAS WRONG
   ABOUT ITS OWN FOUNDATION.** `analysis/pitchfork.py` v1.0 + 24 tests. Weight 0,
   outside the freeze. §4.1 claimed LiquidityMapper already computes swing pivots
