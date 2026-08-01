@@ -1,5 +1,9 @@
 # The Pitchfork Overlay — Design White Paper
 ### options_trader v4.0 milestone · drafted 2026-07-23
+*Revision 2026-08-01 — §7 correction (application #2's target was removed on
+07-28), §7.3 A2 note promoted to a live hypothesis, and a four-phase build split
+added as §13. The design is unchanged; what changed is the schedule and one
+stale row.*
 
 ---
 
@@ -235,7 +239,7 @@ The question was which parts of the system benefit. The honest answer is
 | # | Consumer | Application |
 |---|---|---|
 | 1 | **Iron condor strike anchoring** | Sell the call at/outside UML, the put at/outside LML. Mutually exclusive by construction (price cannot be at both rails). Replaces `_select_by_band`'s BB anchor with a channel that tracks the live structure. **Works on SPX where VWAP cannot.** |
-| 2 | **Continuation pullback rail** | The ML is the structural version of `bb_middle`. Current gate is `CONTINUATION_MIDLINE_ATR = 0.35 × ATR` around a flat mean; the ML slopes with the trend the trade is riding. |
+| 2 | **Continuation pullback rail** | ⚠️ **TARGET MOVED — see the correction note below §7.4.** The ML remains the structural version of a pullback reference, but the constant this row named is gone. |
 | 3 | **Sweep reversal** | A sweep *into* a rail is materially higher-probability than a sweep into open air. Adds a proximity dimension the strategy currently lacks. |
 | 4 | **ORB retest quality** | A retest occurring *at* a rail is a genuine structural quality signal — a strong candidate for the real `orb_quality` the deleted function only claimed to measure. Would extend the A/B grade beyond liquidity-in-path without reintroducing regime. |
 | 5 | **Rejection fade** (future trade) | This trade wants "a level rejected multiple times on the HTF." A rail with a touch count **is** that object, delivered directly. |
@@ -273,6 +277,24 @@ The question was which parts of the system benefit. The honest answer is
 |---|---|---|
 | 16 | **Position sizing** | A tighter *structural* stop means more contracts for the same dollar risk. Sizing improves as a downstream consequence of better stop placement. |
 | 17 | **`LiquidityMapper`** | Sloped zones become first-class objects alongside horizontal pools. |
+
+> ### ⚠️ Correction — application #2's target no longer exists (added 2026-08-01)
+>
+> This paper was drafted 2026-07-23. On **2026-07-28** the `v-fvg-pullback`
+> rewrite replaced continuation's BB-midline entry trigger with a **1-minute wick
+> tagging an unfilled 5-minute FVG**. `CONTINUATION_MIDLINE_ATR` and
+> `CONTINUATION_MAX_PULLBACK_R` are now **orphaned constants**, referenced only
+> in comments describing their own removal (`continuation_strategy.py:10,157`).
+>
+> The application is not dead — a sloped pullback reference is still the right
+> idea — but it is no longer a drop-in replacement for a named constant, and the
+> head-to-head has no current baseline to measure against. It must be re-derived
+> against the FVG trigger before it can be ranked.
+>
+> **The general lesson, which matters more than this one row:** §7 enumerates 17
+> consumers against a codebase that moves weekly. **Re-read §7 against HEAD
+> before committing to any consumer order.** A replacement target that has
+> already been replaced produces a head-to-head with nothing on the other side.
 
 ### 7.5 What the overlay must NOT do
 
@@ -485,3 +507,76 @@ into a level expecting it to hold (credit). This trade *wants* the pitchfork/Liq
 multi-touch HTF zone with a rejection-count attribute — it is the pitchfork's natural partner.
 
 ---
+
+---
+
+## 13. Build phasing — added 2026-08-01
+
+The backlog had gated **everything** pitchfork behind L2.6 (Aug 21). That
+conflates three activities with completely different risk profiles, and it has a
+concrete cost: construction would begin **ten days before live capital**, and
+the condor — which item AI names the fork as the instrument to fix — would stay
+broken straight through go-live.
+
+Only the last of these needs the freeze.
+
+### 13.1 CONSTRUCT — can start immediately
+
+Geometry engine in a git fork: deterministic anchor selection, three variants
+computed in parallel, rails evaluated as `anchor + slope*(t - anchor_time)`.
+Consumed by nothing, gating nothing, weight 0.
+
+**Why the freeze does not apply.** L2.6 protects L1/L2/**entry behaviour**. An
+object that nothing reads cannot alter behaviour. The freeze is a behavioural
+guarantee, not a moratorium on files.
+
+### 13.2 FIT — the blocker cleared 2026-08-01
+
+§4.4's confirmation-lag rule made replay validation depend on **defect S**, the
+HTF-starvation bookmark. That dependency is now evidenced rather than assumed:
+raising the replay's `--warm-sessions` from 5 to 15 moved TRENDING dom%
+**30% → 36%** and TRENDING_BEAR's p90 **0.439 → 0.65**, on identical tape, with
+RANGING/COMPRESSION each giving up only 1–2 points. Anchor selection needs
+exactly that HTF depth.
+
+Starts after **Aug 5** (L1.CAL.2 confirms it on the rebuilt corpus).
+
+**Caveat carried from that same experiment:** more warm-up made **A2 worse**
+(179 → 196 violating ticks). See §13.5.
+
+### 13.3 MEASURE — ~Aug 10, condor strikes only
+
+Head-to-head on the QQQ twin at weight 0, against the chain archive (needs ~2
+weeks, which lands about then). Condor first for the reason §9 already gives:
+strike placement produces a **credit**, one number, directly comparable on
+identical tape with no attribution problem.
+
+**Resist every other consumer until this one has a number.** §12 names consumer
+sprawl as a headline risk, and the project has already paid for that mistake
+once by shipping four engine changes into a frozen window.
+
+### 13.4 WIRE — post-L2.6 (Aug 21) at the earliest; realistically September
+
+Anything that changes what gets traded. This is what the freeze is for. **v4.0
+tags at TWO independently proven consumers**, not when the overlay exists.
+
+### 13.5 A2 — the overlay may be a fourth hypothesis, so do not erase the evidence
+
+§7.3 notes that the daily and hourly forks can legitimately slope in **opposite
+directions**, and that this may give the A2 co-occurrence residual a
+**structural** explanation rather than a statistical one.
+
+That is now live. The A2 root cause was identified 2026-08-01: **A3 passes with
+zero violations because BREAKOUT and COMPRESSION read the same `atr_ratio` in
+opposite directions — one measurement, two ends — while TRENDING reads `adx` and
+RANGING reads midline `angle`, two unrelated measurements with nothing coupling
+them.** The staged fix is A2.1 (characterise) → A2.2 (shared axis, Kaufman
+Efficiency Ratio) → A2.3 (log-odds, making the invariant a property rather than
+a check).
+
+**The warning this section adds:** if some fraction of the ~196 violating ticks
+is genuine cross-horizon disagreement, a single-axis reformulation would
+**erase** that signal rather than fix it. A2.1's characterisation should record
+whether violators cluster on symbols/times where a daily and an hourly fork
+would plausibly disagree — which cannot be checked until §13.1 exists. **That is
+a further argument for constructing early even though nothing consumes it.**

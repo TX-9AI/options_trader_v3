@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.31
+# docs/BACKLOG.md — v3.32
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -264,6 +264,13 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   A2 WORSE (179 -> 196) while TRENDING dom% rose 30% -> 36%. Deeper history makes
   ADX more confidently high; the angle is computed independently, so overlap grew
   exactly as an uncoupled-ADX story predicts.
+  **FOURTH HYPOTHESIS, added 2026-08-01 — do not skip it.** The pitchfork paper
+  §7.3 notes daily and hourly forks can legitimately slope in OPPOSITE
+  directions, which would make some violators genuine **cross-horizon
+  disagreement** rather than a scoring defect. If so, A2.2's single-axis fix
+  would ERASE that signal rather than repair it. Record whether violators cluster
+  on symbols/times where a daily and an hourly fork would plausibly disagree —
+  this needs **PF.1** to exist, which is part of why PF.1 starts now.
   **VALIDATE:** the answer is a scatter of adx vs angle on violating ticks
   against the same on non-violating ticks. If violators cluster at high-adx AND
   low-angle with a recent-large-move signature, it is lag. If they are spread,
@@ -981,10 +988,60 @@ file: everything above either ✅ or explicitly re-dated below.
   secured by the Jul 30 harvest verification.
 - **⬜ P2 — shadow observer stage 2 scorers** (observe-only; graduation post-L2.6).
   Stage-1 validation data (shadow jsonl vs data/OHLC) already banking fleet-wide.
-- **⬜ P4 — HTF zone memory + rejection counts / pitchfork** (rides the tester
-  fork, post-L2.6; the pitchfork's own gate has been L2.6 all along — Aug 21 opens
-  it). Rejection-count validation consumes the same level_strength/sweep capture
-  lineage started 07-24.
+- **⬜ P4 — HTF zone memory + rejection counts** (rides the tester fork,
+  post-L2.6). Rejection-count validation consumes the same level_strength/sweep
+  capture lineage started 07-24.
+- **⬜ PITCHFORK — SPLIT INTO FOUR PHASES 2026-08-01. Only the LAST needs L2.6.**
+  The whole overlay had been gated behind Aug 21, which meant construction would
+  start **ten days before live capital** and the condor — which **AI** names the
+  fork as the instrument to fix — would stay broken through go-live. Full
+  reasoning in `docs/WHITEPAPER_pitchfork_overlay.md` §13.
+  **PF.1 CONSTRUCT — startable NOW.** Geometry engine in a git fork:
+  deterministic anchors, three variants in parallel, rails as
+  `anchor + slope*(t - anchor_time)`. Consumed by nothing, gates nothing,
+  weight 0. **The freeze does not apply** — L2.6 protects L1/L2/entry BEHAVIOUR,
+  and an object nothing reads cannot alter behaviour.
+  **PF.2 FIT — after Aug 5.** §4.4's confirmation-lag rule made replay validation
+  depend on **defect S**, the HTF bookmark. That is now evidenced, not assumed:
+  `--warm-sessions` 5 → 15 moved TRENDING dom% **30% → 36%** and TRENDING_BEAR
+  p90 **0.439 → 0.65** on identical tape. Starts once L1.CAL.2 confirms it on the
+  rebuilt corpus.
+  **PF.3 MEASURE — ~Aug 10, CONDOR STRIKES ONLY.** QQQ twin, weight 0, against
+  the chain archive (needs ~2 weeks of it). Condor first because a **credit is
+  one number**, directly comparable on identical tape, no attribution problem.
+  **Resist every other consumer until this one has a number** — §12 names
+  consumer sprawl as a headline risk and this project has already paid for it.
+  **PF.4 WIRE — post-L2.6 (Aug 21) earliest, realistically September.** Anything
+  that changes what gets traded. **v4.0 tags at TWO proven consumers**, not when
+  the overlay exists.
+  **THE REPLACEMENT MAP — current constants, so the head-to-head is concrete:**
+  `#1 condor strikes  bb_upper/lower OR 0.80*EM (farther), guardrail 1.2*EM,`
+  `                   trigger 0.65    ->  sell at/outside UML / LML`
+  `#7 stops           MAX_LOSS_PCT=0.40 of premium  ->  beyond a rail`
+  `#10 exhaustion     ATR-extension from bb_middle (20-SMA 5m,`
+  `                   exit_engine:1428)  ->  distance beyond UML / channel width`
+  `#9 trailing        FVG trails, HORIZONTAL  ->  slopes with the ML`
+  `#15 compression    BB_WIDTH_COMPRESSION_PCT=0.20, RANGE_ROOM_LO/HI=0.17/1.00`
+  `                   ->  |UML-LML|, structural width that does not lag a 20-bar BB`
+  `#11 condor roll    "tested" premium-derived  ->  price reached that side's rail`
+  `#4 ORB grade       liquidity-in-path only  ->  retest occurring AT a rail`
+  **STALE TARGET CORRECTED IN THE PAPER:** application **#2** cited
+  `CONTINUATION_MIDLINE_ATR = 0.35 * ATR` around `bb_middle`. The 07-28
+  `v-fvg-pullback` rewrite removed that trigger; the constant is now an ORPHAN
+  referenced only in comments describing its own removal
+  (`continuation_strategy.py:10,157`). The application is not dead, but it has no
+  current baseline to measure against and must be re-derived. **General lesson
+  now written into §7:** the paper enumerates 17 consumers against a codebase
+  that moves weekly — **re-read §7 against HEAD before fixing any consumer
+  order**, or the head-to-head has nothing on the other side.
+  **A2 LINKAGE — §13.5, and it argues for building EARLY.** §7.3 notes daily and
+  hourly forks can legitimately slope in OPPOSITE directions, which may give the
+  A2 residual a **structural** explanation rather than a statistical one. If some
+  of the ~196 violating ticks are genuine cross-horizon disagreement, A2.2's
+  single-axis reformulation would **erase** that signal rather than fix it.
+  A2.1's characterisation should record whether violators cluster where a daily
+  and an hourly fork would plausibly disagree — **which cannot be checked until
+  PF.1 exists.**
 - **⬜ P5.4/P5.5 — ChainReplay + exit replay** (post-L2.6, scope set by the Aug 14
   validator verdict; holdout discipline per L3.5).
 
@@ -1420,6 +1477,27 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.32 — 2026-08-01 — PITCHFORK SPLIT INTO FOUR PHASES; only the last needs
+  L2.6.** The overlay had been gated whole behind Aug 21, which put construction
+  ten days before live capital and left the condor broken through go-live.
+  **PF.1 CONSTRUCT is startable now** — a weight-0 object nothing reads cannot
+  break a behavioural freeze. **PF.2 FIT's blocker cleared tonight**: defect S,
+  the HTF bookmark, is now evidenced (warm-sessions 5 → 15 moved TRENDING dom%
+  30% → 36%). **PF.3 MEASURE ~Aug 10, condor strikes ONLY** — a credit is one
+  number. **PF.4 WIRE post-L2.6**, v4.0 at two proven consumers.
+  **The replacement map is now recorded with the ACTUAL current constants** so
+  the head-to-head is concrete: 0.80*EM / 1.2*EM guardrail / 0.65 trigger for
+  strikes, MAX_LOSS_PCT=0.40 for stops, bb_middle for exhaustion, horizontal FVG
+  trails, BB_WIDTH_COMPRESSION_PCT=0.20 for compression.
+  **A STALE TARGET FOUND AND CORRECTED:** the paper's application #2 cited
+  `CONTINUATION_MIDLINE_ATR`, removed by the 07-28 FVG-pullback rewrite and now an
+  orphan. Eight days old and one of seventeen targets had already moved. §7 now
+  carries a standing instruction to re-read against HEAD before ordering
+  consumers.
+  **And §7.3's A2 note is promoted to a live hypothesis:** daily and hourly forks
+  may legitimately disagree, so a single-axis A2 fix could ERASE genuine
+  cross-horizon signal. That check needs PF.1 to exist — a further argument for
+  constructing early.
 - **v3.31 — 2026-08-01 — A2's ROOT CAUSE IDENTIFIED, and the answer was already
   in the codebase.** A3 (BREAKOUT & COMPRESSION not both >0.5) passes with ZERO
   violations because those two read the SAME `atr_ratio` in OPPOSITE directions —
