@@ -1,9 +1,17 @@
 """
-analysis/pitchfork.py — options_trader_v3 — v1.0
+analysis/pitchfork.py — options_trader_v3 — v1.1
 
 PF.1 CONSTRUCT. Andrews pitchfork geometry. Weight 0. Consumed by nothing,
 gating nothing. See docs/WHITEPAPER_pitchfork_overlay.md for the full design.
 
+v1.1 — 2026-08-01 — REJECTION REASONS. build_fork returned a bare None, so when
+        a2_rail_drift found 1,030 ticks with no usable fork there was no way to
+        tell WHY: a corpus too short to contain a qualifying triple, or §4.3
+        filters too tight for a ~105-bar hourly series. Those have opposite
+        responses — wait for sessions to accrue, vs revisit the priors. Every
+        return-None path now records a reason in `last_reject_reason()`.
+        Additive only: no filter, threshold or geometry changed, and the return
+        contract is unchanged. Read by tests/pitchfork_filter_audit.py.
 v1.0 — 2026-08-01 — first construct. Deterministic anchor selection, three
         variants in parallel, rails as anchor + slope*(bars from anchor).
 
@@ -105,6 +113,23 @@ FRACTAL_K: Dict[str, int] = {"1d": 2, "1h": 3}
 # ten-parameter surface as an overfitting risk, so these are PRIORS, not fits.
 SIGNIFICANCE_ATR = 1.0     # S — |P1-P0| and |P2-P1| must each clear S * ATR
 RECENCY_BARS     = 40      # R — P2's CONFIRMATION must be within R bars of now
+
+# Why the most recent build_fork call returned None. Diagnostic only — nothing
+# in the geometry reads it, and it is deliberately NOT part of the return
+# contract, so no caller can start branching on it.
+_LAST_REJECT: Optional[str] = None
+
+
+def last_reject_reason() -> Optional[str]:
+    """Reason the most recent build_fork() returned None, or None on success."""
+    return _LAST_REJECT
+
+
+def _reject(reason: str):
+    global _LAST_REJECT
+    _LAST_REJECT = reason
+    return None
+
 
 VARIANTS = ("andrews", "schiff", "modified_schiff")
 DEFAULT_VARIANT = "modified_schiff"
@@ -278,11 +303,11 @@ def build_fork(symbol: str, df: pd.DataFrame, timeframe: str, atr: float,
     k = FRACTAL_K.get(timeframe)
     if k is None:
         logger.debug("pitchfork: %s is not an anchor timeframe", timeframe)
-        return None
+        return _reject("NOT_ANCHOR_TF")
     if df is None or len(df) < (2 * k + 1) * 3:
-        return None
+        return _reject("FRAME_TOO_SHORT")
     if not atr or atr <= 0:
-        return None
+        return _reject("NO_ATR")
 
     highs, lows = df["high"].tolist(), df["low"].tolist()
     now_idx = len(df) - 1 if now_idx is None else now_idx
@@ -292,7 +317,7 @@ def build_fork(symbol: str, df: pd.DataFrame, timeframe: str, atr: float,
                  if p.confirmed_idx <= now_idx]
     alt = _alternating_tail(confirmed)
     if len(alt) < 3:
-        return None
+        return _reject("FEWER_THAN_3_ALTERNATING_PIVOTS")
 
     p0, p1, p2 = alt[-3], alt[-2], alt[-1]
     passed: List[str] = []
@@ -301,30 +326,30 @@ def build_fork(symbol: str, df: pd.DataFrame, timeframe: str, atr: float,
     if p0.kind == "low" and p1.kind == "high":
         direction = "bullish"
         if not p2.price > p0.price:
-            return None
+            return _reject("STRUCTURAL_bull_P2_not_above_P0")
     elif p0.kind == "high" and p1.kind == "low":
         direction = "bearish"
         if not p2.price < p0.price:
-            return None
+            return _reject("STRUCTURAL_bear_P2_not_below_P0")
     else:
-        return None
+        return _reject("STRUCTURAL_pivot_kinds_not_alternating")
     passed.append("structural")
 
     # 1. significance — each leg must be a real move, not noise
     if abs(p1.price - p0.price) < significance_atr * atr:
-        return None
+        return _reject("SIGNIFICANCE_leg_P0P1")
     if abs(p2.price - p1.price) < significance_atr * atr:
-        return None
+        return _reject("SIGNIFICANCE_leg_P1P2")
     passed.append("significance")
 
     # 2. separation — non-overlapping fractal windows
     if (p1.idx - p0.idx) < (2 * k + 1) or (p2.idx - p1.idx) < (2 * k + 1):
-        return None
+        return _reject("SEPARATION")
     passed.append("separation")
 
     # 4. recency — measured on CONFIRMATION, not on the pivot's own bar
     if (now_idx - p2.confirmed_idx) > recency_bars:
-        return None
+        return _reject("RECENCY")
     passed.append("recency")
     passed.append("uniqueness")           # by construction: the last three
 
@@ -332,9 +357,11 @@ def build_fork(symbol: str, df: pd.DataFrame, timeframe: str, atr: float,
     m_idx = (p1.idx + p2.idx) / 2.0
     m_price = (p1.price + p2.price) / 2.0
     if m_idx == origin_idx:
-        return None                        # vertical median — degenerate
+        return _reject("DEGENERATE_vertical_median")
     slope = (m_price - origin_price) / (m_idx - origin_idx)
 
+    global _LAST_REJECT
+    _LAST_REJECT = None
     return Fork(symbol=symbol, timeframe=timeframe, direction=direction,
                 variant=variant, p0=p0, p1=p1, p2=p2,
                 origin_idx=origin_idx, origin_price=origin_price, slope=slope,
