@@ -289,6 +289,9 @@ else
     echo "  ✓ PRESENT: v4.7 L2 gate literal is lowercase (block is reachable)"
 fi
 check "notifications/alert_manager.py"  "def send_regime_engine_degraded_alert"  "v1.7 degraded-engine pager exists"
+check "notifications/alert_manager.py"  "def _send(self, msg: str) -> bool"      "v1.9 _send reports delivery"
+check "notifications/alert_manager.py"  "def send_blind_alert"                   "v1.8 blind-alert pager exists"
+check "utils/blindness_latch.py"        "def update"                             "v1.0 blindness latch present"
 if grep -q "conviction_integrator import ConvictionIntegrator, RANGE_WINDOW_BARS" main.py 2>/dev/null; then
     echo "  ✗ STALE:   main.py re-imports RANGE_WINDOW_BARS from conviction_integrator — the 07-29 fleet-wide L2 outage is BACK"
     MISS=$((MISS+1))

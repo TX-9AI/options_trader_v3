@@ -26,6 +26,17 @@ v1.5 — 2026-07-07 — broker-reconcile alerts: send_adopted_alert() (a positio
         (DB rows the broker no longer shows, closed), and
         send_reconcile_unavailable_alert() (broker read failed/empty — fell back
         to DB-only recovery, closed nothing).
+v1.9 — 2026-08-01 — _send() RETURNS WHETHER IT ACTUALLY SENT. It never did, and
+        TelegramSender.send() has returned a bool since v3.0 — _send simply threw
+        it away. That discarded boolean is why the blind-alert DRILL reported
+        "sent" on 29 boxes while nothing left the machine: credentials live in the
+        systemd unit as Environment= lines, a manual SSH run inherits none of
+        them, telegram_configured() is False, send() returns False and logs at
+        DEBUG, and every layer above was blind to it.
+        Now _send returns the bool and send_blind_alert / send_sight_restored_alert
+        propagate it, so a caller CAN check. Purely additive — every existing
+        caller ignores the return and behaves exactly as before. The information
+        was present at each layer and dropped at each; this stops dropping it.
 v1.8 — 2026-08-01 — send_blind_alert() / send_sight_restored_alert(): the
         operator's requirement is that ANY condition blinding the bot — the feed
         going down, stale data, a dead heartbeat, or anything else — pages
@@ -89,13 +100,23 @@ class AlertManager:
             self._tg      = None
             self._enabled = False
 
-    def _send(self, msg: str):
+    def _send(self, msg: str) -> bool:
+        """True iff the message actually reached Telegram.
+
+        v1.9: TelegramSender.send() has always returned a bool; this discarded
+        it, so no caller could ever distinguish "sent" from "silently disabled".
+        Returning it changes nothing for existing callers and makes the drill
+        able to fail honestly.
+        """
+        sent = False
         if self._enabled and self._tg:
             try:
-                self._tg.send(msg)
+                sent = bool(self._tg.send(msg))
             except Exception as e:
                 logger.error(f"Telegram send failed: {e}")
+                sent = False
         logger.info(f"ALERT: {msg}")
+        return sent
 
     # ── 1. Bot started ──────────────────────────────────────────────────────
 
@@ -231,7 +252,7 @@ class AlertManager:
     def send_blind_alert(self, instrument: str, snapshot: dict,
                          open_positions: Optional[list] = None,
                          paper: bool = True, blind_for_s: float = 0.0,
-                         drill: bool = False):
+                         drill: bool = False) -> bool:
         """The bot cannot see. Page immediately and log what caused it.
 
         `snapshot` is market_data.last_blindness() — the record written at the
@@ -275,15 +296,15 @@ class AlertManager:
         else:
             msg += "no open positions | "
         msg += fmt_et_short()
-        self._send(msg)
+        return self._send(msg)
 
     def send_sight_restored_alert(self, instrument: str, blind_for_s: float,
-                                  cause: str = "", drill: bool = False):
+                                  cause: str = "", drill: bool = False) -> bool:
         """Sight is back. Sent once per outage so a silent recovery never leaves
         the operator believing the box is still blind."""
         why = f" (was {cause})" if cause else ""
         pre = "\U0001F9EA DRILL — NOT REAL — " if drill else ""
-        self._send(
+        return self._send(
             f"\u2705 {pre}Sight restored{why} | {instrument} | "
             f"was blind {blind_for_s:.0f}s | {fmt_et_short()}"
         )
