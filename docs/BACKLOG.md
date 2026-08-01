@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.37
+# docs/BACKLOG.md — v3.38
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -529,6 +529,75 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   wrong or zero and break the whole downstream chain silently.
   **SEQUENCING: this goes BEFORE A2.5.** Building a live factor column for a state
   with no forward edge is work spent to confirm nothing.
+
+- `[DESK]` **AR — THE POOLED MEAN WAS THE WRONG STATISTIC, AND THE FORK IS THE
+  RIGHT PREDICTOR. `tests/a2_rail_drift.py` v1.0.** Opened 2026-08-01 from the
+  excursion result.
+  **WHAT THE EXCURSION RUN ACTUALLY SAID.** Median paused-trend episode is **2
+  bars** (p50 2 / p75 6 / p90 12 / p95 17 / max 48, n=1309) — a flicker, not a
+  regime. Diluted horizons showed nothing. `--persistent-only` at 2/3/5 showed
+  BOTH statistics moving monotonically in the same direction: excursion p90 vs
+  control 0.151/0.172, 0.190/0.220, 0.231/0.296 (−12%, −14%, −22%) and drift
+  +0.0047 / +0.0080 / **+0.0184 (clears)**. Two independent measures moving
+  together across three horizons is not noise.
+  **BUT `--persistent-only` CONDITIONS ON THE FUTURE.** To know the state holds
+  for the whole window you must know bars t+1..t+h are also violations, which is
+  not knowable at t. It says "episodes that LASTED >= h bars behaved this way",
+  NOT "when you see a violation, expect this" — the same class of error as
+  anchoring a fork at P2's own timestamp (§4.4). **Do not build a gate on that
+  number.**
+  **WHY THE POOLED DRIFT WAS SO SMALL — my error, not the data's.** a2_excursion
+  averaged one scalar across every instance, but those instances sit in trends of
+  DIFFERENT SLOPES POINTING IN OPPOSITE DIRECTIONS. A +0.4%/hr uptrend averaged
+  against a −0.4%/hr downtrend gives zero. The +0.0184% is the RESIDUE of that
+  cancellation, not what any instance did. Stop averaging across trends; predict
+  per instance.
+  **THE OPERATOR'S POINT, and it closes a loop:** a trend line taken out to a
+  moment in time IS a drift prediction. `rail_price(t) = anchor + slope*(t −
+  anchor_time)` — **PF.1 already computes it.**
+  **TWO PREDICTORS, one tool, both knowable at the tick:**
+  **(1) ELAPSED PERSISTENCE** — how long the state has ALREADY run. Zero forward
+  conditioning, so a live gate could use it, and it maps onto the existing arming
+  state machine. Buckets 1 / 2-3 / 4-7 / 8+ against a no-violation control.
+  **(2) MEDIAN-LINE DISPLACEMENT** — split in two because they can disagree:
+  **2a SLOPE** (does price move at the rate the ML predicts?) and **2b REVERSION**
+  (Andrews' actual teaching is that price RETURNS to the ML, so the signed target
+  is `ML(t) − price(t)` — a PER-INSTANCE number, which is what "guess WHERE" asks
+  for). Reported as regressions with coefficient + r2 + magnitudes, not means.
+  **FORK CONSTRUCTION IS HONEST:** hourly (k=3) from 1m tape resampled and
+  concatenated ACROSS SESSIONS (§4.3's R=40 is ~6 sessions at ~7 bars/session),
+  rebuilt only when an hourly bar closes, and `build_fork` is called with
+  `now_idx` = the last COMPLETED hourly bar so the confirmation lag holds.
+  **A SELF-CORRECTION WORTH KEEPING:** the smoke run returned a 2a coefficient of
+  +41 and I called it a scaling bug. It is not — checked directly, the fork's
+  median line was nearly flat (−0.0023 price/hour) while the tape moved ~93x
+  faster, so the prediction sits far under the noise. The formula was right. The
+  tool now prints median |predicted| vs |realized| alongside every regression, so
+  a SCALE MISMATCH cannot be misread as a broken formula the way I misread it.
+  **KNOWN WEAKNESS:** the hourly ML barely moves across a few 1-minute bars, so
+  2a has little to work with — **2b is the load-bearing test at these horizons.**
+  Re-run 2a when the DAILY fork ripens (AP / daily_bars.py, ~Aug 21), since a
+  daily fork carries far more slope per window.
+  **SCOPE:** this tests whether the fork PREDICTS anything. It is UPSTREAM of the
+  §9/PF.3 condor-strike head-to-head, not a second consumer competing with it —
+  rail-anchored strikes only make sense if the rail says something true about
+  future price, and testing that directly is cheaper than a credit differential.
+  Builds no consumer, gates nothing.
+  **⬜ ALSO OPEN, from the excursion run:** a2_excursion's excursion verdict
+  compares p90 POINT ESTIMATES with no confidence band, which is why it flipped
+  sign across horizons on the diluted run — it needs a bootstrap CI before its
+  STILLER/NOT-STILLER language means anything. And favorable/adverse is reported
+  for violations only with no control, so the STOP LOGIC number is not yet shown
+  to be state-specific. The max-excursion gap (0.870 vs 2.479) is a SAMPLE-SIZE
+  artifact — 53x more control ticks — and p95 is nearly identical (0.394/0.396).
+  **⬜ USABLE NOW REGARDLESS of how the drift question resolves:** mean adverse
+  excursion 0.019% / 0.033% / 0.049% at 2/3/5 bars (~1.2 / 2.1 / 3.1 SPX points)
+  is the structural floor under a non-noise stop — a 17.6c stop on a $0.70 credit
+  fires far inside it. And p90 excursion 0.231% over 5 bars (~14.8 SPX points) is
+  a strike distance derived from the state's own behaviour.
+  **⬜ NOT SUPPORTED:** the wrong-theta-sign hypothesis for continuation's
+  −$2,024. Excursion is not materially lower on the diluted (real-time-knowable)
+  measurement, so continuation is not being handed unusually still tape.
 
 **⬜ Sun Aug 2**
 - `[DESK]` **A2.4 — 🔴 A2's REAL CAUSE IS A HORIZON MISMATCH, and the state it
@@ -1925,6 +1994,22 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.38 — 2026-08-01 — THE STATE IS A 2-BAR FLICKER, THE POOLED MEAN WAS THE
+  WRONG STATISTIC, AND THE FORK IS THE PREDICTOR.** Median paused-trend episode is
+  2 bars. `--persistent-only` showed drift AND stillness moving monotonically
+  together across 2/3/5 bars (drift +0.0047/+0.0080/+0.0184, excursion p90 −12%/
+  −14%/−22% vs control) — but that mode CONDITIONS ON THE FUTURE and cannot drive
+  a gate. New **AR** + `tests/a2_rail_drift.py` v1.0 replaces the pooled mean with
+  two tick-knowable predictors: ELAPSED persistence (no forward conditioning) and
+  MEDIAN-LINE displacement from PF.1's fork, split into slope vs reversion and
+  reported as regressions so opposite-signed trends stop cancelling each other
+  out. Confirmation lag preserved via `now_idx` = last completed hourly bar.
+  Self-correction kept on the record: I called a +41 coefficient a scaling bug; it
+  was a real 93x scale mismatch and the formula was right — the tool now prints
+  predicted-vs-realized magnitudes so nobody repeats that read. Also filed: two
+  a2_excursion defects (no CI on the excursion verdict; no control on
+  favorable/adverse), and the wrong-theta-sign hypothesis for continuation is NOT
+  supported.
 - **v3.37 — 2026-08-01 — A2 IS A REAL STATE. THE QUESTION IS NOW WHETHER IT PAYS,
   AND TO WHICH SIDE OF THETA.** The partition ran on the regenerated corpus:
   150,517 ticks, 4.14% violations. H1 horizon and H2 drive SUPPORTED, **H3 gap
