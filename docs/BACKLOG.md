@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.42
+# docs/BACKLOG.md — v3.43
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -747,6 +747,52 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   saying "I still did not get any telegram notifications" three separate times
   while the tooling insisted everything passed. Each fix revealed the next layer.
   The tooling was never going to surface it alone.
+
+- `[DESK]` **AV — GAP CLASS x TIME OF DAY IS A CONDITIONING VARIABLE AND NOTHING
+  IN THE FLEET KEYS ON IT. `tests/gap_outcome_join.py` v1.0.** Opened 2026-08-02
+  out of AQ's clean-corpus result. **This is what survived; read it with the list
+  of what did not.**
+  **WHAT DIED IN AQ/AR ON CLEAN DATA:** drift shows NO EDGE at any horizon or
+  elapsed bucket, so **A2.5 as a live drift factor should be DROPPED, not
+  deferred**; the wrong-theta-sign hypothesis for continuation's -$2,024 is NOT
+  supported; and the excursion difference is real but ~3% at p90, which does not
+  move a condor's economics.
+  **WHAT SURVIVED, and it is not A2 at all:**
+  `             OPEN         DECAY        CLEAN`
+  `FLAT          3.60   →    13.78   →     3.55`
+  `CONT          9.89   →     5.91   →     1.46`
+  `REV           9.55   →     5.98   →     1.83`
+  On a flat open the first 70 minutes are statistically indistinguishable from
+  midday, then 10:40-12:00 runs ~4x hotter. On gap days the open is hot and
+  decays monotonically. **Two completely different day shapes, and every strategy
+  currently treats them identically.**
+  **SO A2 WAS NEVER THE TRADEABLE SIGNAL — it was the INSTRUMENT.** A sensitive
+  proxy for regime ambiguity that made day type visible when we had no other way
+  to measure it. That is a legitimate outcome for a diagnostic, and it is worth
+  recording as such rather than pretending the state itself pays.
+  **THE SHARPEST TEST, and why ORB is first:** ORB forms its opening range
+  09:30-10:00 — PRECISELY the window the clean grid shows is dead on flat opens
+  and hot on gap days. **AH** has ORB at **-0.24R over 252 trades** with no
+  explanation offered. If that decomposes into something like "+0.3R on gap days,
+  -0.8R on flat opens", it is a gate with a real sample behind it, **no new
+  collection**, landing well before the freeze. Same split applies to the 362
+  condors and to continuation's handoff-vs-standalone problem.
+  **THE TOOL:** joins `reports/gap_pct.json` to `reports/fleet_trades_<date>.json`
+  by (date, symbol). Rows by strategy / setup_grade / regime / box, columns by gap
+  class, optional entry-time window matching a2_partition's buckets. Mean ±95%,
+  win rate and MEDIAN per cell — median because one large loser can dominate a
+  small cell. Cells under n=30 are REFUSED. Verified on a fixture with a planted
+  ORB split (+42.5 CONT / -50.5 FLAT) which it recovered exactly while showing no
+  split on the other two strategies.
+  **⬜ LIMITS WRITTEN INTO THE TOOL, not discovered later:** fills are PAPER, so a
+  split depending on fill quality will not show; 252 ORB trades over 15 sessions
+  across 3 classes is ~84/class BEFORE any further split, so n is thin; gap class
+  is per (date, symbol) so every trade on a symbol-day inherits one class — correct,
+  since the gap is a property of the session, but it means cells are not
+  independent samples; and pnl_usd is used rather than R, so position size varies.
+  **It is not a backtest.** It reports realised outcomes partitioned by a variable
+  that was always computable and never computed. Any gate that follows needs its
+  own pre-registered validation.
 
 **⬜ Sun Aug 2**
 - `[DESK]` **A2.4 — 🔴 A2's REAL CAUSE IS A HORIZON MISMATCH, and the state it
@@ -2153,6 +2199,16 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.43 — 2026-08-02 — A2 WAS THE INSTRUMENT, NOT THE SIGNAL.** New **AV** +
+  `tests/gap_outcome_join.py` v1.0. The clean corpus killed the tradeable reading
+  of A2 — no drift edge at any horizon or elapsed bucket (so A2.5 as a live drift
+  factor should be DROPPED), the wrong-theta-sign hypothesis unsupported, and a
+  ~3% excursion difference that does not move a condor. What survived is
+  **gap class x time of day**: flat opens are dead for 70 minutes then run ~4x hot
+  at 10:40-12:00, gap days are hot at the open and decay. Nothing in the fleet
+  keys on that. The tool joins banked trade outcomes to gap class — **ORB first**,
+  since it forms its range in exactly that window and AH has it at -0.24R over 252
+  trades with no explanation. No new collection required.
 - **v3.42 — 2026-08-01 — CLEAN CORPUS. AT RESOLVED, AQ AND AR FINAL, AND ONE OF
   MY VERDICTS WAS WRONG.** Regen finished 15/15 (~5h50m); all four tools re-run.
   Headline **3.98%**. **Only the OPEN row moved** — v2.1 touched only the opening
