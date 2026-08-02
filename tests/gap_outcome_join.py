@@ -1,7 +1,38 @@
 #!/usr/bin/env python3
 """
-tests/gap_outcome_join.py — v1.3 — 2026-08-02
+tests/gap_outcome_join.py — v1.4 — 2026-08-02
 
+v1.4 — 2026-08-02 — --metric r | winrate | pnl, BECAUSE pnl_usd IS UNDERPOWERED
+       BY TWO ORDERS OF MAGNITUDE. The v1.3 clean-window run settled it: of 15
+       cells only continuation cleared n=30, reporting CONT -12.3 ±90.1 and REV
+       -1.4 ±100.5 — a band 7-8x the point estimate, which is not a weak result
+       but NO measurement. (It also erased the condor CONT/REV split that looked
+       like the one real signal at n=30/30 pooled; clean it is n=10/11, so it was
+       an artifact of the confounded window exactly as HISTORY.md predicted.)
+       BACKING sigma OUT OF THOSE BANDS gives ~$340 per trade. At 95% confidence
+       and 80% power, n per cell to detect a mean difference:
+           delta $200 -> n=  45   ~10 trading days
+           delta $100 -> n= 181   ~38 trading days
+           delta  $50 -> n= 725   ~153 trading days
+           delta  $30 -> n=2014   ~424 trading days
+       Detecting a $50/trade edge takes SEVEN MONTHS at the current rate. So the
+       question is not "wait for more trades", it is "use a lower-variance
+       statistic or accept the tick corpus is where the power lives" — the A2
+       corpus resolved 0.05% differences on n=150,517 ticks, three orders of
+       magnitude more than the 215 trades here.
+       TWO CHEAPER STATISTICS, both added:
+         --metric r        pnl_usd / max_loss. max_loss is on every trade row and
+                           is the RISK MANAGER'S OWN number, not one reconstructed
+                           here. Position size varies, so a large share of that
+                           $340 sigma is SIZE rather than outcome; normalising by
+                           risk removes it. This is the one most likely to make a
+                           $100-equivalent effect visible inside the freeze window.
+         --metric winrate  bounded [0,1], so variance is capped at 0.25 regardless
+                           of trade size. It cannot tell you edge MAGNITUDE, only
+                           whether gap class shifts the hit rate — but it answers
+                           that far sooner than a mean ever will.
+       The tool now prints the POWER LINE for whichever metric is selected, so an
+       underpowered cell is labelled as such instead of being read as a null.
 v1.3 — 2026-08-02 — --since / --until, AND A DEFAULT THAT REFUSES TO POOL ACROSS
        A DOCUMENTED CONFOUND. v1.2 fixed the join and the per-date column then
        showed the real problem: FOUR DAYS CARRY 73% OF ALL TRADES. 07-13 and
@@ -228,6 +259,10 @@ def main(argv) -> int:
                          f"pnl_usd across a documented execution change.")
     ap.add_argument("--until", default="9999-12-31",
                     help="last date to include")
+    ap.add_argument("--metric", default="r", choices=("r", "winrate", "pnl"),
+                    help="r = pnl_usd/max_loss (default; strips position size "
+                         "from the variance). winrate = bounded hit rate. "
+                         "pnl = raw dollars, underpowered — see the header.")
     ap.add_argument("--diagnose", action="store_true",
                     help="report WHY trades failed to join, by date and symbol")
     ap.add_argument("--window", default="ALL",
@@ -258,6 +293,7 @@ def main(argv) -> int:
     miss_class = collections.Counter()     # record present, class not CONT/FLAT/REV
     joined_by_date = collections.Counter()
     excluded_dates = {}
+    no_denominator = 0
 
     for p in paths:
         m = DATE_RE.search(os.path.basename(p))
@@ -297,7 +333,18 @@ def main(argv) -> int:
                 if b != a.window.upper():
                     continue
             key = str(t.get(a.by) or "?")
-            cells[(key, grec["gap_class"])].append(_num(t.get("pnl_usd")))
+            pnl = _num(t.get("pnl_usd"))
+            if a.metric == "r":
+                ml = abs(_num(t.get("max_loss")))
+                if ml <= 0:
+                    no_denominator += 1
+                    continue
+                val = pnl / ml
+            elif a.metric == "winrate":
+                val = 1.0 if pnl > 0 else 0.0
+            else:
+                val = pnl
+            cells[(key, grec["gap_class"])].append(val)
             totals[grec["gap_class"]] += 1
 
     if a.diagnose:
@@ -331,7 +378,21 @@ def main(argv) -> int:
         return 0
 
     if not cells:
-        print("Nothing joined. Check that trade dates overlap the gap lookup.")
+        # Say WHICH cause, rather than blaming the first one that comes to mind.
+        # v1.4's first run printed "check that trade dates overlap" when every
+        # trade had actually been dropped for a missing max_loss — a failure
+        # reporting the wrong reason, which is the exact class of bug this whole
+        # session has been chasing.
+        if a.metric == "r" and no_denominator:
+            print(f"Nothing joined: all {no_denominator} in-window trades were "
+                  f"dropped because\n  max_loss is missing or zero, so R has no "
+                  f"denominator. Either those rows\n  predate the column being "
+                  f"populated, or use --metric winrate instead.")
+        elif in_window == 0:
+            print(f"Nothing joined: no closed trades inside {a.since}..{a.until}.")
+        else:
+            print("Nothing joined: trades exist in the window but none matched a "
+                  "gap record.\n  Run with --diagnose to see which side is missing.")
         return 2
 
     if a.since <= "2026-07-22":
@@ -350,7 +411,14 @@ def main(argv) -> int:
         print(f"window             : {a.window.upper()}  "
               f"(no usable entry time: {no_bucket})")
     print(f"row dimension      : {a.by}")
-    print("units              : pnl_usd. PAPER fills — see the header's limits.\n")
+    unit_label = {"r": "R (pnl_usd / max_loss)",
+                  "winrate": "win rate, 0/1 per trade",
+                  "pnl": "pnl_usd — UNDERPOWERED, see the header"}[a.metric]
+    print(f"metric             : {unit_label}")
+    if a.metric == "r" and no_denominator:
+        print(f"                     ({no_denominator} trades dropped: max_loss "
+              f"missing or zero)")
+    print("                     PAPER fills — see the header's limits.\n")
 
     rows = sorted({k for k, _ in cells})
     print(f"{'':<26}" + "".join(f"{c:>26}" for c in CLASSES))
@@ -366,7 +434,21 @@ def main(argv) -> int:
             line += f"{f'{mean:+.1f}±{hw:.1f} {wins/n:.0%} n={n}':>26}"
         print(line)
 
-    print(f"\n  mean pnl_usd ±95%, win rate, n. Cells under n={MIN_CELL_N} refused.")
+    print(f"\n  mean {unit_label} ±95%, win rate, n. Cells under n={MIN_CELL_N} refused.")
+
+    # ── POWER, so an underpowered cell is never read as a null ──────────────
+    allvals = [v for xs in cells.values() for v in xs]
+    if len(allvals) > 2:
+        m_all = sum(allvals) / len(allvals)
+        sd = math.sqrt(sum((x - m_all) ** 2 for x in allvals) / (len(allvals) - 1))
+        biggest = max((len(x) for x in cells.values()), default=0)
+        # smallest difference detectable at 95%/80% with the largest cell we have
+        detectable = (1.96 + 0.84) * sd * math.sqrt(2.0 / max(biggest, 1))
+        print(f"\n  POWER: sd={sd:.3f} across all cells; largest cell n={biggest}.")
+        print(f"  Smallest difference detectable at 95%/80% with that n: "
+              f"{detectable:.3f} {unit_label.split(' ')[0]}.")
+        print("  A cell showing 'no difference' smaller than that is UNDERPOWERED,")
+        print("  not null — the sample cannot see an effect that size yet.")
 
     # ── the one comparison worth calling out explicitly ─────────────────────
     print("\n" + "=" * 62)
