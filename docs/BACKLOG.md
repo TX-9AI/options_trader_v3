@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.43
+# docs/BACKLOG.md — v3.44
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -784,6 +784,47 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   small cell. Cells under n=30 are REFUSED. Verified on a fixture with a planted
   ORB split (+42.5 CONT / -50.5 FLAT) which it recovered exactly while showing no
   split on the other two strategies.
+  **⬜ REVISIT TRIGGER — 2026-08-13, and this is a DATE not an intention.** The
+  first real runs settled that the question is not yet answerable and, more
+  usefully, exactly WHEN it becomes answerable.
+  **WHAT THE RUNS SHOWED.** Clean window (--since 2026-07-23) gives 215 trades,
+  116 of them from 07-31 alone. Of 15 cells only continuation cleared n=30:
+  CONT -12.3 ±90.1, REV -1.4 ±100.5 — a band 7-8x the point estimate, which is
+  no measurement. It also ERASED the condor CONT/REV split that looked like the
+  one real signal at n=30/30 pooled (clean: n=10/11) — an artifact of the
+  confounded window, exactly as HISTORY.md predicted.
+  **BOTH LOWER-VARIANCE ALTERNATIVES FAILED, and how R failed is the finding.**
+  `--metric r` did NOT reduce variance, it RESCALED it: sd 340/0.318 = $1,069 and
+  detectable 188.5/0.176 = $1,071 — identical to four digits. **`max_loss` is
+  near-constant at ~$1,070**, so dividing by it only changes the axis units.
+  Which means **the risk manager is sizing consistently** (good, found by
+  accident) and **the $340 sigma is OUTCOME dispersion, not position-size
+  dispersion** — there was no size variance to remove. `--metric winrate` is
+  worse: sd 0.501 at n=51 detects only a **27.8 percentage-point** difference.
+  **SO THE BOTTLENECK WAS NEVER THE METRIC — IT IS n**, and n is capped by the
+  fleet's trade rate (~31/day in the clean window, continuation 46% of that, split
+  three ways = ~4.8 per cell per day):
+  `  detect 0.20 R  ->  n=  40/cell  ->   ~8 trading days`
+  `  detect 0.10 R  ->  n= 159/cell  ->  ~33 trading days`
+  `  detect 0.05 R  ->  n= 634/cell  -> ~133 trading days`
+  **THE TRIGGER: re-run `--by strategy` when continuation clears n≈40 per cell,
+  expected ~2026-08-13** (8 trading sessions past 2026-08-02). That reads a
+  **0.20 R** effect and nothing smaller. 0.10 R lands ~2026-09-15, after go-live.
+  **DECIDE NOW WHICH YOU WOULD ACT ON**, because the answer at 0.20 R and at
+  0.10 R may differ and committing in advance is the difference between a test and
+  a search. 0.20 R is a fifth of risk per trade — a large effect; absence of one
+  is NOT evidence of no effect at all.
+  **THE ONE LEVER THAT MOVES THE DATE** is not waiting or re-slicing but **not
+  splitting three ways**: collapse to gap-vs-flat, or pool strategies sharing a
+  mechanism, and n per cell roughly triples — putting 0.10 R inside ~11 days.
+  Whether that pooling is legitimate is a judgement about whether ORB and
+  continuation respond to gaps the same way, which is exactly the kind of question
+  **the tick corpus CAN answer and the trade log cannot** (150,517 ticks vs 215
+  trades — three orders of magnitude).
+  **NOT BLOCKED, DELIBERATELY PARKED.** Operator's call 2026-08-02: let it
+  accumulate. Several sessions of positive expectancy on the CURRENT engine —
+  post-07-22, post-L2.5, at the ~15-31 trades/day rate rather than the un-gated
+  ~120/day that produced the early sample. That is the configuration going live.
   **⬜ LIMITS WRITTEN INTO THE TOOL, not discovered later:** fills are PAPER, so a
   split depending on fill quality will not show; 252 ORB trades over 15 sessions
   across 3 classes is ~84/class BEFORE any further split, so n is thin; gap class
@@ -2199,6 +2240,18 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.44 — 2026-08-02 — THE BOTTLENECK IS n, NOT THE METRIC. AV GETS A DATED
+  REVISIT TRIGGER.** `gap_outcome_join` v1.4 added `--metric r|winrate|pnl` and a
+  power line. **R did not reduce variance, it rescaled it** — sd 340/0.318 and
+  detectable 188.5/0.176 both give $1,070, so `max_loss` is near-constant and the
+  risk manager is sizing consistently; the $340 sigma is OUTCOME dispersion with
+  no size component to strip. Win rate is worse (27.8 pp detectable at n=51).
+  The clean window also **erased the condor CONT/REV split** that looked like the
+  one real signal — it was a confounded-window artifact. **Trigger set: re-run
+  ~2026-08-13** when continuation clears n≈40/cell, which reads a 0.20 R effect;
+  0.10 R lands ~09-15, after go-live. Parked deliberately, not blocked — the
+  operator's call is to let it accumulate on the current engine, which is running
+  several sessions of positive expectancy at the post-fix trade rate.
 - **v3.43 — 2026-08-02 — A2 WAS THE INSTRUMENT, NOT THE SIGNAL.** New **AV** +
   `tests/gap_outcome_join.py` v1.0. The clean corpus killed the tradeable reading
   of A2 — no drift edge at any horizon or elapsed bucket (so A2.5 as a live drift
