@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.41
+# docs/BACKLOG.md — v3.42
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -450,7 +450,31 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
 - `[DESK]` **AQ — THE FLEET MAY BE DISPATCHING THE WRONG THETA SIGN INTO THE
   PAUSED-TREND STATE, and no strategy exists that wants it.** Opened 2026-08-01
   from the A2 partition result. `tests/a2_excursion.py` v1.0 built to settle it.
-  **THE PARTITION SETTLED THE DIAGNOSIS.** 150,517 ticks joined, 4.14%
+  **✅ RE-RUN ON THE CLEAN CORPUS 2026-08-01 (AT cleared). These numbers are
+  final; the provisional set is superseded.** Headline **3.98%** (5,985 / 150,517).
+  Grid, violation rate ±95%:
+  `OPEN   CONT 9.89±0.59   FLAT  3.60±0.91   REV 9.55±0.49`
+  `DECAY  CONT 5.91±0.43   FLAT 13.78±1.53   REV 5.98±0.37`
+  `CLEAN  CONT 1.46±0.12   FLAT  3.55±0.45   REV 1.83±0.12`
+  **ONLY THE OPEN ROW MOVED** against the contaminated run (CONT 10.62→9.89,
+  FLAT 5.41→3.60); DECAY and CLEAN barely shifted. v2.1 altered only the opening
+  24 ticks per symbol-session, so that is the fix doing exactly what it claimed
+  and nothing more — independent confirmation it was correctly scoped.
+  **THE DECAY×FLAT HUMP SURVIVED AND SHARPENED: 13.78%**, still the highest cell
+  in the grid, now with BASELINE SHOULDERS ON BOTH SIDES (3.60 → 13.78 → 3.55).
+  **H2 FLIPPED TO NOT SUPPORTED** — flat-open mornings 3.60% vs 3.55% midday, so
+  there is NO morning excess at all on gapless days and no "opening drive" in the
+  plain sense. Which makes the hump unambiguous: **on a flat-open day nothing
+  happens at 09:30; the first real move arrives mid-morning and A2 spikes with it.
+  The tradeable window on those days is ~10:40-12:00, not the open.**
+  **H3 IS PARTIAL, NOT DEAD — correcting my own earlier call.** I claimed it was
+  dead on two grounds, the second being that the ADX medians pointed the wrong
+  way. On the clean corpus they point the RIGHT way: OPEN row CONT 52.4 > FLAT
+  50.2 > REV 46.6, monotone, exactly what the ablation predicted for
+  continuation-inflation and reversal-suppression. The reversal RATE deficit still
+  does not appear, so PARTIAL stands — but "dead" was a contaminated number read
+  confidently.
+  *Superseded provisional text follows.* 150,517 ticks joined, 4.14%
   violations (supersedes 4.02%). H1 horizon SUPPORTED, H2 drive SUPPORTED, H3 gap
   **dead as a cause** — the reversal-gap deficit never appeared, and the ADX
   medians point the wrong way (CONT 52.0 < FLAT 53.5, when a continuation-gap
@@ -533,6 +557,20 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
 - `[DESK]` **AR — THE POOLED MEAN WAS THE WRONG STATISTIC, AND THE FORK IS THE
   RIGHT PREDICTOR. `tests/a2_rail_drift.py` v1.0.** Opened 2026-08-01 from the
   excursion result.
+  **✅ RE-RUN ON THE CLEAN CORPUS 2026-08-01 (AT cleared).** Episode duration and
+  Predictor 1's negative both HELD — drift shows NO EDGE at every horizon and
+  every elapsed bucket, so **A2.5 as a live drift factor remains unsupported.**
+  Excursion FIRMED UP: violation p90 sits below control at ALL THREE horizons
+  (0.166/0.172, 0.215/0.220, 0.285/0.296), consistent and monotone where the
+  contaminated run flip-flopped. Small (~3%) but no longer noise — though the
+  missing confidence band on that verdict is still a real defect (below).
+  **USABLE NUMBERS, clean:** stop floor (mean adverse excursion) **0.027% /
+  0.046% / 0.075%** at 2/3/5 bars; strike distance p90 **0.166% / 0.215% /
+  0.285%**. A 17.6c stop on a $0.70 credit still fires far inside the floor.
+  **RAIL DRIFT UNCHANGED** — 1,013 ticks with no usable fork, Predictor 2 REFUSED
+  at n=78. It reads the 1m tape, not the corpus, so the regen could not touch it.
+  **AS is the blocker there, not data.**
+  *Original text follows.*
   **WHAT THE EXCURSION RUN ACTUALLY SAID.** Median paused-trend episode is **2
   bars** (p50 2 / p75 6 / p90 12 / p95 17 / max 48, n=1309) — a flicker, not a
   regime. Diluted horizons showed nothing. `--persistent-only` at 2/3/5 showed
@@ -653,45 +691,6 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   ~98k control, no edge anywhere — which means **the `--persistent-only` edge was
   look-ahead exactly as suspected, and A2.5 as a live drift factor is not
   supported.**
-
-- `[DESK]` **AT — 🔴 EVERY A2 CORPUS NUMBER TAKEN 2026-08-01 IS PROVISIONAL. The
-  regen was still running while we measured, and I told the operator it had
-  finished.** Filed 2026-08-01 as a correction against **AQ** and **AR**.
-  **WHAT HAPPENED.** `validate_regime.sh --backfill --rebuild` started 16:54.
-  At 21:31 `ps aux` showed PID 92226 still alive — 4h37m elapsed, 51 min CPU,
-  working on `ohlc/2026-07-31`, the LAST date. It had never finished.
-  **MY ERROR, and it is the interesting part.** I concluded the regen was done
-  because `a2_partition` reported "corpus files: 15". But **all 15 files existed
-  the whole time** — the regen OVERWRITES them one at a time, so file COUNT is
-  invariant to progress. I inferred completion from an artifact that could not
-  distinguish the two states, and then stated it as fact rather than as an
-  inference. Same class as the 07-29 backlog-trails-repo finding: reading a
-  side-effect instead of checking the thing itself.
-  **WHAT IT CONTAMINATES.** a2_partition ran ~17:38, roughly 2-3 of 15 dates
-  rebuilt. a2_excursion and a2_rail_drift ran ~18:29, roughly 5. So the numbers
-  came off a **mostly-stale corpus with a handful of v2.2 dates mixed in** —
-  worse than either clean state, because nothing marks which date is which. This
-  is precisely the mixed-corpus condition **AM** warns about, and I was already
-  sitting in it while writing that warning.
-  **PROVISIONAL, must be re-run before anything is built on them:** the 4.14%
-  baseline; the entire partition grid INCLUDING the DECAY×FLAT 13.88% hump and
-  the H1/H2/H3 verdicts; the excursion distributions; the strike distance
-  (p90 0.231%) and stop floor (0.019/0.033/0.049%); the episode-duration
-  distribution (p50 2 bars); and **Predictor 1's negative** — which means "A2.5
-  as a live drift factor is not supported" is NOT yet established either.
-  **UNAFFECTED — stands on its own:** `pitchfork_filter_audit` and everything in
-  **AS**. That tool reads the 1m tape directly and never touches the corpus, so
-  the lifecycle finding and the 6.8%-is-a-birth-rate correction are unaffected.
-  **RE-RUN ORDER once the regen lands:** `gap_backfill.py` -> `a2_partition.py`
-  -> `a2_excursion.py` -> `a2_rail_drift.py`. Then update AQ and AR in place.
-  **THE RULE THIS EARNS:** *"the artifacts exist" is not "the job finished".*
-  Check the PROCESS — `ps aux`, `tmux ls` — not the output files, before calling
-  a long run complete. A rebuild-in-place job is invisible to every file-level
-  check there is.
-  **ALSO WORTH KNOWING:** a full regen is a **~5 hour** job on control, not the
-  "long" hand-wave it was scheduled as. Budget it accordingly, and do not queue a
-  test suite against the same box while it runs — the 79%-stall on the Aug 1
-  suite was CPU contention with this process, not a hung test.
 
 - `[DESK]` **AU — ✅ THE BLIND ALERT WAS UNSENDABLE IN PRODUCTION, AND THE DRILL
   BUILT TO CATCH THAT LIED FOUR TIMES BEFORE THE TRUTH GOT OUT.** 2026-08-01,
@@ -1699,6 +1698,16 @@ file: everything above either ✅ or explicitly re-dated below.
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
 `docs/HISTORY.md` and the audits. Resolution date + fixing versions + the why.*
 
+- **AT ✅ 2026-08-01 — RESOLVED. The regen finished (15/15 dates, rc=0, ~5h50m)
+  and all four tools were re-run on the clean corpus.** The contamination is
+  cleared and the numbers in **AQ** and **AR** are no longer provisional.
+  The lesson stands and is the reason this item exists: *"the artifacts exist" is
+  not "the job finished"* — I inferred completion from a file COUNT that was
+  invariant to progress (the regen overwrites in place), and stated it as fact.
+  Check the PROCESS, not the output files. A rebuild-in-place job is invisible to
+  every file-level check there is. Also recorded: a full regen is a ~5 hour job on
+  control, and a test suite queued against the same box will stall on CPU
+  contention rather than hang.
 - **AN ✅ 2026-08-01 — PF.1 CONSTRUCT BUILT, and the white paper's §4.1 was
   wrong about its own foundation.** `analysis/pitchfork.py` v1.0 +
   `tests/test_pitchfork_construct.py` (24 tests). Weight 0, consumed by nothing —
@@ -2144,6 +2153,19 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.42 — 2026-08-01 — CLEAN CORPUS. AT RESOLVED, AQ AND AR FINAL, AND ONE OF
+  MY VERDICTS WAS WRONG.** Regen finished 15/15 (~5h50m); all four tools re-run.
+  Headline **3.98%**. **Only the OPEN row moved** — v2.1 touched only the opening
+  24 ticks per symbol-session, and the grid shows exactly that and nothing else.
+  **The DECAY×FLAT hump survived and sharpened to 13.78%** with baseline shoulders
+  either side, while **H2 flipped to NOT SUPPORTED** (flat-open mornings 3.60% vs
+  3.55% midday) — so there is no opening drive, and on a flat-open day the
+  tradeable window is **~10:40-12:00, not the open**. **H3 is PARTIAL, not dead:**
+  I called it dead partly because the ADX medians pointed the wrong way; clean,
+  they point the RIGHT way (CONT 52.4 > FLAT 50.2 > REV 46.6, monotone, as the
+  ablation predicted). Excursion firmed up and now reads consistently across
+  horizons. Predictor 1's negative held, so A2.5 as a live drift factor stays
+  unsupported. Rail drift unchanged — **AS is its blocker, not data.**
 - **v3.41 — 2026-08-01 — THE BLIND ALERT COULD NOT BE SENT, AND FOUR LAYERS OF
   TOOLING SAID IT COULD.** Filed as **AU**, amending AL. `parse_mode="HTML"` means
   any unescaped `<`, `>` or `&` gets the whole message rejected with a 400 — and
