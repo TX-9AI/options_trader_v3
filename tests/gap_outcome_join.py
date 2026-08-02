@@ -1,7 +1,38 @@
 #!/usr/bin/env python3
 """
-tests/gap_outcome_join.py — v1.2 — 2026-08-02
+tests/gap_outcome_join.py — v1.3 — 2026-08-02
 
+v1.3 — 2026-08-02 — --since / --until, AND A DEFAULT THAT REFUSES TO POOL ACROSS
+       A DOCUMENTED CONFOUND. v1.2 fixed the join and the per-date column then
+       showed the real problem: FOUR DAYS CARRY 73% OF ALL TRADES. 07-13 and
+       07-14 have 225 each, 07-16/17 have 111/128, 07-31 has 116 — while the nine
+       sessions 07-20..07-30 produced 134 COMBINED, about 15/day across 29 boxes.
+       That is not one population and pooling pnl_usd across it is not analysis.
+       WHAT ACTUALLY CHANGED, from docs/HISTORY.md — 2026-07-18 is "day zero on a
+       materially changed engine":
+         07-20  orb_engine v3.9 — the stale-retest timeout had been counting 15s
+                loop ticks as bars and dying in ~3 minutes; fixed to real 1m bars,
+                and expiry now RE-ARMS instead of terminating.
+         07-21  main.py v4.0 — L2.5 live, the L1→L2 committed label now drives
+                primary_regime. sweep_reversal v3.2 ORB-ownership gate.
+         07-22  regime_confluence v1.2 ramp de-saturation AND, riding the same
+                push, the MARK-LIMIT EXECUTION workstream — limit_ladder v1.2,
+                entry_engine v3.8 mark-limit entries, mark-limit exit closes.
+       And the volume cliff has a NAMED cause rather than being a mystery: the
+       v2.5 row records that UNKNOWN's veto power was REMOVED FOR THE ORB —
+       "Sample restored. The safety was removed before the replacement was built."
+       Pre-07-20 volume was a deliberate un-gating, not a defect firing randomly.
+       THE REPO ALREADY WARNED ABOUT THIS. HISTORY.md, on the 07-22 push:
+       "label-gated regime metrics stay attributable to v1.2; P&L / FILL-DEPENDENT
+       STATS ARE CONFOUNDED BY BOTH CHANGES. The ~2-week frozen-baseline window
+       gets one week added to its back end to preserve a clean stretch."
+       This tool reports pnl_usd, which is exactly a fill-dependent stat. So the
+       DEFAULT is now --since 2026-07-23, the first session after mark-limit
+       landed. Pooling the whole range requires --since 1970-01-01 and prints a
+       warning, because it should be a deliberate act rather than the default.
+       BE HONEST ABOUT WHAT THAT LEAVES: ~215 trades, 116 of them from 07-31
+       alone. Over half the clean sample is ONE SESSION. Gap-conditioned P&L may
+       simply not be answerable yet, and "not yet" is a legitimate answer.
 v1.2 — 2026-08-02 — NORMALISE THE JOIN KEY. --diagnose immediately earned its
        keep: of the 450 unjoined, 225 were the first tape date (legitimate — no
        prior session to gap against) and 225 were ONE DATE, 2026-07-14, where the
@@ -114,6 +145,11 @@ CLASSES = ("CONT", "FLAT", "REV")
 # trade counts instead of tick counts.
 MIN_CELL_N = 30
 
+# First session AFTER the mark-limit execution workstream landed (2026-07-22).
+# Before this, fills came from a different execution path, so pnl_usd on either
+# side is not the same measurement. HISTORY.md flags this explicitly.
+CONFOUND_CUTOFF = "2026-07-23"
+
 # Entry-time buckets, matching a2_partition's so the two can be read together.
 BUCKETS = (("OPEN", "09:30", "10:40"),
            ("DECAY", "10:40", "12:00"),
@@ -186,6 +222,12 @@ def main(argv) -> int:
     ap.add_argument("--gaps", default=DEFAULT_GAPS)
     ap.add_argument("--by", default="strategy",
                     help="row dimension: strategy, setup_grade, regime, box")
+    ap.add_argument("--since", default=CONFOUND_CUTOFF,
+                    help=f"first date to include (default {CONFOUND_CUTOFF}, the "
+                         f"session after mark-limit landed). Widening this pools "
+                         f"pnl_usd across a documented execution change.")
+    ap.add_argument("--until", default="9999-12-31",
+                    help="last date to include")
     ap.add_argument("--diagnose", action="store_true",
                     help="report WHY trades failed to join, by date and symbol")
     ap.add_argument("--window", default="ALL",
@@ -209,17 +251,22 @@ def main(argv) -> int:
     no_gap_record = 0
     no_bucket = 0
     n_closed = 0
+    in_window = 0
     # v1.1 diagnostics: split the miss by WHICH side is absent
     miss_date = collections.Counter()      # date not in the gap lookup at all
     miss_sym = collections.Counter()       # date present, symbol absent
     miss_class = collections.Counter()     # record present, class not CONT/FLAT/REV
     joined_by_date = collections.Counter()
+    excluded_dates = {}
 
     for p in paths:
         m = DATE_RE.search(os.path.basename(p))
         if not m:
             continue
         date = m.group(1)
+        if not (a.since <= date <= a.until):
+            excluded_dates[date] = 0
+            continue
         day = gaps.get(date)
         try:
             bundle = json.load(open(p))
@@ -229,6 +276,7 @@ def main(argv) -> int:
             if str(t.get("status", "")).lower() != "closed":
                 continue
             n_closed += 1
+            in_window += 1
             sym = _symbol_of(t)
             grec = (day or {}).get(sym)
             if not grec or grec.get("gap_class") not in CLASSES:
@@ -286,6 +334,13 @@ def main(argv) -> int:
         print("Nothing joined. Check that trade dates overlap the gap lookup.")
         return 2
 
+    if a.since <= "2026-07-22":
+        print("⚠ WARNING: --since is at or before 2026-07-22, so this pools "
+              "pnl_usd ACROSS\n  the mark-limit execution change. HISTORY.md: "
+              "\"P&L / fill-dependent stats\n  are confounded by both changes.\" "
+              "Fills differ on either side of that date.\n")
+    print(f"window             : {a.since} .. {a.until}"
+          f"   ({len(excluded_dates)} date(s) excluded)")
     print(f"fleet_trades files : {len(paths)}")
     print(f"closed trades      : {n_closed}")
     print(f"joined to a gap    : {sum(totals.values())}"
