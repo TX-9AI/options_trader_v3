@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 """
-tests/gap_outcome_join.py — v1.0 — 2026-08-02
+tests/gap_outcome_join.py — v1.1 — 2026-08-02
+
+v1.1 — 2026-08-02 — --diagnose. The first real run joined only 489 of 939 closed
+       trades: 450 had NO GAP RECORD, which is ~48% of the sample discarded by an
+       unknown selection rule. That is not a caveat, it is a hole — a cell drawn
+       from half the trades with unknown bias tells you nothing. This flag says
+       exactly which side is missing (date absent from the lookup vs symbol absent
+       within a present date) and breaks it down by date and by symbol, so the
+       cause is measured rather than guessed.
+       Two priors worth checking against the output, both of which would be
+       LEGITIMATE rather than defects: (a) the FIRST tape date has no prior
+       session, so every symbol on it is a first-appearance skip by construction —
+       gap_backfill reported 29 of those; (b) only a SUBSET of boxes wakes on a
+       typical day, so a symbol that traded today but whose PRIOR session was
+       never harvested has no gap to compute. If the 450 is mostly (b), the join
+       is honest but the sample is structurally thin and that is the finding.
 
 DOES GAP CLASS SEPARATE GOOD TRADING DAYS FROM BAD ONES? Joins already-banked
 trade outcomes to the gap classification. No new collection, no waiting.
@@ -142,6 +157,8 @@ def main(argv) -> int:
     ap.add_argument("--gaps", default=DEFAULT_GAPS)
     ap.add_argument("--by", default="strategy",
                     help="row dimension: strategy, setup_grade, regime, box")
+    ap.add_argument("--diagnose", action="store_true",
+                    help="report WHY trades failed to join, by date and symbol")
     ap.add_argument("--window", default="ALL",
                     help="restrict to an entry bucket: OPEN / DECAY / CLEAN / ALL")
     a = ap.parse_args(argv[1:])
@@ -163,6 +180,11 @@ def main(argv) -> int:
     no_gap_record = 0
     no_bucket = 0
     n_closed = 0
+    # v1.1 diagnostics: split the miss by WHICH side is absent
+    miss_date = collections.Counter()      # date not in the gap lookup at all
+    miss_sym = collections.Counter()       # date present, symbol absent
+    miss_class = collections.Counter()     # record present, class not CONT/FLAT/REV
+    joined_by_date = collections.Counter()
 
     for p in paths:
         m = DATE_RE.search(os.path.basename(p))
@@ -182,7 +204,14 @@ def main(argv) -> int:
             grec = (day or {}).get(sym)
             if not grec or grec.get("gap_class") not in CLASSES:
                 no_gap_record += 1
+                if day is None:
+                    miss_date[date] += 1
+                elif grec is None:
+                    miss_sym[f"{date}/{sym}"] += 1
+                else:
+                    miss_class[str(grec.get("gap_class"))] += 1
                 continue
+            joined_by_date[date] += 1
             if a.window.upper() != "ALL":
                 b = _entry_bucket(t)
                 if b is None:
@@ -193,6 +222,36 @@ def main(argv) -> int:
             key = str(t.get(a.by) or "?")
             cells[(key, grec["gap_class"])].append(_num(t.get("pnl_usd")))
             totals[grec["gap_class"]] += 1
+
+    if a.diagnose:
+        print(f"closed trades      : {n_closed}")
+        print(f"joined             : {sum(totals.values())}")
+        print(f"NOT joined         : {no_gap_record}\n")
+        print("WHY, by cause")
+        print(f"  date absent from the gap lookup : {sum(miss_date.values())}")
+        for d, n in miss_date.most_common():
+            print(f"      {d}  {n} trades   <- no gap record for this date at all")
+        print(f"  symbol absent within a present date : {sum(miss_sym.values())}")
+        by_sym = collections.Counter()
+        by_date2 = collections.Counter()
+        for k, n in miss_sym.items():
+            d, sy = k.split("/")
+            by_sym[sy] += n
+            by_date2[d] += n
+        print("      top symbols:", ", ".join(f"{s_}:{n}" for s_, n in by_sym.most_common(8)))
+        print("      top dates  :", ", ".join(f"{d}:{n}" for d, n in by_date2.most_common(8)))
+        print(f"  gap_class not CONT/FLAT/REV : {sum(miss_class.values())}"
+              f"   {dict(miss_class)}")
+        print("\nJOINED per date (to see whether the loss is one date or spread)")
+        for d in sorted(set(list(joined_by_date) + list(miss_date) + list(by_date2))):
+            print(f"  {d}   joined {joined_by_date[d]:>4}   "
+                  f"missed {miss_date[d] + by_date2[d]:>4}")
+        print("\nREADING IT: a loss concentrated on the FIRST tape date is the")
+        print("first-appearance skip and is correct by construction. A loss spread")
+        print("across dates and symbols means the PRIOR session was never harvested")
+        print("for those symbols — the join is honest, but the sample is")
+        print("structurally thin and that is itself the finding.")
+        return 0
 
     if not cells:
         print("Nothing joined. Check that trade dates overlap the gap lookup.")
