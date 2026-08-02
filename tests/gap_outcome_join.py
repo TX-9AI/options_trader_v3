@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 """
-tests/gap_outcome_join.py — v1.1 — 2026-08-02
+tests/gap_outcome_join.py — v1.2 — 2026-08-02
 
+v1.2 — 2026-08-02 — NORMALISE THE JOIN KEY. --diagnose immediately earned its
+       keep: of the 450 unjoined, 225 were the first tape date (legitimate — no
+       prior session to gap against) and 225 were ONE DATE, 2026-07-14, where the
+       `box` field carries the SOURCE DB FILENAME (`AVGO_2026-07-14_TRADES.DB`)
+       rather than the ticker. My join used `box` verbatim, so every trade that
+       day missed. Recovering them is ~24% of the sample.
+       `box` stays authoritative — consolidate_trades deliberately leaves the
+       row's own `symbol` column untouched so a mislabeled db can be caught, so
+       switching fields would discard that safeguard. The suffix is stripped
+       instead.
 v1.1 — 2026-08-02 — --diagnose. The first real run joined only 489 of 939 closed
        trades: 450 had NO GAP RECORD, which is ~48% of the sample discarded by an
        unknown selection rule. That is not a caveat, it is a hole — a cell drawn
@@ -110,6 +120,25 @@ BUCKETS = (("OPEN", "09:30", "10:40"),
            ("CLEAN", "12:00", "16:00"))
 
 
+_DBNAME_RE = re.compile(r"_\d{4}-\d{2}-\d{2}_TRADES\.DB$", re.I)
+
+
+def _symbol_of(t):
+    """Ticker from a trade row.
+
+    `box` is the authoritative tag (consolidate_trades stamps it from the source
+    file and leaves the row's own `symbol` column untouched on purpose, so a
+    mislabeled db stays detectable). But on some dates it carries the whole
+    filename — `AVGO_2026-07-14_TRADES.DB` — so the suffix is stripped rather
+    than falling back to `symbol`, which would throw the safeguard away.
+    """
+    raw = str(t.get("box") or t.get("symbol") or "?")
+    raw = _DBNAME_RE.sub("", raw)
+    if raw.lower().endswith(".db"):
+        raw = raw[:-3]
+    return raw.upper()
+
+
 def _num(v, default=0.0):
     try:
         return float(v)
@@ -200,7 +229,7 @@ def main(argv) -> int:
             if str(t.get("status", "")).lower() != "closed":
                 continue
             n_closed += 1
-            sym = str(t.get("box") or t.get("symbol") or "?").upper()
+            sym = _symbol_of(t)
             grec = (day or {}).get(sym)
             if not grec or grec.get("gap_class") not in CLASSES:
                 no_gap_record += 1
