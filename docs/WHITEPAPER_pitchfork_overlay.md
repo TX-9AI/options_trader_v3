@@ -1,5 +1,5 @@
 # The Pitchfork Overlay — Design White Paper
-### options_trader v4.0 milestone · drafted 2026-07-23 · §4.1 corrected 2026-08-01 (PF.1) · §5.3(b) corrected 2026-08-03 (AW)
+### options_trader v4.0 milestone · drafted 2026-07-23 · §4.1 corrected 2026-08-01 (PF.1) · §5.3(b) corrected 2026-08-03 (AW), amended same day — the proposed fix measured WORSE
 *Revision 2026-08-01 — §7 correction (application #2's target was removed on
 07-28), §7.3 A2 note promoted to a live hypothesis, and a four-phase build split
 added as §13. The design is unchanged; what changed is the schedule and one
@@ -265,6 +265,37 @@ and cleanest condition.
 > Corroborating: the 3 structural deaths are rare precisely because **P0 violation
 > is already pivot-anchored**. The one condition tied to structure rather than to
 > a moving line is the one that behaves.
+>
+> **AMENDED SAME DAY — THE PIVOT REPLACEMENT WAS MEASURED AND IT IS WORSE.**
+> Best adverse-share over the same grid: **CLOSES 56.5%, PIVOT 72.0%.** The
+> replacement proposed above is not supported by the tape and is recorded here as
+> failed rather than quietly kept.
+>
+> *Why it failed, and it was foreseeable:* **a k=3 fractal pivot is not a
+> structural filter.** It is a local extremum over a seven-bar window, and an
+> ordinary pullback produces one every few bars. The claim that "a pivot requires
+> the excursion to have structure" was wrong — it requires a local low, which is
+> nearly free.
+>
+> **WHAT THE TWO FAILURES TOGETHER POINT AT.** Both attempts to fix the KILL RULE
+> failed, while the same tape shows **22 ACCELERATION events on 33 births** —
+> price exceeding the *trend*-side tine — alongside 56-89% adverse deaths on the
+> *counter* side. **Price is leaving the channel on both sides, routinely.** No
+> invalidation rule can look good if the fork is not describing the price envelope
+> in the first place. That makes this a **geometry** question, not a threshold
+> one, and it lands on **§12 open question 2 (variant)** — which §3.2 itself flags
+> as chosen "on reasoning, not evidence".
+>
+> Measured on a trending fixture: **andrews slope +0.70/bar, channel width 29.6;
+> modified_schiff +0.26 and 23.5; schiff +0.17 and 22.1.** Andrews is both STEEPER
+> and WIDER — the shape that would contain price escaping on both sides.
+> `pitchfork_prior_sweep` v1.2 tests that rather than assuming it, holding N/D at
+> the paper's own values so the variant is the only thing changing, and reporting
+> ACCELERATION PER FORK since "channel too narrow" is the hypothesis and
+> acceleration is its direct symptom.
+>
+> **Nothing is switched on the strength of this.** §5.3(b) as written remains the
+> default; the pivot form stays available and OFF; the variant question is open.
 >
 > Implemented as `adverse_mode="pivot"` in `analysis/pitchfork_lifecycle.py`
 > v1.2, **shipping OFF** so both forms stay measurable side by side. Switching the

@@ -1,7 +1,31 @@
 #!/usr/bin/env python3
 """
-tests/pitchfork_prior_sweep.py — v1.1 — 2026-08-03
+tests/pitchfork_prior_sweep.py — v1.2 — 2026-08-03
 
+v1.2 — 2026-08-03 — +VARIANT rows, because TWO ROUNDS OF FIXING THE KILL RULE
+       BOTH FAILED and the evidence points at the GEOMETRY instead.
+       v1.1 measured the pivot form and it came back WORSE: best adverse-share
+       CLOSES 56.5% vs PIVOT 72.0%. So the §5.3(b) replacement I wrote into the
+       whitepaper is not supported by the tape, and the paper has been amended to
+       say so rather than keep it.
+       WHY IT FAILED, and it was foreseeable: a k=3 FRACTAL PIVOT IS NOT A
+       STRUCTURAL FILTER. It is a local extremum over a 7-bar window, and an
+       ordinary pullback produces one every few bars. The claim that "a pivot
+       requires the excursion to have structure" was wrong — it requires a local
+       low, which is nearly free.
+       THE READING THAT NOW FITS EVERYTHING: 22 ACCELERATION events on 33 births,
+       AND 56-89% adverse deaths. **Price is leaving the channel on BOTH SIDES,
+       routinely.** No invalidation rule can look good if the fork is not
+       describing the price envelope in the first place — that is a GEOMETRY
+       problem, and §12 open question 2 (variant) is exactly where the paper says
+       evidence should decide it. §3.2 chose Modified Schiff "on reasoning, not
+       evidence".
+       MEASURED on a trending fixture: andrews slope +0.70/bar with channel width
+       29.6; modified_schiff +0.26 and 23.5; schiff +0.17 and 22.1. Andrews is
+       both STEEPER and WIDER, which is the shape that would contain price
+       escaping on both sides. Variant rows test that instead of assuming it.
+       ACCELERATION RATE is now reported per row, since "channel too narrow" is
+       the hypothesis and acceleration is its direct symptom.
 v1.1 — 2026-08-03 — +the PIVOT form, measured against the same criterion. v1.0
        swept N x D on §5.3(b) as WRITTEN and returned NO SETTING CLEARS THE BAR:
        adverse-tine went 88.9% -> 56.5% across the whole grid while deaths barely
@@ -176,24 +200,31 @@ def main(argv) -> int:
 
     print("CLOSES form = §5.3(b) as written. PIVOT form = lifecycle v1.2's")
     print("replacement (confirmed pivot beyond the counter tine; ignores N).\n")
-    print(f"{'N':>3} {'D':>6} | {'cover':>7} {'births':>7} {'deaths':>7} "
-          f"{'adverse%':>9} {'p50 life':>9}")
-    print("-" * 60)
+    print(f"{'variant':<9}{'N':>2} {'D':>5} | {'cover':>6} {'births':>6} "
+          f"{'deaths':>6} {'adverse%':>8} {'accel/fk':>7} {'p50':>8}")
+    print("-" * 74)
 
     results = {}
     # (mode, n, d) — pivot ignores N, so it gets one row per D
-    combos = [("closes", n, d) for n in N_GRID for d in D_GRID]
-    combos += [("pivot", None, d) for d in D_GRID]
-    for mode, n, d in combos:
+    combos = [("modified_schiff", "closes", n, d) for n in N_GRID for d in D_GRID]
+    combos += [("modified_schiff", "pivot", None, d) for d in D_GRID]
+    # §12 open question 2 — the variant was chosen on reasoning, not evidence.
+    # Held at the paper's own N/D so the variant is the only thing changing.
+    combos += [(v, "closes", 2, 0.25) for v in ("andrews", "schiff")]
+    combos += [(v, "closes", 6, 1.00) for v in ("andrews", "schiff")]
+    for variant, mode, n, d in combos:
         if True:
             covs, births, cause, lifetimes = [], 0, collections.Counter(), []
+            accel = 0
             for sym, (h1, atrs) in frames.items():
-                tr = replay(sym, h1, "1h", atrs,
+                tr = replay(sym, h1, "1h", atrs, variant=variant,
                             adverse_closes=(n or 2), adverse_atr=d,
                             adverse_mode=mode)
                 covs.append(tr.coverage(len(h1)))
                 born_at = None
                 for ev in tr.events:
+                    if ev.kind == "ACCELERATION":
+                        accel += 1
                     if ev.kind == "BORN":
                         births += 1
                         born_at = ev.idx
@@ -208,12 +239,18 @@ def main(argv) -> int:
             adv = cause["adverse"] / deaths if deaths else 0.0
             cov = sum(covs) / len(covs)
             p50 = sorted(lifetimes)[len(lifetimes) // 2] if lifetimes else 0
-            results[(mode, n, d)] = (cov, births, deaths, adv, p50)
-            star = (" <- paper's start" if (mode, n, d) == ("closes", 2, 0.25)
-                    else " <- PIVOT form" if mode == "pivot" else "")
+            accel_rate = accel / births if births else 0.0
+            results[(variant, mode, n, d)] = (cov, births, deaths, adv, p50,
+                                              accel_rate)
+            star = (" <- paper's start"
+                    if (variant, mode, n, d) == ("modified_schiff", "closes", 2, 0.25)
+                    else " <- PIVOT" if mode == "pivot"
+                    else f" <- {variant.upper()}" if variant != "modified_schiff"
+                    else "")
             nlabel = "-" if n is None else str(n)
-            print(f"{nlabel:>3} {d:>6.2f} | {cov:>6.1%} {births:>7} {deaths:>7} "
-                  f"{adv:>8.1%} {p50:>9}{star}")
+            print(f"{variant[:8]:<9}{nlabel:>2} {d:>5.2f} | {cov:>6.1%} "
+                  f"{births:>6} {deaths:>6} {adv:>8.1%} {accel_rate:>7.1f} "
+                  f"{p50:>8}{star}")
 
     # ── apply the criterion, without looking at coverage ────────────────────
     print("\n" + "=" * 60)
@@ -224,10 +261,17 @@ def main(argv) -> int:
               f"eligible —\n   a setting that never invalidates passes the bar "
               f"vacuously.)")
     passing = [k for k, r in eligible.items() if r[3] < ADVERSE_DOMINANT]
-    closes_best = min((r[3] for k, r in eligible.items() if k[0] == "closes"),
+    closes_best = min((r[3] for k, r in eligible.items()
+                       if k[1] == "closes" and k[0] == "modified_schiff"),
                       default=None)
-    pivot_best = min((r[3] for k, r in eligible.items() if k[0] == "pivot"),
+    pivot_best = min((r[3] for k, r in eligible.items() if k[1] == "pivot"),
                      default=None)
+    for v in ("andrews", "schiff"):
+        rows = [(k, r) for k, r in eligible.items() if k[0] == v]
+        if rows:
+            best = min(rows, key=lambda kr: kr[1][3])
+            print(f"  {v:>16}: adverse {best[1][3]:.1%}  cover {best[1][0]:.1%}  "
+                  f"accel/fork {best[1][5]:.1f}  p50 {best[1][4]}")
     if closes_best is not None and pivot_best is not None:
         print(f"  best adverse-share: CLOSES {closes_best:.1%}   "
               f"PIVOT {pivot_best:.1%}")
@@ -248,11 +292,11 @@ def main(argv) -> int:
         print("         consecutive closes). Do NOT pick the best of a bad grid.")
     else:
         # "smallest" = fewest bars, then smallest ATR margin
-        pick = sorted(passing, key=lambda k: (k[0] != "pivot", k[1] or 0, k[2]))[0]
+        pick = sorted(passing, key=lambda k: (k[1] != "pivot", k[2] or 0, k[3]))[0]
         cov, births, deaths, adv, p50 = results[pick]
         best_cov = max(r[0] for r in eligible.values())
-        pm, pn, pd = pick
-        print(f"VERDICT  {pm.upper()} form, N={'-' if pn is None else pn}, "
+        pv, pm, pn, pd = pick
+        print(f"VERDICT  {pv} / {pm.upper()} form, N={'-' if pn is None else pn}, "
               f"D={pd:.2f} — the SMALLEST setting where")
         print(f"         adverse-tine is no longer dominant ({adv:.1%} of {deaths}"
               f" deaths).")
