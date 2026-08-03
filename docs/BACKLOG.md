@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.46
+# docs/BACKLOG.md — v3.47
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -909,6 +909,33 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   precisely because Andrews runs steep. That is a VARIANT question (§12 open
   question 2), not a threshold one, and `build_all_variants` already computes all
   three in parallel so it is measurable whenever we want it.
+
+- `[DESK]` **AX — THE EOD CONDUCTOR CANNOT SEND TELEGRAM. Every warning it has
+  ever raised went to a journal nobody reads.** Found 2026-08-03 in the conductor
+  log, immediately under a real warning it swallowed:
+  `[BACKFILL] ⚠️ 7 symbol(s) still without candles (AMD, AVGO, CVX, DIA, GLD, GS,
+  IWM)` followed by `[notify] missing DTP_TELEGRAM_TOKEN/DTP_TELEGRAM_CHAT_ID;
+  cannot send.`
+  **SAME SPLIT AS THE 08-01 BLIND-ALERT DRILL, one layer up.** The bot boxes carry
+  `TELEGRAM_TOKEN` / `TELEGRAM_CHAT_ID` baked into their systemd unit by
+  setup_ec2.sh; the CONTROL conductor looks for `DTP_`-prefixed variables that
+  were never set anywhere. Box credentials and control credentials are different
+  namespaces and only one of them was ever wired.
+  **CONSEQUENCE:** we have been running EOD blind. Not "the alert is noisy" —
+  the alert has never fired, so a nightly failure would look exactly like a
+  nightly success from outside the journal.
+  **FIX** is one line in the control environment, same shape as the 07-30
+  `DTP_REPORT_JSON` fix (item Y), and should be verified the same way: run the
+  conductor and confirm a message actually ARRIVES rather than that the code path
+  ran. `alert_manager` v1.10's lesson applies — a send that reports success
+  without checking delivery is worse than no send.
+  **⬜ ALSO RECORDED, a constraint rather than a defect:** the same log line says
+  **DXFeed history is same-evening only**, so a box that sat out a session can
+  NEVER have its candles backfilled afterwards. The short-tape gaps found 08-01
+  (p10 = 241 rows against a 391-row full session) are therefore PERMANENT once the
+  day passes. Tape coverage is use-it-or-lose-it, which raises the cost of a box
+  failing to wake and is worth weighing against the idle-cost argument for
+  shutting boxes down.
 
 **⬜ Sun Aug 2**
 - `[DESK]` **A2.4 — 🔴 A2's REAL CAUSE IS A HORIZON MISMATCH, and the state it
@@ -2359,6 +2386,18 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.47 — 2026-08-03 — POSTMORTEM FILED; +AX (conductor cannot send Telegram).**
+  `docs/POSTMORTEM_2026-08-03.md` sorts the day into DEFECTS (wrong regardless of
+  how permissive the fleet is — and corrupting the sample we are collecting) and
+  PERMISSIVENESS COSTS (the system took the trade it was designed to take and the
+  environment did not cooperate — **this is the data**). The flicker is bucket 1:
+  regime_flip exits have median hold **0.8 min, p25 12 SECONDS** against 5-12 min
+  for every other exit reason, and each one writes a row that will later be
+  miscounted as evidence about continuation in a trending regime. Fixed same day
+  by **main v5.0**, live on 29/29. MSFT −$1,169 and QQQ −$1,327 are bucket 2 —
+  good setups, price chopped, and deleting that observation would be the error.
+  New **AX**: the conductor's Telegram was never wired, so every EOD warning it
+  has raised has gone unread — including tonight's 7 permanently-missing symbols.
 - **v3.46 — 2026-08-03 — THE HOURLY FORK IS NOT A LEVEL, AND THAT RE-SCOPES v4.0.**
   New **AW**. AS's lifecycle worked — Predictor 2 went REFUSED-at-78 to n≈210 —
   but coverage came in at **10.1% mean / 5.3% median / 0.0% min**, so the fork is
