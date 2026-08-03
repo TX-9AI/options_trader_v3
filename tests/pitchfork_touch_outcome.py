@@ -1,6 +1,26 @@
 #!/usr/bin/env python3
 """
-tests/pitchfork_touch_outcome.py — v1.0 — 2026-08-03
+tests/pitchfork_touch_outcome.py — v1.1 — 2026-08-03
+
+v1.1 — 2026-08-03 — THE CONTROL WAS UNSIGNED AND THE TOUCHES WERE SIGNED, so the
+       two columns did not mean the same thing and could not be compared. Worse,
+       the sign convention plausibly MANUFACTURES the pattern the first run showed.
+       WHAT THE FIRST RUN SHOWED: every readable cell smaller than its own minimum
+       detectable effect — but a consistent, monotone sign. upper/from_below ran
+       -0.019 -> -0.118 -> -0.379 across h=1,2,4 and lower/from_above ran -0.064 ->
+       -0.154 -> -0.441, both saying the rail did NOT hold and both GROWING with
+       horizon. `lower/from_above/h=4` even separated from zero (-0.441 ±0.281).
+       WHY THAT IS PROBABLY AN ARTIFACT OF MY OWN SIGN RULE: "from_below" means
+       price approached the rail from underneath, which is what an UPTREND does,
+       and that instance is assigned sign = -1. So in any drifting market, signing
+       by approach side ANTI-CORRELATES with the drift and produces exactly this —
+       negative, and growing with horizon because drift compounds. A raw-return
+       control cannot reveal that, because signed and unsigned series have
+       different expected values under the null.
+       THE FIX: the control is now signed by THE SAME RULE. For every non-touch bar
+       with a live fork, find the nearest rail, determine which side price sits on,
+       apply the identical sign, and measure. Both columns then answer the same
+       question and their difference is the rail effect with drift removed.
 
 DOES PRICE REACT AT A RAIL? The one question the hourly fork can actually be
 asked, and the only thing it produced in quantity.
@@ -192,16 +212,27 @@ def main(argv) -> int:
                 touch[(rail, approach, h)].append(
                     sign * 100.0 * (closes[i + h] - p0) / p0)
 
-        # controls: bars with a live fork and NO touch, signed both ways so the
-        # comparison is against drift rather than against a direction
-        for i, d in live.items():
+        # CONTROLS, v1.1: bars with a live fork and NO touch, signed by THE SAME
+        # RULE as the touches. Find the nearest rail, work out which side price
+        # sits on, apply the identical sign. Without this the control is a raw
+        # drift series while the touches are sign-flipped, so the comparison is
+        # meaningless and — worse — invisible, because both columns still print.
+        fk_by_idx = tr.active_by_idx
+        for i in live:
             if i in touched_idx or i >= len(closes) or closes[i] <= 0:
                 continue
+            fk = fk_by_idx.get(i)
+            if fk is None:
+                continue
+            p0 = closes[i]
+            rails = (("upper", fk.upper_at(i)), ("median", fk.median_at(i)),
+                     ("lower", fk.lower_at(i)))
+            name, rail = min(rails, key=lambda nr: abs(nr[1] - p0))
+            sign = -1.0 if p0 <= rail else 1.0
             for h in horizons:
                 if i + h >= len(closes):
                     continue
-                r = 100.0 * (closes[i + h] - closes[i]) / closes[i]
-                control[h].append(abs(r) * 0.0 + r)   # unsigned drift baseline
+                control[h].append(sign * 100.0 * (closes[i + h] - p0) / p0)
 
     if not touch:
         print("No touches found. Check the tape root and that forks are building.")
@@ -230,9 +261,12 @@ def main(argv) -> int:
                 cm, chw, cn = _mean_ci(cs)
                 sd = hw * math.sqrt(n) / 1.96 if n > 1 else 0.0
                 mde = (1.96 + 0.84) * sd * math.sqrt(2.0 / n)
+                diff = m - cm
+                sep = abs(diff) > (hw + chw)
+                mark = "  <- SEPARATES" if sep else ""
                 print(f"{rail:<8}{approach:<12}{h:>2} | "
                       f"{m:+.4f}% ±{hw:.4f} n={n:<4} "
-                      f"{cm:+.4f}% ±{chw:.4f}      {mde:+.4f}%")
+                      f"{cm:+.4f}% ±{chw:.4f}      {mde:+.4f}%{mark}")
     if not any_read:
         print("\nEVERY CELL REFUSED. 162 touches across 3 rails x 2 approach sides")
         print("x horizons is ~27 per cell before splitting, and the hourly fork's")
@@ -240,6 +274,9 @@ def main(argv) -> int:
         print("MEASUREMENT, not a null — and per AW the answer is the DAILY fork")
         print("(AP), not more hourly tape.")
     else:
+        print("\nBOTH COLUMNS ARE NOW SIGNED BY THE SAME RULE (v1.1), so their")
+        print("DIFFERENCE is the rail effect with drift removed. A shared sign in")
+        print("both columns is the sign convention, not the rails.")
         print("\nREAD THE 'min detectable' COLUMN FIRST. A cell whose reaction is")
         print("smaller than that is UNDERPOWERED, not null. Calling an underpowered")
         print("cell null is the error that made the confounded condor split look")
