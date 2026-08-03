@@ -1,7 +1,22 @@
 #!/usr/bin/env python3
 """
-tests/butterfly_cutoff_query.py — v1.1 — 2026-08-03
+tests/butterfly_cutoff_query.py — v1.2 — 2026-08-03
 
+v1.2 — 2026-08-03 — DST. v1.1 fixed the UTC-vs-ET comparison but did it with a
+       HARDCODED -4, reasoning that "the whole trading calendar here is inside
+       DST". True today, false on **2026-11-01**, when ET goes to UTC-5 and every
+       converted time silently shifts an hour — nine weeks after go-live. That is
+       the same class of bug as v1.0, just with a fuse on it: correct now, wrong
+       later, and nothing would announce the change.
+       Now uses ZoneInfo("America/New_York") so DST is handled by the tz database,
+       with the fixed offset kept ONLY as a no-tzdata fallback (fresh boxes may
+       lack it) and LABELLED in the output when it is used, so a reader can see
+       which path produced the numbers.
+       NOTE the contrast with eod_summary.py, which also carries a fixed -4: that
+       one is a documented no-tzdata fallback whose only consumer needs the DATE,
+       and it runs at 15:50 — an hour of error cannot change the date except
+       between 23:00 and midnight. It is correct for its purpose and was
+       deliberately left alone rather than changed to look thorough.
 v1.1 — 2026-08-03 — TIMEZONE. v1.0 read the raw HH:MM out of `entry_time` and
        compared it to a 15:00 ET cutoff. But entry_time is stored in **UTC** —
        `2026-08-03T17:38:45.284192+00:00`. So every entry looked four hours later
@@ -70,7 +85,7 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # capture the offset too — entry_time is written in UTC (+00:00), and comparing
 # a UTC wall clock to an ET cutoff shifts every trade four hours later.
@@ -78,10 +93,14 @@ TS_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2}):(\d{2})"
     r"(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?")
 DEFAULT_CUTOFF = "15:00"
-# US/Eastern is UTC-4 in DST. The whole trading calendar here is inside DST, so a
-# fixed offset is exact for this data; if that ever stops being true this is the
-# line to revisit rather than a silent drift.
-ET_OFFSET_H = -4
+# DST is handled by the tz database, not by an assumption. ET is UTC-4 in EDT and
+# UTC-5 in EST, and the changeover on 2026-11-01 falls nine weeks after go-live.
+try:
+    from zoneinfo import ZoneInfo
+    _ET = ZoneInfo("America/New_York")
+except Exception:                                    # noqa: BLE001 - no tzdata
+    _ET = None
+ET_OFFSET_H = -4          # fallback ONLY, and announced when used
 
 
 def _et(ts):
@@ -97,13 +116,18 @@ def _et(ts):
                   int(m.group(2)), int(m.group(3)), int(m.group(4)))
     raw = f"{m.group(2)}:{m.group(3)}"
     off = m.group(5)
+    # normalise to an AWARE UTC datetime first, then let the tz database do the
+    # conversion — so EDT/EST is a lookup, not an assumption.
     if off in (None, "Z", "+00:00", "+0000"):
-        dt = dt + timedelta(hours=ET_OFFSET_H)          # UTC -> ET
+        aware = dt.replace(tzinfo=timezone.utc)
     else:
         sign = 1 if off[0] == "+" else -1
-        oh = int(off[1:3])
-        dt = dt - sign * timedelta(hours=oh) + timedelta(hours=ET_OFFSET_H)
-    return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M"), raw
+        oh, om = int(off[1:3]), int(off[-2:])
+        aware = dt.replace(tzinfo=timezone(
+            sign * timedelta(hours=oh, minutes=om)))
+    et = (aware.astimezone(_ET) if _ET
+          else aware.astimezone(timezone.utc) + timedelta(hours=ET_OFFSET_H))
+    return et.strftime("%Y-%m-%d"), et.strftime("%H:%M"), raw
 
 
 def _dbs(path):
@@ -155,6 +179,9 @@ def main(argv) -> int:
                          "setup": str(t["setup_type"] or "")})
         conn.close()
 
+    if _ET is None:
+        print("⚠ no tzdata — falling back to a FIXED UTC-4. Correct through "
+              "2026-10-31 only.")
     print(f"scanned {scanned} trade row(s) across {len(dbs)} db(s)")
     print(f"butterfly trades found: {len(rows)}"
           + (f"   ({no_time} dropped: unparseable entry_time)" if no_time else ""))
