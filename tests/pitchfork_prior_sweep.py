@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 """
-tests/pitchfork_prior_sweep.py — v1.0 — 2026-08-03
+tests/pitchfork_prior_sweep.py — v1.1 — 2026-08-03
+
+v1.1 — 2026-08-03 — +the PIVOT form, measured against the same criterion. v1.0
+       swept N x D on §5.3(b) as WRITTEN and returned NO SETTING CLEARS THE BAR:
+       adverse-tine went 88.9% -> 56.5% across the whole grid while deaths barely
+       moved (27 -> 23). That is the signature of a rule wrong in FORM, so
+       lifecycle v1.2 added `adverse_mode="pivot"` — invalidate on a CONFIRMED
+       PIVOT beyond the counter tine rather than on N consecutive closes.
+       It was built but never measured, which left the whitepaper asserting the
+       written form is broken while offering an untested replacement. This closes
+       that: pivot rows run under the SAME pre-registered criterion, so the two
+       forms are comparable rather than merely both present.
+       PIVOT MODE IGNORES N — it counts no consecutive closes — so it is swept on
+       D alone and N is shown as "-".
 
 WHAT N AND D SHOULD BE FOR THE HOURLY FORK — with the criterion fixed BEFORE the
 numbers are looked at.
@@ -161,17 +174,23 @@ def main(argv) -> int:
     print("NOT drive the choice — §5.3(a) calls structural the cleanest condition,")
     print("so a healthy fork should die mostly that way.\n")
 
+    print("CLOSES form = §5.3(b) as written. PIVOT form = lifecycle v1.2's")
+    print("replacement (confirmed pivot beyond the counter tine; ignores N).\n")
     print(f"{'N':>3} {'D':>6} | {'cover':>7} {'births':>7} {'deaths':>7} "
           f"{'adverse%':>9} {'p50 life':>9}")
     print("-" * 60)
 
     results = {}
-    for n in N_GRID:
-        for d in D_GRID:
+    # (mode, n, d) — pivot ignores N, so it gets one row per D
+    combos = [("closes", n, d) for n in N_GRID for d in D_GRID]
+    combos += [("pivot", None, d) for d in D_GRID]
+    for mode, n, d in combos:
+        if True:
             covs, births, cause, lifetimes = [], 0, collections.Counter(), []
             for sym, (h1, atrs) in frames.items():
                 tr = replay(sym, h1, "1h", atrs,
-                            adverse_closes=n, adverse_atr=d)
+                            adverse_closes=(n or 2), adverse_atr=d,
+                            adverse_mode=mode)
                 covs.append(tr.coverage(len(h1)))
                 born_at = None
                 for ev in tr.events:
@@ -189,9 +208,11 @@ def main(argv) -> int:
             adv = cause["adverse"] / deaths if deaths else 0.0
             cov = sum(covs) / len(covs)
             p50 = sorted(lifetimes)[len(lifetimes) // 2] if lifetimes else 0
-            results[(n, d)] = (cov, births, deaths, adv, p50)
-            star = " <- paper's start" if (n, d) == (2, 0.25) else ""
-            print(f"{n:>3} {d:>6.2f} | {cov:>6.1%} {births:>7} {deaths:>7} "
+            results[(mode, n, d)] = (cov, births, deaths, adv, p50)
+            star = (" <- paper's start" if (mode, n, d) == ("closes", 2, 0.25)
+                    else " <- PIVOT form" if mode == "pivot" else "")
+            nlabel = "-" if n is None else str(n)
+            print(f"{nlabel:>3} {d:>6.2f} | {cov:>6.1%} {births:>7} {deaths:>7} "
                   f"{adv:>8.1%} {p50:>9}{star}")
 
     # ── apply the criterion, without looking at coverage ────────────────────
@@ -203,6 +224,17 @@ def main(argv) -> int:
               f"eligible —\n   a setting that never invalidates passes the bar "
               f"vacuously.)")
     passing = [k for k, r in eligible.items() if r[3] < ADVERSE_DOMINANT]
+    closes_best = min((r[3] for k, r in eligible.items() if k[0] == "closes"),
+                      default=None)
+    pivot_best = min((r[3] for k, r in eligible.items() if k[0] == "pivot"),
+                     default=None)
+    if closes_best is not None and pivot_best is not None:
+        print(f"  best adverse-share: CLOSES {closes_best:.1%}   "
+              f"PIVOT {pivot_best:.1%}")
+        if pivot_best >= closes_best:
+            print("  -> the PIVOT form does NOT improve on the written one. The")
+            print("     whitepaper §5.3(b) correction claimed a replacement that")
+            print("     the tape does not support — say so rather than keep it.")
     if not eligible:
         print("VERDICT  REFUSED — no cell has enough deaths to judge. Either the")
         print("         tape is too short or no fork ever invalidated. Nothing")
@@ -216,10 +248,12 @@ def main(argv) -> int:
         print("         consecutive closes). Do NOT pick the best of a bad grid.")
     else:
         # "smallest" = fewest bars, then smallest ATR margin
-        pick = sorted(passing)[0]
+        pick = sorted(passing, key=lambda k: (k[0] != "pivot", k[1] or 0, k[2]))[0]
         cov, births, deaths, adv, p50 = results[pick]
         best_cov = max(r[0] for r in eligible.values())
-        print(f"VERDICT  N={pick[0]}, D={pick[1]:.2f} — the SMALLEST setting where")
+        pm, pn, pd = pick
+        print(f"VERDICT  {pm.upper()} form, N={'-' if pn is None else pn}, "
+              f"D={pd:.2f} — the SMALLEST setting where")
         print(f"         adverse-tine is no longer dominant ({adv:.1%} of {deaths}"
               f" deaths).")
         print(f"         coverage {cov:.1%}, p50 life {p50} bars, {births} births.")
