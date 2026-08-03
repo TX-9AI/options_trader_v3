@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.49
+# docs/BACKLOG.md — v3.50
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -987,6 +987,37 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   price CONTINUE in the trade's direction?** If it systematically does, BOS is
   cutting live moves rather than reading structure. Buildable now from tape +
   fleet_trades; no waiting.
+  **✅ MEASURED 2026-08-03 — AND THE READING ABOVE IS WRONG. BOS IS NOT CUTTING
+  LIVE MOVES.** `tests/post_exit_continuation.py` v1.0 asks the question giveback
+  cannot: after an exit fires, does price keep going the trade's way? Signed by
+  direction, `bos_exit` against EVERY other exit on the same tape, comparing
+  absolute instants (exit_time is UTC, the tape is ET-offset).
+  `  h= 5   bos +0.034% ±0.089 (n=17)   other +0.006% ±0.039 (n=167)`
+  `  h=15   bos +0.117% ±0.202          other -0.042% ±0.066`
+  `  h=30   bos +0.005% ±0.179          other -0.045% ±0.095`
+  **No separation at any horizon.** So the -$2,757.50 was **GIVEBACK** (MFE +2%
+  -> realized -9%), not early exit. **The candidate is the TRAIL, not the BOS
+  trigger** — the opposite of what MU's six 2.8-minute trades suggested, and I
+  filed that suggestion as the reading before measuring it.
+  **⬜ UNDERPOWERED, NOT NULL — the distinction this week keeps earning.** Every
+  bos_exit cell is smaller than its own minimum detectable effect (n=17, MDE
+  0.18-0.41%). The h=15 gap of +0.159% would need roughly **n≈113** to resolve —
+  about 5-10 more sessions at recent rates. What this says is "no effect larger
+  than ~0.4%"; it cannot rule out something smaller. Re-run when bos_exit clears
+  n≈100.
+  **⬜ AND 41% OF ROWS WERE DROPPED: 157 of 379 had no tape at the exit instant.**
+  Partly trades from 07-07..07-10 that predate the tape harvest, partly hard_close
+  exits landing after the tape ends, partly the five sat-out symbols. That is a
+  large enough hole that selection bias is possible, and it should be closed or
+  characterised before this result is leaned on.
+  **⬜ THE STRONGEST SIGNAL IN THE TABLE IS NOT BOS.** `max_loss` post-exit
+  continuation runs **-0.065% -> -0.205% -> -0.341%** across 5/15/30 minutes on
+  n=18 — monotonically negative, the only cell where the effect grows cleanly with
+  horizon. **Price keeps moving AGAINST the trade after a max-loss exit**, i.e.
+  the disaster stop is doing its job and getting out of positions that continue
+  to deteriorate. Worth stating because the day's second-largest line item
+  (-$1,958.50) is that exit, and this says it was right.
+
   **⬜ WHAT IS DELIBERATELY NOT ACTIONED:** the chop losses on the MSFT/AMZN/NFLX-
   shaped names (~$2,000 of the day). We let continuation fire into that on purpose.
   Recording it as a defect would delete the observation we paid for. **Today is a
@@ -2475,6 +2506,18 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.50 — 2026-08-03 — BOS IS NOT CUTTING LIVE MOVES; AY's THIRD ITEM
+  CORRECTED.** `post_exit_continuation` v1.0 measured what giveback cannot — does
+  price keep running after an exit fires — and `bos_exit` shows **no separation
+  from other exits at 5, 15 or 30 minutes**. So today's -$2,757.50 was GIVEBACK,
+  not early exit, and **the trail is the candidate rather than the BOS trigger**.
+  I had filed the opposite reading off MU's six 2.8-minute trades before measuring
+  it. Three caveats recorded with it: every bos cell is UNDERPOWERED (n=17 vs MDE
+  0.18-0.41%, needs n≈113); **41% of rows dropped** for no tape at the exit
+  instant, so selection bias is possible; and the clearest signal in the table is
+  `max_loss` running -0.065 → -0.205 → -0.341% — price continues AGAINST the trade
+  after a max-loss exit, so the day's second-largest line item was the stop
+  working.
 - **v3.49 — 2026-08-03 — TWO SOLO DESK ITEMS CLOSED, ONE AS A NEGATIVE.**
   **Historical ADX reconstruction ❌ closes as NOT SUPPORTABLE**: the held-out
   check (reconstruct rows that already have a real value, compare) fails at every
