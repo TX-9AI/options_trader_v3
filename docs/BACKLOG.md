@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.45
+# docs/BACKLOG.md — v3.46
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -834,6 +834,81 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   **It is not a backtest.** It reports realised outcomes partitioned by a variable
   that was always computable and never computed. Any gate that follows needs its
   own pre-registered validation.
+
+- `[DESK]` **AW — THE HOURLY FORK IS NOT A LEVEL. RE-SCOPE PF.3, THE v4.0 GATE,
+  AND THE L1 CORROBORATOR ON MEASURED COVERAGE.** 2026-08-03, from the first run
+  of `pitchfork_filter_audit` v1.2 and `a2_rail_drift` v1.1 through **AS**'s
+  lifecycle.
+  **WHAT THE LIFECYCLE FIXED.** Predictor 2 went from REFUSED at n=78 to
+  reporting at **n≈210**; no-fork ticks fell 1,030 → 878. So the per-bar
+  `build_fork` rebuild WAS suppressing it, exactly as AS diagnosed.
+  **WHAT IT DID NOT FIX — coverage is 10.1% mean, 5.3% MEDIAN, 0.0% min** across
+  29 symbols, against a 6.8% birth rate. Only ~1.5x, not the 33x a synthetic
+  fixture suggested. **Half the symbols carry a fork under 5% of the time and
+  some never have one.** The answer to "my bug or the data" is BOTH.
+  **⛔ THIS KILLS THE L1 CORROBORATOR at the hourly timeframe.** An input absent
+  ~90% of the time makes a two-mode classifier whose behaviour depends on fork
+  AVAILABILITY rather than on the market. §7 wave 4 (`setup_scorer`, L1
+  corroborator, L2 weight) stays post-freeze, but the L1 half is now blocked on
+  coverage, not on calibration. NOTE the distinction that matters: `setup_scorer`
+  grades a setup ALREADY selected, so it changes grade and size but NOT which
+  trades exist — comparable before/after. Anything feeding `regime_confluence`
+  changes argmax, hence which strategy fires, hence the trade population, and
+  every counterfactual (A2's 3.98% baseline, PF.3's credit) loses its control.
+  **"Corroborates, never labels" is softer than it reads: a score that feeds
+  argmax defines the regime in the only sense that is operationally real.**
+  **⛔ 2b REVERSION IS A CLEAN NULL.** Coefficients +0.002 / +0.001 / -0.004,
+  r² ≈ 0.001 at every horizon. **Price does not return to the median line.** That
+  was the load-bearing test and Andrews' central claim, and on this corpus it is
+  not there.
+  **⛔ 2a SLOPE IS DEAD AT MINUTE HORIZONS FOR ANY TIMEFRAME.** The prediction is
+  4-9x smaller than the noise it sits in. And the reasoning generalises: a DAILY
+  median line moves even less per minute, so this is not "the hourly fork failed",
+  it is "slope prediction over 3-10 minute horizons is the wrong question for a
+  structural object".
+  **⬜ EXHAUSTION IS NOW THREE INDEPENDENT MEASUREMENTS, SAME SIGN**, and deserves
+  a directed test rather than another footnote: Predictor 1 drift negative in
+  EVERY elapsed bucket at all three horizons; 2a slope coefficient NEGATIVE at all
+  three (-1.09 / -2.18 / -1.56) with r² RISING with horizon (0.005 → 0.030); and
+  the earlier `--persistent-only` run negative before conditioning. None clears
+  its bands alone. Three weak signals sharing a sign with a horizon-increasing r²
+  is a different object from one. **It inverts A2.5's premise — if a paused trend
+  EXHAUSTS rather than resumes, the trade is to FADE it.**
+  **⬜ THE SPLIT THAT FOLLOWS — §6 already says it, the data now says why.**
+  "Higher timeframe governs zone strength; lower timeframe governs entry timing."
+  Measured, the hourly fork is SHORT-LIVED AND REACTIVE: ~9-bar median life,
+  exceeded on the trend side in 22 of 33 births, no reversion, sub-noise slope.
+  **DAILY → levels** (condor strikes, structural stops, opposite-tine targets) —
+  a strike wants a level that does NOT move during the trade, so slow and stable
+  is the feature. **HOURLY → touch events and entry timing** — short-lived and
+  current is right for "price just tagged a rail", and **162 TOUCH events** is the
+  one thing the hourly fork produced in quantity.
+  **⬜ PF.3 MOVES BEHIND AP.** Condor strikes are a LEVEL question. Anchoring them
+  on an object exceeded two-thirds of the time and dying every ~1.3 sessions would
+  burn the measurement, not just the time — and §9 chose strikes precisely because
+  a credit is one clean number. Wait for the daily series (~2026-08-21).
+  **⬜ AND THE v4.0 GATE MOVES WITH IT.** The paper tags v4.0 at ">=2 consumers
+  independently proven". With reversion and slope dead, EVERY surviving consumer
+  is level-based and all of them want the slow fork. **The critical path to v4.0
+  now runs through AP, not through more hourly work.**
+  **⬜ CHEAPEST NEXT ANSWERS, all available without waiting for AP:**
+  (1) `pitchfork_filter_audit` **v1.3** now bins CAUSE OF DEATH and prints the
+  lifetime distribution — 27 INVALIDATED on 33 BORN is fast for a persistent
+  object, and mostly-adverse-tine means the N=2/D=0.25 priors are strangling it
+  (revisit them) while mostly-structural means the tape genuinely broke it (priors
+  fine). Opposite responses, so measure before touching anything.
+  (2) **TOUCH-OUTCOME STUDY** — 162 events, joins with machinery we already have,
+  and touches are what §5.2 calls the tradeable event. Highest yield available now.
+  (3) **§4.3.5's UNIQUENESS READING** (from AS): scan back for the most recent
+  triple SATISFYING the filters rather than take-the-last-three-and-test.
+  SEPARATION is 39.8% of rejections. It is an IMPLEMENTATION READING, not a
+  threshold change, so it does not touch §10's overfitting surface.
+  **⬜ WATCH, not yet a finding: 22 ACCELERATION on 33 births.** Forks exceeded on
+  the trend side two-thirds of the time suggests the channel is too NARROW for the
+  move it describes — plausibly a Modified Schiff artifact, since §3.2 chose it
+  precisely because Andrews runs steep. That is a VARIANT question (§12 open
+  question 2), not a threshold one, and `build_all_variants` already computes all
+  three in parallel so it is measurable whenever we want it.
 
 **⬜ Sun Aug 2**
 - `[DESK]` **A2.4 — 🔴 A2's REAL CAUSE IS A HORIZON MISMATCH, and the state it
@@ -2284,6 +2359,21 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.46 — 2026-08-03 — THE HOURLY FORK IS NOT A LEVEL, AND THAT RE-SCOPES v4.0.**
+  New **AW**. AS's lifecycle worked — Predictor 2 went REFUSED-at-78 to n≈210 —
+  but coverage came in at **10.1% mean / 5.3% median / 0.0% min**, so the fork is
+  genuinely rare on real tape as well. That **kills the L1 corroborator at hourly**
+  (an input absent 90% of the time is a two-mode classifier). **2b reversion is a
+  clean null** (r²≈0.001) — price does not return to the median line, which was
+  Andrews' central claim and the load-bearing test. **2a slope is dead at minute
+  horizons for ANY timeframe**, daily included, since a daily ML moves even less
+  per minute. What survives is §6's split, now with a reason: **daily → levels,
+  hourly → touch events.** **PF.3 moves behind AP** because strikes are a level
+  question, and **the v4.0 gate moves with it** — every surviving consumer is
+  level-based. Exhaustion is now three independent measurements sharing a sign and
+  gets promoted from footnote to directed test. `pitchfork_filter_audit` **v1.3**
+  adds cause-of-death and lifetime bins to settle whether the §5.3 priors are
+  strangling the object or the tape genuinely breaks it.
 - **v3.45 — 2026-08-03 — SENTIMENT SCORE RECORDING STARTS; THE ANALYSIS IS FILED
   OUTSIDE THE PLAN.** Operator's idea: weight directional trades by the morning
   sentiment score, never veto. Turns out `setup_scorer` v1.2 ALREADY has a signed

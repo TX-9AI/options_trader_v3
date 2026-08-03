@@ -1,7 +1,21 @@
 #!/usr/bin/env python3
 """
-tests/pitchfork_filter_audit.py — v1.2 — 2026-08-03
+tests/pitchfork_filter_audit.py — v1.3 — 2026-08-03
 
+v1.3 — 2026-08-03 — WHICH CONDITION IS KILLING THEM, and how long they live.
+       v1.2's coverage run raised a question it could not answer: 27 INVALIDATED
+       against 33 BORN, so forks die almost as fast as they are born. §5.2 expects
+       a persistent object to survive far longer, and "27 deaths" does not say
+       whether the TAPE is unsuitable or the §4.3/§5.3 PRIORS are strangling the
+       object. Those have opposite responses — accept the fork is rare, versus
+       revisit N/D. Now every INVALIDATED event is binned by cause and the
+       lifetime distribution is printed.
+       ALSO WATCHING: 22 ACCELERATION events on 33 births. Forks being exceeded
+       on the TREND side two-thirds of the time suggests the channel is too
+       narrow for the move it is describing — plausibly a Modified Schiff
+       artifact, since §3.2 chose it precisely because Andrews runs steep. That
+       is a variant question, not a threshold one, and the count is reported so
+       it can be watched rather than assumed.
 v1.2 — 2026-08-03 — MEASURES COVERAGE NOW THAT LIFECYCLE EXISTS. v1.1 could only
        report the BIRTH rate and said so; with analysis/pitchfork_lifecycle.py
        (AS) the fork HOLDS until invalidated, so the number that actually matters
@@ -163,6 +177,8 @@ def main(argv) -> int:
     # ── coverage, via the lifecycle (v1.2) ──────────────────────────────────
     cov_by_sym = {}
     life_events = collections.Counter()
+    death_cause = collections.Counter()
+    lifetimes = []
     for sym in syms:
         h1 = _hourly(root, sym)
         if h1 is None or len(h1) < 25:
@@ -172,6 +188,20 @@ def main(argv) -> int:
         cov_by_sym[sym] = tr.coverage(len(h1))
         for ev in tr.events:
             life_events[ev.kind] += 1
+        # cause-of-death and lifetime, the two things v1.2 could not say
+        born_at = None
+        for ev in tr.events:
+            if ev.kind == "BORN":
+                born_at = ev.idx
+            elif ev.kind == "INVALIDATED":
+                r = ev.reason
+                cause = ("structural (P0)" if "structural" in r
+                         else "adverse tine" if "adverse" in r
+                         else "stale" if "stale" in r else r[:28])
+                death_cause[cause] += 1
+                if born_at is not None:
+                    lifetimes.append(ev.idx - born_at)
+                    born_at = None
 
     bars = list(bars_by_sym.values())
     print(f"hourly bars per symbol: min {min(bars)}  median "
@@ -186,6 +216,23 @@ def main(argv) -> int:
               f"median {covs[len(covs)//2]:.1%}   max {covs[-1]:.1%}")
         print(f"  lifecycle events: {dict(life_events)}")
         birth_rate = built / max(attempts, 1)
+        if death_cause:
+            tot = sum(death_cause.values())
+            print("  CAUSE OF DEATH")
+            for c, n in death_cause.most_common():
+                print(f"    {n:>4}  {100.0*n/tot:5.1f}%  {c}")
+            print("    -> mostly ADVERSE TINE means the N/D priors are strangling "
+                  "a persistent\n       object and are worth revisiting. Mostly "
+                  "STRUCTURAL (P0) means the tape\n       genuinely broke the fork "
+                  "and the priors are fine.")
+        if lifetimes:
+            lt = sorted(lifetimes)
+            print(f"  LIFETIME in bars, n={len(lt)}: min {lt[0]}  "
+                  f"p50 {lt[len(lt)//2]}  p90 {lt[min(len(lt)-1,int(len(lt)*0.9))]}  "
+                  f"max {lt[-1]}")
+            print("    -> a p50 under ~20 hourly bars (~3 sessions) is NOT "
+                  "persistent behaviour;\n       §5.2 expects a daily fork to "
+                  "survive weeks.")
         print(f"  vs BIRTH rate {birth_rate:.1%} — these are NOT the same number, "
               f"and treating\n  the birth rate as coverage is what made the fork "
               f"look starved (AS).\n")
