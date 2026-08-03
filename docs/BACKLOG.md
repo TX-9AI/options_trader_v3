@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.47
+# docs/BACKLOG.md — v3.48
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -936,6 +936,68 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   day passes. Tape coverage is use-it-or-lose-it, which raises the cost of a box
   failing to wake and is worth weighing against the idle-cost argument for
   shutting boxes down.
+
+- `[DESK]` **AY — THE GAP-DAY MISREAD: continuation fires into post-gap chop on a
+  trend that already finished. Plus a SELECTION miss and an EXIT miss that the
+  same session exposed.** Filed 2026-08-03 from the −$3,149.50 session and the
+  operator's chart review.
+  **WHAT THE TAPE ACTUALLY DID.** MSFT +4.93%, AMZN +4.58%, NFLX +2.26% — the
+  ENTIRE move happened in the opening bar, then all three chopped sideways in a
+  tight range for the rest of the morning. **The trend was complete before the
+  first candle closed.**
+  **WHY THE CLASSIFIER CALLS THAT TRENDING.** A 5% opening 5m bar spikes ADX, and
+  TRENDING is measured on ADX-14 over 5m ≈ a 70-MINUTE window, so the gap DOMINATES
+  the window for over an hour after the move is over. Result: **TRENDING_BULL
+  labelled 30 times, −$2,943**, and continuation fired into chop repeatedly.
+  **THIS IS NOT A NEW FINDING — IT IS THE CELL A2 ALREADY FLAGGED.** The clean
+  partition put **CONT × OPEN at 9.89%**, the second-hottest cell in the grid
+  outside the DECAY×FLAT hump. We measured the ambiguity weeks ago; today priced it.
+  **AND IT IS NOT AN ODD DAY.** gap_backfill over 15 sessions: **CONT 40.4%, REV
+  52.7%, FLAT 6.9% — gap days are 93% of session-symbols.** What was unusual today
+  was the SIZE of the gaps, not the fact of them. This is the MODAL environment and
+  the misread recurs constantly; today merely made it legible.
+  **⬜ THE PLAN — measure the specific cell, gate nothing yet.** The fleet is
+  deliberately permissive to collect a broad sample (see POSTMORTEM 2026-08-03),
+  so the output here is a sharper QUESTION, not a tightening.
+  **AV's 2026-08-13 revisit is re-aimed:** it was "does gap class separate
+  outcomes"; it is now **"does ContinuationStrategy lose on CONT gap days in the
+  OPEN window?"** — a single named cell with a mechanism behind it.
+  `tests/gap_outcome_join.py --by strategy --window OPEN` already does exactly this
+  join; the `--window` flag exists and matches a2_partition's buckets. **No new
+  tool.** If the cell separates, the gate writes itself: continuation should not
+  fire in the open window on a CONT gap day. If it does not separate, today was
+  variance and we will have learned that cheaply.
+  **⬜ SECOND MISS — SELECTION, not strategy. TSLA was never woken.** It ranked
+  **#18 at sc 0.0704**, below the 13-symbol discretionary cutoff, and then produced
+  a clean +3.49% leg (318 → 324, 10:30–11:15). **No exit or strategy fix reaches a
+  symbol that never woke.** New question: how often does a JUST-MISSED symbol
+  (ranks ~14–20) produce the session's best move? The tape exists for all 29
+  symbols regardless of whether they woke, so the price side is historical — but
+  the RANK is only archived from 2026-08-03 (conductor phase 5c). **Revisit
+  ~2026-09-05**, same accumulation window as the sentiment study, and read them
+  together since both come from the same archived report.
+  **⬜ THIRD MISS — THE EXIT, and this is the one real defect.** MU WAS woken, the
+  breakout through ~803 at 10:00 ran to ~830 by 11:00 — a **60-minute leg** — and
+  the fleet took **6 trades at 2.8 min average hold for −$377.** It was in and out
+  repeatedly during a move it had correctly identified.
+  That is `bos_exit`'s signature: today n=21, realized **−9%**, MFE **+2%**,
+  **giveback +11%**, −$2,757.50 = **88% of the day's loss.** Note the cumulative
+  contrast — bos_exit over 40 trades is **57% win, +$477.55**, so it is NOT a
+  broken exit; it inverted on one session. **THE TEST: after a bos_exit fires, does
+  price CONTINUE in the trade's direction?** If it systematically does, BOS is
+  cutting live moves rather than reading structure. Buildable now from tape +
+  fleet_trades; no waiting.
+  **⬜ WHAT IS DELIBERATELY NOT ACTIONED:** the chop losses on the MSFT/AMZN/NFLX-
+  shaped names (~$2,000 of the day). We let continuation fire into that on purpose.
+  Recording it as a defect would delete the observation we paid for. **Today is a
+  dense, clean sample of ONE environment — 78 continuation trades in post-gap chop
+  — which is exactly what the permissive posture exists to collect.**
+  **⬜ A PROCESS LESSON, recorded because it cost a day of attention.** The flicker
+  was found first and four tools were built around it. It was worth **−$234**.
+  `bos_exit` sat at **−$2,757** the entire time and was only weighed when the
+  excursion report forced the comparison. **The postmortem's own two-bucket test
+  should be applied BEFORE building, not after** — "how much did this cost?" is a
+  cheaper question than any tool.
 
 **⬜ Sun Aug 2**
 - `[DESK]` **A2.4 — 🔴 A2's REAL CAUSE IS A HORIZON MISMATCH, and the state it
@@ -2386,6 +2448,20 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.48 — 2026-08-03 — THE GAP-DAY MISREAD, AND TWO MISSES THE SAME SESSION
+  EXPOSED.** New **AY**. The tape: MSFT +4.93%, AMZN +4.58%, NFLX +2.26% with the
+  ENTIRE move in the opening bar, then hours of chop. TRENDING is ADX-14 on 5m ≈ a
+  70-minute window, so a 5% opening bar keeps the label TRENDING_BULL for an hour
+  after the move ends — **30 trades, −$2,943.** Exactly the **CONT × OPEN 9.89%**
+  cell the clean A2 partition already flagged, and **not** an odd day: gap days are
+  **93% of session-symbols** (CONT 40.4% / REV 52.7% / FLAT 6.9%). **AV's Aug 13
+  revisit is re-aimed at that one named cell** using `gap_outcome_join --window
+  OPEN` — no new tool. Also filed: **TSLA never woke** (#18, sc 0.0704) then gave a
+  clean +3.49% leg — a SELECTION miss no exit fix reaches, revisit ~09-05 once ranks
+  accumulate; and **MU**, woken, 60-minute move, **6 trades at 2.8 min for −$377** —
+  the `bos_exit` giveback (+11%) that is 88% of the day's loss. Process lesson
+  recorded: the flicker cost −$234 and got four tools; bos_exit cost −$2,757 and got
+  attention only after the excursion report forced the comparison.
 - **v3.47 — 2026-08-03 — POSTMORTEM FILED; +AX (conductor cannot send Telegram).**
   `docs/POSTMORTEM_2026-08-03.md` sorts the day into DEFECTS (wrong regardless of
   how permissive the fleet is — and corrupting the sample we are collecting) and
