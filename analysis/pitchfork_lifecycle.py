@@ -1,9 +1,21 @@
 """
-analysis/pitchfork_lifecycle.py — options_trader_v3 — v1.2
+analysis/pitchfork_lifecycle.py — options_trader_v3 — v1.3
 
 PF/AS. §5 of docs/WHITEPAPER_pitchfork_overlay.md — the fork HOLDS UNTIL
 INVALIDATED. Weight 0. Consumed by nothing, gating nothing.
 
+v1.3 — 2026-08-03 — TOUCH events now say WHICH RAIL, and whether price was above
+        or below it going in. v1.0-v1.2 logged a bare "rail interaction", which is
+        useless for the one thing §5.2 says the overlay exists to produce: "tagging
+        the median or either tine is NOT invalidation — those are the TRADEABLE
+        EVENTS". Upper, median and lower are three different hypotheses (resistance,
+        mean-reversion anchor, support) and pooling them would average a bounce
+        against a rejection.
+        APPROACH SIDE is recorded too, because a rail touched from BELOW and one
+        touched from ABOVE are opposite trades even on the same rail.
+        This is the input to the touch-outcome study — the highest-yield thing
+        available without waiting for the daily series (AP), since the hourly fork
+        produced 162 TOUCH events against only 33 births.
 v1.2 — 2026-08-03 — +adverse_mode="pivot". §5.3(b) AS WRITTEN CANNOT WORK FOR A
         SLOPED OBJECT, and the sweep proved it by failing to improve: across the
         whole N x D grid adverse-tine stayed dominant (88.9% -> 56.5%, never under
@@ -241,14 +253,23 @@ class ForkTracker:
         return fk.upper_at(idx) if fk.direction == "bullish" else fk.lower_at(idx)
 
     def _touched(self, fk: Fork, idx: int, high: float, low: float,
-                 atr: float) -> bool:
-        """Did the bar interact with any rail? Needed by staleness (d), and it is
-        the raw material for §6's touch-count rail strength later."""
+                 close: float, atr: float):
+        """Which rail(s) the bar interacted with, and from which side.
+
+        Returns a list of (rail_name, rail_price, approach) where approach is
+        "from_below" or "from_above" judged on the CLOSE relative to the rail —
+        a rail tagged from underneath and one tagged from on top are opposite
+        trades even though both are "a touch".
+        """
         tol = STALE_TOUCH_ATR * atr
-        for rail in (fk.upper_at(idx), fk.median_at(idx), fk.lower_at(idx)):
+        hits = []
+        for name, rail in (("upper", fk.upper_at(idx)),
+                           ("median", fk.median_at(idx)),
+                           ("lower", fk.lower_at(idx))):
             if (low - tol) <= rail <= (high + tol):
-                return True
-        return False
+                hits.append((name, rail,
+                             "from_below" if close <= rail else "from_above"))
+        return hits
 
     # ── the one call a caller makes per bar ─────────────────────────────────
     def step(self, df: pd.DataFrame, atr: float, now_idx: int) -> Optional[Fork]:
@@ -273,9 +294,14 @@ class ForkTracker:
 
             # touch bookkeeping first — a touch is NOT invalidation (§5.2), it is
             # the event the overlay exists to produce, and it also resets (d).
-            if atr > 0 and self._touched(fk, now_idx, high, low, atr):
+            hits = (self._touched(fk, now_idx, high, low, close, atr)
+                    if atr > 0 else [])
+            if hits:
                 self._last_touch_idx = now_idx
-                self._log(TOUCH, now_idx, "rail interaction")
+                for name, rail, approach in hits:
+                    self._log(TOUCH, now_idx, f"{name} rail interaction",
+                              rail=name, rail_price=f"{rail:.4f}",
+                              approach=approach, close=f"{close:.4f}")
 
             # (a) structural break — P0 violation, strongest and cleanest
             broke_p0 = (close < fk.p0.price if fk.direction == "bullish"
