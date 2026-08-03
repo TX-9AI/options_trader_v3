@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
-tests/adx_reconstruct.py — v1.0 — 2026-08-03
+tests/adx_reconstruct.py — v1.1 — 2026-08-03
+
+v1.1 — 2026-08-03 — --db ACCEPTS A DIRECTORY. v1.0 took a single file, on the
+       assumption there was one trades.db. There is not: the fleet pulls to
+       `~/day_trader_pro/trades/<date>/<SYM>_trades_<date>.db` — one db PER SYMBOL
+       per pull. The per-db join was already right (each box's db holds exactly
+       one symbol, which is why regime_log needs no symbol column); it just had to
+       walk the tree. Given a directory, every .db under it is processed
+       independently and the overlap bar is evaluated PER DB — one symbol failing
+       its own held-out check does not block the others, and does not get written.
 
 BACKFILL `adx_at_entry` ON PRE-2026-07-27 TRADE ROWS by timestamp-joining
 `regime_log` to `trades`. Backlog item: "Historical ADX reconstruction",
@@ -55,6 +64,7 @@ Read-only unless --apply. Never touches a row that already has a real value.
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import re
 import sqlite3
@@ -126,45 +136,38 @@ def _nearest_preceding(rows, t, tol_s):
     return best[1]
 
 
-def main(argv) -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--db", required=True, help="path to a trades.db")
-    ap.add_argument("--tolerance", type=int, default=TOLERANCE_S)
-    g = ap.add_mutually_exclusive_group()
-    g.add_argument("--verify-only", action="store_true",
-                   help="run the held-out overlap check and stop")
-    g.add_argument("--dry-run", action="store_true")
-    g.add_argument("--apply", action="store_true")
-    a = ap.parse_args(argv[1:])
+def _dbs(path):
+    p = os.path.expanduser(path)
+    if os.path.isfile(p):
+        return [p]
+    if os.path.isdir(p):
+        return sorted(glob.glob(os.path.join(p, "**", "*.db"), recursive=True))
+    return []
 
-    path = os.path.expanduser(a.db)
-    if not os.path.isfile(path):
-        print(f"No db at {path}")
-        return 2
+
+def run_one(path, a) -> int:
+    """Process ONE db. Returns 0 ok / 1 overlap failed / 2 unusable."""
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
-
-    regime = _load_regime(conn)
-    if not regime:
-        print("regime_log has no usable rows — nothing to join against.")
+    try:
+        regime = _load_regime(conn)
+    except Exception as exc:                                     # noqa: BLE001
+        print(f"  {os.path.basename(path):<34} SKIP — no regime_log ({exc})")
         return 2
-    print(f"db {os.path.basename(path)} | regime_log rows {len(regime)} "
-          f"({regime[0][0].date()} .. {regime[-1][0].date()})")
-
+    if not regime:
+        print(f"  {os.path.basename(path):<34} SKIP — regime_log empty")
+        return 2
     trades = list(conn.execute(
         "SELECT trade_id, entry_time, adx_at_entry, notes FROM trades"))
-    print(f"trades {len(trades)}")
 
-    # ── the held-out overlap check, always run ──────────────────────────────
-    errs, within5 = [], 0
-    overlap = 0
+    errs, within5, overlap = [], 0, 0
     for t in trades:
         et = _parse(t["entry_time"])
         if et is None or et.strftime("%Y-%m-%d") < REAL_FROM:
             continue
         real = float(t["adx_at_entry"] or 0.0)
         if real <= 0:
-            continue                      # nothing to compare against
+            continue
         got = _nearest_preceding(regime, et, a.tolerance)
         if got is None:
             continue
@@ -174,30 +177,25 @@ def main(argv) -> int:
         if e <= 5.0:
             within5 += 1
 
-    print(f"\nHELD-OUT OVERLAP (rows since {REAL_FROM} with a real value)")
+    name = os.path.basename(path)
     if overlap == 0:
-        print("  REFUSED — no overlap rows. The join cannot be validated on this")
-        print("  db, so nothing is written. Run against a db that spans the")
-        print("  migration date.")
+        print(f"  {name:<34} REFUSED — no overlap rows to validate the join")
+        conn.close()
         return 2
-    med = _median(errs)
-    frac = within5 / overlap
-    print(f"  n={overlap}   median |error| {med:.2f} ADX   "
-          f"within 5 pts {frac:.0%}")
+    med, frac = _median(errs), within5 / overlap
     ok = med <= MAX_MEDIAN_ERR and frac >= MIN_WITHIN_5
-    print(f"  bar (pre-registered): median <= {MAX_MEDIAN_ERR}, "
-          f">= {MIN_WITHIN_5:.0%} within 5   ->  {'PASS' if ok else 'FAIL'}")
+    verdict = "PASS" if ok else "FAIL"
+    print(f"  {name:<34} overlap n={overlap:<4} med|err| {med:>6.2f}  "
+          f"within5 {frac:>4.0%}  {verdict}")
     if not ok:
-        print("\n  The reconstruction does NOT reproduce values we already know.")
-        print("  Backfilling on this evidence would write plausible-looking")
-        print("  numbers that are wrong, which is worse than leaving 0.0 —")
-        print("  a zero is obviously missing; a wrong ADX is not. Nothing written.")
+        print("       -> NOT written. A wrong ADX is worse than a 0.0: a zero "
+              "is obviously missing.")
+        conn.close()
         return 1
     if a.verify_only:
-        print("\n--verify-only: stopping here, nothing written.")
+        conn.close()
         return 0
 
-    # ── the backfill ────────────────────────────────────────────────────────
     to_write, no_match, already = [], 0, 0
     for t in trades:
         et = _parse(t["entry_time"])
@@ -205,32 +203,67 @@ def main(argv) -> int:
             continue
         if float(t["adx_at_entry"] or 0.0) > 0:
             already += 1
-            continue                      # never overwrite a real value
+            continue
         got = _nearest_preceding(regime, et, a.tolerance)
         if got is None:
             no_match += 1
             continue
         to_write.append((t["trade_id"], got, t["notes"] or ""))
-
-    print(f"\nBACKFILL (rows before {REAL_FROM})")
-    print(f"  would write   {len(to_write)}")
-    print(f"  no match <={a.tolerance}s  {no_match}   (left at 0.0, NOT guessed)")
-    print(f"  already real  {already}   (never overwritten)")
-
     if a.apply and to_write:
         cur = conn.cursor()
         for tid, adx, notes in to_write:
             tag = "source=reconstructed"
-            newnotes = notes if tag in notes else (notes + " " + tag).strip()
-            cur.execute(
-                "UPDATE trades SET adx_at_entry=?, notes=? WHERE trade_id=?",
-                (adx, newnotes, tid))
+            nn = notes if tag in notes else (notes + " " + tag).strip()
+            cur.execute("UPDATE trades SET adx_at_entry=?, notes=? "
+                        "WHERE trade_id=?", (adx, nn, tid))
         conn.commit()
-        print(f"  ✅ wrote {len(to_write)} row(s), each tagged "
-              f"source=reconstructed")
-    elif to_write:
-        print("  (dry-run — nothing written; re-run with --apply)")
+        print(f"       ✅ wrote {len(to_write)}  (no match {no_match}, "
+              f"already real {already})")
+    else:
+        print(f"       would write {len(to_write)}  (no match {no_match}, "
+              f"already real {already})"
+              + ("" if a.apply else "  [dry-run]"))
     conn.close()
+    return 0
+
+
+def main(argv) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--db", required=True,
+                    help="a trades .db, or a DIRECTORY of them (walked "
+                         "recursively — the fleet layout is "
+                         "trades/<date>/<SYM>_trades_<date>.db)")
+    ap.add_argument("--tolerance", type=int, default=TOLERANCE_S)
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--verify-only", action="store_true",
+                   help="run the held-out overlap check and stop")
+    g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--apply", action="store_true")
+    a = ap.parse_args(argv[1:])
+
+    dbs = _dbs(a.db)
+    if not dbs:
+        print(f"No .db found at {a.db}\n"
+              f"  the fleet layout is ~/day_trader_pro/trades/<date>/"
+              f"<SYM>_trades_<date>.db — pass the DIRECTORY.")
+        return 2
+
+    mode = ("verify-only" if a.verify_only else
+            "APPLY" if a.apply else "dry-run")
+    print(f"{len(dbs)} db(s) | tolerance {a.tolerance}s | mode {mode}")
+    print(f"real values from {REAL_FROM}; bar: median |err| <= {MAX_MEDIAN_ERR}, "
+          f">= {MIN_WITHIN_5:.0%} within 5\n")
+
+    ok = fail = skip = 0
+    for d in dbs:
+        r = run_one(d, a)
+        ok += r == 0
+        fail += r == 1
+        skip += r == 2
+    print(f"\n{ok} passed, {fail} failed the overlap bar, {skip} unusable.")
+    if fail:
+        print("Failures are per-symbol and were NOT written; the rest are "
+              "unaffected.")
     return 0
 
 
