@@ -230,6 +230,23 @@ def test_supersession_requires_materially_different_geometry(bullish):
 
 
 # ── determinism ──────────────────────────────────────────────────────────────
+def test_coverage_counts_supersession_chains(touching):
+    """A supersession emits SUPERSEDED then BORN with no INVALIDATED between. If
+    coverage only pairs BORN→INVALIDATED, every held bar before the final fork is
+    silently dropped — and coverage can come out BELOW the birth rate, which is
+    arithmetically impossible."""
+    a = atr_series(touching, 14).tolist()
+    tr = replay("T", touching, "1h", a)
+    births = sum(1 for e in tr.events if e.kind == BORN)
+    supers = sum(1 for e in tr.events if e.kind == SUPERSEDED)
+    if supers == 0:
+        pytest.skip("fixture produced no supersession; nothing to test here")
+    cov = tr.coverage(len(touching))
+    assert cov >= births / len(touching), (
+        f"coverage {cov:.1%} is below the birth rate {births/len(touching):.1%} — "
+        f"supersession spans are being dropped")
+
+
 def test_replay_is_deterministic(bullish):
     a = atr_series(bullish, 14).tolist()
     one = replay("T", bullish, "1h", a)

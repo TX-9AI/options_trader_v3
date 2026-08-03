@@ -1,9 +1,17 @@
 """
-analysis/pitchfork_lifecycle.py — options_trader_v3 — v1.0
+analysis/pitchfork_lifecycle.py — options_trader_v3 — v1.1
 
 PF/AS. §5 of docs/WHITEPAPER_pitchfork_overlay.md — the fork HOLDS UNTIL
 INVALIDATED. Weight 0. Consumed by nothing, gating nothing.
 
+v1.1 — 2026-08-03 — coverage() UNDERCOUNTED SUPERSESSION CHAINS. It paired only
+        BORN→INVALIDATED, but a supersession emits SUPERSEDED then BORN, so each
+        new BORN overwrote the open span without banking it and every held bar
+        before the LAST fork vanished. On a churn-heavy frame it reported 1.8%
+        coverage against a 42.2% birth rate — coverage below the birth rate is
+        arithmetically impossible and would have read as the fork being MORE
+        starved than before lifecycle existed. Caught by running it, not reading
+        it.
 v1.0 — 2026-08-03 — first lifecycle. Birth, persistence, the four invalidation
         conditions, and the acceleration asymmetry.
         A SPENT TRIPLE CANNOT RE-BIRTH, and the tests are what found it. The
@@ -157,6 +165,11 @@ class ForkTracker:
 
         self.active: Optional[Fork] = None
         self.events: List[ForkEvent] = []
+        # Which fork was ACTIVE at each bar index. This is what a consumer needs:
+        # asking "was a fork in effect at bar i" is the whole point of a
+        # persistent object, and it is not answerable from build_fork, which only
+        # ever says "could one be built from scratch here".
+        self.active_by_idx: Dict[int, Fork] = {}
         self._adverse_run = 0          # consecutive closes beyond the counter tine
         self._last_touch_idx: Optional[int] = None
         self._born_idx: Optional[int] = None
@@ -202,6 +215,12 @@ class ForkTracker:
         """
         if df is None or now_idx <= 0 or now_idx >= len(df):
             return self.active
+        result = self._step(df, atr, now_idx)
+        if result is not None:
+            self.active_by_idx[now_idx] = result
+        return result
+
+    def _step(self, df: pd.DataFrame, atr: float, now_idx: int) -> Optional[Fork]:
         bar = df.iloc[now_idx]
         close, high, low = float(bar["close"]), float(bar["high"]), float(bar["low"])
 
@@ -330,6 +349,14 @@ class ForkTracker:
         held, cur = 0, None
         for ev in self.events:
             if ev.kind == BORN:
+                # v1.1 — bank the open span FIRST. A supersession emits
+                # SUPERSEDED then BORN, so the old code overwrote `cur` without
+                # accumulating and every held bar before the final fork was
+                # discarded. On a churn-heavy frame that reported coverage BELOW
+                # the birth rate, which is impossible and would have looked like
+                # the fork being even more starved than before lifecycle existed.
+                if cur is not None:
+                    held += ev.idx - cur
                 cur = ev.idx
             elif ev.kind == INVALIDATED and cur is not None:
                 held += ev.idx - cur

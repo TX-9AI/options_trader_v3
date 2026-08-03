@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 """
-tests/pitchfork_filter_audit.py — v1.1 — 2026-08-01
+tests/pitchfork_filter_audit.py — v1.2 — 2026-08-03
 
+v1.2 — 2026-08-03 — MEASURES COVERAGE NOW THAT LIFECYCLE EXISTS. v1.1 could only
+       report the BIRTH rate and said so; with analysis/pitchfork_lifecycle.py
+       (AS) the fork HOLDS until invalidated, so the number that actually matters
+       is finally computable. Both are printed side by side, because the whole
+       point of AS was that conflating them made the fork look starved: 156
+       births from 2,297 attempts read as 6.8% "coverage" when it was ~5 anchor
+       events per symbol in three weeks — entirely normal for a persistent object.
+       The per-bar build_fork walk is KEPT, not replaced, because it is still the
+       only way to attribute rejections to a filter. It just no longer pretends
+       to be a coverage measurement.
 v1.1 — 2026-08-01 — VERDICT BINNING CORRECTED, AND WHAT 6.8% ACTUALLY MEASURES.
        v1.0 swept STRUCTURAL_* into "filter tightness" and reported
        "FILTER TIGHTNESS (2064 vs 77)" on the first real run. That overstates it
@@ -64,6 +74,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd  # noqa: E402
 
 from analysis.pitchfork import build_fork, last_reject_reason  # noqa: E402
+from analysis.pitchfork_lifecycle import replay  # noqa: E402
 from utils.math_utils import atr_series  # noqa: E402
 
 TAPE_ROOTS = ["~/day_trader_pro/ohlc", "./ohlc"]
@@ -149,11 +160,36 @@ def main(argv) -> int:
             else:
                 totals[last_reject_reason() or "UNKNOWN"] += 1
 
+    # ── coverage, via the lifecycle (v1.2) ──────────────────────────────────
+    cov_by_sym = {}
+    life_events = collections.Counter()
+    for sym in syms:
+        h1 = _hourly(root, sym)
+        if h1 is None or len(h1) < 25:
+            continue
+        a = atr_series(h1, 14).tolist()
+        tr = replay(sym, h1, "1h", a)
+        cov_by_sym[sym] = tr.coverage(len(h1))
+        for ev in tr.events:
+            life_events[ev.kind] += 1
+
     bars = list(bars_by_sym.values())
     print(f"hourly bars per symbol: min {min(bars)}  median "
           f"{sorted(bars)[len(bars)//2]}  max {max(bars)}")
     print(f"build attempts {attempts}   forks built {built} "
           f"({100.0*built/max(attempts,1):.1f}%)\n")
+    if cov_by_sym:
+        covs = sorted(cov_by_sym.values())
+        mean_cov = sum(covs) / len(covs)
+        print(f"COVERAGE (lifecycle held-fork bars / total bars), {len(covs)} symbols")
+        print(f"  mean {mean_cov:.1%}   min {covs[0]:.1%}   "
+              f"median {covs[len(covs)//2]:.1%}   max {covs[-1]:.1%}")
+        print(f"  lifecycle events: {dict(life_events)}")
+        birth_rate = built / max(attempts, 1)
+        print(f"  vs BIRTH rate {birth_rate:.1%} — these are NOT the same number, "
+              f"and treating\n  the birth rate as coverage is what made the fork "
+              f"look starved (AS).\n")
+
     print("REJECTIONS, most common first")
     for reason, n in totals.most_common():
         if reason == "__BUILT__":

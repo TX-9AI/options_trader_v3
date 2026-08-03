@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """
-tests/a2_rail_drift.py — v1.0 — 2026-08-01
+tests/a2_rail_drift.py — v1.1 — 2026-08-03
+
+v1.1 — 2026-08-03 — USES THE LIFECYCLE. v1.0 called build_fork once per hourly
+       bar and used the result only when it returned non-None — which treated the
+       fork as a PER-BAR INDICATOR, the one thing §5.2 says it is not. That is
+       why Predictor 2 came back REFUSED at n=78 with "1,030 ticks with no usable
+       fork": a fork that HOLDS was being asked to re-qualify from scratch every
+       hour. Now it steps a ForkTracker (AS / analysis/pitchfork_lifecycle.py)
+       through the hourly series once per symbol and reads `active_by_idx` — the
+       fork that was actually IN EFFECT at that bar, which is the question a
+       consumer should be asking.
+       Whether Predictor 2's starvation was my bug or the data is exactly what
+       this re-run answers.
 
 CAN WE PREDICT WHERE PRICE GOES DURING A PAUSED TREND — with two predictors that
 are both knowable at the tick, and neither of which is the pooled mean that
@@ -90,7 +102,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd  # noqa: E402
 
-from analysis.pitchfork import build_fork  # noqa: E402
+from analysis.pitchfork_lifecycle import replay as fork_replay  # noqa: E402
 from utils.math_utils import atr_series  # noqa: E402
 
 TAPE_ROOTS = ["~/day_trader_pro/ohlc", "./ohlc"]
@@ -215,6 +227,7 @@ def main(argv) -> int:
     revert_real = collections.defaultdict(list)
     no_fork = 0
     hourly_cache = {}
+    tracker_cache = {}
 
     for path in paths:
         date = DATE_RE.search(os.path.basename(path))
@@ -254,7 +267,12 @@ def main(argv) -> int:
                 run = run + 1 if v else 0
                 elapsed_at.append(run)
 
-            fork_cache = {}
+            # step the lifecycle through this symbol's hourly series ONCE; the
+            # fork in effect at bar i is then a lookup, not a rebuild
+            if h1 is not None and sym not in tracker_cache:
+                tracker_cache[sym] = fork_replay(
+                    sym, h1, "1h", atr_series(h1, 14).tolist())
+            tracker = tracker_cache.get(sym)
             for i, r in enumerate(recs):
                 if time_bucket(r.get("ts", "")) != want:
                     continue
@@ -292,11 +310,7 @@ def main(argv) -> int:
                 hidx = h1.index.searchsorted(ts, side="right") - 1
                 if hidx < 20:
                     continue
-                if hidx not in fork_cache:
-                    sub = h1.iloc[:hidx + 1]
-                    atr = float(atr_series(sub, 14).iloc[-1]) if len(sub) > 15 else 0.0
-                    fork_cache[hidx] = build_fork(sym, sub, "1h", atr) if atr > 0 else None
-                fk = fork_cache[hidx]
+                fk = tracker.active_by_idx.get(hidx) if tracker else None
                 if fk is None or not fk.is_born_by(hidx):
                     no_fork += 1
                     continue
