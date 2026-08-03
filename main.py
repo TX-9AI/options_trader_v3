@@ -1,5 +1,5 @@
 """
-main.py — options_trader v4.9
+main.py — options_trader v5.0
 v4.9 — 2026-07-30 — DISPATCH ISOLATION. Each strategy evaluation now runs inside
         _safe_strategy(): a raise is logged at ERROR and returns None, so the
         priority cascade continues instead of aborting the tick. Before this, one
@@ -8,6 +8,33 @@ v4.9 — 2026-07-30 — DISPATCH ISOLATION. Each strategy evaluation now runs in
         every RANGING/COMPRESSION tick where GEX was pinning, and nothing in any
         log said the condor had been skipped. Applies to all six dispatch call
         sites plus the Leg-2 check in the tick loop.
+v5.0 — 2026-08-03 — STOP TRADING ON THE UN-SMOOTHED CLASSIFIER. Two rules, no
+        new parameter, nothing to tune.
+        THE DEFECT: `st.regime and not st.stale` was read correctly, but the
+        FALLBACK was wrong. On a stale tick the bot dropped to the v1.3
+        classifier — raw L1 argmax — which is precisely the churn L2 exists to
+        remove (436 committed switches vs 695 argmax flips). exit_engine checks
+        regime-flip SECOND, before any price stop, so a single wobbled tick
+        closed the position. MEASURED over 2026-07-23..: regime_flip exits have
+        median hold 0.8 min and p25 12 SECONDS, against 5-12 min for every other
+        exit reason; 19% of continuation exits and 27% of iron-condor exits.
+        A 12-second position has not had time to be right or wrong — only to pay
+        a round trip. And the trigger is routine: v4.6's own note records that
+        "a tick gap over dt_max=90s re-stales every tick".
+        THE FIX: (a) on a stale tick WITH a committed label, HOLD that label
+        instead of falling back; (b) take NO NEW ENTRIES while stale. Holding is
+        declining to act on unknown information — the position stays protected
+        by every price-based stop, none of which read the label. Entering is a
+        DECISION and is refused.
+        A COLD BOOK AT THE OPEN STILL FALLS BACK TO v1.3 — that path was always
+        correct (no prior state exists to hold) and is unchanged.
+        WHY THIS MATTERS EVEN THOUGH LOSSES ARE ACCEPTABLE RIGHT NOW: the fleet
+        is deliberately permissive to collect a broad sample. A flickered exit
+        does not just cost $48, it writes a row tagged
+        "ContinuationStrategy / TRENDING / -$48" that will later be counted as
+        evidence about continuation in a trending regime. It is not — it is
+        evidence about an exit mechanism. The fix does not reduce firing; it
+        stops premature exits, so each trade actually expresses its setup.
 v4.8 — 2026-07-30 — DECLARE THE OPENING GAP, AND STAMP THE ENGINE.
         (a) The first ~25 minutes of every session legitimately cannot produce
         RANGING or COMPRESSION: both are computed on a 25-bar 1-MINUTE window,
@@ -384,6 +411,11 @@ logger.info("REGIME ENGINE: %s (L2 import %s) — OT_REGIME_ENGINE=%s",
             os.environ.get("OT_REGIME_ENGINE", "(unset, default L2)"))
 _l1_scorer   = RegimeConfluenceScorer() if _L2_OK else None
 _l2_integ    = ConvictionIntegrator() if _L2_OK else None
+# v5.0 — the last label L2 actually committed, held across stale ticks so the bot
+# never swaps the smoother for the raw classifier mid-position. `since` is set on
+# the first stale tick of a stretch and cleared on recovery, purely so a long
+# hold is visible in the log — it gates nothing.
+_l2_held     = {"regime": None, "conviction": 0.0, "since": None}
 _L2_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "data", "integrator_state.json")
 
@@ -574,10 +606,43 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
                 l2_label, l2_conv = st.regime, st.conviction
                 regime.primary_regime = st.regime
                 regime.conviction     = st.conviction
+                # v5.0 — remember it, so a stale tick can HOLD rather than fall
+                # back to the un-smoothed classifier.
+                _l2_held["regime"] = st.regime
+                _l2_held["conviction"] = st.conviction
+                _l2_held["since"] = None
                 if _l2_mute.get("why"):          # v4.6 — announce recovery once
                     logger.info("L2.5 COMMITTING again (%s c=%.2f) — was: %s",
                                 st.regime, st.conviction, _l2_mute["why"])
                     _l2_mute.clear()
+            elif st.stale and _l2_held["regime"]:
+                # v5.0 — HOLD THE LAST COMMITTED LABEL. This branch is the whole
+                # fix. Falling through to v1.3 here swapped the SMOOTHER out for
+                # the RAW classifier at exactly the moment the smoother was
+                # unavailable — 436 committed switches vs 695 L1-argmax flips, so
+                # v1.3 is the churn L2 exists to remove. exit_engine checks
+                # regime-flip SECOND, before any price stop, so one wobbled tick
+                # closed the position: measured median hold on regime_flip exits
+                # was 0.8 min, p25 12 SECONDS, against 5-12 min for every other
+                # exit reason.
+                # And the trigger is routine — v4.6's own note: "a tick gap over
+                # dt_max=90s re-stales every tick."
+                # HOLDING IS NOT DECIDING ON UNKNOWN INFORMATION, it is declining
+                # to act on it. The position stays protected the entire time by
+                # everything that reads PRICE — 15:45 hard close, break-of-
+                # structure, trail, stop, max loss — none of which touch the
+                # label. No expiry: a label held for 30 stale minutes costs
+                # nothing, because regime-flip was never what kept the position
+                # safe, it was what closed it early.
+                if _l2_held["since"] is None:
+                    _l2_held["since"] = now_utc()
+                    logger.info("L2.5 STALE — HOLDING %s c=%.2f (was falling back "
+                                "to v1.3 raw argmax, the churn source)",
+                                _l2_held["regime"], _l2_held["conviction"])
+                l2_label = _l2_held["regime"]
+                l2_conv  = _l2_held["conviction"]
+                regime.primary_regime = l2_label
+                regime.conviction     = l2_conv
             else:
                 # v4.6 — THE SILENT GATE, NOW AUDIBLE. Import can be fine and the
                 # integrator can run without raising, yet L2 still not commit,
@@ -913,6 +978,21 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     can_enter, reason = session.can_enter(ctx["macro"])
     if not can_enter:
         logger.debug(f"Entry blocked: {reason}")
+        return
+
+    # ── v5.0 — NO NEW ENTRIES WHILE THE REGIME BOOK IS STALE ──────────────────
+    # The asymmetry is deliberate and is the other half of the hold above.
+    # HOLDING a label on a stale tick is declining to act on unknown information.
+    # OPENING a position is a DECISION — taking on new risk against a
+    # classification the engine currently cannot confirm — which is exactly what
+    # the rule prohibits. The costs are asymmetric too: a missed entry costs
+    # opportunity, and with 29 boxes there is plenty of that; a wrong entry costs
+    # capital.
+    # Open positions are unaffected: they keep being managed to exit by every
+    # price-based stop.
+    if _l2_integ is not None and getattr(_l2_integ, "stale", False):
+        logger.info("Entry blocked: regime book is STALE — waiting for a tick "
+                    "that resolves it. (Open positions keep being managed.)")
         return
 
 
