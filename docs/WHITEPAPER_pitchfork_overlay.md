@@ -1,5 +1,5 @@
 # The Pitchfork Overlay — Design White Paper
-### options_trader v4.0 milestone · drafted 2026-07-23 · §4.1 corrected 2026-08-01 (PF.1)
+### options_trader v4.0 milestone · drafted 2026-07-23 · §4.1 corrected 2026-08-01 (PF.1) · §5.3(b) corrected 2026-08-03 (AW)
 *Revision 2026-08-01 — §7 correction (application #2's target was removed on
 07-28), §7.3 A2 note promoted to a live hypothesis, and a four-phase build split
 added as §13. The design is unchanged; what changed is the schedule and one
@@ -227,8 +227,52 @@ A close beyond `P0` in the invalidating direction (bullish fork: close below
 and cleanest condition.
 
 **(b) Adverse tine break.**
-`N` consecutive anchor-timeframe closes beyond the **counter-trend** tine by
-`≥ D × ATR`. Start `N = 2`, `D = 0.25`.
+
+> **CORRECTED 2026-08-03. The rule below cannot work as written for a sloped
+> object, and the original is left visible rather than quietly rewritten.**
+> Measured on 29 symbols of real hourly tape: **24 of 27 invalidations (88.9%)
+> were this condition** against 3 structural, with a median fork life of **five
+> hourly bars** — under one session, where §5.2 expects a persistent object to
+> survive far longer.
+>
+> A sensitivity sweep over `N ∈ {2,3,4,6}` × `D ∈ {0.25,0.5,1.0}` **never brought
+> adverse-tine below 50% of deaths** (88.9% → 56.5% at the loosest corner) while
+> deaths barely moved (27 → 23). A magnitude problem collapses when the threshold
+> loosens; this asymptotes. So the **form** is wrong, not the numbers.
+>
+> **Two mechanisms, the second dominant:**
+>
+> 1. *It is time-dependent.* All three rails share the fork's slope, so a bullish
+>    fork's **lower** rail rises. Price need not weaken to end up beyond it — it
+>    only has to stand still. Demonstrated on a stationary fixture: the written
+>    form invalidated after **43 bars of perfectly flat price**, zero adverse
+>    movement.
+> 2. *Counting closes is noise-sensitive, and this is what produces the 88.9%.*
+>    A five-bar median life is far faster than mechanism 1 alone can explain. Two
+>    consecutive hourly closes 0.25 ATR beyond a rail is an ordinary retracement,
+>    not a structural event — and a bigger `N` still counts the same kind of thing.
+>
+> **The replacement asks a different question.** As written the condition asks
+> *"is price beyond the rail?"*. For a persistent object it should ask *"has price
+> **established itself** beyond the rail?"* — and the fork already owns the right
+> primitive, being anchored on fractal pivots. **Invalidate when a CONFIRMED PIVOT
+> forms beyond the counter-trend tine**, judged against the rail at the *pivot's
+> own index*. Same `_pivots` machinery, one lineage, and it inherits §4.4's
+> confirmation lag instead of fighting it. It addresses both mechanisms: a pivot
+> requires the excursion to have structure, and judging at the pivot's index
+> removes the time-dependence.
+>
+> Corroborating: the 3 structural deaths are rare precisely because **P0 violation
+> is already pivot-anchored**. The one condition tied to structure rather than to
+> a moving line is the one that behaves.
+>
+> Implemented as `adverse_mode="pivot"` in `analysis/pitchfork_lifecycle.py`
+> v1.2, **shipping OFF** so both forms stay measurable side by side. Switching the
+> default is a separate, deliberate act — and per **AW** the hourly fork is off
+> the critical path, so there is no reason to rush it.
+
+*Superseded original:* `N` consecutive anchor-timeframe closes beyond the
+**counter-trend** tine by `≥ D × ATR`. Start `N = 2`, `D = 0.25`.
 
 > **Asymmetry, deliberate:** breaking the *trend-side* tine is **acceleration,
 > not invalidation** — this is Andrews' own teaching and it is correct. A

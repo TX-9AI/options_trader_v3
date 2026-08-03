@@ -255,6 +255,56 @@ def test_replay_is_deterministic(bullish):
            [(e.kind, e.idx, e.reason) for e in two.events]
 
 
+def test_pivot_mode_ships_off(bullish):
+    """§5.3(b)'s written form stays the default so the two are measurable side by
+    side. Switching it is a separate, deliberate act."""
+    tr = ForkTracker("T", "1h")
+    assert tr.adverse_mode == "closes"
+
+
+@pytest.fixture
+def flat_tail():
+    """The bullish structure with a LONG stationary tail. The plain fixture has
+    only 9 bars after birth — nowhere near enough for the rail to climb through
+    price, so a test built on it proves nothing either way. Measured: the rail
+    needs ~43 bars here, because price sits well ABOVE the lower rail at birth
+    rather than on it."""
+    c = ([100.0] + _seg(100, 88, 12) + _seg(88, 116, 20) + _seg(116, 97, 14)
+         + _seg(97, 108, 12) + [108.0] * 40)
+    return _frame(c)
+
+
+def _run(df, **kw):
+    tr = ForkTracker("T", "1h", **kw)
+    born = None
+    for i in range(20, len(df)):
+        tr.step(df, ATR, i)
+        if born is None and tr.active is not None:
+            born = i
+    deaths = [e for e in tr.events if e.kind == INVALIDATED]
+    return tr, born, deaths
+
+
+def test_closes_mode_dies_on_stationary_price(flat_tail):
+    """§5.3(b) as written is TIME-DEPENDENT: all three rails share the fork's
+    slope, so a bullish fork's LOWER rail rises through stationary price. This is
+    the defect, demonstrated — zero adverse movement, fork still dies."""
+    _, born, deaths = _run(flat_tail)
+    assert deaths, "closes mode held through a stationary tail; fixture too short?"
+    assert "adverse" in deaths[0].reason
+    assert deaths[0].idx - born > 20, (
+        "died too fast to attribute to the rail climbing — check the fixture is "
+        "actually stationary")
+
+
+def test_pivot_mode_survives_stationary_price(flat_tail):
+    """Same tape, pivot form. No confirmed pivot forms outside the channel when
+    price merely stands still, so the fork holds — which is the whole point."""
+    tr, _, deaths = _run(flat_tail, adverse_mode="pivot")
+    assert not deaths, f"pivot mode invalidated on flat price: {deaths[0].reason}"
+    assert tr.active is not None
+
+
 def test_staleness_ships_off(bullish):
     """§5.3(d) says measure before enabling. It must be implemented AND off."""
     from analysis import pitchfork_lifecycle as pl

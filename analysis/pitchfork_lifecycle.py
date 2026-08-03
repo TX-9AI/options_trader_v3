@@ -1,9 +1,46 @@
 """
-analysis/pitchfork_lifecycle.py — options_trader_v3 — v1.1
+analysis/pitchfork_lifecycle.py — options_trader_v3 — v1.2
 
 PF/AS. §5 of docs/WHITEPAPER_pitchfork_overlay.md — the fork HOLDS UNTIL
 INVALIDATED. Weight 0. Consumed by nothing, gating nothing.
 
+v1.2 — 2026-08-03 — +adverse_mode="pivot". §5.3(b) AS WRITTEN CANNOT WORK FOR A
+        SLOPED OBJECT, and the sweep proved it by failing to improve: across the
+        whole N x D grid adverse-tine stayed dominant (88.9% -> 56.5%, never under
+        50%) while deaths barely moved (27 -> 23). A magnitude problem collapses
+        when you loosen the threshold. This asymptotes, which means the FORM is
+        wrong.
+        TWO THINGS ARE WRONG WITH THE FORM, and I first claimed only one of them
+        and overstated it. Recording both, and the correction.
+        (i) IT IS TIME-DEPENDENT. All three rails share the fork's slope, so a
+            BULLISH fork's LOWER rail RISES: price does not have to weaken to end
+            up beyond it, it only has to stand still. MEASURED on a fixture with a
+            long flat tail — closes mode DIED after 43 bars of perfectly
+            stationary price, zero adverse movement; pivot mode HELD.
+            MY OVERSTATEMENT, corrected: I first said "N=2 is the rule and 1.9
+            bars is the geometry, the same number". That arithmetic assumed price
+            sits ON the rail. It does not — at birth price sat 2.36 ABOVE the
+            lower rail, so the climb takes (gap + margin)/slope ~= 11 bars there
+            and 43 on the measured fixture. The effect is real and the direction
+            was right; the magnitude was not.
+        (ii) AND IT IS THE DOMINANT ONE: COUNTING CLOSES IS NOISE-SENSITIVE.
+            Observed p50 life on real tape is FIVE bars, far faster than (i) alone
+            can produce. Two consecutive hourly closes 0.25 ATR beyond a rail is
+            an ordinary retracement, not a structural event. That is what makes
+            88.9% of deaths adverse-tine, and no amount of loosening fixes it
+            because a bigger N still counts the same kind of thing.
+        THE FIX IS A DIFFERENT QUESTION. As specified the condition asks "is price
+        beyond the rail?" For a persistent object it should ask "has price
+        ESTABLISHED itself beyond the rail?" — and the fork already owns the right
+        primitive, since it is anchored on fractal pivots. adverse_mode="pivot"
+        invalidates when a CONFIRMED PIVOT forms beyond the counter tine. Same
+        _pivots machinery, one lineage, and it inherits §4.4's confirmation lag
+        rather than fighting it.
+        Corroborating evidence: the 3 structural deaths are rare precisely because
+        P0 violation is ALREADY pivot-anchored. The one condition tied to
+        structure rather than to a moving line is the one that behaves.
+        SHIPS OFF — default stays "closes" so the two are measurable side by side.
+        Switching §5.3(b) is a separate, deliberate act.
 v1.1 — 2026-08-03 — coverage() UNDERCOUNTED SUPERSESSION CHAINS. It paired only
         BORN→INVALIDATED, but a supersession emits SUPERSEDED then BORN, so each
         new BORN overwrote the open span without banking it and every held bar
@@ -94,7 +131,9 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from analysis.pitchfork import DEFAULT_VARIANT, Fork, build_fork, last_reject_reason
+from analysis.pitchfork import (
+    DEFAULT_VARIANT, FRACTAL_K, Fork, _pivots, build_fork, last_reject_reason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +193,8 @@ class ForkTracker:
                  adverse_closes: int = ADVERSE_CLOSES,
                  adverse_atr: float = ADVERSE_ATR,
                  stale_enabled: bool = STALE_ENABLED,
-                 stale_bars: int = STALE_BARS):
+                 stale_bars: int = STALE_BARS,
+                 adverse_mode: str = "closes"):
         self.symbol = symbol
         self.timeframe = timeframe
         self.variant = variant
@@ -162,6 +202,10 @@ class ForkTracker:
         self.adverse_atr = adverse_atr
         self.stale_enabled = stale_enabled
         self.stale_bars = stale_bars
+        # "closes" = §5.3(b) as written. "pivot" = invalidate on a CONFIRMED
+        # PIVOT beyond the counter tine. See the v1.2 note: the written form
+        # measures elapsed time on any sloped channel.
+        self.adverse_mode = adverse_mode
 
         self.active: Optional[Fork] = None
         self.events: List[ForkEvent] = []
@@ -254,18 +298,45 @@ class ForkTracker:
 
                 # (b) adverse tine break — N consecutive closes beyond the
                 # COUNTER-trend tine by >= D * ATR
-                counter = self._counter_tine(fk, now_idx)
                 margin = self.adverse_atr * atr
-                beyond_counter = (close < counter - margin
-                                  if fk.direction == "bullish"
-                                  else close > counter + margin)
-                self._adverse_run = self._adverse_run + 1 if beyond_counter else 0
-                if self._adverse_run >= self.adverse_closes:
-                    self._log(INVALIDATED, now_idx,
-                              f"adverse tine break: {self._adverse_run} closes "
-                              f"beyond the counter tine by >= {self.adverse_atr} ATR",
-                              close=f"{close:.2f}", rail=f"{counter:.2f}")
-                    self._retire()
+                if self.adverse_mode == "pivot":
+                    # A pivot at index p is CONFIRMED at p + k (§4.4), so the
+                    # pivot becoming knowable on THIS bar sits k bars back. Judge
+                    # it against the tine at its OWN index, not at now_idx — the
+                    # rail has moved since, and judging it here would smuggle the
+                    # same time-dependence back in.
+                    k = FRACTAL_K.get(self.timeframe, 3)
+                    pidx = now_idx - k
+                    if pidx > 0:
+                        sub = df.iloc[:now_idx + 1]
+                        for pv in _pivots(sub["high"].tolist(), sub["low"].tolist(),
+                                          k, self.timeframe):
+                            if pv.idx != pidx:
+                                continue
+                            rail = self._counter_tine(fk, pv.idx)
+                            broke = (pv.kind == "low" and pv.price < rail - margin
+                                     if fk.direction == "bullish"
+                                     else pv.kind == "high" and pv.price > rail + margin)
+                            if broke:
+                                self._log(INVALIDATED, now_idx,
+                                          "adverse tine break: confirmed PIVOT "
+                                          "beyond the counter tine",
+                                          pivot=f"{pv.price:.2f}@{pv.idx}",
+                                          rail=f"{rail:.2f}")
+                                self._retire()
+                            break
+                else:
+                    counter = self._counter_tine(fk, now_idx)
+                    beyond_counter = (close < counter - margin
+                                      if fk.direction == "bullish"
+                                      else close > counter + margin)
+                    self._adverse_run = self._adverse_run + 1 if beyond_counter else 0
+                    if self._adverse_run >= self.adverse_closes:
+                        self._log(INVALIDATED, now_idx,
+                                  f"adverse tine break: {self._adverse_run} closes "
+                                  f"beyond the counter tine by >= {self.adverse_atr} ATR",
+                                  close=f"{close:.2f}", rail=f"{counter:.2f}")
+                        self._retire()
 
             # (d) staleness — implemented, SHIPS OFF (§5.3 says measure first)
             if (self.active is not None and self.stale_enabled
