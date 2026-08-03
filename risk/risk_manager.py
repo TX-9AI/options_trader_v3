@@ -326,15 +326,18 @@ class RiskManager:
         self._session_pnl_usd = net   # keep the in-memory mirror truthful
         if net <= -self._daily_loss_limit and not self._session_halted:
             self._session_halted = True
+            # v-symbol 2026-08-03: NAME THE BOX. One symbol per box and 15 of
+            # them can breach independently, so an unattributed alert forces a
+            # fleet-wide hunt to find which one halted.
             logger.warning(
-                f"\U0001F6D1 DAILY LOSS LIMIT HIT: day P&L ${net:+.0f} "
+                f"\U0001F6D1 [{INSTRUMENT}] DAILY LOSS LIMIT HIT: day P&L ${net:+.0f} "
                 f"<= -${self._daily_loss_limit:.0f}. Halting NEW entries. "
                 f"Override via configure.sh."
             )
             try:
                 from notifications.alert_manager import get_alert_manager
                 get_alert_manager()._send(
-                    f"\U0001F6D1 DAILY LOSS LIMIT HIT — day P&L ${net:+.0f} "
+                    f"\U0001F6D1 {INSTRUMENT} DAILY LOSS LIMIT HIT — day P&L ${net:+.0f} "
                     f"(limit ${self._daily_loss_limit:.0f}). New entries halted. "
                     f"Override via configure.sh."
                 )

@@ -758,9 +758,9 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState):
                                f"no position recorded")
                 if fill.working_order_id:
                     get_alert_manager()._send(
-                        f"\U0001F6A8 Condor entry order {fill.working_order_id} "
-                        f"could not be cancelled and may still fill — "
-                        f"reconcile will adopt it. ({fill.detail})")
+                        f"\U0001F6A8 {INSTRUMENT} Condor entry order "
+                        f"{fill.working_order_id} could not be cancelled and may "
+                        f"still fill — reconcile will adopt it. ({fill.detail})")
                 return
             if fill.quantity < contracts:
                 logger.warning(f"Condor leg entry PARTIAL: {fill.quantity}/"
