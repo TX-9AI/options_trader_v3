@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.44
+# docs/BACKLOG.md — v3.45
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -1698,6 +1698,50 @@ file: everything above either ✅ or explicitly re-dated below.
 
 ## PART 2 — DEFERRED PAST THE WINDOW (kept, dated, gated — not forgotten)
 
+- **⬜ NICE-TO-HAVE, OUTSIDE THE EVM PLAN — does the morning sentiment score
+  predict trade outcomes?** Operator's idea 2026-08-03: let a bullish score
+  magnify long directional trades and penalise shorts — *"I didn't think it would
+  be wise to short into positive tailwinds or fire longs into headwinds."*
+  Operator's own call, and the right one: **measure the correlation first, build
+  nothing.** Filed here deliberately so it does not count against the schedule.
+  **THE NUDGE ALREADY EXISTS AND DOES SOMETHING ELSE.** `setup_scorer` v1.2 has a
+  signed brief nudge at `BRIEF_CONVICTION_WEIGHT = 0.05`, but `brief_sign` keys on
+  STRATEGY TYPE, not trade direction: ORB +1.0, Butterfly -1.0, IronCondor -1.0,
+  SweepReversal 0.0, and **Continuation is absent so it gets nothing.** A high
+  score boosts an ORB whether that ORB is long or short. What the operator
+  described needs the sign to come from the trade's DIRECTION — nobody built that.
+  **AND IT HAS ONLY JUST STARTED WORKING.** Per the 07-29 diagnosis,
+  `brief_strength` was a hardcoded **0.30 for every name every day** until the
+  `DTP_REPORT_JSON` fix landed after the close on 07-30. The 08-03 wake shows
+  `str` finally VARYING (+1.00 MSFT → +0.42 MU), so there are ~2 sessions of real
+  sentiment in the trade history. A month of accumulation is exactly right.
+  **⬜ WATCH: XOM printed `+0.30` on 08-03 — exactly the old
+  `strength_by_sym.get(s, 0.3)` fallback** while every other name varied. Likely a
+  missing entry defaulting silently, which would quietly poison any correlation.
+  Check before trusting the series.
+  **RECORDING IS ALREADY IN PLACE (eod_conductor v1.12.0, phase 5c).**
+  `data/report.json` is overwritten every 09:15, so the day's scores were being
+  destroyed before they could be joined. Phase 5c archives it to
+  `reports/morning_report_<date>.json` with a freshness check — a stale file is
+  worse than none, since it would attribute an old day's sentiment to today's
+  trades, which is precisely the 07-29 failure mode. Chosen over a trade-row
+  column because the score is per SYMBOL PER DAY, not per trade: no sqlite
+  migration, nothing box-side, no freeze exposure.
+  **HOW TO ANALYSE IT, and the one correction to "per symbol":** at ~31 trades/day
+  fleet-wide a month gives ~20 trades PER SYMBOL — hopeless, the same wall **AV**
+  hit. **POOL ACROSS SYMBOLS** (the score is a cross-symbol ranking, so pooling is
+  legitimate) and a month is ~650 trades, which resolves a correlation down to
+  r≈0.11. `tests/gap_outcome_join.py` already does this join shape — swap the
+  conditioning column from gap class to score bucket.
+  **⬜ REVISIT ~2026-09-05**, roughly a month of archived reports. Same
+  accumulation window as **AV** (2026-08-13), so they can be read together.
+  **IF IT CORRELATES**, the change is to make `brief_sign` directional rather than
+  strategy-keyed — a behaviour change, so post-freeze, and it needs its own
+  pre-registered validation. **NEVER A VETO**, per the operator: influence only.
+  Note that "influence, not veto" is harder to guarantee than it sounds — anything
+  upstream of a grade threshold can veto in effect, so the weight belongs where it
+  cannot cross a gate.
+
 - **⬜ L3.7 — wire live + delete UNKNOWN from the enum + recalibration cadence.**
   After the bars are placed (late Sep). Grep status.py/query.py/alerts before the
   enum change; the data-fault no-trade stays forever.
@@ -2240,6 +2284,17 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.45 — 2026-08-03 — SENTIMENT SCORE RECORDING STARTS; THE ANALYSIS IS FILED
+  OUTSIDE THE PLAN.** Operator's idea: weight directional trades by the morning
+  sentiment score, never veto. Turns out `setup_scorer` v1.2 ALREADY has a signed
+  brief nudge — but it keys on STRATEGY TYPE (ORB +1, condor/butterfly -1,
+  continuation absent), not trade direction, so it does not do what was described.
+  It also only started working at all after the 07-30 DTP_REPORT_JSON fix; the
+  08-03 wake is the first with `str` actually varying per symbol. `eod_conductor`
+  **v1.12.0 phase 5c** archives `report.json` daily with a freshness check, since
+  it was being overwritten every morning and the scores destroyed. Analysis filed
+  in **PART 2, outside the EVM plan**, to revisit ~09-05. Watch: XOM printed the
+  old 0.30 fallback exactly while every other name varied.
 - **v3.44 — 2026-08-02 — THE BOTTLENECK IS n, NOT THE METRIC. AV GETS A DATED
   REVISIT TRIGGER.** `gap_outcome_join` v1.4 added `--metric r|winrate|pnl` and a
   power line. **R did not reduce variance, it rescaled it** — sd 340/0.318 and
