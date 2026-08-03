@@ -1,7 +1,27 @@
 #!/usr/bin/env python3
 """
-tests/adx_reconstruct.py — v1.1 — 2026-08-03
+tests/adx_reconstruct.py — v1.2 — 2026-08-03
 
+v1.2 — 2026-08-03 — A MINIMUM OVERLAP, AND A STALENESS COLUMN. The first fleet
+       run exposed two things v1.1 could not see.
+       (a) THE BAR COULD BE CLEARED BY ONE ROW. Overlaps came back n=1,2,1,3,2,1,
+       4,1,4,1 — and ORCL "FAILED" on n=1 while eight symbols "PASSED" on n<=4.
+       A median over one observation is that observation. Every other tool this
+       week carries a refusal floor (MIN_CELL_N, MIN_DEATHS); this one did not,
+       which is the same omission in a new place. MIN_OVERLAP now refuses rather
+       than reporting a verdict a single row could flip.
+       (b) regime_log IS NOT A TICK LOG. 457 rows across a month — it writes on
+       regime CHANGES. Measured against real entries: the gap back to the nearest
+       preceding row is p50 600s, p90 1740s, max 4770s. Within 60s: 13/42. So the
+       item's "tolerance <= 60s" was written assuming a denser log, and at 60s
+       roughly a third of rows get filled.
+       WIDENING THE TOLERANCE IS THE WRONG FIX. ADX-14 on 5m spans 70 minutes so
+       a 10-minute-old reading is not absurd — but it is not the reading AT ENTRY
+       either, and `adx_at_entry` means what was true at that moment. So instead
+       every reconstructed row now records HOW STALE its source was, in a
+       `staleness_s` column, and the caveat travels with the data rather than
+       living in one decision made once. A downstream study picks its own
+       tolerance; this tool no longer picks it for everyone.
 v1.1 — 2026-08-03 — --db ACCEPTS A DIRECTORY. v1.0 took a single file, on the
        assumption there was one trades.db. There is not: the fleet pulls to
        `~/day_trader_pro/trades/<date>/<SYM>_trades_<date>.db` — one db PER SYMBOL
@@ -69,7 +89,7 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # The v-obs migration that added adx_at_entry. Rows entered on or after this
 # carry a real reading and are the held-out overlap.
@@ -79,6 +99,9 @@ TOLERANCE_S = 60
 # Pre-registered agreement bar — stated before the overlap is measured.
 MAX_MEDIAN_ERR = 1.0
 MIN_WITHIN_5 = 0.90
+# A median over one observation IS that observation. Refuse rather than report a
+# verdict a single row could flip — the same floor every other tool here carries.
+MIN_OVERLAP = 8
 
 TS_RE = re.compile(r"(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2}):(\d{2})")
 
@@ -114,6 +137,15 @@ def _load_regime(conn):
     return out
 
 
+def _ensure_staleness_col(conn):
+    """Add staleness_s if absent. Additive, idempotent, and it is what lets a
+    later reader choose a tolerance instead of inheriting this tool's."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(trades)")]
+    if "staleness_s" not in cols:
+        conn.execute("ALTER TABLE trades ADD COLUMN staleness_s REAL")
+        conn.commit()
+
+
 def _nearest_preceding(rows, t, tol_s):
     """Largest logged_at <= t, within tolerance. Binary search on a sorted list.
 
@@ -131,9 +163,10 @@ def _nearest_preceding(rows, t, tol_s):
             hi = mid - 1
     if best is None:
         return None
-    if (t - best[0]) > timedelta(seconds=tol_s):
+    age = (t - best[0]).total_seconds()
+    if age > tol_s:
         return None
-    return best[1]
+    return best[1], age
 
 
 def _dbs(path):
@@ -168,9 +201,10 @@ def run_one(path, a) -> int:
         real = float(t["adx_at_entry"] or 0.0)
         if real <= 0:
             continue
-        got = _nearest_preceding(regime, et, a.tolerance)
-        if got is None:
+        hit = _nearest_preceding(regime, et, a.tolerance)
+        if hit is None:
             continue
+        got, _age = hit
         overlap += 1
         e = abs(got - real)
         errs.append(e)
@@ -178,8 +212,10 @@ def run_one(path, a) -> int:
             within5 += 1
 
     name = os.path.basename(path)
-    if overlap == 0:
-        print(f"  {name:<34} REFUSED — no overlap rows to validate the join")
+    if overlap < MIN_OVERLAP:
+        print(f"  {name:<34} REFUSED — overlap n={overlap} < {MIN_OVERLAP}; a "
+              f"verdict here would rest on\n       too few rows to mean anything "
+              f"(a median over one row IS that row).")
         conn.close()
         return 2
     med, frac = _median(errs), within5 / overlap
@@ -204,21 +240,26 @@ def run_one(path, a) -> int:
         if float(t["adx_at_entry"] or 0.0) > 0:
             already += 1
             continue
-        got = _nearest_preceding(regime, et, a.tolerance)
-        if got is None:
+        hit = _nearest_preceding(regime, et, a.tolerance)
+        if hit is None:
             no_match += 1
             continue
-        to_write.append((t["trade_id"], got, t["notes"] or ""))
+        got, age = hit
+        to_write.append((t["trade_id"], got, age, t["notes"] or ""))
     if a.apply and to_write:
+        _ensure_staleness_col(conn)
         cur = conn.cursor()
-        for tid, adx, notes in to_write:
+        for tid, adx, age, notes in to_write:
             tag = "source=reconstructed"
             nn = notes if tag in notes else (notes + " " + tag).strip()
-            cur.execute("UPDATE trades SET adx_at_entry=?, notes=? "
-                        "WHERE trade_id=?", (adx, nn, tid))
+            cur.execute("UPDATE trades SET adx_at_entry=?, staleness_s=?, "
+                        "notes=? WHERE trade_id=?", (adx, age, nn, tid))
         conn.commit()
+        ages = sorted(w[2] for w in to_write)
         print(f"       ✅ wrote {len(to_write)}  (no match {no_match}, "
               f"already real {already})")
+        print(f"          staleness_s: p50 {ages[len(ages)//2]:.0f}s  "
+              f"max {ages[-1]:.0f}s  — downstream picks its own tolerance")
     else:
         print(f"       would write {len(to_write)}  (no match {no_match}, "
               f"already real {already})"

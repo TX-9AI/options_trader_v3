@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.48
+# docs/BACKLOG.md — v3.49
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -1275,17 +1275,6 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   **VALIDATE:** the pull_val rule — accept a bound only where the raw
   distribution spans the behaviour the factor measures. Angle does
   (p5 1.09° → p99 47.14°). `align_frac` currently does not.
-- `[DESK]` **Historical ADX reconstruction.** Timestamp-join `regime_log` → trades to
-  backfill `adx_at_entry` on pre-07-27 rows (deferred at the 07-24 fix; the warm
-  rebuild makes it worth doing now). Offline, control-side.
-  **HOW:** nearest-preceding-timestamp join per symbol, tolerance ≤ 60s, off the
-  N.1-harvested regime_log archive (no ad-hoc box pulls); write back via an
-  UPDATE tagged `source=reconstructed`.
-  **VALIDATE:** free overlap check we already collect — rows since 07-27 carry
-  BOTH the live-captured `adx_at_entry` and a reconstructable value; the
-  reconstruction error distribution on that overlap qualifies (or disqualifies)
-  the backfill. |err| p90 < 2 ADX points = trustworthy; worse = tag the backfilled
-  rows excluded from calibration queries.
 - `[DESK·DATA]` **L1.6 (first pass) — flat-angle sweep.** 16–26° against the rebuilt multi-day
   diary (07-14 → 08-04) with the rotating 30% holdout — never off one day. Output:
   the candidate frozen cut, staged for the Aug 10 deploy.
@@ -1586,14 +1575,6 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   pattern); the decision memo cites n, win share, and net R of the counterfactual
   entries. Thin n → keep the current handoff (rule 12: thin samples find
   mechanisms, not conclusions).
-- `[DESK]` **I — butterfly cutoff branch decision.** `can_enter(is_butterfly=...)` is
-  unreachable; either fix the `main.py` call site (if a 15:00 butterfly cutoff is
-  ever wanted) or delete the branch so config and code stop disagreeing. Decision
-  today; code post-freeze.
-  **HOW/VALIDATE:** one query on collected trades — the butterfly entry-time
-  distribution (trades.db). If no fill has ever wanted the 15:00 window, delete
-  the branch (loose-code principle); if late entries exist and lost, wire the call
-  site. Data decides a two-line decision.
 - `[DESK·DATA]` **AA checkpoint.** Any two-sided condor with both legs near-simultaneous since
   07-17? Post-fix sample was 7 legs at last count. If clean through ~4 weeks,
   close AA as superseded-by-Y+rich-triggers; if recurred, it gets a forensic slot
@@ -2003,6 +1984,52 @@ file: everything above either ✅ or explicitly re-dated below.
   every file-level check there is. Also recorded: a full regen is a ~5 hour job on
   control, and a test suite queued against the same box will stall on CPU
   contention rather than hang.
+- **Historical ADX reconstruction ❌ 2026-08-03 — CLOSED AS NOT SUPPORTABLE ON
+  THIS DATA, which is a result rather than a failure to build.** The item assumed
+  a `regime_log` → trades timestamp join at tolerance <= 60s would recover
+  `adx_at_entry` on pre-07-27 rows. `tests/adx_reconstruct.py` v1.2 was built,
+  and its held-out check — reconstruct rows that ALREADY carry a real value since
+  2026-07-27 and compare — says the join does not work at any tolerance:
+  `  tol   60s  overlap n=4    REFUSED (below the n>=8 floor)`
+  `  tol  600s  overlap n=7    REFUSED`
+  `  tol  900s  overlap n=8    med|err| 1.90   within5 62%   FAIL`
+  `  tol 1800s  overlap n=15   med|err| 6.28   within5 40%   FAIL`
+  `  tol 3600s  overlap n=17   med|err| 7.88   within5 35%   FAIL`
+  **Accuracy collapses exactly as the sample grows large enough to measure it.**
+  CAUSE: `regime_log` writes on regime CHANGES, not on ticks — 457 rows across a
+  month. Measured against real entries, the gap back to the nearest preceding row
+  is p50 600s, p90 1740s, max 4770s; only 13/42 land within 60s. A row ten minutes
+  old genuinely does not describe ADX at entry, and `adx_at_entry` means what was
+  true AT THAT MOMENT.
+  **Widening the tolerance until something writes would have produced
+  plausible-looking wrong numbers** — worse than the 0.0 default, because a zero
+  is obviously missing and a wrong ADX is not. The tool refuses on both grounds
+  and prints why, so this closes with evidence rather than a shrug.
+  **KEPT:** the `staleness_s` column the tool adds, so any FUTURE join to
+  regime_log records how old its source was and the caveat travels with the row
+  instead of living in one decision. And the tool itself, as the proof.
+  **PROCESS NOTE:** the first fleet run reported "8 passed, 2 failed" on overlaps
+  of n=1..4 — one symbol "FAILED" on a single row. Every other tool this week
+  carries a refusal floor and this one did not; v1.2 adds MIN_OVERLAP=8. A bar a
+  single row can clear is not a bar.
+
+- **I ✅ 2026-08-03 — butterfly cutoff RESOLVED: the branch guards nothing,
+  DELETE it** (code post-freeze, per the item). `tests/butterfly_cutoff_query.py`
+  v1.1 over 379 trade rows across 15 dbs found **3 butterfly trades, all entered
+  before 15:00 ET** — 12:35, 12:41, 13:40, latest 13:40. No fill has ever wanted
+  the 15:00 window, so per the item's loose-code principle the unreachable
+  `can_enter(is_butterfly=...)` branch goes and config stops disagreeing with code.
+  **THE FIRST RUN SAID THE OPPOSITE, and the correction matters more than the
+  answer.** v1.0 compared the raw `HH:MM` from `entry_time` to a 15:00 ET cutoff —
+  but entry_time is stored in **UTC** (`...T17:38:45+00:00`). Every entry read four
+  hours late, so the same three trades appeared at 16:35 / 16:41 / 17:40 and the
+  verdict came back "late entries exist and WON, so the cutoff would have COST
+  money — delete the branch AND correct the config." **The action was right by
+  luck; the reasoning was backwards**, and it would have entered the record as
+  evidence that a 15:00 butterfly cutoff is harmful — a claim the tape does not
+  make. v1.1 parses the offset, converts properly, and prints BOTH the ET and raw
+  UTC times so the conversion is visible rather than trusted.
+
 - **AN ✅ 2026-08-01 — PF.1 CONSTRUCT BUILT, and the white paper's §4.1 was
   wrong about its own foundation.** `analysis/pitchfork.py` v1.0 +
   `tests/test_pitchfork_construct.py` (24 tests). Weight 0, consumed by nothing —
@@ -2448,6 +2475,21 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.49 — 2026-08-03 — TWO SOLO DESK ITEMS CLOSED, ONE AS A NEGATIVE.**
+  **Historical ADX reconstruction ❌ closes as NOT SUPPORTABLE**: the held-out
+  check (reconstruct rows that already have a real value, compare) fails at every
+  tolerance — below 900s the overlap is too thin to judge, at 900s+ median error
+  runs 1.90 → 6.28 → 7.88 ADX points. `regime_log` writes on regime CHANGES, not
+  ticks (457 rows/month, p50 gap 600s), so a preceding row minutes old does not
+  describe ADX at entry. Widening until something writes would have produced
+  plausible wrong numbers, which is worse than a 0.0. Kept: the `staleness_s`
+  column, so future joins carry their own caveat.
+  **Item I ✅ RESOLVED — delete the branch**: 3 butterfly trades ever, all before
+  15:00 ET. The FIRST run said the opposite because `entry_time` is stored in UTC
+  and v1.0 compared the raw clock to an ET cutoff — right action, backwards
+  reasoning, corrected in v1.1 which now prints ET and UTC side by side.
+  Also recorded: adx_reconstruct v1.2 gains MIN_OVERLAP=8 after the first fleet
+  run reported PASS/FAIL verdicts on overlaps of n=1.
 - **v3.48 — 2026-08-03 — THE GAP-DAY MISREAD, AND TWO MISSES THE SAME SESSION
   EXPOSED.** New **AY**. The tape: MSFT +4.93%, AMZN +4.58%, NFLX +2.26% with the
   ENTIRE move in the opening bar, then hours of chop. TRENDING is ADX-14 on 5m ≈ a

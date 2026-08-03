@@ -1,6 +1,22 @@
 #!/usr/bin/env python3
 """
-tests/butterfly_cutoff_query.py — v1.0 — 2026-08-03
+tests/butterfly_cutoff_query.py — v1.1 — 2026-08-03
+
+v1.1 — 2026-08-03 — TIMEZONE. v1.0 read the raw HH:MM out of `entry_time` and
+       compared it to a 15:00 ET cutoff. But entry_time is stored in **UTC** —
+       `2026-08-03T17:38:45.284192+00:00`. So every entry looked four hours later
+       than it was, and the first real run reported three "late" butterflies at
+       16:35 / 16:41 / 17:40 that are actually **12:35 / 12:41 / 13:40 ET** — all
+       comfortably BEFORE the cutoff.
+       THE VERDICT WAS EXACTLY BACKWARDS: "late entries exist and WON, so the
+       cutoff would have cost money" became "no butterfly has ever opened at or
+       after 15:00, so the branch guards nothing". The ACTION happens to be the
+       same (delete the branch), but the REASONING was wrong and would have gone
+       into the record as evidence the cutoff is harmful — a claim the tape does
+       not make.
+       Now the offset in the timestamp is parsed and applied, ET is derived
+       properly, and both the raw and converted times are printed so the
+       conversion is visible rather than trusted.
 
 BACKLOG ITEM I — "butterfly cutoff branch decision". `can_enter(is_butterfly=...)`
 is unreachable: either fix the main.py call site (if a 15:00 butterfly cutoff is
@@ -54,19 +70,40 @@ import os
 import re
 import sqlite3
 import sys
+from datetime import datetime, timedelta
 
-TS_RE = re.compile(r"(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})")
+# capture the offset too — entry_time is written in UTC (+00:00), and comparing
+# a UTC wall clock to an ET cutoff shifts every trade four hours later.
+TS_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2}):(\d{2})"
+    r"(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?")
 DEFAULT_CUTOFF = "15:00"
+# US/Eastern is UTC-4 in DST. The whole trading calendar here is inside DST, so a
+# fixed offset is exact for this data; if that ever stops being true this is the
+# line to revisit rather than a silent drift.
+ET_OFFSET_H = -4
 
 
-def _hhmm(ts):
+def _et(ts):
+    """(date_et, 'HH:MM' ET, 'HH:MM' as stored) or None.
+
+    entry_time is UTC. Convert BEFORE comparing to a wall-clock ET cutoff.
+    """
     m = TS_RE.search(str(ts or ""))
-    return f"{m.group(2)}:{m.group(3)}" if m else None
-
-
-def _date(ts):
-    m = TS_RE.search(str(ts or ""))
-    return m.group(1) if m else "?"
+    if not m:
+        return None
+    d = m.group(1)
+    dt = datetime(int(d[:4]), int(d[5:7]), int(d[8:10]),
+                  int(m.group(2)), int(m.group(3)), int(m.group(4)))
+    raw = f"{m.group(2)}:{m.group(3)}"
+    off = m.group(5)
+    if off in (None, "Z", "+00:00", "+0000"):
+        dt = dt + timedelta(hours=ET_OFFSET_H)          # UTC -> ET
+    else:
+        sign = 1 if off[0] == "+" else -1
+        oh = int(off[1:3])
+        dt = dt - sign * timedelta(hours=oh) + timedelta(hours=ET_OFFSET_H)
+    return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M"), raw
 
 
 def _dbs(path):
@@ -106,12 +143,13 @@ def main(argv) -> int:
                        or "butterfly" in str(t["setup_type"] or "").lower())
             if not is_bfly:
                 continue
-            hm = _hhmm(t["entry_time"])
-            if hm is None:
+            conv = _et(t["entry_time"])
+            if conv is None:
                 no_time += 1
                 continue
+            d_et, hm, raw = conv
             rows.append({"id": t["trade_id"], "sym": t["symbol"],
-                         "date": _date(t["entry_time"]), "hhmm": hm,
+                         "date": d_et, "hhmm": hm, "raw": raw,
                          "pnl": float(t["pnl_usd"] or 0.0),
                          "status": str(t["status"] or ""),
                          "setup": str(t["setup_type"] or "")})
@@ -126,7 +164,8 @@ def main(argv) -> int:
         print("'guards nothing' from 'never tested'. NOT a decision — say so.")
         return 0
 
-    print(f"\nENTRY-TIME DISTRIBUTION (cutoff under test: {a.cutoff} ET)")
+    print(f"\nENTRY-TIME DISTRIBUTION — converted to ET "
+          f"(entry_time is stored UTC; cutoff under test: {a.cutoff} ET)")
     by_hour = collections.Counter(r["hhmm"][:2] + ":00" for r in rows)
     for h in sorted(by_hour):
         bar = "█" * by_hour[h]
@@ -152,8 +191,9 @@ def main(argv) -> int:
         print("         Listed individually below: with a sample this small a win")
         print("         rate would be theatre, so read the rows, not a percentage.")
         for r in sorted(late, key=lambda r: r["hhmm"]):
-            print(f"           {r['date']} {r['hhmm']} {r['sym']:<6} "
-                  f"{r['pnl']:+9.2f}  {r['setup'][:34]}")
+            print(f"           {r['date']} {r['hhmm']} ET "
+                  f"({r['raw']} UTC) {r['sym']:<6} "
+                  f"{r['pnl']:+9.2f}  {r['setup'][:30]}")
         if net < 0:
             print("\n         Net NEGATIVE -> the cutoff would have helped. WIRE the")
             print("         call site.")
