@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.53
+# docs/BACKLOG.md — v3.54
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -760,93 +760,6 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   while the tooling insisted everything passed. Each fix revealed the next layer.
   The tooling was never going to surface it alone.
 
-- `[DESK]` **AV — GAP CLASS x TIME OF DAY IS A CONDITIONING VARIABLE AND NOTHING
-  IN THE FLEET KEYS ON IT. `tests/gap_outcome_join.py` v1.0.** Opened 2026-08-02
-  out of AQ's clean-corpus result. **This is what survived; read it with the list
-  of what did not.**
-  **WHAT DIED IN AQ/AR ON CLEAN DATA:** drift shows NO EDGE at any horizon or
-  elapsed bucket, so **A2.5 as a live drift factor should be DROPPED, not
-  deferred**; the wrong-theta-sign hypothesis for continuation's -$2,024 is NOT
-  supported; and the excursion difference is real but ~3% at p90, which does not
-  move a condor's economics.
-  **WHAT SURVIVED, and it is not A2 at all:**
-  `             OPEN         DECAY        CLEAN`
-  `FLAT          3.60   →    13.78   →     3.55`
-  `CONT          9.89   →     5.91   →     1.46`
-  `REV           9.55   →     5.98   →     1.83`
-  On a flat open the first 70 minutes are statistically indistinguishable from
-  midday, then 10:40-12:00 runs ~4x hotter. On gap days the open is hot and
-  decays monotonically. **Two completely different day shapes, and every strategy
-  currently treats them identically.**
-  **SO A2 WAS NEVER THE TRADEABLE SIGNAL — it was the INSTRUMENT.** A sensitive
-  proxy for regime ambiguity that made day type visible when we had no other way
-  to measure it. That is a legitimate outcome for a diagnostic, and it is worth
-  recording as such rather than pretending the state itself pays.
-  **THE SHARPEST TEST, and why ORB is first:** ORB forms its opening range
-  09:30-10:00 — PRECISELY the window the clean grid shows is dead on flat opens
-  and hot on gap days. **AH** has ORB at **-0.24R over 252 trades** with no
-  explanation offered. If that decomposes into something like "+0.3R on gap days,
-  -0.8R on flat opens", it is a gate with a real sample behind it, **no new
-  collection**, landing well before the freeze. Same split applies to the 362
-  condors and to continuation's handoff-vs-standalone problem.
-  **THE TOOL:** joins `reports/gap_pct.json` to `reports/fleet_trades_<date>.json`
-  by (date, symbol). Rows by strategy / setup_grade / regime / box, columns by gap
-  class, optional entry-time window matching a2_partition's buckets. Mean ±95%,
-  win rate and MEDIAN per cell — median because one large loser can dominate a
-  small cell. Cells under n=30 are REFUSED. Verified on a fixture with a planted
-  ORB split (+42.5 CONT / -50.5 FLAT) which it recovered exactly while showing no
-  split on the other two strategies.
-  **⬜ REVISIT TRIGGER — 2026-08-13, and this is a DATE not an intention.** The
-  first real runs settled that the question is not yet answerable and, more
-  usefully, exactly WHEN it becomes answerable.
-  **WHAT THE RUNS SHOWED.** Clean window (--since 2026-07-23) gives 215 trades,
-  116 of them from 07-31 alone. Of 15 cells only continuation cleared n=30:
-  CONT -12.3 ±90.1, REV -1.4 ±100.5 — a band 7-8x the point estimate, which is
-  no measurement. It also ERASED the condor CONT/REV split that looked like the
-  one real signal at n=30/30 pooled (clean: n=10/11) — an artifact of the
-  confounded window, exactly as HISTORY.md predicted.
-  **BOTH LOWER-VARIANCE ALTERNATIVES FAILED, and how R failed is the finding.**
-  `--metric r` did NOT reduce variance, it RESCALED it: sd 340/0.318 = $1,069 and
-  detectable 188.5/0.176 = $1,071 — identical to four digits. **`max_loss` is
-  near-constant at ~$1,070**, so dividing by it only changes the axis units.
-  Which means **the risk manager is sizing consistently** (good, found by
-  accident) and **the $340 sigma is OUTCOME dispersion, not position-size
-  dispersion** — there was no size variance to remove. `--metric winrate` is
-  worse: sd 0.501 at n=51 detects only a **27.8 percentage-point** difference.
-  **SO THE BOTTLENECK WAS NEVER THE METRIC — IT IS n**, and n is capped by the
-  fleet's trade rate (~31/day in the clean window, continuation 46% of that, split
-  three ways = ~4.8 per cell per day):
-  `  detect 0.20 R  ->  n=  40/cell  ->   ~8 trading days`
-  `  detect 0.10 R  ->  n= 159/cell  ->  ~33 trading days`
-  `  detect 0.05 R  ->  n= 634/cell  -> ~133 trading days`
-  **THE TRIGGER: re-run `--by strategy` when continuation clears n≈40 per cell,
-  expected ~2026-08-13** (8 trading sessions past 2026-08-02). That reads a
-  **0.20 R** effect and nothing smaller. 0.10 R lands ~2026-09-15, after go-live.
-  **DECIDE NOW WHICH YOU WOULD ACT ON**, because the answer at 0.20 R and at
-  0.10 R may differ and committing in advance is the difference between a test and
-  a search. 0.20 R is a fifth of risk per trade — a large effect; absence of one
-  is NOT evidence of no effect at all.
-  **THE ONE LEVER THAT MOVES THE DATE** is not waiting or re-slicing but **not
-  splitting three ways**: collapse to gap-vs-flat, or pool strategies sharing a
-  mechanism, and n per cell roughly triples — putting 0.10 R inside ~11 days.
-  Whether that pooling is legitimate is a judgement about whether ORB and
-  continuation respond to gaps the same way, which is exactly the kind of question
-  **the tick corpus CAN answer and the trade log cannot** (150,517 ticks vs 215
-  trades — three orders of magnitude).
-  **NOT BLOCKED, DELIBERATELY PARKED.** Operator's call 2026-08-02: let it
-  accumulate. Several sessions of positive expectancy on the CURRENT engine —
-  post-07-22, post-L2.5, at the ~15-31 trades/day rate rather than the un-gated
-  ~120/day that produced the early sample. That is the configuration going live.
-  **⬜ LIMITS WRITTEN INTO THE TOOL, not discovered later:** fills are PAPER, so a
-  split depending on fill quality will not show; 252 ORB trades over 15 sessions
-  across 3 classes is ~84/class BEFORE any further split, so n is thin; gap class
-  is per (date, symbol) so every trade on a symbol-day inherits one class — correct,
-  since the gap is a property of the session, but it means cells are not
-  independent samples; and pnl_usd is used rather than R, so position size varies.
-  **It is not a backtest.** It reports realised outcomes partitioned by a variable
-  that was always computable and never computed. Any gate that follows needs its
-  own pre-registered validation.
-
 - `[DESK]` **AW — THE HOURLY FORK IS NOT A LEVEL. RE-SCOPE PF.3, THE v4.0 GATE,
   AND THE L1 CORROBORATOR ON MEASURED COVERAGE.** 2026-08-03, from the first run
   of `pitchfork_filter_audit` v1.2 and `a2_rail_drift` v1.1 through **AS**'s
@@ -1214,20 +1127,6 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   **VALIDATE:** A2 violating-tick count on the same tape, before and after, at
   identical --warm-sessions. Must fall sharply. Also confirm TRENDING dom% does
   NOT collapse — the fix must decouple, not suppress.
-- `[DESK]` **A2.3 — THE LOG-ODDS REFORMULATION. The correct endpoint. HOLD UNTIL
-  AFTER GO-LIVE (Aug 31).** Operator's instinct, and it is right: treat
-  trend-vs-range as ONE latent axis in log-odds rather than two independent
-  scores. Each factor contributes a log-likelihood ratio, evidence ADDS in
-  log-odds space, then `TREND = sigmoid(L)` and `RANGE = sigmoid(-L) = 1 - TREND`.
-  **A2 then becomes IMPOSSIBLE TO VIOLATE rather than tested for** — the
-  invariant stops being an acceptance check and becomes a property of the
-  construction. Same reasoning generalises: any mutually-exclusive pair belongs
-  on one axis, and the current design only accidentally gets that right for
-  breakout/compression.
-  **WHY NOT NOW:** it is a rewrite of the regime scoring core four weeks before
-  live capital. Every ramp bound, every acceptance check and the entire L1.11
-  calibration track are fitted against the current formulation. Ship A2.2's
-  targeted fix for go-live; take A2.3 in September with time to re-fit.
 - `[DESK]` **L1.9a — bookmark tester proof.** Run against copies of real `ohlc/<date>/`
   folders; prove byte-inert on the diary for warm-irrelevant days and prove the
   EOD conductor chain is untouched. The conductor is finally flawless — it stays
@@ -1522,6 +1421,95 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   of a session.
 
 **⬜ Thu Aug 13**
+
+- `[DESK·DATA]` **AV — GAP CLASS x TIME OF DAY IS A CONDITIONING VARIABLE AND NOTHING
+  **⏱ RE-DATED 2026-08-04 from Sat Aug 1 to Thu Aug 13, and RE-TAGGED `[DESK·DATA]`.** It was dated due 08-01 while its own text records it OPENED 08-02 — due before it existed. And it waits on ~40 trades per cell to read a 0.20 R effect, a DC&A dependency rather than effort: it was counted against execution for sessions that had not happened yet.
+  IN THE FLEET KEYS ON IT. `tests/gap_outcome_join.py` v1.0.** Opened 2026-08-02
+  out of AQ's clean-corpus result. **This is what survived; read it with the list
+  of what did not.**
+  **WHAT DIED IN AQ/AR ON CLEAN DATA:** drift shows NO EDGE at any horizon or
+  elapsed bucket, so **A2.5 as a live drift factor should be DROPPED, not
+  deferred**; the wrong-theta-sign hypothesis for continuation's -$2,024 is NOT
+  supported; and the excursion difference is real but ~3% at p90, which does not
+  move a condor's economics.
+  **WHAT SURVIVED, and it is not A2 at all:**
+  `             OPEN         DECAY        CLEAN`
+  `FLAT          3.60   →    13.78   →     3.55`
+  `CONT          9.89   →     5.91   →     1.46`
+  `REV           9.55   →     5.98   →     1.83`
+  On a flat open the first 70 minutes are statistically indistinguishable from
+  midday, then 10:40-12:00 runs ~4x hotter. On gap days the open is hot and
+  decays monotonically. **Two completely different day shapes, and every strategy
+  currently treats them identically.**
+  **SO A2 WAS NEVER THE TRADEABLE SIGNAL — it was the INSTRUMENT.** A sensitive
+  proxy for regime ambiguity that made day type visible when we had no other way
+  to measure it. That is a legitimate outcome for a diagnostic, and it is worth
+  recording as such rather than pretending the state itself pays.
+  **THE SHARPEST TEST, and why ORB is first:** ORB forms its opening range
+  09:30-10:00 — PRECISELY the window the clean grid shows is dead on flat opens
+  and hot on gap days. **AH** has ORB at **-0.24R over 252 trades** with no
+  explanation offered. If that decomposes into something like "+0.3R on gap days,
+  -0.8R on flat opens", it is a gate with a real sample behind it, **no new
+  collection**, landing well before the freeze. Same split applies to the 362
+  condors and to continuation's handoff-vs-standalone problem.
+  **THE TOOL:** joins `reports/gap_pct.json` to `reports/fleet_trades_<date>.json`
+  by (date, symbol). Rows by strategy / setup_grade / regime / box, columns by gap
+  class, optional entry-time window matching a2_partition's buckets. Mean ±95%,
+  win rate and MEDIAN per cell — median because one large loser can dominate a
+  small cell. Cells under n=30 are REFUSED. Verified on a fixture with a planted
+  ORB split (+42.5 CONT / -50.5 FLAT) which it recovered exactly while showing no
+  split on the other two strategies.
+  **⬜ REVISIT TRIGGER — 2026-08-13, and this is a DATE not an intention.** The
+  first real runs settled that the question is not yet answerable and, more
+  usefully, exactly WHEN it becomes answerable.
+  **WHAT THE RUNS SHOWED.** Clean window (--since 2026-07-23) gives 215 trades,
+  116 of them from 07-31 alone. Of 15 cells only continuation cleared n=30:
+  CONT -12.3 ±90.1, REV -1.4 ±100.5 — a band 7-8x the point estimate, which is
+  no measurement. It also ERASED the condor CONT/REV split that looked like the
+  one real signal at n=30/30 pooled (clean: n=10/11) — an artifact of the
+  confounded window, exactly as HISTORY.md predicted.
+  **BOTH LOWER-VARIANCE ALTERNATIVES FAILED, and how R failed is the finding.**
+  `--metric r` did NOT reduce variance, it RESCALED it: sd 340/0.318 = $1,069 and
+  detectable 188.5/0.176 = $1,071 — identical to four digits. **`max_loss` is
+  near-constant at ~$1,070**, so dividing by it only changes the axis units.
+  Which means **the risk manager is sizing consistently** (good, found by
+  accident) and **the $340 sigma is OUTCOME dispersion, not position-size
+  dispersion** — there was no size variance to remove. `--metric winrate` is
+  worse: sd 0.501 at n=51 detects only a **27.8 percentage-point** difference.
+  **SO THE BOTTLENECK WAS NEVER THE METRIC — IT IS n**, and n is capped by the
+  fleet's trade rate (~31/day in the clean window, continuation 46% of that, split
+  three ways = ~4.8 per cell per day):
+  `  detect 0.20 R  ->  n=  40/cell  ->   ~8 trading days`
+  `  detect 0.10 R  ->  n= 159/cell  ->  ~33 trading days`
+  `  detect 0.05 R  ->  n= 634/cell  -> ~133 trading days`
+  **THE TRIGGER: re-run `--by strategy` when continuation clears n≈40 per cell,
+  expected ~2026-08-13** (8 trading sessions past 2026-08-02). That reads a
+  **0.20 R** effect and nothing smaller. 0.10 R lands ~2026-09-15, after go-live.
+  **DECIDE NOW WHICH YOU WOULD ACT ON**, because the answer at 0.20 R and at
+  0.10 R may differ and committing in advance is the difference between a test and
+  a search. 0.20 R is a fifth of risk per trade — a large effect; absence of one
+  is NOT evidence of no effect at all.
+  **THE ONE LEVER THAT MOVES THE DATE** is not waiting or re-slicing but **not
+  splitting three ways**: collapse to gap-vs-flat, or pool strategies sharing a
+  mechanism, and n per cell roughly triples — putting 0.10 R inside ~11 days.
+  Whether that pooling is legitimate is a judgement about whether ORB and
+  continuation respond to gaps the same way, which is exactly the kind of question
+  **the tick corpus CAN answer and the trade log cannot** (150,517 ticks vs 215
+  trades — three orders of magnitude).
+  **NOT BLOCKED, DELIBERATELY PARKED.** Operator's call 2026-08-02: let it
+  accumulate. Several sessions of positive expectancy on the CURRENT engine —
+  post-07-22, post-L2.5, at the ~15-31 trades/day rate rather than the un-gated
+  ~120/day that produced the early sample. That is the configuration going live.
+  **⬜ LIMITS WRITTEN INTO THE TOOL, not discovered later:** fills are PAPER, so a
+  split depending on fill quality will not show; 252 ORB trades over 15 sessions
+  across 3 classes is ~84/class BEFORE any further split, so n is thin; gap class
+  is per (date, symbol) so every trade on a symbol-day inherits one class — correct,
+  since the gap is a property of the session, but it means cells are not
+  independent samples; and pnl_usd is used rather than R, so position size varies.
+  **It is not a backtest.** It reports realised outcomes partitioned by a variable
+  that was always computable and never computed. Any gate that follows needs its
+  own pre-registered validation.
+
 - `[DESK]` **L3.2a — rejection ledger build starts.** `analysis/rejection_ledger.py` +
   `reports/rejection_summary_<date>.jsonl` + digest. Class (a) threshold near-miss
   consolidation from L3.1 events; prove the forward-outcome join leak-free on a
@@ -1857,6 +1845,22 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
 ### RAMP — Mon Sep 7 → Fri Sep 18
 
 **⬜ Mon Sep 7 — Labor Day, markets closed.** Analysis day: first live-week
+
+- `[DESK]` **A2.3 — THE LOG-ODDS REFORMULATION. The correct endpoint. HOLD UNTIL
+  **⏱ RE-DATED 2026-08-04 from Sun Aug 2 to Mon Sep 7 (post-go-live analysis day).** This item's own first line says HOLD UNTIL AFTER GO-LIVE (Aug 31), and it was nonetheless dated 08-02 and counted overdue against execution. The schedule now matches the item.
+  AFTER GO-LIVE (Aug 31).** Operator's instinct, and it is right: treat
+  trend-vs-range as ONE latent axis in log-odds rather than two independent
+  scores. Each factor contributes a log-likelihood ratio, evidence ADDS in
+  log-odds space, then `TREND = sigmoid(L)` and `RANGE = sigmoid(-L) = 1 - TREND`.
+  **A2 then becomes IMPOSSIBLE TO VIOLATE rather than tested for** — the
+  invariant stops being an acceptance check and becomes a property of the
+  construction. Same reasoning generalises: any mutually-exclusive pair belongs
+  on one axis, and the current design only accidentally gets that right for
+  breakout/compression.
+  **WHY NOT NOW:** it is a rewrite of the regime scoring core four weeks before
+  live capital. Every ramp bound, every acceptance check and the entire L1.11
+  calibration track are fitted against the current formulation. Ship A2.2's
+  targeted fix for go-live; take A2.3 in September with time to re-fit.
 conditional tables; confirm the newly-admitted buckets' realized expectancy;
 revisit the ON-tier rank with whatever n exists; finalize the descent decision.
 
@@ -2571,6 +2575,14 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.54 — 2026-08-04 — TWO DATES CORRECTED TO MATCH WHAT THE ITEMS SAY ABOUT
+  THEMSELVES.** **AV** moved Sat Aug 1 → Thu Aug 13 and re-tagged `[DESK·DATA]`:
+  dated due 08-01 while its own text records it OPENED 08-02 — due before it
+  existed — and it waits on ~40 trades per cell for a 0.20 R read, a DC&A
+  dependency rather than effort. **A2.3** moved Sun Aug 2 → Mon Sep 7: its own
+  first line reads HOLD UNTIL AFTER GO-LIVE (Aug 31) while it was counted overdue
+  against execution. Neither is slippage recovered; both are schedule errors that
+  were inflating the accountability number.
 - **v3.53 — 2026-08-04 — STATUS SCRUB. FIVE MORE DUPLICATE IDs, AS RESOLVED,
   AW's THREE NEXT-ANSWERS ALL SPENT.** The A2.6/L1.9 split in v3.52 was not the
   whole problem: `M.3`, `TC.4`, `G`, `L3.2` each named two different items and
