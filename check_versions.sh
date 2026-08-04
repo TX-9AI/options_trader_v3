@@ -1,4 +1,9 @@
 #!/bin/bash
+# v4.25 — 2026-08-04 — candle_feed v3.10: `--once` exempt from BOTH RTH gates.
+#         THE ABSENCE CANARY IS THE POINT — a bare `if not is_rth():` inside
+#         run() is the v3.9 form, and it hangs every EOD candle retrieval with
+#         no exception, no non-zero exit and an INFO line. It cost two sessions
+#         of sat-out tape, and DXFeed history is same-evening only.
 # v4.24 — 2026-08-04 — pull_today_ohlc v1.4: the RTH guard is OFF BY DEFAULT per
 #         operator directive, gated on OT_PULL_RTH_GUARD. The canary now pins
 #         the KNOB rather than the condition — the refusal path still exists and
@@ -355,6 +360,17 @@ check "tests/pitchfork_filter_audit.py"  "ACCEL/held bar"               "v1.5 ex
 # ── pull_today_ohlc v1.3 (2026-08-04) — the guard that ate the backfill ───
 check "pull_today_ohlc.sh"               'BOT=$(systemctl is-active optionsbot' "v1.3 guard reads optionsbot, not just the clock"
 check "pull_today_ohlc.sh"               'GUARD="${OT_PULL_RTH_GUARD:-0}"'  "v1.4 guard OFF by default, one env var to restore"
+
+# ── candle_feed v3.10 (2026-08-04) — the gate that ate the backfill ───────
+check "data/candle_feed.py"              "addendum v3.10"               "v3.10 header present"
+check "tests/test_candle_feed_once_exempt.py" "both_rth_gates_are_exempted"  "v1.0 BOTH gates pinned (a one-gate fix hangs identically)"
+_n_once=$(grep -c "if not is_rth() and not once:" data/candle_feed.py 2>/dev/null || echo 0)
+if [ "$_n_once" = "2" ]; then
+    echo "  ✓ PRESENT: v3.10 both RTH gates exempt --once (found $_n_once)"
+else
+    echo "  ✗ STALE:   candle_feed has $_n_once of 2 --once exemptions — an EOD candle pull outside RTH will sleep to its timeout and write a header-only csv; that day's sat-out tape is gone at midnight"
+    MISS=$((MISS+1))
+fi
 check "tests/test_pull_ohlc_guard.sh"    "THE CASE THAT WAS BROKEN"     "v1.0 guard decision table covered"
 if grep -q '\[ "$FEED" = "active" \] && \[ "$POSTCLOSE" = "0" \]; then' pull_today_ohlc.sh 2>/dev/null; then
     echo "  ✗ STALE:   pull_today_ohlc guard is back to the clock-only form — every sat-out box backfill wakes will write a header-only csv and that session's tape is gone at midnight"

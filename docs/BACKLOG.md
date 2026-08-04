@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.71
+# docs/BACKLOG.md — v3.72
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -68,7 +68,8 @@ BAKED is changing nothing about today's data.
 | **ORB.1 — ORB was gated by the stale entry block** | ✅ 08-04 | ✅ 08-04 | ⬜ **fleet reflash tonight** | control suite 216 passed, ALL CANARIES GREEN |
 | **RPT.1 — report rollup (5 fixes, 2 repos)** | ✅ 08-04 | ⬜ | n/a (offline) | otv3 suite **223 passed / 1 skipped**; behavioural proof on all five |
 | **BF.1 — the RTH guard was eating the backfill** | ✅ 08-04 | ⬜ | ⬜ **tonight's reflash** | 8/8 guard states proven; 2 sessions of sat-out tape at stake |
-| **BF.2 — guard OFF by default (operator directive)** | ✅ 08-04 | ⬜ | ⬜ **tonight's reflash** | v1.4, both modes proven. **⚠️ the 16:28 failure was NOT the guard — cause still unknown** |
+| **BF.2 — guard OFF by default (operator directive)** | ✅ 08-04 | ⬜ | ⬜ **tonight's reflash** | v1.4, both modes proven |
+| **BF.3 — THE REAL CAUSE: `--once` hung on the v3.9 RTH gate** | ✅ 08-04 | ⬜ | ⬜ **tonight's reflash** | candle_feed v3.10; 4/4 states + 5 tests; **2 sessions of tape permanently lost** |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1242,6 +1243,49 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK→DEPLOY]` **BF.3 — 🔴 ✅ FOUND AND FIXED 2026-08-04. THE EOD CANDLE
+  RETRIEVAL HAS BEEN DEAD SINCE 08-03 AND NOTHING RAISED. `candle_feed` v3.10.
+  Ships on tonight's reflash — it is box-side.**
+  **THE BOX LOG SETTLED IT** (AAPL, 21:13 UTC, post-close):
+  `post-close: safe to rebuild` — the pull guard did NOT block, confirming BF.2's
+  read. `TastyTrade session established` — creds fine. Then, four times:
+  `Feed idle — outside RTH, no subscriptions held. Open in 976 min. Sleeping 60s.`
+  and finally `AAPL → 0 bars`.
+  **THE CAUSE: `candle_feed --once` NEVER BACKFILLS OUTSIDE RTH.** v3.9's RTH
+  gate (landed **2026-08-01**) idles the reconnect loop whenever `not is_rth()`
+  — and **never asks whether the run is a one-shot backfill**. A `--once` run
+  therefore sleeps 60s at a time until `timeout 200` kills it, having subscribed
+  to nothing. `pull_today_ohlc.sh` calls exactly `candle_feed --once`, and it is
+  **the only path the EOD candle retrieval has**.
+  **THE DATE MATH IS THE CONFIRMATION.** The gate landed Sat 08-01; the first
+  affected trading sessions are **08-03 and 08-04**. That is precisely the two
+  days of missing sat-out candles, and it explains why boxes that ran THROUGH a
+  session are fine (warm store) while every box woken AFTER it produces nothing.
+  **BOTH GATES HAD TO MOVE, and this is the part a naive fix misses.** The
+  RTH-over `break` inside the stream loop sits **above** the `--once` drain-exit.
+  Exempting only the outer gate reproduces the identical hang one layer down —
+  connect, break on the first flush cycle, back to the outer gate, sleep — with
+  the backfill still undrained. **Proven: reverting only the inner gate turns 3
+  of 5 tests red.**
+  **THE EXEMPTION IS RIGHT, NOT A LOOPHOLE.** v3.9 exists so a box does not HOLD
+  a live socket when no session needs one — its own header says the problem was
+  maintenance wakes putting 29 boxes on the wire. `--once` connects, pulls
+  HISTORY from 09:30, flushes and exits; it holds nothing. **The service path is
+  untouched**, so v3.9's fix stays intact — verified across all four
+  (is_rth × once) states.
+  **⛔ THE COST IS PERMANENT AND SHOULD BE STATED PLAINLY.** DXFeed history is
+  same-evening only. **08-03's sat-out symbols are gone.** 08-04's are gone too
+  unless the reflash lands and the backfill re-runs before midnight ET. Every
+  analysis reading the replay corpus inherits two sessions at ~15 symbols ×
+  ~243 ticks against a normal 29 × ~389 — including **AV**'s Aug 13 revisit.
+  **WHY IT SURVIVED TWO SESSIONS:** no exception, no non-zero exit, an INFO-level
+  line, and a 38-byte file where a 16 KB one belongs. The conductor's
+  `7 symbol(s) still without candles` warning fired and was the only signal.
+  **⬜ IMMEDIATELY AFTER THE REFLASH, while it is still 2026-08-04 ET:**
+  `cd ~/day_trader_pro && venv/bin/python eod_backfill.py --date 2026-08-04`
+  then `--date 2026-08-03` as a long shot. Confirm by file SIZE, not by the
+  summary line: any 38-byte file left in `ohlc/<date>/` is still a failure.
+
 - `[DESK→DEPLOY]` **BF.2 — RTH GUARD DISABLED BY DEFAULT, 2026-08-04, OPERATOR
   DIRECTIVE. `pull_today_ohlc` v1.4, gated on `OT_PULL_RTH_GUARD` (set to 1 to
   restore). Ships on tonight's reflash.**
@@ -3313,6 +3357,13 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.72 — 2026-08-04 — BF.3: THE REAL CAUSE. `candle_feed --once` has been
+  unable to backfill outside RTH since v3.9's gate landed 2026-08-01.** The gate
+  never checked `once`, so every EOD candle pull slept to its timeout and wrote a
+  header-only csv — first affected sessions 08-03 and 08-04, exactly the two days
+  of missing sat-out tape. Both gates needed the exemption; the inner one sits
+  above the drain-exit and a one-gate fix hangs identically. Service behaviour
+  unchanged. The loss is permanent: DXFeed history is same-evening only.
 - **v3.71 — 2026-08-04 — BF.2: RTH GUARD OFF BY DEFAULT (operator directive),
   behind OT_PULL_RTH_GUARD.** Recorded alongside it: the 16:28 backfill that
   prompted the directive ran POST-CLOSE with zero bot boxes running, a state

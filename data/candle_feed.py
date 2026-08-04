@@ -1,5 +1,25 @@
 """
-data/candle_feed.py — addendum v3.9 (see below); original header follows.
+data/candle_feed.py — addendum v3.10 (see below); original header follows.
+v3.10 — 2026-08-04 — `--once` IS EXEMPT FROM BOTH RTH GATES. v3.9's gate never
+        asked whether the run was a one-shot backfill, and neither did the
+        RTH-over break inside the stream loop. A one-shot outside RTH therefore
+        slept 60s at a time in the outer loop until `timeout 200` killed it,
+        having subscribed to nothing and written nothing.
+        WHAT IT COST: `pull_today_ohlc.sh` — the ONLY path the EOD candle
+        retrieval has — calls exactly `candle_feed --once`. From 2026-08-03 every
+        SAT-OUT box that eod_backfill woke produced a HEADER-ONLY csv: fourteen
+        38-byte files on 08-04, the same signature on 08-03. **DXFeed history is
+        same-evening only, so both sessions' sat-out tape is permanent loss.**
+        Nothing raised. The log read `Feed idle — outside RTH` at INFO, four
+        times, and then `0 bars`.
+        BOTH SITES HAD TO MOVE TOGETHER. The inner break sits ABOVE the --once
+        drain-exit, so fixing only the outer gate produces the identical hang one
+        layer down with the backfill still undrained.
+        WHY THE EXEMPTION IS RIGHT RATHER THAN A LOOPHOLE: v3.9 exists so a box
+        does not HOLD a live socket when no session needs one. `--once` connects,
+        pulls HISTORY from 09:30, flushes and exits — it holds nothing. The
+        service path is untouched, so the maintenance-wake problem v3.9 solved
+        stays solved.
 v3.9 — 2026-08-01 — RTH GATE on the reconnect loop. The feed had NO time gate
         (Restart=always, no timer), so while a box was up it held a DXLink socket
         continuously. Invisible on a normal day — phase_report stops the
@@ -641,7 +661,18 @@ class CandleFeed:
             # nothing for its first cycles. Connect FEED_WARM_LEAD_S early
             # (default 20 min, covering the 09:15 fleet wake) so the frames are
             # warm when the first tick asks.
-            if not is_rth():
+            # v3.9 — `--once` IS EXEMPT. The gate below is about not HOLDING a
+            # live socket when no session needs one. A one-shot backfill is the
+            # opposite operation: it connects, pulls HISTORY from 09:30, flushes
+            # and exits. History does not stop existing at 16:00, and this is the
+            # only path the EOD candle retrieval has.
+            # WHAT IT COST: the gate landed 2026-08-01 and `--once` was never
+            # excluded, so from 08-03 every sat-out box woken by eod_backfill
+            # entered this branch, slept 60s at a time until `timeout 200` killed
+            # it, and wrote a HEADER-ONLY csv. Two sessions of sat-out tape, and
+            # DXFeed history is same-evening only — permanent at midnight.
+            # It logged INFO the whole time and nothing raised.
+            if not is_rth() and not once:
                 _until = seconds_until_rth_open()
                 if _until > FEED_WARM_LEAD_S:
                     _nap = min(60.0, _until - FEED_WARM_LEAD_S)
@@ -721,7 +752,15 @@ class CandleFeed:
                             # Rides the existing flush cadence rather than adding
                             # a timer: we are already here, once per cycle.
                             # Flushed first (above), so no buffered bar is lost.
-                            if not is_rth():
+                            # v3.9 — `and not once` here too, and this one is the
+                            # blocker a naive fix would have missed. This break
+                            # sits ABOVE the --once drain-exit, so a one-shot run
+                            # outside RTH would connect, break out on its first
+                            # flush cycle, return to the outer loop, hit the gate
+                            # again and sleep — the same hang, one layer down,
+                            # with the backfill still undrained. Both sites had
+                            # to move together or neither works.
+                            if not is_rth() and not once:
                                 logger.info(
                                     "RTH over — closing DXLink socket and "
                                     "releasing all subscriptions until the next "
