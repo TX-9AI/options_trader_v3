@@ -1,0 +1,334 @@
+#!/usr/bin/env python3
+"""
+tests/tcs_floor_durability.py — v1.0 — 2026-08-04   (backlog TC.4b prerequisite)
+
+DOES THE IMPULSE FLOOR HOLD? That is the entire premise of the trend credit
+spread — sell a spread BEYOND the impulse candle, on the claim that committed
+order flow will not fully retrace it. No engine exists yet, deliberately: TC.4b
+says this table runs FIRST, because if the floor does not hold the strategy is
+wrong and the firing engine is wasted work.
+
+WHAT IT ASKS, per armed impulse:
+    the readiness track recorded floor_px at time T.
+    Between T and the session close, did a 1-MINUTE CLOSE go back through it?
+
+CLOSE, not wick, and that is a real choice rather than a convenience. A short
+strike is not taken out by a touch; it is threatened by acceptance beyond the
+level. The wick statistic is reported ALONGSIDE (max penetration in ATR-free
+percent) because it is what a stop would have felt, but the headline durability
+number is close-based. Both are printed so the two are never conflated.
+
+WHAT IT OUTPUTS, and each line answers a different open question:
+  1. DURABILITY BY SD BUCKET — survival rate per impulse-magnitude tier. This IS
+     the fit for TR_TCS_IMPULSE_SD_LO/HI: the bound belongs where durability
+     starts clearing, not where a prior guessed. Feeds TC.4b (Aug 8-9).
+  2. PENETRATION DISTRIBUTION — how far past the floor price actually traded on
+     the failures. p90 is a STRIKE-DISTANCE rule priced from the state's own
+     behaviour, the same argument AQ made for the condor on a strategy that
+     wants it.
+  3. TIME-TO-FAILURE — a floor that breaks at 15:55 is a different animal from
+     one that breaks in four minutes, and only the second invalidates the trade.
+
+DISCIPLINE, inherited rather than reinvented:
+  - Cells under MIN_N are REFUSED, never read (a2_partition's rule).
+  - The minimum detectable effect is printed, so an underpowered cell is never
+    mistaken for a null (gap_outcome_join's lesson).
+  - This is NOT a backtest and NOT a P&L claim. No spread is priced, no credit
+    is assumed, no fill is modelled. It reports what the underlying did after a
+    state the fleet already records.
+
+Read-only. stdlib only. Runs on control, needs no boxes.
+
+USAGE
+    python3 tests/tcs_floor_durability.py
+    python3 tests/tcs_floor_durability.py --since 2026-07-28 --min-sd 1.0
+    python3 tests/tcs_floor_durability.py --diagnose     # why rows did not join
+"""
+
+import argparse
+import collections
+import csv
+import glob
+import json
+import math
+import os
+import re
+import sys
+
+JOURNAL_GLOB = "~/day_trader_pro/signal_journal/*/*.jsonl"
+OHLC_ROOT = "~/day_trader_pro/ohlc"
+DATE_RE = re.compile(r"(20\d\d-\d\d-\d\d)")
+
+# The track only started emitting on this date; earlier rows cannot exist and a
+# wider window would silently look like missing data rather than absent history.
+TRACK_START = "2026-07-28"
+
+# Same floor as gap_outcome_join, same reason: the samples are what they are, and
+# a cell below this is refused rather than read.
+MIN_N = 30
+
+# Operator's magnitude tiers (aware / established / screaming). Edges are the
+# CURRENT priors — this tool exists partly to say whether they are the right
+# ones, so they are printed as priors and never treated as settled.
+SD_BUCKETS = [(0.0, 1.5, "sub-aware  <1.5"),
+              (1.5, 2.0, "aware      1.5-2.0"),
+              (2.0, 2.5, "establish  2.0-2.5"),
+              (2.5, 99.0, "screaming  >=2.5")]
+
+
+def _bucket(sd):
+    for lo, hi, name in SD_BUCKETS:
+        if lo <= sd < hi:
+            return name
+    return None
+
+
+def _pct(vals, q):
+    if not vals:
+        return None
+    s = sorted(vals)
+    return s[min(int(q * len(s)), len(s) - 1)]
+
+
+def _load_tape(date, root):
+    """{SYM: [(hhmm, close, high, low)]} for one session, in file order."""
+    day_dir = os.path.join(os.path.expanduser(root), date)
+    out = {}
+    if not os.path.isdir(day_dir):
+        return out
+    for f in os.listdir(day_dir):
+        if "_ohlc_" not in f.lower() or not f.lower().endswith(".csv"):
+            continue
+        sym = f.split("_ohlc_")[0].upper()
+        rows = []
+        try:
+            with open(os.path.join(day_dir, f)) as fh:
+                for r in csv.DictReader(fh):
+                    ts = (r.get("timestamp") or r.get("time") or r.get("date")
+                          or r.get("datetime") or "")
+                    m = re.search(r"(\d\d):(\d\d)", str(ts))
+                    if not m:
+                        continue
+                    try:
+                        rows.append((int(m.group(1)) * 60 + int(m.group(2)),
+                                     float(r["close"]), float(r["high"]),
+                                     float(r["low"])))
+                    except Exception:                            # noqa: BLE001
+                        continue
+        except Exception:                                        # noqa: BLE001
+            continue
+        if rows:
+            out[sym] = sorted(rows)
+    return out
+
+
+def _minutes(ts_et):
+    m = re.search(r"T(\d\d):(\d\d)", str(ts_et))
+    return int(m.group(1)) * 60 + int(m.group(2)) if m else None
+
+
+def main(argv):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--journal", default=JOURNAL_GLOB)
+    ap.add_argument("--ohlc", default=OHLC_ROOT)
+    ap.add_argument("--since", default=TRACK_START)
+    ap.add_argument("--until", default="9999-12-31")
+    ap.add_argument("--min-sd", type=float, default=0.0,
+                    help="ignore impulses below this SD ratio")
+    ap.add_argument("--diagnose", action="store_true")
+    a = ap.parse_args(argv[1:])
+
+    paths = sorted(glob.glob(os.path.expanduser(a.journal)))
+    if not paths:
+        print(f"No journal files under {a.journal} — nothing harvested yet.")
+        return 2
+
+    # One observation per (date, symbol, floor_px, direction): the track scores
+    # every tick, so the SAME impulse appears on hundreds of consecutive rows.
+    # Counting them all would weight a long-lived impulse hundreds of times and
+    # report a sample size that does not exist. Dedup on the floor itself.
+    seen = set()
+    obs = []
+    tapes = {}
+    stats = collections.Counter()
+
+    for p in paths:
+        m = DATE_RE.search(p)
+        if not m:
+            continue
+        date = m.group(1)
+        if not (a.since <= date <= a.until):
+            continue
+        sym_hint = os.path.basename(p).split(".")[0].split("_")[0].upper()
+        try:
+            fh = open(p)
+        except Exception:                                        # noqa: BLE001
+            continue
+        with fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:                                # noqa: BLE001
+                    continue
+                rd = r.get("readiness") or {}
+                if rd.get("strategy") != "trend_credit_spread":
+                    continue
+                stats["tcs_rows"] += 1
+                f = rd.get("factors") or {}
+                floor = f.get("floor_px")
+                direction = f.get("dir") or ""
+                sd = f.get("sd_ratio")
+                if floor is None or direction not in ("long", "short"):
+                    stats["no_floor"] += 1
+                    continue
+                if sd is None or float(sd) < a.min_sd:
+                    stats["below_min_sd"] += 1
+                    continue
+                key = (date, sym_hint, round(float(floor), 2), direction)
+                if key in seen:
+                    stats["dedup"] += 1
+                    continue
+                seen.add(key)
+                t0 = _minutes(r.get("ts_et"))
+                if t0 is None:
+                    stats["no_ts"] += 1
+                    continue
+                obs.append({"date": date, "sym": sym_hint, "floor": float(floor),
+                            "dir": direction, "sd": float(sd), "t0": t0})
+
+    # ── join each impulse forward against its own session's tape ────────────
+    results = []
+    for o in obs:
+        tape = tapes.get(o["date"])
+        if tape is None:
+            tape = tapes[o["date"]] = _load_tape(o["date"], a.ohlc)
+        bars = tape.get(o["sym"])
+        if not bars:
+            stats["no_tape"] += 1
+            continue
+        fwd = [b for b in bars if b[0] > o["t0"]]
+        if len(fwd) < 5:
+            # Not a failure and not a hold — an impulse armed at 15:57 has no
+            # forward window, and scoring it either way would be a lie.
+            stats["no_forward_window"] += 1
+            continue
+        stats["joined"] += 1
+
+        floor, long_ = o["floor"], o["dir"] == "long"
+        broke_at, pen = None, 0.0
+        for tm, c, h, lo in fwd:
+            through = (c < floor) if long_ else (c > floor)
+            if through and broke_at is None:
+                broke_at = tm - o["t0"]
+            depth = (floor - lo) if long_ else (h - floor)
+            if depth > 0 and floor > 0:
+                pen = max(pen, 100.0 * depth / floor)
+        results.append({**o, "held": broke_at is None,
+                        "mins_to_break": broke_at, "wick_pen_pct": pen})
+
+    if a.diagnose or not results:
+        print("READINESS ROWS / JOIN DIAGNOSIS")
+        for k in ("tcs_rows", "dedup", "no_floor", "below_min_sd", "no_ts",
+                  "no_tape", "no_forward_window", "joined"):
+            print(f"  {k:<20} {stats[k]}")
+        print(f"  distinct impulses  {len(obs)}")
+        if not results:
+            print("\nNothing joined. `no_tape` dominating means the journal and "
+                  "the OHLC\nroots disagree on symbol or date; `tcs_rows` at 0 "
+                  "means the track\nnever emitted in this window.")
+            return 2
+        if a.diagnose:
+            return 0
+
+    held = [r for r in results if r["held"]]
+    print(f"window        : {a.since} .. {a.until}")
+    print(f"impulses      : {len(results)} distinct (deduped from "
+          f"{stats['tcs_rows']} scored rows)")
+    print(f"floor HELD    : {len(held)} ({100.0 * len(held) / len(results):.1f}%)"
+          f"   — no 1m CLOSE back through the impulse origin before the bell")
+    print("definition    : CLOSE-based. A short strike is threatened by "
+          "ACCEPTANCE beyond\n                a level, not by a touch; the wick "
+          "statistic is reported separately.\n")
+
+    # ── 1. durability by SD bucket — this is the ramp fit ───────────────────
+    print("=" * 66)
+    print("DURABILITY BY IMPULSE MAGNITUDE  (the TR_TCS_IMPULSE_SD_* fit)")
+    print("=" * 66)
+    by_b = collections.defaultdict(list)
+    for r in results:
+        b = _bucket(r["sd"])
+        if b:
+            by_b[b].append(r)
+    for _, _, name in SD_BUCKETS:
+        rs = by_b.get(name, [])
+        if len(rs) < MIN_N:
+            print(f"  {name:<22} n={len(rs):<4} REFUSED (under n={MIN_N})")
+            continue
+        h = sum(1 for r in rs if r["held"])
+        rate = h / len(rs)
+        hw = 1.96 * math.sqrt(rate * (1 - rate) / len(rs))
+        print(f"  {name:<22} n={len(rs):<4} held {rate:.0%} ±{hw:.0%}")
+    print("\n  Bucket EDGES are the current PRIORS, not a result. If durability")
+    print("  rises monotonically across them the tiers are real; if it is flat,")
+    print("  impulse magnitude is not what protects the floor and the ramp is")
+    print("  measuring nothing.")
+
+    # ── 2. how far past the floor, on the failures ──────────────────────────
+    print("\n" + "=" * 66)
+    print("PENETRATION ON FAILURES  (a strike-distance rule, in % of floor)")
+    print("=" * 66)
+    fails = [r for r in results if not r["held"]]
+    if len(fails) < MIN_N:
+        print(f"  n={len(fails)} REFUSED (under n={MIN_N})")
+    else:
+        pens = [r["wick_pen_pct"] for r in fails]
+        print(f"  n={len(fails)}   p50 {_pct(pens, .50):.3f}%   "
+              f"p90 {_pct(pens, .90):.3f}%   p95 {_pct(pens, .95):.3f}%   "
+              f"max {max(pens):.3f}%")
+        print("\n  p90 is the distance a short strike would have had to sit "
+              "beyond the\n  floor to survive nine failures in ten — priced from "
+              "the state's own\n  behaviour rather than from a fixed delta.")
+
+    # ── 3. time to failure ──────────────────────────────────────────────────
+    print("\n" + "=" * 66)
+    print("TIME TO FAILURE  (minutes from the impulse to the first close through)")
+    print("=" * 66)
+    mins = [r["mins_to_break"] for r in fails if r["mins_to_break"] is not None]
+    if len(mins) < MIN_N:
+        print(f"  n={len(mins)} REFUSED (under n={MIN_N})")
+    else:
+        print(f"  n={len(mins)}   p10 {_pct(mins, .10)}   p50 {_pct(mins, .50)}"
+              f"   p90 {_pct(mins, .90)}   max {max(mins)}")
+        print("\n  A floor that fails late is a 0DTE that ran out of clock, not "
+              "a thesis\n  that was wrong. A p50 in single-digit minutes would "
+              "say the opposite.")
+
+    # ── power ───────────────────────────────────────────────────────────────
+    n = len(results)
+    if n > 2:
+        p = len(held) / n
+        biggest = max((len(v) for v in by_b.values()), default=0)
+        if biggest > 1:
+            mde = (1.96 + 0.84) * math.sqrt(2 * p * (1 - p) / biggest)
+            print(f"\n  POWER: largest bucket n={biggest}. Smallest difference in "
+                  f"hold-rate\n  detectable at 95%/80% between two such buckets: "
+                  f"{mde:.0%}. A gap smaller\n  than that is UNDERPOWERED, not a "
+                  f"null.")
+
+    print("\n" + "=" * 66)
+    print("WHAT THIS DOES AND DOES NOT ESTABLISH")
+    print("=" * 66)
+    print("  ESTABLISHES: whether the underlying respects the impulse origin,")
+    print("  and at what magnitude — which is the strategy's whole premise and")
+    print("  the empirical basis for its SD ramp and its strike distance.")
+    print("  DOES NOT: price a spread, assume a credit, model a fill, or claim")
+    print("  a P&L. A held floor is a necessary condition for the trade, not a")
+    print("  profitable one. The firing engine stays gated where TC.4 puts it.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

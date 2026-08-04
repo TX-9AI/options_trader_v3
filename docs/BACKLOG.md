@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.62
+# docs/BACKLOG.md — v3.63
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -62,7 +62,8 @@ BAKED is changing nothing about today's data.
 | **N.8 — no regime-flip exit on a stale book** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | control suite green, ALL CANARIES GREEN |
 | **W.2a — today's own swallows made audible + the alarm made specific** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | silent count back to the 08-03 baseline of **87**; `--since` proven on three cases |
 | **D.1 — bull/bear were the same token in THREE renderers** | ✅ 08-04 | ✅ 08-04 | n/a (report-only) | 16 rows re-rendered on control; ALL CANARIES GREEN |
-| **AV.1 — the pooled gap read, with a legitimacy guard** | ✅ 08-04 | ⬜ | n/a (offline) | desk suite **185 passed / 1 skipped**; 7 planted-world tests |
+| **AV.1 — the pooled gap read, with a legitimacy guard** | ✅ 08-04 | ✅ 08-04 | n/a (offline) | ALL CANARIES GREEN on control |
+| **TC.4b-pre — does the impulse floor hold?** | ✅ 08-04 | ⬜ | n/a (offline) | desk suite **193 passed / 1 skipped**; 8 planted-world tests |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1236,6 +1237,53 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK·DATA]` **TC.4b-pre — ✅ TOOL BUILT 2026-08-04. DOES THE IMPULSE FLOOR
+  HOLD? `tests/tcs_floor_durability.py` v1.0. The credit spread's premise, tested
+  BEFORE the engine exists.**
+  **THE DECISION THIS RECORDS, because it was asked directly:** *should we build
+  `vertical_spread_strategy.py` now?* **No — and not for schedule reasons.** The
+  strategy rests on one claim: committed order flow will not fully retrace, so a
+  spread sold BEYOND the impulse candle is safe. **That claim has never been
+  measured.** TC.4b already says this table runs first. Building the firing
+  engine ahead of it is the inversion the 08-03 postmortem names in its own
+  process lesson — four tools built around a -$234 line item while bos_exit sat
+  at -$2,757. Build the measurement, then the fix.
+  Three supporting reasons, in descending order: the SD bounds are unfitted
+  until TC.4b (Aug 8-9); a new firing strategy moves fire-rate, which is one of
+  the four numbers the **Aug 21 freeze verdict** is written from, so it would
+  break its own baseline; and it changes the trade population **AV**'s Aug 13
+  read and `conditional_tables` are measured on.
+  **BUILDABLE TODAY, verified rather than assumed:** every scored readiness
+  event since 07-28 journals `floor_px`, `sd_ratio`, `dir` and `ts_et`, and the
+  tape sits in `ohlc/<date>/<SYM>_ohlc_<date>.csv`. No new collection. The
+  digest already reports `trend_credit_spread wf=802 arm=652`, so the sample is
+  banked.
+  **THREE OUTPUTS, EACH ANSWERING A DIFFERENT OPEN QUESTION:**
+  (1) **Durability by SD bucket** — this IS the fit for
+  `TR_TCS_IMPULSE_SD_LO/HI`. The bound belongs where durability starts clearing,
+  not where a prior guessed. Feeds TC.4b directly. Bucket edges are printed as
+  PRIORS; a flat curve says impulse magnitude is not what protects the floor and
+  the ramp is measuring nothing.
+  (2) **Penetration on failures** — p90 is a strike distance priced from the
+  state's own behaviour, the same argument AQ made for the condor, on a strategy
+  that actually wants it.
+  (3) **Time to failure** — a floor broken at 15:55 is a 0DTE that ran out of
+  clock; one broken in four minutes is a wrong thesis. Only the second
+  invalidates the trade.
+  **TWO DESIGN CALLS WORTH KNOWING BEFORE READING THE OUTPUT.**
+  *CLOSE, not wick.* A short strike is threatened by ACCEPTANCE beyond a level,
+  not by a touch. The wick is reported separately so the two are never
+  conflated — merge them and durability silently becomes a stop-out statistic.
+  *DEDUP on the floor.* The track scores every tick, so ONE impulse appears on
+  hundreds of consecutive rows; counting them would report a sample size that
+  does not exist. Both are guarded by tests and by absence canaries, because
+  either failure produces a confidently WRONG number rather than a missing one.
+  **⬜ WHAT IT DOES NOT ESTABLISH, stated in the tool's own output:** no spread
+  is priced, no credit assumed, no fill modelled. A held floor is a NECESSARY
+  condition for the trade, not a profitable one. If the floor holds, the engine
+  build is fast and well-specified with fitted bounds and its slot is the
+  **Aug 24 paper deploy** — post-freeze, four weeks before full size. If it does
+  not hold, TC.4 is answered for the price of one offline run.
 - `[DESK]` **AV.1 — ✅ 2026-08-04. THE POOLING LEVER, BUILT WITH ITS OWN
   LEGITIMACY TEST ATTACHED. `gap_outcome_join` v1.5 `--pool gapflat`.**
   **AV** names this as the ONE lever that moves the answerable date: not waiting
@@ -2879,6 +2927,12 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.63 — 2026-08-04 — TC.4b-pre: THE CREDIT SPREAD'S PREMISE, TESTED BEFORE
+  THE ENGINE.** Asked whether to build `vertical_spread_strategy.py` now; answered
+  no, and built the floor-durability table instead — the thing TC.4b already says
+  runs first. Every input was already being journaled, so it needed no new
+  collection. Its SD curve is the ramp fit, its penetration p90 is a strike rule,
+  and a flat curve would kill the strategy for the price of one offline run.
 - **v3.62 — 2026-08-04 — AV.1: THE POOLED GAP READ.** `--pool gapflat` collapses
   CONT+REV into GAP (n per cell roughly triples, putting a 0.10 R read inside the
   freeze instead of after go-live) and prints a per-row CONT-vs-REV verdict, so

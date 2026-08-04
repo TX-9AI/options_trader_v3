@@ -1,4 +1,11 @@
 #!/bin/bash
+# v4.16 — 2026-08-04 — +2 canaries for tcs_floor_durability v1.0 (TC.4b's
+#         prerequisite). The DEDUP one is load-bearing: the readiness track
+#         scores every tick, so one impulse appears on hundreds of consecutive
+#         journal rows. Losing the dedup key does not error — it reports a
+#         sample size that does not exist and weights a long-lived impulse
+#         hundreds of times, which is a confidently wrong answer rather than a
+#         missing one.
 # v4.15 — 2026-08-04 — +3 canaries for gap_outcome_join v1.5 (--pool gapflat).
 #         The pooled cell and its legitimacy verdict are ONE feature: pooling
 #         two arms that disagree manufactures a null from two real opposite
@@ -417,6 +424,10 @@ check "tests/regime_diary.py"            "LABEL = REGIME_LABELS"        "v1.4 di
 check "tests/gap_outcome_join.py"        "POOLED_CLASSES"               "v1.5 --pool gapflat present"
 check "tests/gap_outcome_join.py"        "POOL LEGITIMACY"              "v1.5 pooling prints its own CONT-vs-REV verdict"
 check "tests/test_gap_pool.py"           "test_opposite_arms_are_refused"  "v1.0 planted-divergence test present"
+
+# ── TC.4b prerequisite (2026-08-04) — does the impulse floor hold? ────────
+check "tests/tcs_floor_durability.py"    "seen.add(key)"                "v1.0 one impulse counted once, not once per scored tick"
+check "tests/tcs_floor_durability.py"    "through = (c < floor)"        "v1.0 durability is CLOSE-based (acceptance, not a touch)"
 check "tests/replay_confluence.py"       "from utils.regime_labels import label"  "v2.3 emitted-distribution line uses the shared map"
 check "tests/regime_diary.py"            "churn-cut"                    "v1.3 churn-cut on the L2 line (flips per committed switch)"
 check "tests/regime_diary.py"            "def rerender"                 "v1.3 --rerender rebuilds the md from the jsonl"
