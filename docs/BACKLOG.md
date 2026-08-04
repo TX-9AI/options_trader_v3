@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.52
+# docs/BACKLOG.md — v3.53
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -649,7 +649,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   −$2,024. Excursion is not materially lower on the diluted (real-time-knowable)
   measurement, so continuation is not being handed unusually still tape.
 
-- `[DESK]` **AS — 🔴 PF.1 HAS NO LIFECYCLE, SO I USED THE FORK AS A PER-BAR
+- `[DESK]` **AS — ✅ RESOLVED 2026-08-03. PF.1 HAD NO LIFECYCLE, SO I USED THE FORK AS A PER-BAR
   INDICATOR — the one thing the persistence mandate says it is not. My bug, and
   it is upstream of every pitchfork number taken so far.** Opened 2026-08-01.
   **WHAT THE AUDIT ACTUALLY SHOWED.** 29 symbols, 95-111 hourly bars each, 2,297
@@ -903,6 +903,27 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   independently proven". With reversion and slope dead, EVERY surviving consumer
   is level-based and all of them want the slow fork. **The critical path to v4.0
   now runs through AP, not through more hourly work.**
+  **✅ ALL THREE OF THE BELOW ARE NOW SPENT (2026-08-04). Results, in the order
+  they are listed: (1) cause-of-death ANSWERED — 24 adverse tine (88.9%) vs 3
+  structural (11.1%), lifetime p50 5 bars, so by this item's own pre-registered
+  reading the N=2/D=0.25 priors are strangling a persistent object and the tape
+  is not what is killing it. (2) TOUCH-OUTCOME STUDY run at 180 events — NOT A
+  NULL, an ABSENT MEASUREMENT: zero of eighteen cells clears its own MDE and six
+  are REFUSED at n=18. Reaching the largest h<=2 effect needs n~600, ~17x what is
+  banked, so the hourly fork cannot answer the touch question at any sample
+  reachable before the freeze — retired on POWER grounds, not evidence grounds.
+  Its one real yield: the signed control REPRODUCES the monotone negative, so the
+  original "the rail did not hold" was manufactured by the approach-side sign
+  rule, confirming v1.1's hypothesis. (3) §4.3.5 UNIQUENESS READING built as
+  pitchfork v1.2 and measured NEGATIVE on coverage — births 6.9%->35.7% and 163
+  ->850 built, while lifecycle events were BYTE-IDENTICAL across both arms
+  (BORN 34/TOUCH 180/INVALIDATED 27/ACCELERATION 22/SUPERSEDED 2). Cause: the
+  scan reaches BACKWARD to older triples and `pitchfork_lifecycle.py:399` refuses
+  any candidate whose p2.idx <= the spent-P2 running max, so the scan is
+  structurally inert on the lifecycle path. Ships OFF. Whether that guard is
+  right under the scan reading is a §5 lifecycle question, now open.
+  ALL THREE POINT THE SAME WAY: AP AND THE DAILY SERIES.**
+
   **⬜ CHEAPEST NEXT ANSWERS, all available without waiting for AP:**
   (1) `pitchfork_filter_audit` **v1.3** now bins CAUSE OF DEATH and prints the
   lifetime distribution — 27 INVALIDATED on 33 BORN is fast for a persistent
@@ -1215,7 +1236,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   conductor untouched proven by a full dry-run of the chain on the tester with the
   bookmark grafted onto a *copy* of validate_regime.sh, diffing every artifact
   path it writes.
-- `[DESK→DEPLOY]` **M.3 — Dedicated Telegram bot for options-trader notifications.** Promoted from
+- `[DESK→DEPLOY]` **M.3a — Dedicated Telegram bot for options-trader notifications.** Promoted from
   nice-to-have to **go-live requirement**: live trading needs its own paging channel
   before Aug 31. Build today, live-test Thu Aug 27.
   **HOW:** new bot token; fleet-wide .env rotation via the existing
@@ -1238,7 +1259,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   from `conditional_tables` (existing nightly artifact); gate-block dispositions
   visible in that night's harvested journal = the gates are alive; N.3 column
   populating on any sweep = capture alive.
-- `[DESK·DATA]` **TC.4 (T+1wk) — readiness digest check.** `_trend_credit_spread` journal has
+- `[DESK·DATA]` **TC.4a (T+1wk) — readiness digest check.** `_trend_credit_spread` journal has
   been accumulating since 07-28; confirm fleet-wide capture is clean.
   **HOW/VALIDATE:** run `readiness_digest` over the harvested journal; per-symbol
   row counts > 0 on every traded box, impulse-SD distribution non-degenerate.
@@ -1255,7 +1276,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   under-report signature is gone on the days the live boxes trended (e.g. the
   07-17+ AVGO sessions), with chop days unchanged. Both series are on control;
   the check is a query.
-- `[DESK·DATA]` **TC.4 — SD-bounds fit PR.** Run `readiness_digest`, fit
+- `[DESK·DATA]` **TC.4b — SD-bounds fit PR.** Run `readiness_digest`, fit
   aware/established/screaming SD bounds + room/extension bounds + corroborator
   weights from the observed distribution. Priors → calibrated knobs (env flips, no
   bake). The firing engine stays unbuilt — gated on the L1 excavation and the
@@ -1304,7 +1325,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   wins on its fit set is unproven and the 20° default stands.
 
 **⬜ Thu Aug 6**
-- `[DESK]` **Level hierarchy + Overnight High/Low — build on the TESTER** (queued 07-24).
+- `[DESK]` **Level.1 — hierarchy + Overnight High/Low, build on the TESTER** (queued 07-24).
   Add `overnight_high`/`overnight_low` (extremes across the Asia+London span) to
   LiquidityMap as a named tier; replace the flat `is_named` bool with graded
   `level_strength` per the stated hierarchy: **ON H/L ≈ PDH/PDL (top) > historic
@@ -1341,7 +1362,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   bucket so Aug 18's power is known in advance.
 
 **⬜ Fri Aug 7**
-- `[DESK]` **Level hierarchy tester proof complete.** Inert where it should be; the
+- `[DESK]` **Level.2 — hierarchy tester proof complete.** Inert where it should be; the
   postmortem buckets become meaningful only once the tiered value flows.
   **HOW/VALIDATE:** replay banked sessions through the tester mapper — every
   sweep that fired at HEAD still fires with the graded value, `is_named`-shim
@@ -1357,7 +1378,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   **HOW/VALIDATE:** pure evidence review over collected artifacts — warm diary ×
   auto_label labels; each Tier-B row's bar is stated in VALIDATION.md §2 and the
   diary prints the numbers. No new framework; the framework is why these close.
-- `[DESK·DATA]` **G (data checkpoint).** Snapshot the `retest_depth` distribution (3 weeks
+- `[DESK·DATA]` **G.1 (data checkpoint).** Snapshot the `retest_depth` distribution (3 weeks
   accumulated). No decision yet — that's Aug 22.
   **VALIDATE:** existing `retest_check` journal events since 07-18; snapshot =
   histogram + n, so the Aug 22 decision knows its power.
@@ -1501,7 +1522,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   of a session.
 
 **⬜ Thu Aug 13**
-- `[DESK]` **L3.2 — rejection ledger build starts.** `analysis/rejection_ledger.py` +
+- `[DESK]` **L3.2a — rejection ledger build starts.** `analysis/rejection_ledger.py` +
   `reports/rejection_summary_<date>.jsonl` + digest. Class (a) threshold near-miss
   consolidation from L3.1 events; prove the forward-outcome join leak-free on a
   known session (outcomes only from post-decision bars). Version-hash every row.
@@ -1566,7 +1587,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   the same comparison schema so paper-vs-live divergence is one diff.
 
 **⬜ Sat Aug 15 – Sun Aug 16**
-- `[DESK·DATA]` **L3.2 finish.** Class (b) coverage-gap scan (per strategy: was a live setup
+- `[DESK·DATA]` **L3.2b — finish.** Class (b) coverage-gap scan (per strategy: was a live setup
   present during its target condition with no signal formed?); both classes
   populating across a fleet session. Pre-freeze rows tagged gap-finder grade;
   post-freeze rows will be calibration grade.
@@ -1635,7 +1656,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   dominating a verdict for trades the gate can never refuse (it short-circuits to
   `_grade_orb`). v1.1 excludes it. Any future gate: check its exempt set before
   trusting a ledger number.
-- `[DESK·DATA]` **Level-conviction lead:** win-rate/expectancy by `level_strength` bucket at
+- `[DESK·DATA]` **Level.3 — conviction lead:** win-rate/expectancy by `level_strength` bucket at
   ~3 weeks of current-engine data. If equal-H/L sweeps are the losers → a
   level_strength floor on the sweep gate is confirmed.
   **VALIDATE:** existing capture (07-24) × conditional_tables cells with Wilson
@@ -1728,7 +1749,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   rebuilt corpus (**AM**) before deciding the fix's shape.
   **POST-FREEZE (after Aug 21).** Do not fold it into an unrelated deploy.
 
-- `[DESK·DATA]` **G — decision.** Feed `retest_depth` into `orb_quality` or drop it: 5 weeks of
+- `[DESK·DATA]` **G.2 — decision.** Feed `retest_depth` into `orb_quality` or drop it: 5 weeks of
   distribution + the Phase-3 ROI buckets now exist to answer it. Decide from the
   data; the measurement gates nothing until then.
   **HOW/VALIDATE:** join `retest_check`/`retest_depth_px` (journal, since 07-18)
@@ -1788,7 +1809,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   before it matters.
 
 **⬜ Thu Aug 27**
-- `[FLEET]` **M.3 — Telegram bot live test** (built Aug 2): pages route to the dedicated
+- `[FLEET]` **M.3b — Telegram bot live test** (built Aug 2): pages route to the dedicated
   options-trader channel; half-complete-roll and phantom-P&L pages verified.
   **VALIDATE:** the Aug 2 drill plan executed — induced half-complete roll page,
   induced phantom-P&L page, fallback-channel test. Transcript archived in the
@@ -2550,6 +2571,22 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.53 — 2026-08-04 — STATUS SCRUB. FIVE MORE DUPLICATE IDs, AS RESOLVED,
+  AW's THREE NEXT-ANSWERS ALL SPENT.** The A2.6/L1.9 split in v3.52 was not the
+  whole problem: `M.3`, `TC.4`, `G`, `L3.2` each named two different items and
+  `Level` named three — 66 item lines carrying 60 unique IDs, so six items were
+  invisible to the register and any one ✅ would have closed its twin. Now
+  M.3a/b, TC.4a/b, G.1/G.2, L3.2a/b, Level.1/2/3. **AS ✅** — its lifecycle
+  deliverable exists (`analysis/pitchfork_lifecycle.py`, now v1.4) and AW's own
+  text records having run through it. AW updated with all three of its named
+  cheapest-next-answers and their results; every one points at AP.
+  FLAGGED, NOT APPLIED, because both need the item moved under a different date
+  header rather than an edit in place: **AV** is dated due 08-01 but was OPENED
+  08-02 and waits on ~40/cell for a 0.20 R read with an 08-13 review — mis-dated
+  and mis-tagged `[DESK]` when it is `[DESK·DATA]`. **A2.3**'s own first line
+  says HOLD UNTIL AFTER GO-LIVE (Aug 31) while it sits dated 08-02 and counted
+  against execution. Together worth about -2 on DESK overdue, and neither is
+  slippage.
 - **v3.52 — 2026-08-04 — DUPLICATE IDs SPLIT.** `A2.6` and `L1.9` were each two
   distinct items under one ID — a register defect, not a formatting one: the EVM
   parser keys on the token, so a single ✅ would have closed both and credited
