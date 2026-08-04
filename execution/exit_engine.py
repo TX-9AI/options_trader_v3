@@ -1,5 +1,25 @@
 """
 execution/exit_engine.py — Strategy-aware exit logic for all options positions.
+v4.11 — 2026-08-04 — EXIT LADDER LATENCY (N.5, log-only). place_exit_order() —
+        the ONE seam every close routes through, paper and live — now stamps
+        submit and fill instants, counts the passes the close took, flags
+        escalation, and records the MARK AT TRIGGER. Written to the trade row
+        via trade_logger v3.11 set_exit_latency() on a CONFIRMED close only.
+        WHY THE MARK MATTERS MORE THAN THE MILLISECONDS: TC.2 has to choose a
+        stop trigger (-40% vs 35% vs 25%) "calibrated against measured ladder
+        fill-latency", and latency is not a cost until it is priced. The cost
+        is (mark when the exit fired) - (price it actually filled at). Paper
+        books the mark, so the two are equal by construction there — that
+        equality is the PLUMBING PROOF that the capture is wired, not a result.
+        The real distribution only exists in the live week.
+        STATE LIVES ON THE RECORD, NOT ON THE ENGINE, because a live close is
+        MULTI-TICK: the deadline can expire and the next tick RESUMES the same
+        broker order. Keying off the record means submit_ts is the FIRST submit
+        of that close attempt and the pass count spans the whole sequence; an
+        engine-level counter would reset on restart and undercount exactly the
+        slow closes the study is about.
+        NOTHING IN THE TRADING PATH READS ANY OF IT. No exit decision, no
+        price, no size changes — the capture runs after the FillResult exists.
 v4.1 — 2026-07-23 — CONDOR LEG MANAGEMENT v2 (user directive, data-driven).
         (a) RATCHETING STOP: +20% -> breakeven, +40% -> lock +20%, tightens only.
         (b) TIME-GATED TP at 25%, ONLY after CONDOR_ENTRY_CUTOFF_ET and ONLY
@@ -252,7 +272,7 @@ from config import (
     CONTINUATION_EXHAUST_TRAIL_LOCK, CONTINUATION_STOP_LOSS_PCT
 )
 from utils.time_utils import (is_hard_close_time, minutes_since, now_utc,
-                              fmt_et_short, now_et)
+                              fmt_et_short, now_et, ts_for_db)
 from execution.limit_ladder import limit_at_mark, hard_close_order_mode
 
 logger = logging.getLogger(__name__)
@@ -1494,6 +1514,31 @@ class ExitEngine:
 
         logger.info(f"[{mode}] CLOSING {trade_id[:8]}: {reason} contracts={contracts}")
 
+        # ── N.5 (v4.11) — latency telemetry, log-only ────────────────────────
+        # Stamped BEFORE dispatch so the submit instant is the submit instant,
+        # not a value reconstructed after the fact. Set once per close attempt
+        # and kept on the RECORD: a live close is multi-tick and the next tick
+        # resumes the same order, so this must survive the pass boundary.
+        if not record.get("_exit_submit_ts"):
+            record["_exit_submit_ts"] = ts_for_db()
+            record["_exit_submit_mono"] = time.monotonic()
+            # The mark at TRIGGER — the price the exit decision saw. This is
+            # the number the ladder's cost is measured against; None when no
+            # mark was available, which is honest and must not become 0.0.
+            record["_exit_mark_at_trigger"] = (
+                float(mark_price) if mark_price is not None and mark_price >= 0
+                else None)
+        record["_exit_passes"] = int(record.get("_exit_passes", 0)) + 1
+        # ESCALATED means the close needed more than a plain limit-at-mark post.
+        # Two disjoint causes, either sufficient: the 15:45 hard-close market
+        # cross, or the live loop hitting its deadline and cancelling (set at
+        # that branch). Both are "the ladder did not simply fill".
+        try:
+            if hard_close_order_mode(now_et()) == "market":
+                record["_exit_escalated"] = 1
+        except Exception:                                    # noqa: BLE001
+            pass
+
         # ── PAPER: simulate the fill at the last-known mark and CONFIRM it ──────
         # A simulated close always succeeds on the first pass — there is no
         # broker, nothing to poll, nothing to reuse. If we have no mark we cannot
@@ -1505,15 +1550,61 @@ class ExitEngine:
                                f"cannot simulate a fill this pass, will retry")
                 return FillResult(confirmed=False, detail="paper: no mark yet")
             logger.info(f"[PAPER] Simulated fill {trade_id[:8]} @ {mark_price:.2f}")
-            return FillResult(confirmed=True, fill_price=float(mark_price),
-                              detail="paper simulated fill")
+            return self._stamp_exit_latency(
+                record,
+                FillResult(confirmed=True, fill_price=float(mark_price),
+                           detail="paper simulated fill"))
 
         # ── LIVE: submit, then book ONLY on broker-confirmed fill ──────────────
         # v3.5: implemented. Places the order, captures its id, polls the broker
         # to a bounded deadline, and returns confirmed=True with the REAL net
         # fill price — or confirmed=False (position stays open, retries and
         # escalates). See _confirm_and_book_live_exit and the Fable spec.
-        return self._confirm_and_book_live_exit(record, reason, mark_price)
+        return self._stamp_exit_latency(
+            record, self._confirm_and_book_live_exit(record, reason, mark_price))
+
+    def _stamp_exit_latency(self, record: TradeRecord,
+                            result: FillResult) -> FillResult:
+        """N.5 (v4.11) — write the ladder telemetry, then return the result
+        UNCHANGED. Log-only: it is a pass-through by construction, so no exit
+        path can be altered by it even if it fails.
+
+        Writes ONLY on a confirmed close. An unconfirmed pass leaves the state
+        on the record so the NEXT pass keeps accumulating against the same
+        submit instant — that is the whole point of a ladder measurement, and
+        booking a row per unconfirmed pass would report the fast half of every
+        slow close.
+        """
+        try:
+            if not result or not result.confirmed:
+                return result
+            submit_ts = record.get("_exit_submit_ts")
+            if not submit_ts:
+                return result
+            mono = record.get("_exit_submit_mono")
+            latency_ms = int(max(0.0, (time.monotonic() - mono)) * 1000) if mono else 0
+            wrote = self._trade_logger.set_exit_latency(
+                trade_id       = record.get("trade_id", ""),
+                submit_ts      = submit_ts,
+                fill_ts        = ts_for_db(),
+                latency_ms     = latency_ms,
+                ladder_steps   = int(record.get("_exit_passes", 1)),
+                escalated      = bool(record.get("_exit_escalated", 0)),
+                mark_at_trigger= record.get("_exit_mark_at_trigger"),
+            )
+            if not wrote and "latency-write" not in self._live_exit_alerted:
+                # Once per process, not once per close: a per-exit warning is
+                # spam and gets filtered, which is how a dead capture hides.
+                self._live_exit_alerted.add("latency-write")
+                logger.warning(
+                    "N.5 exit-latency row NOT written for %s — these closes "
+                    "cannot enter the TC.2 stop-trigger dataset (logged once "
+                    "per process)", record.get("trade_id", "")[:8])
+        except Exception as exc:                             # noqa: BLE001
+            logger.warning("N.5 exit-latency capture failed (%s: %s) — the "
+                           "close itself is unaffected",
+                           type(exc).__name__, exc)
+        return result
 
     # ── LIVE FILL-CONFIRMATION (v3.5) ────────────────────────────────────────
     # States in which an order is still working at the broker.
@@ -1662,6 +1753,7 @@ class ExitEngine:
                     try:
                         account.delete_order(session, order_id)
                         cancel_requested = True
+                        record["_exit_escalated"] = 1        # N.5: ladder did not simply fill
                         # Short grace window to resolve the cancel/fill race:
                         # the order may have filled while the cancel was in
                         # flight — the next polls tell us which won.

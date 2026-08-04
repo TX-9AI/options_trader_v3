@@ -1,5 +1,21 @@
 """
-database/trade_logger.py — Options trade logging (SQLite). v3.10
+database/trade_logger.py — Options trade logging (SQLite). v3.11
+v3.11 — 2026-08-04 — EXIT LATENCY (N.5): exit_submit_ts / exit_fill_ts /
+        exit_latency_ms / exit_ladder_steps / exit_escalated /
+        exit_mark_at_trigger, plus set_exit_latency() (returns a bool, same
+        reason as v3.10). Auto-migrated; NULL on every pre-existing row and on
+        any close that was never confirmed.
+        WHY IT MOVED FORWARD FROM AUG 24 TO THE AUG 10 BAKE: the dataset only
+        accrues in sessions recorded AFTER it deploys, and TC.2's stop-trigger
+        decision (-40% vs 35% vs 25%) is explicitly "calibrate against measured
+        ladder fill-latency". At Aug 24 that is ~5 paper sessions before live
+        capital; at Aug 10 it is ~15. Identical argument to v3.10's.
+        `exit_mark_at_trigger` IS THE MEASUREMENT and is an addition to N.5's
+        four named fields: latency in milliseconds is not a cost until it is
+        priced, and the cost is (mark when the exit fired) - (price it actually
+        filled at). In PAPER the two are equal by construction — that equality
+        is the plumbing proof, not a result.
+        TELEMETRY ONLY — nothing reads these columns in the trading path.
 v3.10 — 2026-08-04 — ENTRY SNAPSHOT: `entry_snapshot` (TEXT, JSON written by
         analysis/entry_snapshot.py) + set_entry_snapshot(), which RETURNS a
         boolean instead of discarding it. Auto-migrated; NULL on every
@@ -95,6 +111,7 @@ v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         shared TastyTrade candle feed — see data/candle_feed.py). No logic
         change in this file.
 """
+# v3.11 (2026-08-04, N.5) — trades table also captures the exit ladder's latency: exit_submit_ts, exit_fill_ts, exit_latency_ms, exit_ladder_steps, exit_escalated and exit_mark_at_trigger. Written by exit_engine.place_exit_order() — the ONE seam both paper and live close through — via set_exit_latency(). This is the dataset TC.2's stop-trigger decision reads. Auto-migrates. Observability only.
 # v3.10 (2026-08-04) — trades table also captures entry_snapshot: the FVG zones, the frame the trail would anchor to, the live StructureMap levels and the per-timeframe bar depth, all as held at the moment of the fill. Written by analysis/entry_snapshot.py via set_entry_snapshot(); the TC.2 exit bake-off is not computable without it. Auto-migrates. Observability only.
 # v-obs2 (2026-07-24) — trades table also captures swept_level_name + level_strength (what KIND of liquidity level a sweep fired against — named PDH/PDL/session vs equal-H/L). Sweep postmortems: does level conviction predict outcome? Auto-migrates.
 
@@ -184,6 +201,12 @@ class TradeLogger:
         swept_level_name  TEXT DEFAULT '',
         level_strength    REAL DEFAULT 0.0,
         entry_snapshot    TEXT,
+        exit_submit_ts    TEXT,
+        exit_fill_ts      TEXT,
+        exit_latency_ms   INTEGER,
+        exit_ladder_steps INTEGER,
+        exit_escalated    INTEGER,
+        exit_mark_at_trigger REAL,
         is_fed_day        INTEGER DEFAULT 0,
         status            TEXT DEFAULT 'open',
         exit_reason       TEXT,
@@ -266,6 +289,16 @@ class TradeLogger:
             # to stay distinguishable from a capture that ran and found nothing
             # (which writes a real payload with "anchor":null).
             ("entry_snapshot",    "TEXT"),
+            # v3.11 (N.5) — exit ladder latency. NULLs are load-bearing here:
+            # a close that never confirmed has no fill instant, and inventing
+            # one would put a zero-latency row in the exact population the
+            # trigger decision is measured on.
+            ("exit_submit_ts",      "TEXT"),
+            ("exit_fill_ts",        "TEXT"),
+            ("exit_latency_ms",     "INTEGER"),
+            ("exit_ladder_steps",   "INTEGER"),
+            ("exit_escalated",      "INTEGER"),
+            ("exit_mark_at_trigger", "REAL"),
             ("regime_engine",     "TEXT DEFAULT ''"),   # v-eng: WHICH engine labelled this
         ]:
             try:
@@ -398,6 +431,38 @@ class TradeLogger:
                 return cur.rowcount > 0
         except Exception as exc:                             # noqa: BLE001
             logger.warning("entry_snapshot write failed for %s: %s: %s",
+                           trade_id[:8], type(exc).__name__, exc)
+            return False
+
+    def set_exit_latency(self, trade_id: str, submit_ts: str, fill_ts: str,
+                         latency_ms: int, ladder_steps: int,
+                         escalated: bool, mark_at_trigger=None) -> bool:
+        """v3.11 (N.5) — persist the exit ladder's latency telemetry.
+
+        Returns True only if a row was actually updated, for the same reason
+        set_entry_snapshot does (item AU): a silent no-op UPDATE would leave a
+        column of NULLs that reads exactly like a session with no exits.
+
+        Called ONLY on a confirmed close. An unconfirmed close deliberately
+        writes nothing — a close that never filled has no fill instant, and a
+        fabricated one would land a zero-latency row inside the very population
+        the stop-trigger decision is measured on.
+        """
+        if not trade_id or not submit_ts or not fill_ts:
+            return False
+        try:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "UPDATE trades SET exit_submit_ts=?, exit_fill_ts=?, "
+                    "exit_latency_ms=?, exit_ladder_steps=?, exit_escalated=?, "
+                    "exit_mark_at_trigger=? WHERE trade_id=?",
+                    (submit_ts, fill_ts, int(latency_ms), int(ladder_steps),
+                     1 if escalated else 0,
+                     None if mark_at_trigger is None else float(mark_at_trigger),
+                     trade_id))
+                return cur.rowcount > 0
+        except Exception as exc:                             # noqa: BLE001
+            logger.warning("exit_latency write failed for %s: %s: %s",
                            trade_id[:8], type(exc).__name__, exc)
             return False
 

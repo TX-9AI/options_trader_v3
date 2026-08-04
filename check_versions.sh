@@ -1,4 +1,11 @@
 #!/bin/bash
+# v4.10 — 2026-08-04 — +6 canaries for N.5 exit-ladder latency (exit_engine
+#         v4.11 / trade_logger v3.11). The load-bearing one is the ABSENCE
+#         check on the confirmed-guard: writing telemetry on an UNCONFIRMED
+#         pass books the fast final leg of every slow close, which is the exact
+#         population the TC.2 stop-trigger decision is measured on — a silent
+#         corruption of the answer rather than a missing column. Found by
+#         running the deliberate-failure check, not by reading the code.
 # v4.9 — 2026-08-04 — +7 canaries for the ENTRY SNAPSHOT (main v5.1 /
 #         trade_logger v3.10 / analysis/entry_snapshot.py v1.0), and the stale
 #         main-header pin corrected: it still read v4.8 while the fleet ran
@@ -359,6 +366,19 @@ check "database/trade_logger.py"         "def set_entry_snapshot"       "v3.10 s
 check "database/trade_logger.py"         "return cur.rowcount > 0"      "v3.10 writer reports a REAL write (a no-op UPDATE must not read as success)"
 check "main.py"                          "_capture_entry_snapshot"      "v5.1 capture hooked on the directional entry path"
 check "tests/test_entry_snapshot.py"     "byte_identical_to_the_trails_own_answer"  "v1.0 parity test present (fails if the trail and the snapshot diverge)"
+
+# ── N.5 EXIT LADDER LATENCY (2026-08-04) — the TC.2 stop-trigger dataset ──
+check "execution/exit_engine.py"         "def _stamp_exit_latency"      "v4.11 latency stamp present at the single close seam"
+check "execution/exit_engine.py"         "_exit_submit_mono"            "v4.11 submit instant kept on the RECORD (survives a multi-tick live close)"
+check "database/trade_logger.py"         "def set_exit_latency"         "v3.11 latency writer present"
+check "database/trade_logger.py"         "exit_mark_at_trigger"         "v3.11 mark-at-trigger captured (latency is not a cost until it is priced)"
+check "tests/test_exit_latency.py"       "does_not_restart_the_clock"   "v1.0 multi-tick accumulation test present"
+if grep -q "if not result or not result.confirmed:" execution/exit_engine.py 2>/dev/null; then
+    echo "  ✓ PRESENT: v4.11 latency writes ONLY on a confirmed close"
+else
+    echo "  ✗ STALE:   exit_engine no longer guards the latency write on result.confirmed — unconfirmed passes will book the fast leg of every slow close and silently bias the TC.2 dataset"
+    MISS=$((MISS+1))
+fi
 # ABSENCE — the condor legs must still be handed ctx. Without it the helper
 # degrades to no capture BY DESIGN, so the failure is invisible by construction.
 if grep -q "_execute_condor_leg(leg_signal, state)" main.py 2>/dev/null; then

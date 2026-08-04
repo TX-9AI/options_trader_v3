@@ -184,6 +184,12 @@ full per-file history is in the git log and in
 [`docs/HISTORY.md`](docs/HISTORY.md).
 
 **2026-08-04**
+- **Exit ladder latency measured** (N.5 — `exit_engine` v4.11, `trade_logger`
+  v3.11): submit/fill instants, pass count, escalation flag and the **mark at
+  trigger** on every confirmed close, paper and live. Log-only. It is the dataset
+  TC.2's stop-trigger decision (−40% vs 35% vs 25%) is calibrated against, and it
+  only accrues in sessions recorded after it deploys — which is why it was pulled
+  forward from Aug 24 to the Aug 10 bake.
 - **Entry snapshot captured on every fill** (`analysis/entry_snapshot.py` v1.0 →
   `trades.entry_snapshot`). The FVG zones, the frame the trail would anchor to, the
   live structure levels and the per-timeframe bar depth, as held at the moment of the

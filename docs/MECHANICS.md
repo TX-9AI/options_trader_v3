@@ -661,6 +661,42 @@ The directional-drift angle of the regime window at entry. Added 2026-07-24
 OBSERVATIONS, 2026-07-24 entry). Retained as per-trade context; do not build a
 gate on it without new evidence.
 
+##### `exit_submit_ts` / `exit_fill_ts` / `exit_latency_ms` / `exit_ladder_steps` / `exit_escalated` / `exit_mark_at_trigger` — the exit ladder, measured
+Added 2026-08-04, N.5 (`exit_engine` v4.11, `trade_logger` v3.11). Written at
+`place_exit_order()` — the one seam every close routes through in both modes — on
+a **confirmed close only**.
+
+**Why it exists.** TC.2 has to place the directional stop trigger (−40% today, vs
+35% or 25%) "calibrated against measured ladder fill-latency" rather than guessed.
+That calibration reads these columns and nothing else.
+
+**`exit_mark_at_trigger` is the measurement.** Milliseconds are not a cost until
+they are priced; the cost of the ladder is (mark when the exit fired) − (price it
+actually filled at). In PAPER the two are equal by construction — paper books the
+mark — and that equality is the **plumbing proof** that the capture is wired, not
+a result. The real distribution exists only in live.
+
+**`exit_submit_ts` is the FIRST submit of the close attempt, not of the pass.** A
+live close is multi-tick: the deadline expires, the order is cancelled or left
+working, and the next tick RESUMES the same broker order. State therefore lives on
+the record, so `exit_ladder_steps` spans the whole sequence. An engine-level
+counter would reset on restart and undercount exactly the slow closes this exists
+to find.
+
+**`exit_escalated`** = the close needed more than a plain limit-at-mark post.
+Two disjoint causes, either sufficient: the 15:45 hard-close market cross, or the
+live loop hitting its deadline and cancelling.
+
+**What "good" looks like:** in paper, `exit_latency_ms` ≈ the ladder cadence,
+`exit_ladder_steps` mostly 1, `exit_escalated` 0 outside the 15:45 window, and
+`exit_mark_at_trigger` == `exit_premium`. Any paper row where those last two
+differ is a defect in the capture, not a market observation.
+
+**NULL means no confirmed close** — never captured, never zero. An unconfirmed
+pass writes nothing deliberately: booking one would put the fast final leg of
+every slow close into the population the trigger decision is measured on, which
+biases the answer instead of leaving a hole.
+
 ##### `entry_snapshot` — TEXT (JSON), NULL when not captured
 The FVG zones, the frame the trail would anchor to, the live StructureMap levels
 and the per-timeframe bar depth — all **as held at the instant of the fill**.

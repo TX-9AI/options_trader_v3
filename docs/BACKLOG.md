@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.56
+# docs/BACKLOG.md — v3.57
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -57,14 +57,16 @@ BAKED is changing nothing about today's data.
 
 | item | built | pushed | baked | evidence |
 |---|---|---|---|---|
-| **N.7 — entry snapshot capture** | ✅ 08-04 | ✅ 08-04 `0f78329` | ⬜ **Mon Aug 10** | suite 146 passed / 1 skipped on the desk; ALL CANARIES GREEN and PARITY == origin on control; working tree clean |
+| **N.7 — entry snapshot capture** | ✅ 08-04 | ✅ 08-04 `0f78329` | ⬜ **Mon Aug 10** | control suite **146 passed / 1 skipped, rc=0** (read 08-04); ALL CANARIES GREEN; PARITY == origin; tree clean |
+| **N.5 — exit ladder latency** | ✅ 08-04 | ⬜ | ⬜ **Mon Aug 10** | desk suite **158 passed / 1 skipped**; 12 N.5 tests; deliberate-failure check caught an untested guard |
 
 **⬜ N.7's OWN REMAINING STEPS, in order:**
-1. **Read the suite result from the control run.** The `tail -20` on
-   `/tmp/n7_suite.log` caught only the `check_versions` tail, so the pytest
-   summary and its `rc=` line scrolled past unseen. Canaries green is NOT the
-   suite passing — they answer different questions. One line:
-   `grep -E "passed|failed|error|rc=" /tmp/n7_suite.log`
+1. ✅ **Suite result read 2026-08-04: `146 passed, 1 skipped, rc=0`.** Worth
+   keeping the note: the `tail -20` had caught only the `check_versions` tail,
+   and the grep that recovered it ALSO matched the word `failed` inside file
+   headers and changelog prose in the same log — output that renders like a
+   failure while meaning nothing of the kind. `rc=` is the load-bearing token;
+   anchor future greps to the summary line, not to bare words.
 2. **Bake Mon Aug 10** with the calibration deploy (devtools 25 bake-only or 23),
    verifying commit parity BEFORE restart.
 3. **Verify capture on the first baked session** with the option-14 count — read
@@ -73,13 +75,25 @@ BAKED is changing nothing about today's data.
 4. **Nothing consumes the column yet.** The bake-off harness is TC.2 work and
    stays where the roadmap puts it. Do not read the first payloads as a result.
 
-**⬜ WHAT THIS THREAD HAS NOT TOUCHED, stated so it is not assumed done:** the
-open Bucket-1 defect from POSTMORTEM 2026-08-03 — the EOD conductor cannot send
-Telegram (`DTP_TELEGRAM_TOKEN`/`DTP_TELEGRAM_CHAT_ID` never set on control, while
-the boxes carry the un-prefixed pair). Every EOD warning it has raised has gone to
-a journal nobody reads. It matters more than its size suggests: DXFeed history is
-same-evening only, so a box that fails to wake loses that tape **permanently**,
-and this is the alarm on that. Credential fix, not a project.
+**◐ THE CONDUCTOR TELEGRAM GAP — CODE FIXED AT HEAD, DEPLOYMENT UNVERIFIED.
+Correcting my own statement of 2026-08-04, which called it simply open.**
+`day_trader_pro` HEAD (`354ebf8`) carries the fix as item **AX, 2026-08-03**:
+`install_eod_conductor.sh` now writes `EnvironmentFile=${DIR}/.env` into the
+conductor unit — `dtp-eod-timer` and `dtp-morning-timer` already loaded that file
+and the conductor was the only unit that did not — and the installer prints
+whether each variable is present. **What the repo cannot tell us is whether the
+installer has been RE-RUN since**, because the fix only reaches
+`/etc/systemd/system/dtp-eod-conductor.service` when it is, and the installer
+warns about missing variables rather than adding them. Until that is checked, the
+honest status is *fixed in source, unproven on the box*.
+**WHY IT IS WORTH THE ONE COMMAND:** DXFeed history is same-evening only, so a
+box that fails to wake loses that tape **permanently** — this alarm is the only
+thing that says so on the night it happens.
+**CHECK (control, one line, exits 0, prints its own verdict):**
+`echo "UNIT_ENVFILE=$(grep -c '^EnvironmentFile=' /etc/systemd/system/dtp-eod-conductor.service 2>/dev/null)"; echo "ENV_TOKEN=$(grep -c '^DTP_TELEGRAM_TOKEN=' ~/day_trader_pro/.env 2>/dev/null) ENV_CHAT=$(grep -c '^DTP_TELEGRAM_CHAT_ID=' ~/day_trader_pro/.env 2>/dev/null)"; echo "NOTIFY_FAILS=$(journalctl -u dtp-eod-conductor -n 400 --no-pager 2>/dev/null | grep -c 'cannot send')"; true`
+Wanted: `UNIT_ENVFILE=1`, `ENV_TOKEN=1`, `ENV_CHAT=1`, `NOTIFY_FAILS=0`. Any
+zero on the first three → re-run `bash install_eod_conductor.sh`; a missing
+variable in `.env` is a credential to add, not a code change.
 
 ---
 
@@ -1786,7 +1800,41 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   flag-on paper week → blocked set enumerated in the L3.2 ledger with forward
   outcomes; bars judged on L3.4's marginal-expectancy curve (conditional_tables,
   holdout enforced Aug 22) on BOTH precision and recall axes.
-- `[DESK→DEPLOY]` **N.5 — NEW: fill-latency telemetry (the TC.2 stop-trigger dataset — must exist
+- `[DESK→DEPLOY]` **N.5 — ✅ BUILT 2026-08-04, ⏱ PULLED FORWARD from Thu Aug 20
+  build / Mon Aug 24 deploy to the **Mon Aug 10** bake. ⬜ NOT YET PUSHED.**
+  **WHY IT MOVED, and it is N.7's argument exactly:** this dataset only accrues
+  in sessions recorded AFTER it deploys. Deploying Aug 24 leaves ~5 paper
+  sessions before live capital; Aug 10 leaves ~15. It is log-only and touches no
+  entry logic, so the Aug 10-21 freeze does not bar it — the roadmap explicitly
+  permits log-only work inside the window.
+  **WHAT WAS BUILT.** `exit_engine` **v4.11** — instrumented at
+  `place_exit_order()`, the ONE seam every close routes through in both modes;
+  `trade_logger` **v3.11** — six auto-migrated columns + `set_exit_latency()`
+  returning a bool; `check_versions` **v4.10** (+6 canaries);
+  `tests/test_exit_latency.py` (12 tests). Desk suite 158 passed / 1 skipped.
+  **A SIXTH FIELD BEYOND THE FOUR THIS ITEM NAMED — `exit_mark_at_trigger`, and
+  it is the measurement.** Milliseconds are not a cost until they are priced;
+  the cost is (mark when the exit fired) − (price it actually filled at). In
+  PAPER those are equal by construction, and that equality is the plumbing proof
+  this item already predicted — not a result.
+  **STATE LIVES ON THE RECORD, NOT THE ENGINE**, because a live close is
+  MULTI-TICK: the deadline expires and the next tick resumes the same broker
+  order. So `exit_submit_ts` is the FIRST submit of the attempt and
+  `exit_ladder_steps` spans the whole sequence. An engine-level counter would
+  reset on restart and undercount precisely the slow closes the study is about.
+  **THE DELIBERATE-FAILURE CHECK EARNED ITS KEEP.** Breaking the
+  confirmed-guard left the paper test green — the paper path returns its
+  unconfirmed result BEFORE the stamp, so only the live path exercises that
+  guard. A test was added for it. Writing on an unconfirmed pass would book the
+  fast final leg of every slow close: not a missing column but a silently biased
+  answer, inside the exact population the trigger decision reads. That is the
+  absence canary in `check_versions` v4.10.
+  **⬜ REMAINING:** push → bake Mon Aug 10 → confirm paper rows populate with
+  `exit_latency_ms` ≈ the ladder cadence and `exit_mark_at_trigger` ==
+  `exit_premium` (the paper identity); the REAL distribution only exists in the
+  Sep 1-4 live week, which is what TC.2 reads.
+  *Original item text follows.*
+  **N.5 — fill-latency telemetry (the TC.2 stop-trigger dataset — must exist
   before the live week that is supposed to produce it).** Verified at HEAD:
   FillResult carries confirmation but **no submit→fill timing**, and trades.db has
   no latency columns — yet Sep 1–4's plan says "ladder fill-latency logged" and
@@ -2670,6 +2718,20 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.57 — 2026-08-04 — N.5 BUILT AND PULLED FORWARD TO THE AUG 10 BAKE; N.7's
+  SUITE STEP CLOSED; THE CONDUCTOR TELEGRAM STATUS CORRECTED.** N.5 moves from
+  Thu Aug 20 build / Mon Aug 24 deploy to built-now / bakes Aug 10 on the same
+  argument N.7 won: the dataset only accrues in sessions recorded after it
+  deploys, and Aug 24 leaves ~5 paper sessions before live capital where Aug 10
+  leaves ~15. Log-only, freeze-permitted. Adds a sixth field beyond the four this
+  item named — `exit_mark_at_trigger`, which is the actual measurement.
+  **N.7 step 1 closed:** control suite read, `146 passed, 1 skipped, rc=0`; the
+  recovery grep also matched `failed` inside changelog prose in the same log, so
+  the note about anchoring to the summary line stays. **CORRECTION on my own
+  08-04 claim:** the conductor Telegram gap is FIXED IN SOURCE (day_trader_pro
+  item AX, 08-03, `EnvironmentFile` in the unit) and only its DEPLOYMENT is
+  unverified — restated as ◐ with the one command that settles it, rather than
+  left as an open defect it is not.
 - **v3.56 — 2026-08-04 — N.7 PUSHED, AND THE LEDGER THAT NOW TRAVELS WITH EVERY
   DELIVERY.** New **PART 0.5 — DELIVERY LEDGER**, because one thread now owns
   build → test → deploy and this file is the only durable record it produces:
