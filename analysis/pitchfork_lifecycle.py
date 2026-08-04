@@ -1,5 +1,13 @@
 """
-analysis/pitchfork_lifecycle.py — options_trader_v3 — v1.3
+analysis/pitchfork_lifecycle.py — options_trader_v3 — v1.4
+
+v1.4 — 2026-08-04 — carries pitchfork v1.2's `uniqueness_scan` through to
+        build_fork. Additive: the flag defaults False, so with it off this file
+        behaves exactly as v1.3 did. It exists because COVERAGE IS A PROPERTY OF
+        THE SEQUENCE, not of any single bar — measuring the §4.3.5 scan on the
+        stateless birth walk alone would answer a different question than the
+        one AW asked, and AS's whole lesson was that a birth rate presented as
+        coverage is what made the fork look 33x better than it is.
 
 PF/AS. §5 of docs/WHITEPAPER_pitchfork_overlay.md — the fork HOLDS UNTIL
 INVALIDATED. Weight 0. Consumed by nothing, gating nothing.
@@ -206,10 +214,16 @@ class ForkTracker:
                  adverse_atr: float = ADVERSE_ATR,
                  stale_enabled: bool = STALE_ENABLED,
                  stale_bars: int = STALE_BARS,
-                 adverse_mode: str = "closes"):
+                 adverse_mode: str = "closes",
+                 uniqueness_scan: bool = False):
         self.symbol = symbol
         self.timeframe = timeframe
         self.variant = variant
+        # v1.4 — carried through to build_fork so the §4.3.5 head-to-head is run
+        # on the LIFECYCLE path. Coverage is a property of the sequence, so
+        # measuring the scan on the stateless birth walk alone would answer a
+        # different question than the one AW asked.
+        self.uniqueness_scan = uniqueness_scan
         self.adverse_closes = adverse_closes
         self.adverse_atr = adverse_atr
         self.stale_enabled = stale_enabled
@@ -378,7 +392,8 @@ class ForkTracker:
 
         # (c) supersession, and birth when there is nothing active
         candidate = build_fork(self.symbol, df.iloc[:now_idx + 1], self.timeframe,
-                               atr, variant=self.variant, now_idx=now_idx)
+                               atr, variant=self.variant, now_idx=now_idx,
+                               uniqueness_scan=self.uniqueness_scan)
 
         if self.active is None:
             if candidate is not None and candidate.p2.idx <= self._spent_p2_idx:

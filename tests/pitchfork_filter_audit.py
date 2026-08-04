@@ -139,8 +139,17 @@ def main(argv) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tape-root", default="")
     ap.add_argument("--symbols", default="")
+    ap.add_argument("--uniqueness-scan", action="store_true",
+                    help="§4.3.5 second reading: scan back for the most recent "
+                         "triple SATISFYING the filters (pitchfork v1.2). Run "
+                         "the audit BOTH ways on the same tape and compare "
+                         "MEDIAN coverage, not the birth rate.")
     a = ap.parse_args(argv[1:])
 
+    # §4.3.5 head-to-head flag, captured HERE and not read later: `a` is the
+    # parsed namespace but is REBOUND to an ATR list inside the symbol loop
+    # below, so any `a.<attr>` after that point is a list attribute lookup.
+    scan = a.uniqueness_scan
     root = _tape_root(a.tape_root)
     if not root:
         print("No tape root found (looked in " + ", ".join(TAPE_ROOTS) + ")")
@@ -167,7 +176,8 @@ def main(argv) -> int:
             sub = h1.iloc[:idx + 1]
             atr = float(atr_series(sub, 14).iloc[-1]) if len(sub) > 15 else 0.0
             attempts += 1
-            f = build_fork(sym, sub, "1h", atr)
+            f = build_fork(sym, sub, "1h", atr,
+                           uniqueness_scan=scan)
             if f is not None:
                 built += 1
                 totals["__BUILT__"] += 1
@@ -184,7 +194,8 @@ def main(argv) -> int:
         if h1 is None or len(h1) < 25:
             continue
         a = atr_series(h1, 14).tolist()
-        tr = replay(sym, h1, "1h", a)
+        tr = replay(sym, h1, "1h", a,
+                    uniqueness_scan=scan)
         cov_by_sym[sym] = tr.coverage(len(h1))
         for ev in tr.events:
             life_events[ev.kind] += 1
