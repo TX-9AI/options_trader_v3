@@ -1,4 +1,8 @@
 #!/bin/bash
+# v4.24 — 2026-08-04 — pull_today_ohlc v1.4: the RTH guard is OFF BY DEFAULT per
+#         operator directive, gated on OT_PULL_RTH_GUARD. The canary now pins
+#         the KNOB rather than the condition — the refusal path still exists and
+#         must stay correct for when it is switched back on.
 # v4.23 — 2026-08-04 — pull_today_ohlc v1.3: the RTH guard now requires a LIVE
 #         OPTIONSBOT, not just the clock. +2 canaries, one of them an ABSENCE
 #         check on the v1.1 condition — the old form silently wrote header-only
@@ -350,6 +354,7 @@ check "tests/pitchfork_filter_audit.py"  "ACCEL/held bar"               "v1.5 ex
 
 # ── pull_today_ohlc v1.3 (2026-08-04) — the guard that ate the backfill ───
 check "pull_today_ohlc.sh"               'BOT=$(systemctl is-active optionsbot' "v1.3 guard reads optionsbot, not just the clock"
+check "pull_today_ohlc.sh"               'GUARD="${OT_PULL_RTH_GUARD:-0}"'  "v1.4 guard OFF by default, one env var to restore"
 check "tests/test_pull_ohlc_guard.sh"    "THE CASE THAT WAS BROKEN"     "v1.0 guard decision table covered"
 if grep -q '\[ "$FEED" = "active" \] && \[ "$POSTCLOSE" = "0" \]; then' pull_today_ohlc.sh 2>/dev/null; then
     echo "  ✗ STALE:   pull_today_ohlc guard is back to the clock-only form — every sat-out box backfill wakes will write a header-only csv and that session's tape is gone at midnight"

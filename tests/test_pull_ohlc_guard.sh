@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# tests/test_pull_ohlc_guard.sh — v1.0 — 2026-08-04
+# tests/test_pull_ohlc_guard.sh — v1.1 — 2026-08-04
+#
+# v1.1 — the guard is OFF BY DEFAULT (v1.4, operator directive) and gated on
+#        OT_PULL_RTH_GUARD. Both modes are driven here: default must ALWAYS
+#        rebuild, and =1 must reproduce v1.3 exactly. Keeping the =1 arm tested
+#        is the point — the refusal path still exists and must still be correct
+#        when it is switched back on.
 #
 # The v1.3 guard decision table in pull_today_ohlc.sh, driven over all eight
 # (FEED, POSTCLOSE, BOT) states.
@@ -19,26 +25,28 @@
 # script and driven over all eight (FEED, POSTCLOSE, BOT) combinations.
 # The condition below is copied VERBATIM from pull_today_ohlc.sh v1.3.
 decide() {
-  FEED="$1"; POSTCLOSE="$2"; BOT="$3"
-  if [ "$FEED" = "active" ] && [ "$POSTCLOSE" = "0" ] && [ "$BOT" = "active" ]; then
+  GUARD="$1"; FEED="$2"; POSTCLOSE="$3"; BOT="$4"
+  if [ "$GUARD" = "1" ] && [ "$FEED" = "active" ] && [ "$POSTCLOSE" = "0" ] && [ "$BOT" = "active" ]; then
     echo "SKIP"
   else
     echo "REBUILD"
   fi
 }
 fail=0
-chk(){ got=$(decide "$1" "$2" "$3"); [ "$got" = "$4" ] && s="ok " || { s="FAIL"; fail=1; }; \
-       printf "  %s feed=%-8s postclose=%s bot=%-8s -> %-7s (want %s)\n" "$s" "$1" "$2" "$3" "$got" "$4"; }
-echo "THE CASE THAT WAS BROKEN — sat-out box, mid-session, no bot:"
-chk active   0 inactive REBUILD
-chk active   0 unknown  REBUILD
-echo "THE CASE THE GUARD EXISTS FOR — trading box mid-session:"
-chk active   0 active   SKIP
-echo "POST-CLOSE — unchanged, always rebuilds:"
-chk active   1 active   REBUILD
-chk active   1 inactive REBUILD
-echo "FEED NOT RUNNING — nothing to stop, always rebuilds:"
-chk inactive 0 active   REBUILD
-chk inactive 0 inactive REBUILD
-chk unknown  0 active   REBUILD
+chk(){ got=$(decide "$1" "$2" "$3" "$4"); [ "$got" = "$5" ] && s="ok " || { s="FAIL"; fail=1; }; \
+       printf "  %s guard=%s feed=%-8s postclose=%s bot=%-8s -> %-7s (want %s)\n" "$s" "$1" "$2" "$3" "$4" "$got" "$5"; }
+echo "DEFAULT — guard OFF (v1.4): ALWAYS rebuilds, including under a live bot"
+chk 0 active   0 active   REBUILD
+chk 0 active   0 inactive REBUILD
+chk 0 active   1 active   REBUILD
+chk 0 inactive 0 active   REBUILD
+echo "OT_PULL_RTH_GUARD=1 — v1.3 behaviour, still correct when switched back on:"
+echo "  THE CASE THAT WAS BROKEN — sat-out box, mid-session, no bot:"
+chk 1 active   0 inactive REBUILD
+chk 1 active   0 unknown  REBUILD
+echo "  THE CASE THE GUARD EXISTS FOR — trading box mid-session:"
+chk 1 active   0 active   SKIP
+echo "  POST-CLOSE and FEED-DOWN — rebuild either way:"
+chk 1 active   1 active   REBUILD
+chk 1 inactive 0 inactive REBUILD
 exit $fail

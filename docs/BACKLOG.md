@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.70
+# docs/BACKLOG.md — v3.71
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -68,6 +68,7 @@ BAKED is changing nothing about today's data.
 | **ORB.1 — ORB was gated by the stale entry block** | ✅ 08-04 | ✅ 08-04 | ⬜ **fleet reflash tonight** | control suite 216 passed, ALL CANARIES GREEN |
 | **RPT.1 — report rollup (5 fixes, 2 repos)** | ✅ 08-04 | ⬜ | n/a (offline) | otv3 suite **223 passed / 1 skipped**; behavioural proof on all five |
 | **BF.1 — the RTH guard was eating the backfill** | ✅ 08-04 | ⬜ | ⬜ **tonight's reflash** | 8/8 guard states proven; 2 sessions of sat-out tape at stake |
+| **BF.2 — guard OFF by default (operator directive)** | ✅ 08-04 | ⬜ | ⬜ **tonight's reflash** | v1.4, both modes proven. **⚠️ the 16:28 failure was NOT the guard — cause still unknown** |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1241,6 +1242,40 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK→DEPLOY]` **BF.2 — RTH GUARD DISABLED BY DEFAULT, 2026-08-04, OPERATOR
+  DIRECTIVE. `pull_today_ohlc` v1.4, gated on `OT_PULL_RTH_GUARD` (set to 1 to
+  restore). Ships on tonight's reflash.**
+  **⚠️ RECORDED BECAUSE IT CHANGES WHAT THE DIRECTIVE WILL AND WILL NOT FIX: the
+  16:28 backfill that prompted this was NOT blocked by the guard.** Its own
+  output reads `0 bot box(es) currently running` and it ran POST-CLOSE, so
+  `POSTCLOSE=1` and `BOT != active` — a state where **neither v1.1's guard nor
+  v1.3's can fire**. It returned `0 full, 0 short, 14 still missing`. Whatever
+  stopped that run is downstream of the guard entirely, and **disabling the
+  guard will not address it.** The cause is in the box-side
+  `pull_today_ohlc.log`, which records the exact branch taken and whether the
+  `--once` refill ran, found creds, or returned no bars.
+  **WHAT THE DIRECTIVE DOES BUY:** it removes the guard as a variable while the
+  real cause is found, and it permanently unblocks the mid-session sat-out path
+  that BF.1 diagnosed. Both are legitimate; neither is the 16:28 failure.
+  **WHAT IS BEING GIVEN UP, so the re-enable conversation is informed.** With the
+  guard off, a pull fired at a TRADING box during RTH stops its candle-feed for
+  the ~200s producer pass. The bot keeps running but reads a FROZEN store for
+  that window: every engine consuming 1m/5m frames sees stale bars, and
+  `market_data` v3.3's bar-recency guard will begin recording BLINDNESS. **The
+  script now warns loudly on exactly that combination.** Mandate 2 is untouched —
+  the feed is still stopped before the pass and restarted after — so this is a
+  starvation risk, never a double-producer one. On a box with NO bot, which is
+  the population backfill wakes, there is no risk at all.
+  **THE REFUSAL PATH IS PARKED, NOT DELETED.** One env var reverses it, and
+  `tests/test_pull_ohlc_guard.sh` v1.1 drives BOTH modes — the `=1` arm still
+  asserts v1.3's table exactly, so the guard cannot rot while switched off and
+  come back wrong.
+  **⬜ THE OPEN QUESTION FOR THE LATER DISCUSSION, one command:**
+  `cd ~/options-trader && tail -25 pull_today_ohlc.log; true`
+  on any of the 14. It will name the branch and the outcome — "cannot refill:
+  TT_* creds not present" and "0 bars (store empty / entitlement)" are different
+  faults with different fixes, and neither is the guard.
+
 - `[DESK→DEPLOY]` **BF.1 — 🔴 ✅ FIXED 2026-08-04. THE RTH GUARD WAS BLOCKING THE
   BACKFILL IT WAS NEVER MEANT TO BLOCK, AND IT HAS COST TWO SESSIONS OF SAT-OUT
   TAPE. Ships on tonight's reflash — the boxes need it.**
@@ -3278,6 +3313,12 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.71 — 2026-08-04 — BF.2: RTH GUARD OFF BY DEFAULT (operator directive),
+  behind OT_PULL_RTH_GUARD.** Recorded alongside it: the 16:28 backfill that
+  prompted the directive ran POST-CLOSE with zero bot boxes running, a state
+  where neither version of the guard can fire — so the guard was not what
+  blocked it and disabling it will not fix that run. The refusal path is parked
+  rather than deleted and both modes stay under test.
 - **v3.70 — 2026-08-04 — BF.1: THE RTH GUARD WAS EATING THE BACKFILL.**
   `pull_today_ohlc` v1.1 refused the full-session rebuild on any live feed before
   16:00 ET — a clock test — so every SAT-OUT box that eod_backfill woke read a

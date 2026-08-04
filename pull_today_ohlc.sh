@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 # options_trader_v3/pull_today_ohlc.sh — one-shot EOD retrieval of TODAY's FULL 1-min session on THIS box.
+# v1.4 — 2026-08-04 — RTH GUARD OFF BY DEFAULT (operator directive). Gated on
+#        OT_PULL_RTH_GUARD; set it to 1 to restore v1.3 behaviour. The refusal
+#        path is unchanged and still there — only its default flipped, so this
+#        is one env var to reverse rather than a deletion to re-derive.
+#        NOTE FOR THE LATER DISCUSSION: the 2026-08-04 16:28 backfill that
+#        prompted this returned "0 full, 0 short, 14 still missing" with
+#        "0 bot box(es) currently running" and POSTCLOSE=1 — a state where
+#        NEITHER v1.1's guard NOR v1.3's could fire. Whatever blocked that run
+#        was downstream of the guard entirely; the box-side
+#        pull_today_ohlc.log holds the actual reason.
 # v1.3 — 2026-08-04 — THE RTH GUARD WAS BLOCKING THE BACKFILL IT WAS NEVER MEANT
 #        TO BLOCK. v1.1's test was "candle-feed live AND before 16:00 ET" — a
 #        pure clock check. eod_backfill wakes SAT-OUT boxes mid-session to fetch
@@ -96,7 +106,26 @@ if [ "${1:-}" = "__work" ]; then
         # pass and restarted after, so there is never a second live producer on
         # this box either way.
         BOT=$(systemctl is-active optionsbot 2>/dev/null || echo unknown)
-        if [ "$FEED" = "active" ] && [ "$POSTCLOSE" = "0" ] && [ "$BOT" = "active" ]; then
+        # v1.4 — OPERATOR DIRECTIVE 2026-08-04: the guard is OFF BY DEFAULT,
+        # pending a proper discussion. `OT_PULL_RTH_GUARD=1` restores it.
+        # WHAT IS BEING GIVEN UP, stated so the re-enable decision is informed:
+        # with the guard off, a pull fired at a TRADING box during RTH will stop
+        # its candle-feed for the ~200s producer pass. Its bot keeps running but
+        # reads a frozen store for that window — every engine that consumes 1m/5m
+        # frames sees stale bars, and market_data v3.3's bar-recency guard will
+        # start recording BLINDNESS. Mandate 2 still holds (feed stopped before
+        # the pass, restarted after), so this is a starvation risk, never a
+        # double-producer one.
+        # IT IS NOT A RISK AT ALL ON A BOX WITH NO BOT, which is the population
+        # eod_backfill wakes — hence v1.3's narrower condition, which this knob
+        # now sits on top of rather than replacing.
+        GUARD="${OT_PULL_RTH_GUARD:-0}"
+        if [ "$GUARD" != "1" ]; then
+            echo "RTH guard DISABLED (OT_PULL_RTH_GUARD=$GUARD) — operator directive 2026-08-04."
+            [ "$FEED" = "active" ] && [ "$POSTCLOSE" = "0" ] && [ "$BOT" = "active" ] && \
+                echo "⚠ RTH + optionsbot ACTIVE on this box: the feed will be stopped for the refill and the bot will read a FROZEN store for ~200s."
+        fi
+        if [ "$GUARD" = "1" ] && [ "$FEED" = "active" ] && [ "$POSTCLOSE" = "0" ] && [ "$BOT" = "active" ]; then
             echo "RTH + feed live + optionsbot ACTIVE: NOT stopping the feed (would starve the bot)."
             echo "Reading store as-is; result may be PARTIAL (1m store holds ~240 bars)."
             echo "Re-run after 16:00 ET for a full session."
@@ -108,8 +137,10 @@ if [ "${1:-}" = "__work" ]; then
             # "refilling" with no reason printed is how the old behaviour hid.
             if [ "$POSTCLOSE" = "1" ]; then
                 echo "post-close: safe to rebuild"
-            else
+            elif [ "$BOT" != "active" ]; then
                 echo "RTH but optionsbot is $BOT (not trading on this box): safe to rebuild"
+            else
+                echo "RTH with a LIVE bot, rebuilding anyway because the guard is OFF"
             fi
             [ "$FEED" = "active" ] && { echo "stopping candle-feed for a single-producer refill"; sudo systemctl stop candle-feed; }
             if [ "$HAVE_CREDS" = "1" ]; then
