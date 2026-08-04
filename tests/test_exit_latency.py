@@ -1,5 +1,10 @@
 """
-tests/test_exit_latency.py — v1.0 — 2026-08-04 (N.5)
+tests/test_exit_latency.py — v1.1 — 2026-08-04 (N.5)
+
+v1.1 — 2026-08-04 — the clock is pinned. `exit_escalated` is set from 15:45 ET
+by the hard-close ladder, so these assertions passed all day and failed after
+the close. Found the same hour as the identical defect in
+tests/test_stale_no_regime_flip.py.
 
 Proves the exit-ladder latency capture through the REAL `place_exit_order` seam
 and a REAL sqlite trades table. The paper path is exercised end to end; the live
@@ -42,6 +47,19 @@ def _engine_and_logger():
     eng = ExitEngine(paper_trading=True)
     eng._trade_logger = tl
     return eng, tl
+
+
+@pytest.fixture(autouse=True)
+def _outside_the_flatten_window(monkeypatch):
+    """v1.1 — PIN THE CLOCK. `exit_escalated` is set whenever
+    hard_close_order_mode() reads "market", i.e. from 15:45 ET, so the escalation
+    assertions below were time-of-day dependent: green all day, red after the
+    close. Second test of mine flushed out by one 15:58 ET suite run — the same
+    defect class in a different file, both shipped today.
+    The escalation test drives the flag through the record instead, which is what
+    the live deadline branch does anyway."""
+    import execution.exit_engine as xe
+    monkeypatch.setattr(xe, "hard_close_order_mode", lambda _now: "none")
 
 
 def _open_trade(tl, trade_id="lat001"):

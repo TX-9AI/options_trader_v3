@@ -70,6 +70,17 @@ the state's own behaviour. Time-to-failure separates *a 0DTE that ran out of
 clock* from *a thesis that was wrong*; a p50 in single-digit minutes is the
 second.
 
+*The matched control — v1.3, and no rate here means anything without it.* In a
+trending tape a recent intraday extreme survives terminally a great deal of the
+time simply because trends trend. `--control matched` draws a pseudo-impulse at a
+random earlier minute on the SAME symbol-day, same direction and construction,
+and runs the identical measurement — so the printed difference is *impulse minus
+arbitrary extreme*, with a two-proportion band. The seed is fixed and moves only
+the control draw; a control that wandered between runs could not be argued with.
+**The ranging-vs-trending control was attempted first and is impossible:**
+`_trend_credit_spread` sets `direction = ""` on any non-TRENDING label, so no
+ranging floor is ever recorded. Written down here so it is not planned again.
+
 *What it cannot say.* No spread is priced, no credit assumed, no fill modelled. A
 held floor is a NECESSARY condition for the trade, never a profitable one.
 

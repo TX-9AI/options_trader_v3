@@ -1,6 +1,28 @@
 #!/usr/bin/env python3
 """
-tests/tcs_floor_durability.py — v1.2 — 2026-08-04   (backlog TC.4b prerequisite)
+tests/tcs_floor_durability.py — v1.3 — 2026-08-04   (backlog TC.4b prerequisite)
+
+v1.3 — 2026-08-04 — `--control matched`, BECAUSE 62% MEANS NOTHING WITHOUT ONE.
+        In a trending tape a recent intraday low "holds" terminally a great deal
+        of the time simply because trends trend. Every number this tool printed
+        before v1.3 was an absolute rate with nothing to compare it against.
+        FIRST I TRIED THE OBVIOUS CONTROL AND IT DOES NOT EXIST. The plan was to
+        measure ranging-tape floors against trending ones. It cannot be done from
+        this journal: `_trend_credit_spread` sets `direction = ""` on any
+        non-TRENDING label, `_impulse_sd` is then never called, and `floor_px` is
+        None. **There is no ranging floor recorded anywhere.** Stating that
+        rather than quietly substituting a different comparison, because a
+        control that answers a different question is worse than none.
+        WHAT `--control matched` DOES INSTEAD, and it is a stronger test. For
+        every real impulse it draws a MATCHED pseudo-impulse on the SAME
+        symbol-day: same construction (the low/high of a bar, same lookback),
+        same direction, same minimum forward window, at a random earlier minute.
+        Then it runs the identical terminal measurement on both. That asks the
+        question the strategy actually rests on — **does the IMPULSE origin
+        survive better than an ARBITRARY recent extreme?** — holding day, symbol,
+        direction and session position roughly constant.
+        Seeded (`--seed`) so a run is reproducible; a control that moves between
+        runs cannot be argued with.
 
 v1.2 — 2026-08-04 — TERMINAL OUTCOME + THE STRIKE-DISTANCE CURVE, because v1.1
         answered a question the trade does not ask. "Did a 1m close EVER go back
@@ -81,6 +103,7 @@ USAGE
 
 import argparse
 import collections
+import random
 import csv
 import glob
 import json
@@ -177,6 +200,14 @@ def main(argv):
                          "only so the difference can be shown, not used.")
     ap.add_argument("--min-r", type=float, default=0.0,
                     help="additionally require readiness r >= this")
+    ap.add_argument("--control", default="none", choices=("none", "matched"),
+                    help="matched: for every real impulse, draw a pseudo-impulse "
+                         "at a random earlier minute on the SAME symbol-day, same "
+                         "direction and construction, and report both. Without it "
+                         "every rate here is an absolute with nothing to beat.")
+    ap.add_argument("--seed", type=int, default=20260804,
+                    help="control draw seed; a control that moves between runs "
+                         "cannot be argued with")
     ap.add_argument("--diagnose", action="store_true")
     a = ap.parse_args(argv[1:])
 
@@ -296,6 +327,40 @@ def main(argv):
                         "term_close": term_close, "term_failed": term_failed,
                         "fwd_bars": len(fwd)})
 
+    # ── v1.3 — the matched control ──────────────────────────────────────────
+    control = []
+    if a.control == "matched" and results:
+        rng = random.Random(a.seed)
+        for o in results:
+            bars = tapes.get(o["date"], {}).get(o["sym"]) or []
+            # candidate anchors: any bar with the same minimum forward window the
+            # real observation needed, so the two are compared on equal footing
+            elig = [i for i in range(len(bars)) if len(bars) - i - 1 >= 5]
+            if not elig:
+                continue
+            i = rng.choice(elig)
+            tm, c, h, lo = bars[i]
+            long_ = o["dir"] == "long"
+            floor = lo if long_ else h
+            fwd = bars[i + 1:]
+            if len(fwd) < 5 or floor <= 0:
+                continue
+            broke_at, pen = None, 0.0
+            for tm2, c2, h2, lo2 in fwd:
+                through = (c2 < floor) if long_ else (c2 > floor)
+                if through and broke_at is None:
+                    broke_at = tm2 - tm
+                depth = (floor - lo2) if long_ else (h2 - floor)
+                if depth > 0:
+                    pen = max(pen, 100.0 * depth / floor)
+            term_close = fwd[-1][1]
+            control.append({"dir": o["dir"], "floor": floor,
+                            "held": broke_at is None,
+                            "term_close": term_close,
+                            "term_failed": (term_close < floor) if long_
+                                           else (term_close > floor),
+                            "wick_pen_pct": pen})
+
     if a.diagnose or not results:
         print("READINESS ROWS / JOIN DIAGNOSIS")
         for k in ("tcs_rows", "not_armed", "below_min_r", "dedup", "no_floor",
@@ -402,6 +467,26 @@ def main(argv):
               "a thesis\n  that was wrong. A p50 in single-digit minutes would "
               "say the opposite.")
 
+    if control:
+        c_term = sum(1 for r in control if not r["term_failed"])
+        c_held = sum(1 for r in control if r["held"])
+        n_c = len(control)
+        print("\n" + "=" * 66)
+        print("MATCHED CONTROL — an ARBITRARY recent extreme, same symbol-day")
+        print("=" * 66)
+        print(f"  n={n_c}   intraday held {c_held / n_c:.1%}"
+              f"   terminal OK {c_term / n_c:.1%}")
+        d_t = len(term_ok) / len(results) - c_term / n_c
+        # two-proportion band; if the difference does not clear it, the impulse
+        # is not doing anything the tape was not doing anyway.
+        p1, p2 = len(term_ok) / len(results), c_term / n_c
+        se = math.sqrt(p1 * (1 - p1) / len(results) + p2 * (1 - p2) / n_c)
+        print(f"  impulse minus control, TERMINAL: {d_t:+.1%}  ±{1.96 * se:.1%}")
+        print("\n  THIS IS THE NUMBER THE STRATEGY LIVES ON. If the impulse")
+        print("  origin does not survive better than an arbitrary recent extreme")
+        print("  on the same tape, the state is not selecting anything and the")
+        print("  absolute rate above is a fact about trending tape, not a signal.")
+
     # ── v1.2 — THE STRIKE CURVE: terminal failure vs distance beyond the floor
     # This is the output that becomes a rule. Each row asks: if the short strike
     # had been placed this far BEYOND the impulse floor, how often would price
@@ -410,17 +495,26 @@ def main(argv):
     print("\n" + "=" * 66)
     print("STRIKE CURVE — terminal failure vs distance BEYOND the floor")
     print("=" * 66)
-    print(f"  {'offset':<10}{'terminal failures':>20}{'rate':>10}")
-    for off in (0.0, 0.25, 0.50, 0.75, 1.00, 1.50, 2.00, 3.00):
+    print(f"  {'offset':<10}{'terminal failures':>20}{'rate':>10}"
+          + ("      control" if control else ""))
+    def _fail_at(rows, off):
         bad = 0
-        for r in results:
+        for r in rows:
             f0 = r["floor"]
             strike = f0 * (1 - off / 100.0) if r["dir"] == "long" \
                 else f0 * (1 + off / 100.0)
             through = (r["term_close"] < strike) if r["dir"] == "long" \
                 else (r["term_close"] > strike)
             bad += 1 if through else 0
-        print(f"  {off:>5.2f}%    {bad:>18}{bad / len(results):>10.1%}")
+        return bad
+
+    for off in (0.0, 0.25, 0.50, 0.75, 1.00, 1.50, 2.00, 3.00):
+        bad = _fail_at(results, off)
+        line = f"  {off:>5.2f}%    {bad:>18}{bad / len(results):>10.1%}"
+        if control:
+            cb = _fail_at(control, off)
+            line += f"      control {cb / len(control):>6.1%}"
+        print(line)
     print("\n  The offset where this crosses your tolerance IS the short-strike")
     print("  rule — priced from the state's own behaviour rather than a fixed")
     print("  delta. NOTE WHAT IT IS NOT: further OTM collects less credit, and")

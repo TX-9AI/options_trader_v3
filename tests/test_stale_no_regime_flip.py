@@ -1,5 +1,10 @@
 """
-tests/test_stale_no_regime_flip.py — v1.0 — 2026-08-04 (main v5.2)
+tests/test_stale_no_regime_flip.py — v1.1 — 2026-08-04 (main v5.2)
+
+v1.1 — 2026-08-04 — the clock is pinned. v1.0 was time-of-day dependent: the
+15:45 hard close short-circuits ahead of every regime branch these tests
+exercise, so the file was green all day and red between 15:45 and 16:00 ET. A
+suite that passes depending on when you run it is worse than one that fails.
 
 Operator directive, 2026-08-04: "Do not execute a regime flip exit on stale."
 
@@ -54,6 +59,20 @@ def _continuation_record():
 
 def _eng():
     return ExitEngine(paper_trading=True)
+
+
+@pytest.fixture(autouse=True)
+def _not_hard_close(monkeypatch):
+    """v1.1 — PIN THE CLOCK. Every test below reasons about the regime branch,
+    and `hard_close_15:45_ET` short-circuits BEFORE it. Without this the suite
+    passes all day and fails between 15:45 and 16:00 ET — which is exactly when
+    someone would be running it after the close. Found on 2026-08-04 by a suite
+    run that happened to land in that window; it had been green since the file
+    shipped that morning purely because of the hour.
+    The one test that WANTS the hard close overrides this with its own patch.
+    """
+    import execution.exit_engine as xe
+    monkeypatch.setattr(xe, "is_hard_close_time", lambda: False)
 
 
 # ── the mechanism is armed (so the None case below is not vacuous) ───────────

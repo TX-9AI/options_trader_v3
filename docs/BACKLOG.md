@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.65
+# docs/BACKLOG.md — v3.66
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -63,7 +63,7 @@ BAKED is changing nothing about today's data.
 | **W.2a — today's own swallows made audible + the alarm made specific** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | silent count back to the 08-03 baseline of **87**; `--since` proven on three cases |
 | **D.1 — bull/bear were the same token in THREE renderers** | ✅ 08-04 | ✅ 08-04 | n/a (report-only) | 16 rows re-rendered on control; ALL CANARIES GREEN |
 | **AV.1 — the pooled gap read, with a legitimacy guard** | ✅ 08-04 | ✅ 08-04 | n/a (offline) | ALL CANARIES GREEN on control |
-| **TC.4b-pre — does the impulse floor hold?** | ✅ v1.2 08-04 | ⬜ | n/a (offline) | ARMED run done: intraday held **17.9%** on n=2,812, p50 time-to-failure **6 min**. v1.2 adds TERMINAL + strike curve. 15 tests |
+| **TC.4b-pre — does the impulse floor hold?** | ✅ v1.3 08-04 | ⬜ | n/a (offline) | ANSWERED. Control: arming buys **+1.7pp** terminal (62.6% vs 60.9%) and is WORSE at wide strikes. TC.4 re-scoped. 19 tests |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1237,6 +1237,68 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK·DATA]` **TC.4 — ✅ ANSWERED AND RE-SCOPED 2026-08-04. KEEP THE TREND
+  LABEL, DELETE THE SCORING. Operator's decision, on the control run.**
+  `ARMED   n=2,812   intraday 17.9%   terminal 62.6%`
+  `CONTROL n=5,129   intraday 14.6%   terminal 60.9%`
+  `strike curve, failure at +1.00%: armed 15.5% vs control 16.7%; at +2.00%: 6.4% vs 6.2%`
+  **Arming buys 1.7 points, and at the wider strikes the unarmed population is
+  marginally BETTER.** Terminal survival is FLAT across every SD bucket in both
+  populations (59-64%, all bands overlapping). Two independent measurements
+  agreeing: **`impulse_val` does not discriminate on the outcome the trade
+  depends on.** Category 2 by the operator's own split — a contributor not doing
+  its job is a DEFECT, not a preference.
+  **DELETED:** the readiness gate as TC.4's trigger, and TC.4b's plan to fit
+  `TR_TCS_IMPULSE_SD_LO/HI` from a durability curve. **There is no curve to fit**
+  — re-aim TC.4b's Aug 8-9 slot accordingly rather than running it as written.
+  **SURVIVES:** the trend label as the condition, plus a strike distance read off
+  the terminal-survival curve. TC.4 becomes *in a confirmed trend, sell N% beyond
+  a recent extreme*.
+  **NOT DELETED, deliberately:** the log-only readiness track keeps emitting. It
+  gates nothing, costs nothing, is the only source of the impulse-floor record
+  this analysis ran on, and shares `_extension_from_arm` with the condor sides.
+  Removing the emitter destroys the input to every re-examination and changes no
+  behaviour. Flagged here so "delete the scoring" is not later read as "delete
+  the track".
+  **⛔ THE RANGING CONTROL IS IMPOSSIBLE — recorded so nobody plans it again.**
+  `_trend_credit_spread` sets `direction = ""` on any non-TRENDING label, so
+  `_impulse_sd` is never called and `floor_px` is None. **No ranging floor exists
+  anywhere in the journal.** `--control matched` replaced it: a pseudo-impulse at
+  a random earlier minute on the same symbol-day, same direction and
+  construction — a sharper question, and buildable from tape alone.
+  **⬜ WHAT IS STILL UNMEASURED AND STILL DECIDES WHETHER IT EARNS: THE CREDIT.**
+  The curve bounds RISK only. A 5-wide taking $1.00 risks 4 to make 1 and needs
+  ~80% terminal survival to break even before fees; 62% at the floor is far
+  under, and 94% at +2% is only useful if premium survives that far out. **Do not
+  build the engine on the strike curve alone** — it can say where the trade stops
+  bleeding, never that it pays.
+  **⬜ REUSABLE BEYOND TC.4:** terminal survival vs distance beyond a recent
+  intraday extreme is a fact about the TAPE, not about this strategy. It is
+  directly a prior for any short-premium strike placement — including **AI**'s
+  hunt for a condor midpoint that is not the Bollinger.
+  **⚠️ TWO FLAKY TESTS OF MINE, CAUGHT BY THE CLOCK — same defect class, both
+  shipped today, both found by one suite run that happened to land at 15:58 ET.**
+  `tests/test_exit_latency.py` (N.5) asserted `exit_escalated == 0`, but the flag
+  is set from 15:45 ET by the hard-close ladder. Both files now pin the clock with
+  an autouse fixture. **Neither had ever been correct — only untested at that
+  hour**, and both would have gone red on control during exactly the post-close
+  window someone runs the suite in. Generalisable: any test that reasons about a
+  branch sitting BELOW a time gate must pin the gate, or it is asserting the hour.
+  `tests/test_stale_no_regime_flip.py`
+  (shipped this morning with N.8) was TIME-OF-DAY DEPENDENT: the 15:45 hard close
+  short-circuits ahead of every regime branch it exercises, so the file was green
+  all day and went red at 15:58 ET when a suite run happened to land in that
+  window. It had never been correct — only untested at that hour. **v1.1 pins the
+  clock with an autouse fixture**; the one test that wants the hard close
+  overrides it. A suite that passes depending on when you run it is worse than
+  one that fails, and this one would have gone red on control during exactly the
+  post-close window someone would use.
+
+  **⬜ A PROCESS NOTE WORTH THE LINE.** A strategy that would have cost a build,
+  a deploy slot and weeks of paper data was taken to a near-negative for one
+  offline tool and an afternoon — and the thing that killed it was not the P&L,
+  it was the CONTROL. Every absolute rate before v1.3 looked like a result.
+
 - `[DESK·DATA]` **TC.4b-pre — ARMED RESULT IS IN, AND IT IS NOT GOOD FOR THE
   PREMISE AS STATED. v1.2 built to settle whether that is fatal.**
   **THE NUMBERS (2026-07-28 → 08-04, `--machine ARMED`, n=2,812 distinct
@@ -3005,6 +3067,14 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.66 — 2026-08-04 — TC.4 ANSWERED: KEEP THE TREND LABEL, DELETE THE
+  SCORING.** The matched control settled it — arming buys 1.7pp of terminal
+  survival and is marginally worse at wide strikes, and the SD curve is flat in
+  both populations. `impulse_val` is a category-2 defect, not a tuning question,
+  and TC.4b's fit has no curve to fit. The log-only track stays (it is the data
+  source, and it gates nothing). Also recorded: the ranging control is impossible
+  by construction — no ranging floor is ever journaled — and the credit remains
+  the unmeasured half that decides whether the trade earns at all.
 - **v3.65 — 2026-08-04 — TC.4b-pre v1.2: THE ARMED RESULT, AND THE MEASURE IT
   EXPOSED AS WRONG-SHAPED.** ARMED run: intraday floor held 17.9% on n=2,812, p50
   time-to-failure 6 minutes — the tool's own pre-registration says that means the

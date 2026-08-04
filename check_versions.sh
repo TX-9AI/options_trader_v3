@@ -1,4 +1,11 @@
 #!/bin/bash
+# v4.19 — 2026-08-04 — tcs_floor_durability v1.3: +2 canaries on the MATCHED
+#         CONTROL. Every rate this tool printed before v1.3 was an absolute with
+#         nothing to beat — in a trending tape a recent extreme survives
+#         terminally most of the time regardless. Losing the control does not
+#         error; it restores a number that looks like a result and is a fact
+#         about the tape. The DRAW is pinned separately from the flag, because a
+#         fixed anchor satisfies determinism while measuring nothing.
 # v4.18 — 2026-08-04 — tcs_floor_durability v1.2: +2 canaries on the TERMINAL
 #         split. v1.1 measured INTRADAY violation, which is not what a
 #         defined-risk 0DTE spread loses on — it expires on the close. Collapsing
@@ -445,6 +452,8 @@ check "tests/tcs_floor_durability.py"    'default="ARMED"'              "v1.1 po
 check "tests/tcs_floor_durability.py"    'stats\["not_armed"\]'          "v1.1 DORMANT floors are excluded and counted"
 check "tests/tcs_floor_durability.py"    "term_failed = (term_close < floor)"  "v1.2 TERMINAL outcome is measured at the bell, not from the intraday break"
 check "tests/tcs_floor_durability.py"    "STRIKE CURVE"                 "v1.2 terminal failure vs distance beyond the floor"
+check "tests/tcs_floor_durability.py"    "MATCHED CONTROL"              "v1.3 control arm present (an absolute rate proves nothing)"
+check "tests/tcs_floor_durability.py"    "i = rng.choice(elig)"         "v1.3 the control anchor is DRAWN, not fixed"
 check "tests/replay_confluence.py"       "from utils.regime_labels import label"  "v2.3 emitted-distribution line uses the shared map"
 check "tests/regime_diary.py"            "churn-cut"                    "v1.3 churn-cut on the L2 line (flips per committed switch)"
 check "tests/regime_diary.py"            "def rerender"                 "v1.3 --rerender rebuilds the md from the jsonl"

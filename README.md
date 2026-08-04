@@ -185,6 +185,50 @@ paths are in [`docs/MECHANICS.md`](docs/MECHANICS.md).
   the grounds that a premise which fails its own pre-registered test does not get
   a firing engine until the terminal measure says whether the failure is the
   thesis or the strike. See BACKLOG **TC.4b-pre**.
+
+  **RE-SCOPED 2026-08-04, operator's decision after the control run: KEEP THE
+  TREND LABEL, DELETE THE SCORING.**
+
+  | population | n | intraday held | terminal OK |
+  |---|---|---|---|
+  | ARMED | 2,812 | 17.9% | **62.6%** |
+  | ANY (every floor the lookback computed) | 5,129 | 14.6% | **60.9%** |
+
+  **Arming buys 1.7 points, and at the wider strikes the unarmed control is
+  marginally BETTER** (failure at +1.00%: 15.5% armed vs 16.7% control; at
+  +2.00%: 6.4% vs 6.2%). Terminal survival is also FLAT across every SD bucket in
+  both populations — 59-64% from sub-aware to screaming, every band overlapping.
+  Two independent measurements saying the same thing: **`impulse_val` does not
+  discriminate on the outcome the trade depends on.** By the operator's own
+  three-way split that is CORRECTNESS (category 2) — a contributor not doing the
+  job it was designed for — not a tuning question.
+
+  **WHAT IS DELETED:** the readiness gate as TC.4's trigger, and TC.4b's plan to
+  fit `TR_TCS_IMPULSE_SD_LO/HI` from a durability curve. There is no curve.
+  **WHAT SURVIVES:** the trend label as the condition, and a strike distance
+  taken from the measured terminal-survival curve rather than from a delta.
+  TC.4 becomes *in a confirmed trend, sell N% beyond a recent extreme* — N from
+  the tape, not from a prior.
+  **WHAT IS NOT DELETED, and deliberately:** the log-only readiness track keeps
+  emitting. It gates nothing, costs nothing, is the ONLY source of the
+  impulse-floor record that made this analysis possible, and shares
+  `_extension_from_arm` with the condor sides. Removing the emitter would destroy
+  the input to every re-examination while changing no behaviour.
+
+  **THE CONTROL THAT COULD NOT BE BUILT, recorded so nobody plans it again.** The
+  natural next test was ranging-tape floors against trending ones. It is
+  impossible from this journal: `_trend_credit_spread` sets `direction = ""` on
+  any non-TRENDING label, so `_impulse_sd` is never called and `floor_px` is
+  None. **No ranging floor exists anywhere in the record.** What replaced it is
+  `--control matched` — a pseudo-impulse at a random earlier minute on the same
+  symbol-day, same direction and construction — which asks the sharper question:
+  does the impulse origin survive better than an ARBITRARY recent extreme?
+
+  **STILL UNMEASURED AND STILL DECISIVE: the credit.** The strike curve bounds
+  RISK only. A 5-wide taking $1.00 risks 4 to make 1 and needs roughly 80%
+  terminal survival to break even before fees; 62% at the floor is far under
+  that, and 94% at +2% is only useful if premium survives that far out. Nothing
+  here prices it.
 - **Pitchfork sloped S/R** — designed, not built, gated on Layer 2. See
   [`docs/WHITEPAPER_pitchfork_overlay.md`](docs/WHITEPAPER_pitchfork_overlay.md).
 

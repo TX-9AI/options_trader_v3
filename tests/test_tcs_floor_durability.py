@@ -1,5 +1,5 @@
 """
-tests/test_tcs_floor_durability.py — v1.2 — 2026-08-04
+tests/test_tcs_floor_durability.py — v1.3 — 2026-08-04
 
 Plants worlds with a known answer and asserts the tool recovers each, the same
 way tests/test_a2_partition_recovers.py and tests/test_gap_pool.py do.
@@ -16,6 +16,10 @@ merely empty:
     back above it must read HELD, with the penetration recorded separately. If
     the two ever merge, the durability number silently becomes a stop-out
     statistic and stops answering the question the strategy asks.
+
+v1.3 — 2026-08-04 — three tests for the matched control, including that the
+SEED moves the control draw and nothing else. A seed that perturbed the measured
+population would make the comparison meaningless while still printing a number.
 
 v1.2 — 2026-08-04 — three tests for the terminal/intraday split and the strike
 curve. The recovery case is the one that matters: v1.1 reported an 82% intraday
@@ -219,6 +223,53 @@ def test_the_strike_curve_prices_distance():
                 if l.strip().startswith(("0.", "1.", "2.", "3."))}
         assert "100.0%" in rows["0.00"], rows.get("0.00")
         assert "0.0%" in rows["3.00"], rows.get("3.00")
+
+
+def test_the_matched_control_reports_and_is_seeded():
+    """v1.3. Without a control, 62% terminal survival is an absolute with nothing
+    to beat — in a trending tape a recent low holds terminally a lot of the time
+    simply because trends trend."""
+    with tempfile.TemporaryDirectory() as tmp:
+        w = _world(tmp, _held_bars())
+        a = _run(w, "--control", "matched")
+        b = _run(w, "--control", "matched")
+        assert "MATCHED CONTROL" in a, a[:900]
+        assert "impulse minus control, TERMINAL:" in a
+        assert a == b, "same seed must give the same control draw"
+
+
+def test_a_different_seed_moves_the_draw_only():
+    """The real observation must be identical across seeds; only the control
+    changes. If the seed touched the measured population the comparison would
+    be meaningless."""
+    with tempfile.TemporaryDirectory() as tmp:
+        w = _world(tmp, _held_bars())
+        a = _run(w, "--control", "matched", "--seed", "1")
+        b = _run(w, "--control", "matched", "--seed", "2")
+        head = lambda o: o.split("MATCHED CONTROL")[0]
+        assert head(a) == head(b), "the measured population must not move"
+
+
+def test_the_control_is_actually_DRAWN_not_anchored():
+    """Found by the deliberate-failure run: replacing rng.choice with elig[0]
+    left every other control test GREEN. Determinism and 'the head does not
+    move' are both satisfied by a fixed anchor, so neither of them proves the
+    draw is a draw. This does — across several seeds the control section must
+    take at least two distinct values on a tape with many eligible anchors.
+    """
+    bars = [(f"{9 + i // 60:02d}:{i % 60:02d}", 100.0 + (i % 7) - 3,
+             102.0 + (i % 7) - 3, 97.0 + (i % 7) - 3) for i in range(120)]
+    with tempfile.TemporaryDirectory() as tmp:
+        w = _world(tmp, bars, floor=99.0, t0="09:00")
+        seen = {(_run(w, "--control", "matched", "--seed", str(s))
+                 .split("MATCHED CONTROL")[1][:200]) for s in range(1, 9)}
+        assert len(seen) > 1, "the control anchor is fixed, not drawn"
+
+
+def test_control_is_off_by_default():
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _run(_world(tmp, _held_bars()))
+        assert "MATCHED CONTROL" not in out
 
 
 def test_min_sd_filters():
