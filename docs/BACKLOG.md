@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.66
+# docs/BACKLOG.md — v3.67
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -63,7 +63,8 @@ BAKED is changing nothing about today's data.
 | **W.2a — today's own swallows made audible + the alarm made specific** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | silent count back to the 08-03 baseline of **87**; `--since` proven on three cases |
 | **D.1 — bull/bear were the same token in THREE renderers** | ✅ 08-04 | ✅ 08-04 | n/a (report-only) | 16 rows re-rendered on control; ALL CANARIES GREEN |
 | **AV.1 — the pooled gap read, with a legitimacy guard** | ✅ 08-04 | ✅ 08-04 | n/a (offline) | ALL CANARIES GREEN on control |
-| **TC.4b-pre — does the impulse floor hold?** | ✅ v1.3 08-04 | ⬜ | n/a (offline) | ANSWERED. Control: arming buys **+1.7pp** terminal (62.6% vs 60.9%) and is WORSE at wide strikes. TC.4 re-scoped. 19 tests |
+| **TC.4b-pre — does the impulse floor hold?** | ✅ v1.3 08-04 | ✅ 08-04 | n/a (offline) | **CONTROL RUN: impulse − control TERMINAL = −0.3% ±2.3%. Dead null.** See below |
+| **PF.V — pitchfork variant sweep (§12 Q2)** | ✅ 08-04 | ⬜ | n/a (offline) | desk suite **210 passed / 1 skipped**; 6 planted-tape tests |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1237,11 +1238,65 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK]` **PF.V — ✅ 2026-08-04. THE VARIANT SWEEP: `pitchfork_filter_audit`
+  v1.4 `--variant-sweep`. The one pitchfork question that was not blocked on the
+  calendar.**
+  v1.3 flagged **22 ACCELERATION events against 33 births** and said, correctly,
+  that forks exceeded on the TREND side two-thirds of the time look like a
+  channel too NARROW for the move — plausibly a Modified Schiff artifact, since
+  §3.2 chose that variant precisely because Andrews runs steep. It reported the
+  count "so it can be watched rather than assumed" — and then nothing could act
+  on it, because watching ONE variant says nothing about the other two.
+  **PLUMBING, NOT NEW GEOMETRY.** `build_all_variants` has computed all three
+  since PF.1 and `ForkTracker` already threads `variant`. The sweep runs the SAME
+  lifecycle over the SAME tape three times and prints births, MEDIAN coverage,
+  **ACCELERATION per birth**, touch per birth, cause-of-death split and median
+  lifetime side by side.
+  **TWO DELIBERATE CHOICES.** Rates are PER BIRTH, or a variant that simply
+  builds more forks looks worse for being more productive. Coverage is MEDIAN,
+  not mean — AW measured mean 10.1% against median 5.3% with half the symbols
+  under 5%, so the mean describes a fleet nobody has.
+  **IT DECIDES NO DEFAULT, and says so in its own output.** §10 names the
+  ten-parameter surface as the headline overfitting risk and §12 names consumer
+  sprawl; a table that invited picking the prettiest coverage would be exactly
+  that. A variant exceeded less often describes the move better — a NECESSARY
+  property, never a profitable one. **PF.3's condor-credit head-to-head remains
+  the only thing that can convict a consumer.**
+  **THE FIXTURE TAUGHT ME SOMETHING WORTH RECORDING.** The first planted tape
+  reported ZERO births on all three variants — which reads exactly like the
+  variant being swallowed. It was not: the legs were ~4 hourly bars long and
+  every fork was rejected **SEPARATION**. §4.3's separation prior is doing real
+  work, and a tape has to carry ~10-15 hourly bars per leg before a fork can
+  exist at all. That is a fact about the filter, not about the fixture, and it
+  bears on AW's 39.8%-SEPARATION rejection finding.
+  **⬜ RUN IT:** `python3 tests/pitchfork_filter_audit.py --variant-sweep`
+  (add `--uniqueness-scan` to see it under the §4.3.5 second reading). ACCEL/birth
+  near or above 1.0 is the signal v1.3 was worried about; a markedly lower variant
+  makes §3.2's choice the thing to revisit — a VARIANT question with no parameter
+  attached, which is why it is safe to ask before the freeze.
+
 - `[DESK·DATA]` **TC.4 — ✅ ANSWERED AND RE-SCOPED 2026-08-04. KEEP THE TREND
   LABEL, DELETE THE SCORING. Operator's decision, on the control run.**
   `ARMED   n=2,812   intraday 17.9%   terminal 62.6%`
   `CONTROL n=5,129   intraday 14.6%   terminal 60.9%`
   `strike curve, failure at +1.00%: armed 15.5% vs control 16.7%; at +2.00%: 6.4% vs 6.2%`
+  **⛔ THE MATCHED CONTROL RUN, 2026-08-04 — THE VERDICT, AND IT IS WORSE THAN
+  "NO EDGE".** `n=3,534 control  intraday 14.3%  terminal 61.5%`
+  `impulse − control, TERMINAL: −0.3% ±2.3%` — a dead null, and **the impulse
+  side is the lower of the two.**
+  And the strike curve is not a tie, it is an INVERSION: at every offset beyond
+  zero the arbitrary extreme is SAFER.
+  `+0.25%  28.6% vs control 26.2%   +1.00%  13.1% vs 8.2%`
+  `+2.00%   5.1% vs control  1.7%   +3.00%   2.2% vs 0.6%`
+  **MECHANISM, and it is coherent:** an impulse candle is by construction a
+  large-range bar, so it SELECTS FOR VOLATILITY — and volatility is exactly what
+  breaches a strike placed a fixed percentage away. The state does not merely
+  fail to protect the floor; **it preferentially picks the conditions that
+  breach it.**
+  **THE ONE BIAS I CAN IDENTIFY RUNS AGAINST THE FINDING**, which makes it
+  conservative: control anchors are drawn uniformly over eligible bars, so they
+  sit EARLIER on average and get a LONGER forward window in which to be breached.
+  They should have failed more. They failed less.
   **Arming buys 1.7 points, and at the wider strikes the unarmed population is
   marginally BETTER.** Terminal survival is FLAT across every SD bucket in both
   populations (59-64%, all bands overlapping). Two independent measurements
@@ -3067,6 +3122,15 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.67 — 2026-08-04 — TC.4's CONTROL VERDICT (−0.3% ±2.3%, and the strike
+  curve INVERTS) + PF.V the pitchfork variant sweep.** The impulse origin survives
+  no better than an arbitrary recent extreme, and is strictly worse at every
+  offset beyond zero — coherently, because an impulse candle selects for
+  volatility and volatility is what breaches strikes. The identifiable bias runs
+  against the finding. PF.V adds `--variant-sweep` to the filter audit: §12 open
+  question 2, geometry only, decides no default. Also recorded: the planted tape's
+  zero-birth first run was SEPARATION, not a variant bug — §4.3's separation prior
+  needs ~10-15 hourly bars per leg before a fork can exist.
 - **v3.66 — 2026-08-04 — TC.4 ANSWERED: KEEP THE TREND LABEL, DELETE THE
   SCORING.** The matched control settled it — arming buys 1.7pp of terminal
   survival and is marginally worse at wide strikes, and the SD curve is flat in

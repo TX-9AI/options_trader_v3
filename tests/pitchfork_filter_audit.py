@@ -1,6 +1,27 @@
 #!/usr/bin/env python3
 """
-tests/pitchfork_filter_audit.py — v1.3 — 2026-08-03
+tests/pitchfork_filter_audit.py — v1.4 — 2026-08-04
+
+v1.4 — 2026-08-04 — `--variant-sweep`, WHICH IS THE ONE PITCHFORK QUESTION NOT
+       BLOCKED ON THE CALENDAR. v1.3 flagged 22 ACCELERATION events against 33
+       births and said, correctly, that forks exceeded on the TREND side
+       two-thirds of the time look like a channel too NARROW for the move it
+       describes — plausibly a Modified Schiff artifact, since §3.2 chose that
+       variant precisely because Andrews runs steep. It reported the count "so it
+       can be watched rather than assumed" and then nobody could act on it,
+       because watching one variant tells you nothing about the other two.
+       `build_all_variants` has computed all three in parallel since PF.1 and
+       `ForkTracker` already threads `variant`, so the sweep is plumbing, not new
+       geometry. It runs the SAME lifecycle on the SAME tape three times and
+       prints births, MEDIAN coverage, the ACCELERATION rate per birth, the
+       cause-of-death split and the lifetime distribution side by side.
+       WHAT IT CAN AND CANNOT DECIDE. It is a GEOMETRY comparison, not an
+       outcome one: a variant that gets exceeded less often is describing the
+       move better, which is a necessary property, never a profitable one. §12
+       names consumer sprawl as a headline risk and §10 names the ten-parameter
+       surface as an overfitting risk — so this changes NO prior and ships no
+       default. Picking the variant with the prettiest coverage would be exactly
+       the fit-to-the-number this file exists to avoid.
 
 v1.3 — 2026-08-03 — WHICH CONDITION IS KILLING THEM, and how long they live.
        v1.2's coverage run raised a question it could not answer: 27 INVALIDATED
@@ -135,10 +156,108 @@ def _hourly(root: str, sym: str):
     return df1m.resample("1h", label="right", closed="right").agg(agg).dropna(subset=["close"])
 
 
+def _variant_sweep(root, syms, scan) -> int:
+    """§12 open question 2 — the three variants, same tape, same lifecycle.
+
+    Reports the ACCELERATION RATE PER BIRTH rather than a raw count, because a
+    variant that simply builds more forks would otherwise look worse for being
+    more productive. Median coverage rather than mean, for the reason AW already
+    established: the mean was 10.1% while the median was 5.3% and half the
+    symbols carried a fork under 5% of the time.
+    """
+    from analysis.pitchfork import VARIANTS
+
+    print("=" * 74)
+    print("VARIANT SWEEP — §12 open question 2 (geometry only; changes nothing)")
+    print("=" * 74)
+    rows = []
+    for variant in VARIANTS:
+        births = accel = touches = invalid = superseded = 0
+        covs, lifetimes = [], []
+        causes = collections.Counter()
+        for sym in syms:
+            h1 = _hourly(root, sym)
+            if h1 is None or len(h1) < 25:
+                continue
+            av = atr_series(h1, 14).tolist()
+            tr = replay(sym, h1, "1h", av, variant=variant,
+                        uniqueness_scan=scan)
+            covs.append(tr.coverage(len(h1)))
+            born_at = None
+            for ev in tr.events:
+                if ev.kind == "BORN":
+                    births += 1
+                    born_at = ev.idx
+                elif ev.kind == "ACCELERATION":
+                    accel += 1
+                elif ev.kind == "TOUCH":
+                    touches += 1
+                elif ev.kind == "SUPERSEDED":
+                    superseded += 1
+                elif ev.kind == "INVALIDATED":
+                    invalid += 1
+                    r = ev.reason
+                    causes[("structural (P0)" if "structural" in r
+                            else "adverse tine" if "adverse" in r
+                            else "stale" if "stale" in r else r[:20])] += 1
+                    if born_at is not None:
+                        lifetimes.append(ev.idx - born_at)
+                        born_at = None
+        covs.sort()
+        med_cov = covs[len(covs) // 2] if covs else 0.0
+        lifetimes.sort()
+        med_life = lifetimes[len(lifetimes) // 2] if lifetimes else None
+        rows.append({"variant": variant, "births": births, "accel": accel,
+                     "touch": touches, "inval": invalid, "sup": superseded,
+                     "cov": med_cov, "life": med_life, "causes": causes})
+
+    print(f"  {'variant':<18}{'births':>8}{'med cov':>10}{'ACCEL/birth':>14}"
+          f"{'touch/birth':>13}{'med life':>10}")
+    for r in rows:
+        ab = f"{r['accel'] / r['births']:.2f}" if r["births"] else "—"
+        tb = f"{r['touch'] / r['births']:.2f}" if r["births"] else "—"
+        life = r["life"] if r["life"] is not None else "—"
+        print(f"  {r['variant']:<18}{r['births']:>8}{r['cov']:>9.1%}"
+              f"{ab:>14}{tb:>13}{str(life):>10}")
+
+    print("\n  CAUSE OF DEATH, per variant")
+    for r in rows:
+        tot = sum(r["causes"].values())
+        parts = "  ".join(f"{k} {v}({v / tot:.0%})"
+                          for k, v in r["causes"].most_common()) if tot else "—"
+        print(f"    {r['variant']:<18} {parts}")
+
+    print("\n" + "=" * 74)
+    print("READING IT")
+    print("=" * 74)
+    print("  ACCELERATION/birth is the number v1.3 flagged. A rate near or above")
+    print("  1.0 means the channel is routinely exceeded on the TREND side — the")
+    print("  fork is describing a move narrower than the one that happened. If")
+    print("  one variant is markedly lower, §3.2's choice of Modified Schiff is")
+    print("  the thing to revisit, and that is a VARIANT question with no")
+    print("  parameter attached — which is why it is safe to ask now.")
+    print("  COVERAGE is median, not mean: the mean was 10.1% against a median")
+    print("  of 5.3%, and half the symbols carried a fork under 5% of the time.")
+    print("  DEATH CAUSE separates 'the tape broke it' (structural) from 'the")
+    print("  N=2 / D=0.25 priors are strangling it' (adverse tine). Those have")
+    print("  OPPOSITE responses and the split is per variant here for the first")
+    print("  time.")
+    print("\n  THIS DECIDES NO DEFAULT. A variant exceeded less often describes")
+    print("  the move better — a necessary property, never a profitable one. No")
+    print("  prior moves off this table; PF.3's condor-credit head-to-head is")
+    print("  still the only thing that can convict a consumer.")
+    return 0
+
+
 def main(argv) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tape-root", default="")
     ap.add_argument("--symbols", default="")
+    ap.add_argument("--variant-sweep", action="store_true",
+                    help="§12 open question 2: run the lifecycle on ALL THREE "
+                         "variants over the same tape and compare births, "
+                         "median coverage, ACCELERATION per birth, death causes "
+                         "and lifetimes. Changes no prior and ships no default.")
     ap.add_argument("--uniqueness-scan", action="store_true",
                     help="§4.3.5 second reading: scan back for the most recent "
                          "triple SATISFYING the filters (pitchfork v1.2). Run "
@@ -150,6 +269,7 @@ def main(argv) -> int:
     # parsed namespace but is REBOUND to an ATR list inside the symbol loop
     # below, so any `a.<attr>` after that point is a list attribute lookup.
     scan = a.uniqueness_scan
+    sweep = a.variant_sweep
     root = _tape_root(a.tape_root)
     if not root:
         print("No tape root found (looked in " + ", ".join(TAPE_ROOTS) + ")")
@@ -161,6 +281,10 @@ def main(argv) -> int:
         return 2
 
     print(f"tape {root} | {len(syms)} symbol(s)\n")
+
+    if sweep:
+        return _variant_sweep(root, syms, scan)
+
     totals = collections.Counter()
     built = 0
     attempts = 0

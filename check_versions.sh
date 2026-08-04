@@ -1,4 +1,9 @@
 #!/bin/bash
+# v4.20 — 2026-08-04 — +2 canaries for pitchfork_filter_audit v1.4's variant
+#         sweep. The load-bearing one pins that `variant` is THREADED to the
+#         replay: swallow it and the sweep still prints a clean three-row table,
+#         three runs of one variant wearing three labels. A comparison that
+#         silently compares nothing is worse than no comparison.
 # v4.19 — 2026-08-04 — tcs_floor_durability v1.3: +2 canaries on the MATCHED
 #         CONTROL. Every rate this tool printed before v1.3 was an absolute with
 #         nothing to beat — in a trending tape a recent extreme survives
@@ -454,6 +459,10 @@ check "tests/tcs_floor_durability.py"    "term_failed = (term_close < floor)"  "
 check "tests/tcs_floor_durability.py"    "STRIKE CURVE"                 "v1.2 terminal failure vs distance beyond the floor"
 check "tests/tcs_floor_durability.py"    "MATCHED CONTROL"              "v1.3 control arm present (an absolute rate proves nothing)"
 check "tests/tcs_floor_durability.py"    "i = rng.choice(elig)"         "v1.3 the control anchor is DRAWN, not fixed"
+
+# ── pitchfork variant sweep (2026-08-04) — §12 open question 2 ────────────
+check "tests/pitchfork_filter_audit.py"  "VARIANT SWEEP"                "v1.4 three-variant geometry comparison present"
+check "tests/pitchfork_filter_audit.py"  "replay(sym, h1, \"1h\", av, variant=variant"  "v1.4 variant is THREADED to the replay (not swallowed)"
 check "tests/replay_confluence.py"       "from utils.regime_labels import label"  "v2.3 emitted-distribution line uses the shared map"
 check "tests/regime_diary.py"            "churn-cut"                    "v1.3 churn-cut on the L2 line (flips per committed switch)"
 check "tests/regime_diary.py"            "def rerender"                 "v1.3 --rerender rebuilds the md from the jsonl"
