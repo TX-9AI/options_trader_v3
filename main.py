@@ -1,5 +1,25 @@
 """
-main.py — options_trader v5.1
+main.py — options_trader v5.2
+v5.2 — 2026-08-04 — NO REGIME-FLIP EXIT ON A STALE BOOK (operator directive).
+        v5.1 blocked ENTRIES on stale and held the committed label, but a HELD
+        label is still a label: `_evaluate_continuation` fires `regime_flip` on
+        any label that is not TRENDING in the trade's direction, so a position
+        could still be closed on a classification the engine could not confirm
+        at that moment. And on a COLD book — stale with nothing committed —
+        main fell back to v1.3 raw argmax, which is the churn L2 exists to
+        remove, feeding it straight into the exit that checks regime SECOND,
+        before any price stop. That is the 07-23..08-03 flicker mechanism with
+        one branch left open.
+        THE FIX IS ONE ARGUMENT, NOT A NEW GATE: pass `regime=None` into the
+        exit path while the book is stale. All three regime-driven exits
+        already guard on the label being present — `regime_flip`,
+        `regime_flip_adverse` (condor) and the butterfly `regime_flip_exit` —
+        so None disables exactly those three and nothing else.
+        EVERY PRICE-BASED EXIT STILL RUNS: 15:45 hard close, stop, max_loss,
+        trail, FVG trail, break-of-structure, condor ratchet, nickel close,
+        theta. Stale means the regime BOOK has not resolved; it is not evidence
+        the price feed is down, and refusing to stop out on it would be a
+        different and worse rule. A 0DTE position must still flatten at 15:45.
 v5.1 — 2026-08-04 — ENTRY SNAPSHOT HOOK (log-only, freeze-safe). Every confirmed
         fill — directional and both condor legs — now persists the entry-time
         FVG/structure picture to trades.entry_snapshot via
@@ -1585,10 +1605,19 @@ def main_loop(state: BotState):
                 except Exception as _roll_err:
                     logger.warning(f"Roll check failed: {_roll_err}")
 
+                # v5.2 — the regime label is WITHHELD from the exit path while
+                # the book is stale, so no regime-driven exit can fire on a
+                # classification the engine cannot currently confirm. None is
+                # the existing "do not judge on regime" signal every one of
+                # those three branches already honours; price-based exits are
+                # untouched and keep protecting the position.
+                _rgm_stale = (_l2_integ is not None
+                              and getattr(_l2_integ, "stale", False))
                 pos_mgr.manage_open_position(
                     chain=ctx.get("chain"),
                     df_1m=ctx.get("df_1m"),
-                    regime=regime.primary_regime if regime else None,
+                    regime=(None if _rgm_stale
+                            else (regime.primary_regime if regime else None)),
                     df_5m=ctx.get("df_5m"),   # v3.8: 5m FVG trail anchor
                     vol_state=ctx.get("vol"),
                     trend=ctx.get("trend"),   # continuation exhaustion exit

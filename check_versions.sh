@@ -1,4 +1,10 @@
 #!/bin/bash
+# v4.11 — 2026-08-04 — +3 canaries for main v5.2 (no regime-flip exit on a
+#         stale book). The ABSENCE check is the one that matters: the gate is a
+#         single argument, so a stale sync reverting it produces NO error and NO
+#         log line — exits simply start firing on unconfirmed labels again, and
+#         the only visible symptom would be regime_flip hold-times creeping back
+#         down weeks later in flicker_audit. Also pins the main header to v5.2.
 # v4.10 — 2026-08-04 — +6 canaries for N.5 exit-ladder latency (exit_engine
 #         v4.11 / trade_logger v3.11). The load-bearing one is the ABSENCE
 #         check on the confirmed-guard: writing telemetry on an UNCONFIRMED
@@ -260,7 +266,7 @@ check "analysis/trade_readiness.py"      "readiness_would_fire"         "v1.0 wo
 check "analysis/trade_readiness.py"      "TR_DEARM_SLOPE"               "v1.0 slope de-arm knob (falling confluence disarms)"
 check "analysis/trade_readiness.py"      "0.5 \*\* (dt / TR_SLOPE_HALFLIFE_S)" "v1.0 dt-aware slope EMA (wall-clock, no tick counters)"
 check "main.py"                          "_readiness.assess_all(ctx, regime)" "v4.3 readiness hooked in the every-tick block"
-check "main.py"                          "main.py — options_trader v5.1" "v5.1 main header current (entry-snapshot hook; was pinned at v4.8 while the fleet ran v5.0)"
+check "main.py"                          "main.py — options_trader v5.2" "v5.2 main header current (no regime-flip exit on a stale book)"
 check "analysis/trade_readiness.py"      "readiness_staged_pick"        "v1.1 staged-pick journaling (calm-vs-spike experiment)"
 check "analysis/trade_readiness.py"      "TR_CONV_HALFLIFE_S"           "v1.1 smoothed-conviction EMA knob"
 check "tests/readiness_digest.py"        "readiness_digest_"            "v1.0 nightly digest tool present (conductor phase 9 target)"
@@ -373,6 +379,16 @@ check "execution/exit_engine.py"         "_exit_submit_mono"            "v4.11 s
 check "database/trade_logger.py"         "def set_exit_latency"         "v3.11 latency writer present"
 check "database/trade_logger.py"         "exit_mark_at_trigger"         "v3.11 mark-at-trigger captured (latency is not a cost until it is priced)"
 check "tests/test_exit_latency.py"       "does_not_restart_the_clock"   "v1.0 multi-tick accumulation test present"
+
+# ── v5.2 (2026-08-04) — NO REGIME-FLIP EXIT ON A STALE BOOK ──────────────
+check "main.py"                          "_rgm_stale"                   "v5.2 stale gate present on the exit path"
+check "tests/test_stale_no_regime_flip.py" "hard_close_still_fires"     "v1.0 proves PRICE exits still fire with no label"
+if grep -q "regime=regime.primary_regime if regime else None," main.py 2>/dev/null; then
+    echo "  ✗ STALE:   main.py passes the label to the exit path unconditionally — regime-flip exits can fire on a stale book again (v5.1 form is back)"
+    MISS=$((MISS+1))
+else
+    echo "  ✓ PRESENT: v5.2 label withheld from exits while the book is stale"
+fi
 if grep -q "if not result or not result.confirmed:" execution/exit_engine.py 2>/dev/null; then
     echo "  ✓ PRESENT: v4.11 latency writes ONLY on a confirmed close"
 else

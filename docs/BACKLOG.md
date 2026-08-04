@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.57
+# docs/BACKLOG.md — v3.58
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -58,7 +58,32 @@ BAKED is changing nothing about today's data.
 | item | built | pushed | baked | evidence |
 |---|---|---|---|---|
 | **N.7 — entry snapshot capture** | ✅ 08-04 | ✅ 08-04 `0f78329` | ⬜ **Mon Aug 10** | control suite **146 passed / 1 skipped, rc=0** (read 08-04); ALL CANARIES GREEN; PARITY == origin; tree clean |
-| **N.5 — exit ladder latency** | ✅ 08-04 | ⬜ | ⬜ **Mon Aug 10** | desk suite **158 passed / 1 skipped**; 12 N.5 tests; deliberate-failure check caught an untested guard |
+| **N.5 — exit ladder latency** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | control suite **158 passed / 1 skipped, rc=0**; ALL CANARIES GREEN |
+| **N.8 — no regime-flip exit on a stale book** | ✅ 08-04 | ⬜ | ⬜ **Mon Aug 10** | desk suite **165 passed / 1 skipped**; 7 tests; deliberate-failure check passed |
+
+**⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
+1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
+   accumulates across sessions — TSLA's most recent `NOT committing` line was
+   dated **08-03** — so the 11-vs-4 "bimodal split" I read off those counts is
+   an artifact of differing log ages and restart times, not of today's engine
+   mix. **The correct instrument is the `engine` column on `regime_log` inside
+   each box's trades.db** (main v4.8 stamps it; harvest already pulls the DB),
+   scoped by date. That is exactly the filter **W.1** defines, and it is a
+   query, not a grep.
+2. **The stale-block counts alone read as a live counter.** Timestamps showed
+   every block fell in **09:35-09:41 ET** and nothing since. Read timestamps
+   before reading a trend into counts.
+
+**⬜ NEW, SMALL, NOT YET BUILT — the `NOT committing` warning asserts more than
+it checks.** It prints *"This is NOT the designed opening warm-up"* on the
+strength of `df_1m` alone. But the designed opening warm-up has more dimensions
+than the 1-minute frame: `_ranging` returns None until ATR exists, which needs
+`ATR_PERIOD` 5m bars (~75 minutes of session — the 2026-07-25 finding). So at
+09:30:02 with `df_1m=60` the message rules out one cause and announces the
+conclusion for all of them. Every episode this session sat at the bell, counts
+were 0-6 per box, and RECOVER followed — i.e. it IS the open warm-up, via a
+dimension the message does not test. **Reword to name the missing dimensions it
+actually observed rather than asserting a category.** Log-only, one string.
 
 **⬜ N.7's OWN REMAINING STEPS, in order:**
 1. ✅ **Suite result read 2026-08-04: `146 passed, 1 skipped, rc=0`.** Worth
@@ -75,25 +100,14 @@ BAKED is changing nothing about today's data.
 4. **Nothing consumes the column yet.** The bake-off harness is TC.2 work and
    stays where the roadmap puts it. Do not read the first payloads as a result.
 
-**◐ THE CONDUCTOR TELEGRAM GAP — CODE FIXED AT HEAD, DEPLOYMENT UNVERIFIED.
-Correcting my own statement of 2026-08-04, which called it simply open.**
-`day_trader_pro` HEAD (`354ebf8`) carries the fix as item **AX, 2026-08-03**:
-`install_eod_conductor.sh` now writes `EnvironmentFile=${DIR}/.env` into the
-conductor unit — `dtp-eod-timer` and `dtp-morning-timer` already loaded that file
-and the conductor was the only unit that did not — and the installer prints
-whether each variable is present. **What the repo cannot tell us is whether the
-installer has been RE-RUN since**, because the fix only reaches
-`/etc/systemd/system/dtp-eod-conductor.service` when it is, and the installer
-warns about missing variables rather than adding them. Until that is checked, the
-honest status is *fixed in source, unproven on the box*.
-**WHY IT IS WORTH THE ONE COMMAND:** DXFeed history is same-evening only, so a
-box that fails to wake loses that tape **permanently** — this alarm is the only
-thing that says so on the night it happens.
-**CHECK (control, one line, exits 0, prints its own verdict):**
-`echo "UNIT_ENVFILE=$(grep -c '^EnvironmentFile=' /etc/systemd/system/dtp-eod-conductor.service 2>/dev/null)"; echo "ENV_TOKEN=$(grep -c '^DTP_TELEGRAM_TOKEN=' ~/day_trader_pro/.env 2>/dev/null) ENV_CHAT=$(grep -c '^DTP_TELEGRAM_CHAT_ID=' ~/day_trader_pro/.env 2>/dev/null)"; echo "NOTIFY_FAILS=$(journalctl -u dtp-eod-conductor -n 400 --no-pager 2>/dev/null | grep -c 'cannot send')"; true`
-Wanted: `UNIT_ENVFILE=1`, `ENV_TOKEN=1`, `ENV_CHAT=1`, `NOTIFY_FAILS=0`. Any
-zero on the first three → re-run `bash install_eod_conductor.sh`; a missing
-variable in `.env` is a credential to add, not a code change.
+**✅ THE CONDUCTOR TELEGRAM GAP — CLOSED 2026-08-04, VERIFIED ON THE BOX.**
+`UNIT_ENVFILE=1 · ENV_TOKEN=1 · ENV_CHAT=1 · TOKEN_LEN=47 · CHAT_LEN=11`, the
+last `cannot send` in the journal is **Aug 03 20:29:34** (before the AX
+installer was re-run), and the 08-03 conductor's warnings — backfill, swallow
+audit, VWAP ledger, EVM, readiness — all arrived in Telegram at 16:59. Item AX
+worked. Two corrections to my own account of it: it was **fixed in source on
+08-03**, not open, and `grep -c` on the `.env` could not have told a present
+variable from an empty one — the LENGTHS did.
 
 ---
 
@@ -1219,6 +1233,37 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK→DEPLOY]` **N.8 — ✅ BUILT 2026-08-04. NO REGIME-FLIP EXIT ON A STALE
+  BOOK. Operator directive; bakes Mon Aug 10.** *"Do not execute a regime flip
+  exit on stale... wait for the next non-stale tick to decide if it's going to
+  make a trade decision."*
+  **WHAT v5.1 LEFT OPEN.** It blocked ENTRIES on stale and held the committed
+  label — but a HELD label is still a label, and `_evaluate_continuation` fires
+  `regime_flip` on any label that is not TRENDING in the trade's direction. On a
+  COLD book (stale, nothing committed) main fell back to v1.3 raw argmax and fed
+  it to the exit that checks regime **second, before any price stop**. That is
+  the 07-23..08-03 flicker mechanism with one branch still open.
+  **THE FIX IS ONE ARGUMENT, NOT A NEW GATE.** `regime=None` into the exit path
+  while the book is stale. All three regime-driven exits already guard on the
+  label being present — `regime_flip`, condor `regime_flip_adverse`, butterfly
+  `regime_flip_exit` — so None disables exactly those three and nothing else.
+  Verified by reading every use of `regime` in `exit_engine`: it is passed down
+  and used nowhere else.
+  **SCOPE HELD DELIBERATELY NARROW, and the operator drew the line.** The wider
+  reading — *no exit at all on stale* — was raised and NOT taken. Stale means the
+  regime BOOK has not resolved; it is not evidence the price feed is down.
+  15:45 hard close, stop, max_loss, trail, FVG trail, break-of-structure, condor
+  ratchet, nickel close and theta all still fire. A 0DTE position that skips its
+  flatten becomes an overnight orphan on an expiring contract.
+  **THE TEST ASSERTS BOTH HALVES**, because the second is the one that can be got
+  wrong: a live adverse label DOES flip the trade out (so the None case is not
+  passing vacuously), and with the label withheld the max-loss floor and the hard
+  close still fire on the same record. Plus a source-level assert on main.py,
+  since the gate is one argument and a silent revert would raise nothing.
+  **⬜ VERIFY AFTER THE BAKE:** `regime_flip` exits should no longer appear in
+  the 09:35-09:41 window at all. Re-run `flicker_audit` after a few sessions —
+  regime_flip hold-times are the direct before/after, the same instrument the
+  08-03 postmortem used.
 - `[DESK→DEPLOY]` **N.7 — ◐ BUILT AND PUSHED 2026-08-04 (origin `0f78329`);
   ⬜ NOT YET BAKED — Mon Aug 10. THE TC.2 EXIT BAKE-OFF HAD NO CAPTURE, AND ITS
   DATA WINDOW WAS ALREADY OPEN.**
@@ -2718,6 +2763,17 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.58 — 2026-08-04 — N.8 BUILT (no regime-flip exit on a stale book); THE
+  CONDUCTOR TELEGRAM GAP CLOSED AND VERIFIED; TWO OF MY OWN READINGS RETRACTED.**
+  N.8 closes the branch v5.1 left open — a held or fallen-back label could still
+  drive `regime_flip` on a tick the engine could not confirm. Scope held narrow
+  on the operator's line: regime-driven exits only, every price exit untouched.
+  Telegram: verified working on the box, item AX did the job, and it was fixed in
+  source on 08-03 rather than open as I had it. RETRACTED: the `[L2`/`[v13]` log
+  counts are cross-session and cannot measure today's engine mix (use
+  `regime_log.engine`, per W.1); and the stale-block counts needed timestamps
+  before a trend was read into them. New open item: the `NOT committing` warning
+  asserts a category from one dimension.
 - **v3.57 — 2026-08-04 — N.5 BUILT AND PULLED FORWARD TO THE AUG 10 BAKE; N.7's
   SUITE STEP CLOSED; THE CONDUCTOR TELEGRAM STATUS CORRECTED.** N.5 moves from
   Thu Aug 20 build / Mon Aug 24 deploy to built-now / bakes Aug 10 on the same
