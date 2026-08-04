@@ -219,6 +219,28 @@ and fails the one time it matters.
   PAPER too (tagged `[PAPER]`, without the manage-manually line) so the path is
   exercised daily before live capital depends on it.
 
+## 18. EVERY DELIVERY CARRIES THE BACKLOG.
+Added 2026-08-04, operator's instruction, when this thread became the primary and
+only conversation for building, testing and deploying. One thread owning
+build → test → deploy means this repo's docs are the only durable record it
+leaves; a commit is the change, the backlog is what survives the thread.
+- **`docs/BACKLOG.md` ships in every archive.** Not when it seems relevant —
+  every time. It carries the progress of that delivery, the remaining
+  deliverables, a **title-line version bump** and a matching **PART 4 changelog
+  entry**. A delivery without it is incomplete, because **EV moves only when the
+  backlog records it** — shipping, testing and pushing five artifacts changes EV
+  by zero until the item is marked.
+- **BUILT / PUSHED / BAKED are three different claims.** Written and proven on
+  the desk; on origin with the checkout in parity; live on the fleet boxes. Only
+  the third changes any of the data being collected, so a PUSHED item is ◐ and
+  never ✅. Conflating them writes a green into the record that the tape does not
+  support.
+- **Record the gap, not just the win.** A verification that was planned and not
+  actually read (a suite summary that scrolled past, a per-box line nobody
+  opened) goes in the ledger as an open step. The recurring failure class here is
+  output that renders cleanly while meaning something other than it appears —
+  a laundered green is worse than a red.
+
 ---
 
 ### Companion files

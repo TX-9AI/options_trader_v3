@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.55
+# docs/BACKLOG.md — v3.56
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -40,6 +40,46 @@ when overriding auto_label (feeds L1.6/L1.7) · AA-watch: check for any two-side
 condor firing both legs near-simultaneously · verify the chain-snapshot + journal
 + regime_log harvest landed (one glance at the completeness manifest, once shipped
 Jul 30).
+
+---
+
+## PART 0.5 — DELIVERY LEDGER (added v3.56, 2026-08-04)
+
+**One thread now owns build → test → deploy.** Every archive delivered from it
+ships this file, so the ledger below is the running record of what has actually
+moved and what has not. It exists because EV moves only when the backlog records
+it, and this is now the sole place that record is produced.
+
+**STATUS VOCABULARY — these are three different things and get named separately:**
+`BUILT` = written and proven on the desk · `PUSHED` = on origin, control checkout
+in parity · `BAKED` = live on the fleet boxes. A change that is PUSHED but not
+BAKED is changing nothing about today's data.
+
+| item | built | pushed | baked | evidence |
+|---|---|---|---|---|
+| **N.7 — entry snapshot capture** | ✅ 08-04 | ✅ 08-04 `0f78329` | ⬜ **Mon Aug 10** | suite 146 passed / 1 skipped on the desk; ALL CANARIES GREEN and PARITY == origin on control; working tree clean |
+
+**⬜ N.7's OWN REMAINING STEPS, in order:**
+1. **Read the suite result from the control run.** The `tail -20` on
+   `/tmp/n7_suite.log` caught only the `check_versions` tail, so the pytest
+   summary and its `rc=` line scrolled past unseen. Canaries green is NOT the
+   suite passing — they answer different questions. One line:
+   `grep -E "passed|failed|error|rc=" /tmp/n7_suite.log`
+2. **Bake Mon Aug 10** with the calibration deploy (devtools 25 bake-only or 23),
+   verifying commit parity BEFORE restart.
+3. **Verify capture on the first baked session** with the option-14 count — read
+   the PER-BOX line, not the tally. Directional captured with `legs_captured=0`
+   is the ctx regression the absence canary exists for.
+4. **Nothing consumes the column yet.** The bake-off harness is TC.2 work and
+   stays where the roadmap puts it. Do not read the first payloads as a result.
+
+**⬜ WHAT THIS THREAD HAS NOT TOUCHED, stated so it is not assumed done:** the
+open Bucket-1 defect from POSTMORTEM 2026-08-03 — the EOD conductor cannot send
+Telegram (`DTP_TELEGRAM_TOKEN`/`DTP_TELEGRAM_CHAT_ID` never set on control, while
+the boxes carry the un-prefixed pair). Every EOD warning it has raised has gone to
+a journal nobody reads. It matters more than its size suggests: DXFeed history is
+same-evening only, so a box that fails to wake loses that tape **permanently**,
+and this is the alarm on that. Credential fix, not a project.
 
 ---
 
@@ -1165,8 +1205,15 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
-- `[DESK→DEPLOY]` **N.7 — ✅ BUILT 2026-08-04. THE TC.2 EXIT BAKE-OFF HAD NO
-  CAPTURE, AND ITS DATA WINDOW WAS ALREADY OPEN. Bakes Mon Aug 10.**
+- `[DESK→DEPLOY]` **N.7 — ◐ BUILT AND PUSHED 2026-08-04 (origin `0f78329`);
+  ⬜ NOT YET BAKED — Mon Aug 10. THE TC.2 EXIT BAKE-OFF HAD NO CAPTURE, AND ITS
+  DATA WINDOW WAS ALREADY OPEN.**
+  **LANDED, WITH THE LIMIT OF THAT WORD STATED:** the deploy line's supersession
+  gate passed every content check, `check_versions` v4.9 reported ALL CANARIES
+  GREEN, the parity invariant reads checkout == origin HEAD, and the working tree
+  is clean. **The FLEET is still running the prior code** — nothing about today's
+  or next week's rows changes until the Aug 10 bake, so the capture's clock has
+  not started yet. It is NOT ✅; see PART 0.5 for the remaining steps.
   ROADMAP TC.2 states the counterfactual "LIKELY NEEDS AN OBSERVABILITY
   PRECURSOR (log-only, can start pre-freeze like L3.1/L3.2)" and that precursor
   appeared on no date in this file. Verified at HEAD before building
@@ -2623,6 +2670,19 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.56 — 2026-08-04 — N.7 PUSHED, AND THE LEDGER THAT NOW TRAVELS WITH EVERY
+  DELIVERY.** New **PART 0.5 — DELIVERY LEDGER**, because one thread now owns
+  build → test → deploy and this file is the only durable record it produces:
+  every archive from here ships `docs/BACKLOG.md` with the progress of that
+  delivery, the remaining deliverables, a title-line bump and this changelog
+  entry (WORKING_AGREEMENT §18). N.7 re-stated ✅ BUILT → ◐ BUILT AND PUSHED,
+  because BUILT / PUSHED / BAKED are three different claims and only the third
+  changes any data — the fleet runs the prior code until Aug 10. Two gaps
+  recorded rather than glossed: the control suite's own result was never read
+  (the `tail -20` caught only the canary tail, and canaries green is not the
+  suite passing), and the EOD conductor's Telegram credentials are still the
+  open Bucket-1 defect from the 08-03 postmortem — the alarm on tape coverage
+  that is use-it-or-lose-it.
 - **v3.55 — 2026-08-04 — N.7 FILED AND BUILT: the entry-snapshot capture.**
   New item on Tue Aug 4, ✅ built same day, bakes Mon Aug 10. It closes a hole
   that was invisible because it was in the ROADMAP rather than here: TC.2's
