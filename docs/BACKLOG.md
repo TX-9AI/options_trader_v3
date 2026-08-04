@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.59
+# docs/BACKLOG.md — v3.61
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -60,7 +60,8 @@ BAKED is changing nothing about today's data.
 | **N.7 — entry snapshot capture** | ✅ 08-04 | ✅ 08-04 `0f78329` | ⬜ **Mon Aug 10** | control suite **146 passed / 1 skipped, rc=0** (read 08-04); ALL CANARIES GREEN; PARITY == origin; tree clean |
 | **N.5 — exit ladder latency** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | control suite **158 passed / 1 skipped, rc=0**; ALL CANARIES GREEN |
 | **N.8 — no regime-flip exit on a stale book** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | control suite green, ALL CANARIES GREEN |
-| **W.2a — today's own swallows made audible + the alarm made specific** | ✅ 08-04 | ⬜ | ⬜ **Mon Aug 10** | silent count back to the 08-03 baseline of **87**; `--since` proven on three cases |
+| **W.2a — today's own swallows made audible + the alarm made specific** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | silent count back to the 08-03 baseline of **87**; `--since` proven on three cases |
+| **D.1 — bull/bear were the same token in THREE renderers** | ✅ 08-04 | ⬜ | n/a (report-only) | desk suite **178 passed / 1 skipped**; 13 tests on reproductions of real rows |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1234,6 +1235,49 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK]` **D.1 — ✅ 2026-08-04. THE DIARY HAS PRINTED THE SAME TOKEN FOR
+  TRENDING_BULL AND TRENDING_BEAR SINCE v1.0, IN EVERY ROW OF EVERY SESSION.**
+  Found by reading the 16-session scroll rather than by any check.
+  `_md_block` built its label as `k.split('_')[0][:4]`, so both directional
+  regimes render as **`TREN`** — in the dominance row AND the L2 row. Nothing
+  errored, no test failed, and the report simply could not express the
+  distinction. **That is not cosmetic:** bull-vs-bear asymmetry is an open
+  question in this very workstream (bull-labelled buckets drift WITH thesis,
+  bear-labelled AGAINST — replicated on two pools), and the instrument meant to
+  show it was blind to it. `regime_diary` **v1.3** ships an explicit LABEL map:
+  a sign-suffixed pair plus `RANG / BREA / COMP / SWEE`, four characters so the
+  columns still scan. *(Superseded same day — see v1.4 below. The old tokens are
+  not spelled anywhere in the tree: an absence canary pins them and greps whole
+  files, which is the changelog-prose trap check_versions.sh documents.)*
+  **THREE MORE, ALL FROM THE SAME READ.**
+  *(a) Acceptance has read `4/5` on all sixteen sessions.* A number that has
+  never varied is wallpaper — a genuine 3/5 would have looked identical at a
+  glance. It now names them: `acceptance 4/5 (A2)`. A2's residual is definitional
+  cross-horizon co-occurrence (A2.4), so naming it also stops it reading as a
+  mystery failure every night.
+  *(b) CHURN-CUT is now on the L2 line.* L1 argmax flips per committed L2 switch
+  — 1.45-1.79 across sixteen sessions, clustering ~1.55. It is the envelope the
+  **L2.4** prior fit is judged against and the number the **Aug 10-21 freeze
+  watch** keys on, it was computable from the two values printed beside it, and
+  it was never shown.
+  *(c) TICKS PER SYMBOL on the header.* 2026-08-03 ran **15 symbols x 243/sym**
+  against a normal 29 x ~389 — degraded on BOTH axes, and the row said neither.
+  That is the corpus the -$3,149 postmortem's regime context came from and the
+  one **AV**'s Aug 13 revisit will inherit. Now self-evident on the line.
+  **RETROACTIVE BY CONSTRUCTION:** `upsert()` rebuilds the whole `.md` from the
+  `.jsonl` every run and every field these lines need is already stored on old
+  rows, so re-diarying ONE date re-renders all sixteen. `--rerender` does it with
+  no replay at all — worth running before the Aug 10 bake so the freeze window is
+  watched on a legible scroll rather than half-and-half.
+  **MY OWN ERROR, caught by the test failing on first run:** I wrote churn as
+  switches/flips, which prints 0.60 and silently INVERTS the sentence this repo
+  reads it with ("churn crushed 1.6x"). Direction mattered more than digits.
+  **⬜ STILL OPEN from the same read, NOT actioned here:** why 08-03 ran 15
+  symbols when every other session ran 29 — the 7 backfill-missing symbols do
+  not account for the gap. And `stale%` tracks TAPE SHORTNESS, not the feed
+  (6.3-6.7% on every full day; 10.5 / 8.6 / 10.1 on the three short ones), so
+  08-03's 10.1% is a replay artifact of gaps exceeding `dt_max` and must not be
+  read as a live problem.
 - `[DESK→DEPLOY]` **W.2a — ✅ 2026-08-04. THE NIGHTLY SWALLOW CENSUS FLAGGED MY
   OWN CODE, AND IT WAS RIGHT. Plus: the alarm now NAMES what it found.**
   The 08-03 conductor warned *"silent handlers ROSE 83 → 87 — a new swallow was
@@ -2802,6 +2846,21 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.61 — 2026-08-04 — D.1 EXTENDED: BULL/BEAR, AND THE DEFECT WAS IN THREE
+  RENDERERS NOT ONE.** Operator's labels replace my sign-suffixed pair. Grepping the
+  truncation idiom instead of fixing the row in front of me found the same bug in
+  `replay_confluence`'s nightly emitted-distribution line — the one the freeze
+  watch reads — and in `regime_confluence`'s self-test. New `utils/regime_labels.py`
+  is the single map all three import; canaries pin the map AND each consumer,
+  because fixing one renderer leaves the next free to invent its own.
+- **v3.60 — 2026-08-04 — D.1: THE DIARY COULD NOT TELL BULL FROM BEAR.** Sixteen
+  sessions of rows in which TRENDING_BULL and TRENDING_BEAR both printed `TREN`,
+  found by reading the scroll rather than by any check. Fixed with an explicit
+  label map, plus three things the same read exposed: acceptance now names the
+  failing invariant instead of printing an unvarying 4/5, the L2 line carries
+  churn-cut (the number L2.4 and the freeze watch actually key on), and the
+  header carries ticks/symbol so 08-03's 15 x 243 corpus is visible. All
+  retroactive — `--rerender` rebuilds the whole scroll from the stored jsonl.
 - **v3.59 — 2026-08-04 — W.2a: MY OWN SWALLOWS, AND AN ALARM THAT NAMES THEM.**
   The nightly census caught seven silent handlers added by N.7/N.5/N.8 today,
   including a bare `except: pass` in tier 1. All seven now log at DEBUG once per

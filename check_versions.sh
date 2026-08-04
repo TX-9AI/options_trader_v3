@@ -1,4 +1,15 @@
 #!/bin/bash
+# v4.14 — 2026-08-04 — labels are BULL/BEAR and the map is SHARED. The same
+#         truncation defect was found in tests/replay_confluence.py (the
+#         nightly emitted-distribution line the freeze watch reads) and in
+#         regime_confluence's self-test. Canaries now pin the shared map and
+#         each consumer of it, because fixing one renderer leaves the next free
+#         to invent its own abbreviation.
+# v4.13 — 2026-08-04 — +3 canaries for regime_diary v1.3. The ABSENCE check is
+#         the load-bearing one: `k.split('_')[0][:4]` collapsed TRENDING_BULL
+#         and TRENDING_BEAR into the same token for 16 sessions and nothing
+#         failed — no error, no test, a report that simply could not express
+#         the distinction. A revert would be equally silent.
 # v4.12 — 2026-08-04 — main header pin v5.2 -> v5.3, and +3 W.2a canaries. The
 #         pin FAILED on its own during the W.2a pass, which is the point of
 #         having it: a version bump that nobody re-pins is how the pin sat at
@@ -391,6 +402,19 @@ check "main.py"                          "_rgm_stale"                   "v5.2 st
 check "tests/swallow_audit.py"           "def _report_new"              "v1.1 --since names the new silent handlers"
 check "execution/exit_engine.py"         "_telemetry_logged"            "v4.13 telemetry throttle has its OWN set (reusing the alert set misread as pages)"
 check "analysis/entry_snapshot.py"       "def _first"                   "v1.2 inline logging + throttle (a log behind a helper is invisible to the census)"
+
+# ── regime_diary v1.3 (2026-08-04) — the diary could not tell bull from bear ──
+check "utils/regime_labels.py"           "\"TRENDING_BEAR\":     \"BEAR\""  "v1.0 shared label map (bull/bear distinguishable)"
+check "tests/regime_diary.py"            "LABEL = REGIME_LABELS"        "v1.4 diary uses the SHARED map, not a local copy"
+check "tests/replay_confluence.py"       "from utils.regime_labels import label"  "v2.3 emitted-distribution line uses the shared map"
+check "tests/regime_diary.py"            "churn-cut"                    "v1.3 churn-cut on the L2 line (flips per committed switch)"
+check "tests/regime_diary.py"            "def rerender"                 "v1.3 --rerender rebuilds the md from the jsonl"
+if grep -q "k.split('_')\[0\]\[:4\]} {d\[k\]" tests/regime_diary.py 2>/dev/null; then
+    echo "  ✗ STALE:   regime_diary is back to the truncating label — TRENDING_BULL and TRENDING_BEAR both render as TREN"
+    MISS=$((MISS+1))
+else
+    echo "  ✓ PRESENT: v1.3 truncating label is gone from the dominance row"
+fi
 check "tests/test_stale_no_regime_flip.py" "hard_close_still_fires"     "v1.0 proves PRICE exits still fire with no label"
 if grep -q "regime=regime.primary_regime if regime else None," main.py 2>/dev/null; then
     echo "  ✗ STALE:   main.py passes the label to the exit path unconditionally — regime-flip exits can fire on a stale book again (v5.1 form is back)"

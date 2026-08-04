@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-# tests/replay_confluence.py — options_trader_v3 — v2.2
+# tests/replay_confluence.py — options_trader_v3 — v2.3
+# v2.3 — 2026-08-04 — the emitted-distribution line collapsed TRENDING_BULL and
+#         TRENDING_BEAR into one token ("TREND") — the same defect found in the
+#         diary, on the line the Aug 10-21 freeze watch reads nightly. Uses
+#         utils/regime_labels.label(). Display only.
 # v2.2 — 2026-08-01 — FRAME CAPS FROM CONFIG, so the replay sees exactly what
 #         LIVE sees. The as-of slices were UNCAPPED — every warm session added
 #         history no live engine would ever receive, and the divergence grew with
@@ -109,6 +113,7 @@ import pandas as pd
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 # --- repo engines (this harness is repo-bound by design; regime_confluence is not) --
+from utils.regime_labels import label
 from analysis.volatility_engine import get_volatility_engine
 from analysis.trend_engine import get_trend_engine
 from analysis.structure_analyzer import get_structure_analyzer
@@ -416,7 +421,10 @@ def report(all_recs: List[dict], jsonl: Optional[str]):
         emitted = {}
         for r in l2recs:
             emitted[r["l2"]["regime"]] = emitted.get(r["l2"]["regime"], 0) + 1
-        dist_line = "  ".join(f"{k.split('_')[0][:5]} {100*v/m:.0f}%"
+        # v2.3 — was k.split('_')[0][:5], which printed "TREND" for BOTH
+        # TRENDING_BULL and TRENDING_BEAR on the nightly emitted-distribution
+        # line the freeze watch reads. Shared map now.
+        dist_line = "  ".join(f"{label(k)} {100*v/m:.0f}%"
                               for k, v in sorted(emitted.items(), key=lambda kv: -kv[1]))
         stale_n = sum(1 for r in l2recs if r["l2"].get("stale"))
         print(f"  emitted: {dist_line}")

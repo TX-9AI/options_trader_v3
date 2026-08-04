@@ -1,5 +1,42 @@
 #!/usr/bin/env python3
-# tests/regime_diary.py — options_trader_v3
+# tests/regime_diary.py — options_trader_v3 — v1.4
+# v1.4 — 2026-08-04 — LABELS ARE BULL / BEAR (operator's call; my first cut used
+#   a sign-suffixed abbreviation that read as notation about the thing rather
+#   than the thing itself — deliberately not spelled here, because an absence
+#   canary greps the whole file and the changelog-prose trap is documented in
+#   check_versions.sh), and the map MOVED OUT to
+#   utils/regime_labels.py — because the identical truncation defect was also in
+#   tests/replay_confluence.py (the nightly emitted-distribution line the
+#   Aug 10-21 freeze watch reads) and in analysis/regime_confluence.py's
+#   self-test. Three renderers, three widths, one bug. Fixing them one at a time
+#   would leave the next free to invent a fourth abbreviation, so there is now
+#   exactly one map and every consumer imports it. Import is stdlib-only, which
+#   keeps this tool dependency-free by design.
+#   ALSO: this header line now carries the version. v1.3 shipped with the
+#   version in the changelog only, and the supersession gate caught it — a
+#   crashed edit script had dropped the header entry while the body change
+#   landed, which is precisely the half-applied state the gate exists to refuse.
+# v1.3 — 2026-08-04 — LEGIBILITY, and two of these were defects rather than
+#   polish. (a) TRENDING_BULL and TRENDING_BEAR BOTH rendered as "TREN": the
+#   label was built as k.split('_')[0][:4], so every diary line since v1.0 has
+#   printed the same four characters for opposite regimes, in the dominance row
+#   AND the L2 row. Directional asymmetry is a live open question (bull buckets
+#   drift with thesis, bear against) and the diary was structurally unable to
+#   answer it. Now an explicit label map (v1.4: BULL / BEAR / RANG / BREA /
+#   COMP / SWEE, in utils/regime_labels.py). (b) acceptance printed "4/5" on all 16 sessions with no way to see
+#   WHICH check failed — a number that has never varied is wallpaper, and a
+#   genuine 3/5 would have looked identical at a glance. It now names them:
+#   "4/5 (A2)". (c) the L2 line gains CHURN-CUT (L1 flips per committed L2
+#   switch — that way round, because "churn crushed 1.6x" is the sentence this
+#   repo reads it with, and the inverse would silently flip that meaning),
+#   which sits in a tight 1.45-1.79 band across 16 sessions and is what the
+#   L2.4 fit and the Aug 10-21 freeze watch actually key on. (d) ticks-per-
+#   symbol on the header line, because 2026-08-03 ran 15 symbols x 243 ticks
+#   against a normal 29 x ~389 and nothing in the row said so.
+#   RETROACTIVE BY CONSTRUCTION: upsert() rebuilds the whole .md from the
+#   .jsonl every run, and every field these lines need is already stored on
+#   old rows — so re-diarying ONE date re-renders all 16. `--rerender` does it
+#   without a replay.
 # v1.2 — 2026-07-14 — LAYOUT CONSOLIDATION: --harvest default retired in favor
 #   of --reports (the replay jsonl lives at reports/regime_replay_<date>.jsonl
 #   now); --diary-dir default moves to ~/day_trader_pro/reports. Old flags kept
@@ -35,6 +72,9 @@
 from __future__ import annotations
 import argparse, json, os, sys
 from typing import Dict, List, Optional
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.regime_labels import REGIME_LABELS, label   # noqa: E402
 
 REGIMES = ("TRENDING_BULL", "TRENDING_BEAR", "RANGING",
            "BREAKOUT_VOLATILE", "COMPRESSION", "SWEEP_REVERSAL")
@@ -170,15 +210,34 @@ def digest_from_log(log_path: str) -> dict:
     return entry
 
 
+# v1.4 — the map moved to utils/regime_labels.py: TWO other renderers carried
+# the identical defect (replay_confluence's emitted-distribution line and
+# regime_confluence's self-test, both truncating at 5 chars). One map, three
+# consumers, so there is no room for a fourth abbreviation. The import is
+# stdlib-only, which keeps this tool dependency-free by design.
+LABEL = REGIME_LABELS
+_lab = label
+
+
 def _md_block(e: dict) -> str:
     d = e["dominance"]
-    dom_line = "  ".join(f"{k.split('_')[0][:4]} {d[k]:.0f}%" for k in REGIMES if d[k] > 0) or "—"
+    dom_line = "  ".join(f"{_lab(k)} {d[k]:.0f}%" for k in REGIMES if d[k] > 0) or "—"
     syms = ",".join(e["symbols"])
     if len(syms) > 90:
         syms = syms[:87] + "…"
+    # v1.3 — NAME the failing checks. "4/5" every day for 16 days is wallpaper;
+    # a real 3/5 would have looked the same at a glance. Old rows carry
+    # acceptance_detail already, so this renders retroactively.
+    detail = e.get("acceptance_detail") or {}
+    failed = [k for k in sorted(detail) if not detail[k]]
+    acc = f"{e['acceptance']}" + (f" ({', '.join(failed)})" if failed else "")
+    # v1.3 — ticks per symbol. 2026-08-03 ran 15 x 243 against a normal 29 x
+    # ~389: degraded on BOTH axes, and the row said neither.
+    per = (f" ({e['ticks'] // e['n_symbols']}/sym)"
+           if e.get("n_symbols") else "")
     block = (
-        f"### {e['date']}   [{e['tag']}]   acceptance {e['acceptance']}\n"
-        f"- {e['n_symbols']} symbols · {e['ticks']} ticks\n"
+        f"### {e['date']}   [{e['tag']}]   acceptance {acc}\n"
+        f"- {e['n_symbols']} symbols · {e['ticks']} ticks{per}\n"
         f"- dominance: {dom_line}\n"
         f"- all-zero: {e['all_zero_pct']:.1f}%   flat-angle p50/p90: "
         f"{e['flat_angle_p50']}/{e['flat_angle_p90']}°\n"
@@ -187,10 +246,19 @@ def _md_block(e: dict) -> str:
     # v1.1 — one extra line when the day's log carried Layer-2 tracks
     l2 = e.get("l2")
     if l2:
-        dom2 = "  ".join(f"{k.split('_')[0][:4]} {v:.0f}%"
+        dom2 = "  ".join(f"{_lab(k)} {v:.0f}%"
                          for k, v in sorted(l2["dominance"].items(), key=lambda kv: -kv[1])) or "—"
+        # CHURN-CUT — L1 argmax flips PER committed L2 switch, i.e. how much
+        # churn the integrator removed. Written this way round on purpose: the
+        # repo's own language is "churn crushed 1.6x", so a number that fell
+        # below 1.0 would silently invert the sentence everyone reads it with.
+        # Across 16 sessions it sits in a 1.45-1.79 band, which is the envelope
+        # the L2.4 prior fit is judged against and the Aug 10-21 freeze watches.
+        sw = l2.get("switches") or 0
+        cut = f"   churn-cut {l2['l1_flips'] / sw:.2f}x" if sw else ""
         block += (f"- L2: {dom2}   switches {l2['switches']} "
-                  f"(L1 flips {l2['l1_flips']})   stale {l2['stale_pct']:.1f}%\n")
+                  f"(L1 flips {l2['l1_flips']}){cut}   "
+                  f"stale {l2['stale_pct']:.1f}%\n")
     return block
 
 
@@ -236,6 +304,38 @@ def upsert(entry: dict, diary_dir: str):
     return jsonl, md
 
 
+def rerender(diary_dir: str) -> int:
+    """v1.3 — rewrite the .md from the .jsonl with the CURRENT renderer.
+
+    Digests are never recomputed and no replay runs: this reads the stored
+    entries and re-emits every block. It exists because a rendering change
+    (labels, acceptance detail, churn) would otherwise only reach a date when
+    that date happened to be re-diaried, leaving a scroll that is half one
+    format and half another — which is worse than either.
+    """
+    jsonl = os.path.join(diary_dir, "regime_diary.jsonl")
+    md = os.path.join(diary_dir, "regime_diary.md")
+    if not os.path.isfile(jsonl):
+        print(f"no diary at {jsonl}")
+        return 1
+    entries = []
+    with open(jsonl) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                entries.append(json.loads(line))
+    entries.sort(key=lambda e: e.get("date", ""))
+    tmp = md + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("# Regime Diary — Layer-1 confluence (+ Layer-2 when present), one entry per session\n")
+        f.write("# Tape-only. No trades, no P&L. Server-count agnostic (reports what the log holds).\n\n")
+        for e in entries:
+            f.write(_md_block(e) + "\n")
+    os.replace(tmp, md)
+    print(f"re-rendered {len(entries)} entries -> {md}")
+    return 0
+
+
 def view(diary_dir: str):
     md = os.path.join(diary_dir, "regime_diary.md")
     if not os.path.isfile(md):
@@ -256,10 +356,16 @@ def main():
     ap.add_argument("--diary-dir", default=os.path.expanduser("~/day_trader_pro/reports"),
                     help="where regime_diary.{jsonl,md} live")
     ap.add_argument("--view", action="store_true", help="print the whole diary and exit")
+    ap.add_argument("--rerender", action="store_true",
+                    help="rebuild regime_diary.md from the existing .jsonl "
+                         "(no replay, no re-digest) — use after a rendering change")
     args = ap.parse_args()
 
     if args.view:
         sys.exit(view(args.diary_dir))
+
+    if args.rerender:
+        sys.exit(rerender(args.diary_dir))
 
     log_path = args.log
     if not log_path and args.date:

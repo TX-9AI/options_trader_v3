@@ -1,4 +1,9 @@
 # analysis/regime_confluence.py — options_trader_v3
+# v1.3.2 — 2026-08-04 — DISPLAY ONLY, inside the __main__ self-test: its score
+#         line truncated regime names at 5 chars, so TRENDING_BULL and
+#         TRENDING_BEAR both printed "TREND". Uses utils/regime_labels. NO
+#         scoring, weight, veto or threshold is touched — every v1.3/v1.3.1
+#         canary string is unchanged.
 # v1.3.1 — 2026-07-27 — COMPRESSION CONTAINMENT VETO (A3 fix, found in the
 #         A/B pool). _compression gains hard veto veto_inside: price closed
 #         beyond the band edge zeroes the coil. Its own truth is flat center +
@@ -781,7 +786,11 @@ if __name__ == "__main__":                     # pragma: no cover
     def show(tag, vol, tr, st, lq, closes, atr=None):
         atr = derive_atr(closes[-RANGE_WINDOW_BARS:])
         r = sc.score(vol, tr, st, lq, closes, atr)
-        line = "  ".join(f"{k.split('_')[0][:5]}:{('None' if v is None else f'{v:.2f}')}"
+        # v1.3.2 — was k.split('_')[0][:5]: BULL and BEAR both printed "TREND"
+        # in this self-test, the third instance of the same defect. Display
+        # only, inside __main__ — no scoring path touched.
+        from utils.regime_labels import label as _lab
+        line = "  ".join(f"{_lab(k)}:{('None' if v is None else f'{v:.2f}')}"
                           for k, v in r.scores.items())
         print(f"{tag:10} {line}")
         return r
