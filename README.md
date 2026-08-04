@@ -110,6 +110,42 @@ paths are in [`docs/MECHANICS.md`](docs/MECHANICS.md).
   back, by selling premium beneath it (PCS in a bull, CCS in a bear). Readiness
   track is live and log-only; the firing engine is gated on calibration and on the
   Layer-1 excavation.
+
+  **WHAT EXISTS TODAY, precisely — asked directly on 2026-08-04 and worth writing
+  down rather than re-deriving.** There is **no `strategy/vertical_spread_strategy.py`**.
+  What runs is the READINESS TRACK, `analysis/trade_readiness._trend_credit_spread()`,
+  live on the fleet since 2026-07-28 and log-only; `tests/canary_trend_credit_spread.py`
+  exists to prove it is *wired and inert*, not that it trades. It is scored, journaled
+  and gates nothing.
+
+  **THE TRADE.** Sell a spread BEYOND the impulse candle, so the trade needs no
+  pullback and no chase — which is the point: it is the trade for a trend that
+  never gives you an entry. Grading is a hard veto on the directional label, then
+  corroborators (impulse magnitude on an SD ramp, conviction, structural room from
+  spot to the impulse floor in ATR, momentum-live), a parabolic over-extension
+  damper (exhaustion → snapback risk), and the ≥80%-of-arm expected-move extension
+  gate it shares with the condor sides.
+
+  **ITS PREMISE, AND HOW IT GETS TESTED.** The strategy rests on one claim:
+  *committed order flow will not fully retrace the impulse*. Until 2026-08-04 that
+  claim had never been measured. `tests/tcs_floor_durability.py` v1.0 measures it
+  offline from data already journaled — for every armed impulse, did a 1-minute
+  CLOSE go back through `floor_px` before the bell? It reports durability by SD
+  bucket (which IS the fit for `TR_TCS_IMPULSE_SD_LO/HI`), the penetration
+  distribution on failures (p90 is a strike distance priced from the state's own
+  behaviour), and time-to-failure (a floor broken at 15:55 is a 0DTE out of clock;
+  one broken in four minutes is a wrong thesis). See
+  [`docs/VALIDATION.md`](VALIDATION.md).
+
+  **WHY THE ENGINE IS NOT BUILT YET, and it is not a schedule excuse.** A held
+  floor is a NECESSARY condition for the trade, not a profitable one — and an
+  unheld floor means the strategy is wrong and the engine was wasted work. Three
+  supporting reasons: the SD bounds are unfitted until TC.4b (Aug 8-9); a new
+  firing strategy moves fire-rate, one of the four numbers the Aug 21 freeze
+  verdict is written from, so it would break its own baseline; and it changes the
+  trade population AV's Aug 13 read and `conditional_tables` are measured on. If
+  the floor holds, the build is fast, well-specified, and belongs in the **Aug 24
+  paper deploy** — post-freeze, four weeks before full size.
 - **Pitchfork sloped S/R** — designed, not built, gated on Layer 2. See
   [`docs/WHITEPAPER_pitchfork_overlay.md`](docs/WHITEPAPER_pitchfork_overlay.md).
 

@@ -1,4 +1,11 @@
 #!/bin/bash
+# v4.17 — 2026-08-04 — tcs_floor_durability v1.1: +2 canaries on the POPULATION
+#         FILTER. v1.0's first real run measured every floor the rolling
+#         lookback ever computed instead of the ARMED ones the strategy would
+#         have traded — 5,129 "impulses" that were mostly arithmetic. It did not
+#         error and it did not look wrong; it answered a question nobody asked.
+#         The default is pinned to ARMED and the DORMANT-exclusion is pinned by
+#         name, because reverting either restores a confidently wrong number.
 # v4.16 — 2026-08-04 — +2 canaries for tcs_floor_durability v1.0 (TC.4b's
 #         prerequisite). The DEDUP one is load-bearing: the readiness track
 #         scores every tick, so one impulse appears on hundreds of consecutive
@@ -428,6 +435,8 @@ check "tests/test_gap_pool.py"           "test_opposite_arms_are_refused"  "v1.0
 # ── TC.4b prerequisite (2026-08-04) — does the impulse floor hold? ────────
 check "tests/tcs_floor_durability.py"    "seen.add(key)"                "v1.0 one impulse counted once, not once per scored tick"
 check "tests/tcs_floor_durability.py"    "through = (c < floor)"        "v1.0 durability is CLOSE-based (acceptance, not a touch)"
+check "tests/tcs_floor_durability.py"    'default="ARMED"'              "v1.1 population defaults to ARMED (not every floor the lookback computed)"
+check "tests/tcs_floor_durability.py"    'stats\["not_armed"\]'          "v1.1 DORMANT floors are excluded and counted"
 check "tests/replay_confluence.py"       "from utils.regime_labels import label"  "v2.3 emitted-distribution line uses the shared map"
 check "tests/regime_diary.py"            "churn-cut"                    "v1.3 churn-cut on the L2 line (flips per committed switch)"
 check "tests/regime_diary.py"            "def rerender"                 "v1.3 --rerender rebuilds the md from the jsonl"

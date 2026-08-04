@@ -1,5 +1,5 @@
 """
-tests/test_tcs_floor_durability.py — v1.0 — 2026-08-04
+tests/test_tcs_floor_durability.py — v1.1 — 2026-08-04
 
 Plants worlds with a known answer and asserts the tool recovers each, the same
 way tests/test_a2_partition_recovers.py and tests/test_gap_pool.py do.
@@ -17,9 +17,16 @@ merely empty:
     the two ever merge, the durability number silently becomes a stop-out
     statistic and stops answering the question the strategy asks.
 
+v1.1 — 2026-08-04 — fixtures now carry `machine`/`r`, and four tests cover the
+population filter. v1.0 shipped without it and its first real run measured every
+floor the rolling lookback ever computed rather than the ones the strategy would
+have traded — a confidently wrong number, which is the class this file exists to
+prevent.
+
 Deliberate-failure check performed when written: dropping the dedup key turns
 test_one_impulse_counts_once red (n becomes 200); switching the break test from
-close to low turns test_a_wick_through_the_floor_still_holds red.
+close to low turns test_a_wick_through_the_floor_still_holds red; defaulting
+--machine to ANY turns test_dormant_floors_are_excluded_by_default red.
 """
 
 import json
@@ -34,7 +41,7 @@ DATE = "2026-07-30"
 
 
 def _world(tmp, bars, floor=100.0, direction="long", sd=2.2, n_rows=1,
-           sym="AAA", t0="14:00"):
+           sym="AAA", t0="14:00", machine="ARMED", r=0.62):
     """bars: list of (hhmm, close, high, low) AFTER the impulse."""
     jdir = os.path.join(tmp, "signal_journal", DATE)
     odir = os.path.join(tmp, "ohlc", DATE)
@@ -46,6 +53,7 @@ def _world(tmp, bars, floor=100.0, direction="long", sd=2.2, n_rows=1,
             fh.write(json.dumps({
                 "ts_et": f"{DATE}T{t0}:00",
                 "readiness": {"strategy": "trend_credit_spread",
+                              "machine": machine, "r": r,
                               "factors": {"floor_px": floor, "dir": direction,
                                           "sd_ratio": sd}},
             }) + "\n")
@@ -134,6 +142,41 @@ def test_thin_buckets_are_refused_not_reported():
     with tempfile.TemporaryDirectory() as tmp:
         out = _run(_world(tmp, _held_bars()))
         assert "REFUSED (under n=30)" in out, out[:900]
+
+
+def test_dormant_floors_are_excluded_by_default():
+    """v1.1, and it is the correction that mattered. The impulse lookback rolls
+    on EVERY tick, so most floors the track computes belong to moments when it
+    was DORMANT and the strategy would never have sold anything. Measuring their
+    durability answers a question nobody asked — v1.0 did exactly that on its
+    first real run and reported 5,129 'impulses'."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _run(_world(tmp, _held_bars(), machine="DORMANT"), "--diagnose")
+        assert "not_armed            1" in out, out[:900]
+
+
+def test_any_reproduces_the_unfiltered_population():
+    """Kept so the difference between the two populations can be SHOWN. It is
+    not a mode anyone should read a result from."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _run(_world(tmp, _held_bars(), machine="DORMANT"),
+                   "--machine", "ANY")
+        assert "floor HELD    : 1 (100.0%)" in out, out[:900]
+        assert "NOT the traded population" in out
+
+
+def test_staging_plus_admits_both_live_states():
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _run(_world(tmp, _held_bars(), machine="STAGING"),
+                   "--machine", "STAGING+")
+        assert "floor HELD    : 1 (100.0%)" in out, out[:900]
+
+
+def test_min_r_filters():
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _run(_world(tmp, _held_bars(), r=0.40), "--min-r", "0.55",
+                   "--diagnose")
+        assert "below_min_r          1" in out, out[:900]
 
 
 def test_min_sd_filters():

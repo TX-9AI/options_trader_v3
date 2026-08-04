@@ -10,11 +10,59 @@ decisions stay on the record and fixes don't get quietly reverted.
 
 - **REPLAY_VALIDATION.md — Layer 1 validation & calibration plan**  <sub>(was `docs/REPLAY_VALIDATION.md`)</sub>
 - **Backtest Harness — v1.0**  <sub>(was `docs/README_offline_backtest_harness.md`)</sub>
+- **Offline measurement tools — what each one answers**  <sub>(added 2026-08-04)</sub>
 
 ---
 
 
 <!-- ================= was: docs/REPLAY_VALIDATION.md ================= -->
+
+##### Offline measurement tools — what each one answers
+
+Added 2026-08-04. These are control-side, read-only, and drive nothing. They are
+listed here rather than in MECHANICS because MECHANICS describes what the bot
+DOES; these describe how a claim about it gets TESTED.
+
+| tool | the question it answers | reads |
+|---|---|---|
+| `tests/tcs_floor_durability.py` | **Does the impulse floor hold?** The trend credit spread's entire premise — that committed order flow will not fully retrace — measured before the firing engine exists (TC.4b's stated prerequisite). | readiness journal + banked OHLC |
+| `tests/gap_outcome_join.py` | Does outcome depend on gap class? `--pool gapflat` triples n and prints its own CONT-vs-REV legitimacy verdict. | `gap_pct.json` + `fleet_trades_<date>.json` |
+| `tests/a2_partition.py` | Is A2's 10:00 signature horizon co-truth, opening drive, or a gap artifact? | replay corpus |
+| `tests/post_exit_continuation.py` | After an exit fires, does price keep going the trade's way? | trades + tape |
+| `tests/swallow_audit.py` | Which exception handlers fail silently, and what was added since a snapshot? | source, statically |
+
+**`tcs_floor_durability.py` — read this before reading its output.**
+
+*What it asks.* For every impulse the readiness track recorded a `floor_px` for,
+did a **1-minute CLOSE** go back through that floor before the bell?
+
+*Close, not wick — deliberately.* A short strike is threatened by ACCEPTANCE
+beyond a level, not by a touch. The wick statistic (maximum penetration) is
+reported separately; merge the two and durability silently becomes a stop-out
+statistic answering a different question.
+
+*One impulse, counted once.* The track scores every tick, so a single impulse
+appears on hundreds of consecutive journal rows. Rows are deduped on
+`(date, symbol, floor_px, direction)`.
+
+*The population filter is the thing to get right.* The impulse lookback rolls on
+EVERY tick, so most floors the track computes belong to moments when it was
+DORMANT and the strategy would never have sold anything. `--machine ARMED` is the
+default for that reason. `--machine ANY` exists only so the two populations can be
+COMPARED — a result read from it is a result about arithmetic, not about a trade.
+
+*Its three outputs.* Durability by SD bucket **is** the fit for
+`TR_TCS_IMPULSE_SD_LO/HI` — the bound belongs where durability starts clearing,
+not where a prior guessed, and a flat curve says impulse magnitude is not what
+protects the floor. Penetration p90 on failures is a strike distance priced from
+the state's own behaviour. Time-to-failure separates *a 0DTE that ran out of
+clock* from *a thesis that was wrong*; a p50 in single-digit minutes is the
+second.
+
+*What it cannot say.* No spread is priced, no credit assumed, no fill modelled. A
+held floor is a NECESSARY condition for the trade, never a profitable one.
+
+---
 
 ##### REPLAY_VALIDATION.md — Layer 1 validation & calibration plan
 

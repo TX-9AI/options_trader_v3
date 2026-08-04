@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """
-tests/tcs_floor_durability.py — v1.0 — 2026-08-04   (backlog TC.4b prerequisite)
+tests/tcs_floor_durability.py — v1.1 — 2026-08-04   (backlog TC.4b prerequisite)
+
+v1.1 — 2026-08-04 — `--machine ARMED` (and `--min-r`), BECAUSE v1.0's FIRST RUN
+        MEASURED THE WRONG POPULATION. It scored every floor the track ever
+        computed — the impulse lookback rolls on EVERY tick, so most of those
+        floors belong to moments when readiness was DORMANT and the strategy
+        would never have sold anything. 5,129 "impulses" is the count of
+        distinct floors observed, not of setups. The durability of a floor the
+        trade would never have used answers no question anyone asked. The
+        journal already carries `machine` (DORMANT / STAGING / ARMED) and `r`,
+        so the filter costs nothing and the default is now ARMED.
+        v1.0's numbers are SUPERSEDED, not merely refined: they are a different
+        population and must not be compared to a filtered run.
 
 DOES THE IMPULSE FLOOR HOLD? That is the entire premise of the trend credit
 spread — sell a spread BEYOND the impulse candle, on the claim that committed
@@ -135,6 +147,14 @@ def main(argv):
     ap.add_argument("--until", default="9999-12-31")
     ap.add_argument("--min-sd", type=float, default=0.0,
                     help="ignore impulses below this SD ratio")
+    ap.add_argument("--machine", default="ARMED",
+                    choices=("ARMED", "STAGING+", "ANY"),
+                    help="which readiness state the floor must have been in. "
+                         "ARMED (default) is the only population the strategy "
+                         "would have traded; ANY reproduces v1.0 and is kept "
+                         "only so the difference can be shown, not used.")
+    ap.add_argument("--min-r", type=float, default=0.0,
+                    help="additionally require readiness r >= this")
     ap.add_argument("--diagnose", action="store_true")
     a = ap.parse_args(argv[1:])
 
@@ -187,6 +207,23 @@ def main(argv):
                 if sd is None or float(sd) < a.min_sd:
                     stats["below_min_sd"] += 1
                     continue
+                # v1.1 — THE POPULATION FILTER. A floor computed while the track
+                # was DORMANT is not a setup; it is the rolling lookback doing
+                # arithmetic. Measuring its durability answers nothing.
+                mach = str(rd.get("machine") or "")
+                if a.machine == "ARMED" and mach != "ARMED":
+                    stats["not_armed"] += 1
+                    continue
+                if a.machine == "STAGING+" and mach not in ("ARMED", "STAGING"):
+                    stats["not_armed"] += 1
+                    continue
+                try:
+                    rr = float(rd.get("r") or 0.0)
+                except Exception:                            # noqa: BLE001
+                    rr = 0.0
+                if rr < a.min_r:
+                    stats["below_min_r"] += 1
+                    continue
                 key = (date, sym_hint, round(float(floor), 2), direction)
                 if key in seen:
                     stats["dedup"] += 1
@@ -231,8 +268,9 @@ def main(argv):
 
     if a.diagnose or not results:
         print("READINESS ROWS / JOIN DIAGNOSIS")
-        for k in ("tcs_rows", "dedup", "no_floor", "below_min_sd", "no_ts",
-                  "no_tape", "no_forward_window", "joined"):
+        for k in ("tcs_rows", "not_armed", "below_min_r", "dedup", "no_floor",
+                  "below_min_sd", "no_ts", "no_tape", "no_forward_window",
+                  "joined"):
             print(f"  {k:<20} {stats[k]}")
         print(f"  distinct impulses  {len(obs)}")
         if not results:
@@ -245,6 +283,12 @@ def main(argv):
 
     held = [r for r in results if r["held"]]
     print(f"window        : {a.since} .. {a.until}")
+    print(f"population    : machine={a.machine}"
+          + (f"  min_r={a.min_r}" if a.min_r else "")
+          + ("   <-- ARMED only: the floors the strategy would actually have "
+             "sold beyond" if a.machine == "ARMED" else
+             "   <-- NOT the traded population; every floor the lookback ever "
+             "computed"))
     print(f"impulses      : {len(results)} distinct (deduped from "
           f"{stats['tcs_rows']} scored rows)")
     print(f"floor HELD    : {len(held)} ({100.0 * len(held) / len(results):.1f}%)"

@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.63
+# docs/BACKLOG.md — v3.64
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -63,7 +63,7 @@ BAKED is changing nothing about today's data.
 | **W.2a — today's own swallows made audible + the alarm made specific** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | silent count back to the 08-03 baseline of **87**; `--since` proven on three cases |
 | **D.1 — bull/bear were the same token in THREE renderers** | ✅ 08-04 | ✅ 08-04 | n/a (report-only) | 16 rows re-rendered on control; ALL CANARIES GREEN |
 | **AV.1 — the pooled gap read, with a legitimacy guard** | ✅ 08-04 | ✅ 08-04 | n/a (offline) | ALL CANARIES GREEN on control |
-| **TC.4b-pre — does the impulse floor hold?** | ✅ 08-04 | ⬜ | n/a (offline) | desk suite **193 passed / 1 skipped**; 8 planted-world tests |
+| **TC.4b-pre — does the impulse floor hold?** | ✅ v1.1 08-04 | ⬜ | n/a (offline) | v1.0 RAN on the real corpus and measured the WRONG POPULATION; v1.1 filters to ARMED. 12 tests |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1237,6 +1237,39 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK·DATA]` **TC.4b-pre RESULT — ⚠️ FIRST RUN IS SUPERSEDED, AND THE
+  CORRECTION IS THE FINDING. v1.1 ships the population filter.**
+  **WHAT v1.0 REPORTED (2026-08-04, 5,129 "impulses" from 17,177 scored rows):**
+  floor held **14.6%**; durability by SD **12% / 13% / 15% / 18%** across
+  sub-aware → screaming; penetration on failures p50 0.799% / p90 2.868%;
+  time-to-failure **p10 1 min, p50 4 min**, p90 61 min. Largest bucket n=1907,
+  MDE 3%.
+  **WHY IT IS NOT THE ANSWER.** The impulse lookback recomputes on EVERY TICK, so
+  a `floor_px` exists on every scored row whether or not the track was anywhere
+  near arming. v1.0 filtered on nothing, so **most of those 5,129 floors belong to
+  DORMANT moments the strategy would never have sold beyond.** It is not a
+  measurement of the trade; it is a measurement of a rolling minimum. It did not
+  error and the output did not look wrong — which is exactly the class of failure
+  this thread keeps finding, this time in my own tool, one turn after shipping it.
+  **v1.1 — `--machine ARMED` IS NOW THE DEFAULT.** The journal already carried
+  `machine` (DORMANT/STAGING/ARMED) and `r`, so the filter cost nothing and should
+  have been there from the start. `--machine ANY` is retained ONLY so the two
+  populations can be compared, and the header now says on its face which one is
+  being shown. `--min-r` added for a tighter cut.
+  **DO NOT COMPARE THE TWO RUNS AS IF THEY REFINED EACH OTHER** — they are
+  different populations, not different precisions.
+  **⬜ WHAT THE v1.0 NUMBERS DO STILL SUGGEST, held loosely and pending the
+  ARMED re-run:** the SD curve rises monotonically 12→18% and the 6pp spread
+  clears the 3% MDE, so impulse magnitude does appear to protect the floor — the
+  direction the strategy assumes. But **p50 time-to-failure of 4 minutes** is the
+  number to watch: my own tool's text pre-registered that a single-digit p50
+  means *the thesis was wrong*, not *the clock ran out*. If that survives the
+  ARMED filter, the premise is in serious trouble and TC.4 should be reconsidered
+  rather than built. If it does not survive, the whole first run was noise from
+  DORMANT floors and the real curve starts here.
+  **⬜ NEXT, one command:** `python3 tests/tcs_floor_durability.py` (now ARMED by
+  default), then the same with `--machine ANY` for the contrast.
+
 - `[DESK·DATA]` **TC.4b-pre — ✅ TOOL BUILT 2026-08-04. DOES THE IMPULSE FLOOR
   HOLD? `tests/tcs_floor_durability.py` v1.0. The credit spread's premise, tested
   BEFORE the engine exists.**
@@ -2927,6 +2960,15 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.64 — 2026-08-04 — TC.4b-pre v1.1: THE FIRST RUN MEASURED THE WRONG
+  POPULATION.** v1.0 scored every floor the impulse lookback ever computed rather
+  than the ARMED ones the strategy would have traded — 5,129 "impulses" that were
+  largely arithmetic. No error, no odd-looking output, just an answer to a
+  question nobody asked. v1.1 defaults to `--machine ARMED`; the v1.0 numbers are
+  superseded rather than refined. Also: TC.4's description expanded in MECHANICS
+  and the README (what exists today, the trade, its premise, why the engine is not
+  built), and VALIDATION gains a catalogue of the offline measurement tools and
+  what each one answers.
 - **v3.63 — 2026-08-04 — TC.4b-pre: THE CREDIT SPREAD'S PREMISE, TESTED BEFORE
   THE ENGINE.** Asked whether to build `vertical_spread_strategy.py` now; answered
   no, and built the floor-durability table instead — the thing TC.4b already says
