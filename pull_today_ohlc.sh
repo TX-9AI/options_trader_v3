@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 # options_trader_v3/pull_today_ohlc.sh — one-shot EOD retrieval of TODAY's FULL 1-min session on THIS box.
+# v1.3 — 2026-08-04 — THE RTH GUARD WAS BLOCKING THE BACKFILL IT WAS NEVER MEANT
+#        TO BLOCK. v1.1's test was "candle-feed live AND before 16:00 ET" — a
+#        pure clock check. eod_backfill wakes SAT-OUT boxes mid-session to fetch
+#        their candles; those boxes have a cold store and no trading bot, so the
+#        guard refused the one rebuild that would have produced anything and the
+#        script wrote a HEADER-ONLY csv instead. Measured 2026-08-04: fourteen
+#        38-byte files against fifteen 15-16 KB ones from the boxes that were
+#        already running. DXFeed history is SAME-EVENING ONLY, so every session
+#        lost this way is lost permanently at midnight.
+#        The guard now also requires `optionsbot` to be ACTIVE — that is the
+#        consumer a feed stop would starve, and it is what the guard was for.
+#        Post-close behaviour is unchanged; Mandate 2 is unchanged (the feed is
+#        still stopped before the --once pass and restarted after).
 # v1.2 — 2026-07-10 — Hoist TT_* cred fetch to the top of __work so BOTH the v3 --once refill and a
 #        v2 self-subscribing logger run with creds in-process (v3 logger ignores them). This lets the
 #        EOD timer's oneshot service call `__work` directly and keep NO secrets in the unit file.
@@ -67,12 +80,37 @@ if [ "${1:-}" = "__work" ]; then
 
     if [ "$IS_V3" = "1" ]; then
         FEED=$(systemctl is-active candle-feed 2>/dev/null || echo unknown)
-        if [ "$FEED" = "active" ] && [ "$POSTCLOSE" = "0" ]; then
-            echo "RTH + feed live: NOT stopping the feed (would starve the bot). Reading store as-is;"
-            echo "result may be PARTIAL (1m store holds ~240 bars). Re-run after 16:00 ET for a full session."
+        # v1.3 — THE GUARD NOW ASKS THE RIGHT QUESTION. It used to be
+        # "feed live AND still RTH", i.e. a pure clock test — so a SAT-OUT box
+        # woken mid-session purely to backfill was refused the rebuild, read its
+        # COLD store, and wrote a HEADER-ONLY csv. Measured 2026-08-04: fourteen
+        # 38-byte files at 11:11/11:18/11:23 ET while the fifteen trading boxes
+        # wrote 15-16 KB. Two sessions of sat-out tape lost that way, and DXFeed
+        # history is same-evening only, so each one is permanent at midnight.
+        # WHAT THE GUARD IS ACTUALLY PROTECTING is a TRADING BOT on THIS box —
+        # stopping candle-feed under a live optionsbot starves its analysis. A
+        # box with optionsbot INACTIVE has no such consumer: stopping its feed
+        # for one synchronous producer pass starves nobody, and that is exactly
+        # the population backfill wakes.
+        # MANDATE 2 IS UNAFFECTED. The feed is still stopped before the --once
+        # pass and restarted after, so there is never a second live producer on
+        # this box either way.
+        BOT=$(systemctl is-active optionsbot 2>/dev/null || echo unknown)
+        if [ "$FEED" = "active" ] && [ "$POSTCLOSE" = "0" ] && [ "$BOT" = "active" ]; then
+            echo "RTH + feed live + optionsbot ACTIVE: NOT stopping the feed (would starve the bot)."
+            echo "Reading store as-is; result may be PARTIAL (1m store holds ~240 bars)."
+            echo "Re-run after 16:00 ET for a full session."
             run_logger
         else
-            # Safe to rebuild the full session with a single producer pass.
+            # Safe to rebuild the full session with a single producer pass:
+            # either we are post-close, or no optionsbot is running on this box
+            # to be starved by a brief feed stop. v1.3 says WHICH, because
+            # "refilling" with no reason printed is how the old behaviour hid.
+            if [ "$POSTCLOSE" = "1" ]; then
+                echo "post-close: safe to rebuild"
+            else
+                echo "RTH but optionsbot is $BOT (not trading on this box): safe to rebuild"
+            fi
             [ "$FEED" = "active" ] && { echo "stopping candle-feed for a single-producer refill"; sudo systemctl stop candle-feed; }
             if [ "$HAVE_CREDS" = "1" ]; then
                 echo "refilling full session via one synchronous producer pass (candle_feed --once)"

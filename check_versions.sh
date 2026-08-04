@@ -1,4 +1,10 @@
 #!/bin/bash
+# v4.23 — 2026-08-04 — pull_today_ohlc v1.3: the RTH guard now requires a LIVE
+#         OPTIONSBOT, not just the clock. +2 canaries, one of them an ABSENCE
+#         check on the v1.1 condition — the old form silently wrote header-only
+#         csvs for every sat-out box backfill woke, and DXFeed history is
+#         same-evening only, so a revert costs a session of tape per night with
+#         no error anywhere.
 # v4.22 — 2026-08-04 — +3 canaries: a2_cooccurrence v1.2's parse-time slim (the
 #         OOM that SIGKILLed devtools 47 with no traceback and no output) and
 #         the audit v1.5 ACCEL-per-held-bar denominator. The slim canary pins
@@ -341,6 +347,16 @@ check "tests/orb_stale_block_audit.py"   "ORB confirmed"                "v1.0 th
 check "tests/a2_cooccurrence.py"         "_KEEP = "                     "v1.2 records slimmed at parse time (devtools 47 was OOM-killed)"
 check "tests/test_a2_cooccurrence_slim.py" "covers_every_field_the_source_reads"  "v1.0 the slim is checked against the SOURCE, not a list"
 check "tests/pitchfork_filter_audit.py"  "ACCEL/held bar"               "v1.5 exposure denominator (per-birth is confounded by lifetime)"
+
+# ── pull_today_ohlc v1.3 (2026-08-04) — the guard that ate the backfill ───
+check "pull_today_ohlc.sh"               'BOT=$(systemctl is-active optionsbot' "v1.3 guard reads optionsbot, not just the clock"
+check "tests/test_pull_ohlc_guard.sh"    "THE CASE THAT WAS BROKEN"     "v1.0 guard decision table covered"
+if grep -q '\[ "$FEED" = "active" \] && \[ "$POSTCLOSE" = "0" \]; then' pull_today_ohlc.sh 2>/dev/null; then
+    echo "  ✗ STALE:   pull_today_ohlc guard is back to the clock-only form — every sat-out box backfill wakes will write a header-only csv and that session's tape is gone at midnight"
+    MISS=$((MISS+1))
+else
+    echo "  ✓ PRESENT: v1.3 guard requires a live optionsbot before refusing the rebuild"
+fi
 if grep -q "if not _orb_exempt:" main.py 2>/dev/null; then
     echo "  ✓ PRESENT: v5.4 the stale gate still blocks everything that is not a confirmed ORB"
 else

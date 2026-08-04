@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.69
+# docs/BACKLOG.md — v3.70
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -67,6 +67,7 @@ BAKED is changing nothing about today's data.
 | **PF.V — pitchfork variant sweep (§12 Q2)** | ✅ 08-04 | ✅ 08-04 | n/a (offline) | Answered: no-change. ACCEL/birth andrews 0.22 · mod_schiff 0.67 · schiff 3.61; adverse tine kills 81-97% in ALL THREE |
 | **ORB.1 — ORB was gated by the stale entry block** | ✅ 08-04 | ✅ 08-04 | ⬜ **fleet reflash tonight** | control suite 216 passed, ALL CANARIES GREEN |
 | **RPT.1 — report rollup (5 fixes, 2 repos)** | ✅ 08-04 | ⬜ | n/a (offline) | otv3 suite **223 passed / 1 skipped**; behavioural proof on all five |
+| **BF.1 — the RTH guard was eating the backfill** | ✅ 08-04 | ⬜ | ⬜ **tonight's reflash** | 8/8 guard states proven; 2 sessions of sat-out tape at stake |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1240,6 +1241,51 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK→DEPLOY]` **BF.1 — 🔴 ✅ FIXED 2026-08-04. THE RTH GUARD WAS BLOCKING THE
+  BACKFILL IT WAS NEVER MEANT TO BLOCK, AND IT HAS COST TWO SESSIONS OF SAT-OUT
+  TAPE. Ships on tonight's reflash — the boxes need it.**
+  **THE EVIDENCE.** `ohlc/2026-08-04/` holds two classes of file: fifteen at
+  15-16 KB written 15:05 UTC, and **fourteen at 38 BYTES** — a bare CSV header —
+  written 15:11 / 15:18 / 15:23 UTC. Control runs UTC, so those are **11:11,
+  11:18 and 11:23 ET: mid-session**, in three waves matching
+  `PRODUCE_TIMEOUT=210s` plus wake overhead at batches of five.
+  **THE CAUSE.** `pull_today_ohlc.sh` v1.1's guard is *"candle-feed live AND
+  before 16:00 ET → do NOT stop the feed"* — a pure CLOCK test. `eod_backfill`
+  wakes SAT-OUT boxes to fetch their candles; those boxes have a **cold store**
+  (candle-feed started seconds earlier) and **no trading bot**. The guard refused
+  the one thing that would have produced bars — the synchronous
+  `candle_feed --once` rebuild — so the script read an empty store and wrote a
+  header-only file. It was correct for every state EXCEPT the one backfill
+  actually uses.
+  **THE FIX — the guard now asks the right question.** It additionally requires
+  **`optionsbot` to be ACTIVE**. That bot is the consumer a feed stop would
+  starve, and protecting it is what the guard was for. A box with no bot running
+  starves nobody. Post-close behaviour is unchanged. **Mandate 2 is unchanged** —
+  the feed is still stopped before the `--once` pass and restarted after, so
+  there is never a second live producer.
+  **PROVEN ACROSS ALL EIGHT STATES** (`tests/test_pull_ohlc_guard.sh`): the
+  broken case (sat-out, mid-session, no bot) now REBUILDS; the case the guard
+  exists for (trading box, mid-session) still SKIPS; post-close and feed-down
+  both rebuild as before.
+  **WHY IT WENT UNSEEN FOR TWO SESSIONS.** No error, no exception, no alert — a
+  38-byte file where a 16 KB one belongs. It surfaced only as a thin replay
+  corpus (**3,652 ticks / 15 symbol-sessions on 08-04, 3,645 / 15 on 08-03**,
+  against a normal 29 × ~389) and as the conductor's *"7 symbol(s) still without
+  candles"* line. The 08-04 01:51 `MIN_REAL_BARS=10` phantom floor is what makes
+  the files visible as missing at all — without it they would have counted as
+  harvested and backfill would skip them forever.
+  **⏱ THE CLOCK ON RECOVERY. DXFeed history is SAME-EVENING ONLY.** 2026-08-04 is
+  recoverable **tonight** and not tomorrow. 2026-08-03 is very likely already
+  gone — worth one attempt because it is free, but do not expect it.
+  **⬜ RECOVER 08-04 AFTER THE REFLASH (post-16:00 ET, so the old guard would
+  allow it too — the fix is what protects every FUTURE mid-session run):**
+  `cd ~/day_trader_pro && venv/bin/python eod_backfill.py --date 2026-08-04`
+  then the same with `--date 2026-08-03` as a long shot.
+  **⬜ COMPANION, control-side:** `eod_backfill` now names the phantom's CAUSE.
+  A header-only file written during RTH and one from a dead DXFeed fetch look
+  identical in the report and have opposite responses — re-run after the close
+  versus investigate entitlement.
+
 - `[DESK]` **RPT.1 — ✅ 2026-08-04. FIVE REPORTING FIXES, ALL OF THEM CASES
   WHERE THE OUTPUT LOOKED RIGHT AND WAS NOT.**
   **(1) devtools 47 was OOM-KILLED, not broken.** `line 341: 126055 Killed` is
@@ -3232,6 +3278,14 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.70 — 2026-08-04 — BF.1: THE RTH GUARD WAS EATING THE BACKFILL.**
+  `pull_today_ohlc` v1.1 refused the full-session rebuild on any live feed before
+  16:00 ET — a clock test — so every SAT-OUT box that eod_backfill woke read a
+  cold store and wrote a 38-byte header-only csv. Fourteen of them on 08-04, and
+  the same signature on 08-03. The guard now also requires a live optionsbot,
+  which is the consumer it was protecting; all eight states proven. DXFeed
+  history is same-evening only, so 08-04 is recoverable tonight and 08-03
+  probably is not.
 - **v3.69 — 2026-08-04 — RPT.1: FIVE REPORTING FIXES ACROSS BOTH REPOS.**
   devtools 47 was OOM-killed rather than broken (a2_cooccurrence v1.2 slims at
   parse time, same failure and fix as ramp_calibration v1.2); excursion_report
