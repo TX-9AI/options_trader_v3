@@ -1,5 +1,20 @@
 """
-analysis/entry_snapshot.py — the entry-time structural picture, captured. v1.0
+analysis/entry_snapshot.py — the entry-time structural picture, captured. v1.2
+
+v1.2 — 2026-08-04 — the v1.1 fix routed its logs through a helper, and the
+        census still counted all five SILENT: it reads the HANDLER BODY, so a
+        log behind an indirection is invisible to it. Logger calls are now
+        inline; the helper only throttles. Hiding a log from the census would
+        defeat the census.
+v1.1 — 2026-08-04 — NO SILENT SWALLOWS. v1.0 shipped five `except: return
+        None` handlers and the nightly census (tests/swallow_audit.py, backlog
+        W.2) counted every one of them as SILENT — in TIER 1, the decision-input
+        tier. That is the exact pattern the operator named as the go-live risk,
+        added hours after saying so. Each except now routes through _quiet(),
+        which logs at DEBUG once per site per process: loud enough that a broken
+        capture is findable, quiet enough that it can never spam a session or
+        become the reason a fill is not recorded. Behaviour is otherwise
+        byte-identical — every handler still returns exactly what it returned.
 
 v1.0 — 2026-08-04 — NEW. Captures, on every filled entry, the FVG zones and
         structural context AS THE LIVE ENGINE HELD THEM at that instant, so the
@@ -70,6 +85,26 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
+# One DEBUG line per site per process. A capture failure must not spam a session
+# (that is how three dead timeframes went unnoticed) and must not be invisible
+# either (that is how everything in the 2026-07-27 week hid). See W.2.
+_quiet_seen: set = set()
+
+
+def _first(where: str) -> bool:
+    """True the FIRST time a site fails, False forever after.
+
+    The throttle is a helper but the logger call is left INLINE in every
+    handler on purpose: tests/swallow_audit.py reads the handler body, so a
+    log emitted through an indirection is counted SILENT. Hiding a log from
+    the census would defeat the census — v1.1 was written that way and the
+    audit caught it.
+    """
+    if where in _quiet_seen:
+        return False
+    _quiet_seen.add(where)
+    return True
+
 # Bound the row: the gap list is for reconstructing which zones existed, not an
 # archive. Most recent first, so the cap drops the oldest and least relevant.
 FVG_CAP = 12
@@ -89,7 +124,11 @@ def _depths(df_1m, df_5m, data) -> Dict[str, Optional[int]]:
                         ("15m", data.get("15m")), ("1h", data.get("1h"))):
         try:
             out[name] = int(len(frame)) if frame is not None else None
-        except Exception:                                    # noqa: BLE001
+        except Exception as exc:                             # noqa: BLE001
+            if _first(f"depth:{name}"):
+                logger.debug("entry_snapshot depth:%s failed (%s: %s) — field "
+                             "omitted; once per process", name,
+                             type(exc).__name__, exc)
             out[name] = None
     return out
 
@@ -110,13 +149,19 @@ def _swing(ctx: Dict[str, Any]) -> Dict[str, Any]:
     def _last(points):
         try:
             return round(float(points[-1].price), 4) if points else None
-        except Exception:                                    # noqa: BLE001
+        except Exception as exc:                             # noqa: BLE001
+            if _first("swing:last"):
+                logger.debug("entry_snapshot swing:last failed (%s: %s)",
+                             type(exc).__name__, exc)
             return None
 
     def _lvl(value):
         try:
             return round(float(value), 4) if value is not None else None
-        except Exception:                                    # noqa: BLE001
+        except Exception as exc:                             # noqa: BLE001
+            if _first("swing:level"):
+                logger.debug("entry_snapshot swing:level failed (%s: %s)",
+                             type(exc).__name__, exc)
             return None
 
     return {
@@ -172,6 +217,10 @@ def build(ctx: Dict[str, Any], direction: str) -> Dict[str, Any]:
         payload["anchor"] = anchor
 
     except Exception as exc:                                 # noqa: BLE001
+        if _first("build"):
+            logger.debug("entry_snapshot build failed (%s: %s) — payload "
+                         "carries err and the caller warns",
+                         type(exc).__name__, exc)
         payload["err"] = f"{type(exc).__name__}: {exc}"
 
     return payload
@@ -185,5 +234,8 @@ def to_json(ctx: Dict[str, Any], direction: str) -> str:
     try:
         return json.dumps(payload, separators=(",", ":"))
     except Exception as exc:                                 # noqa: BLE001
+        if _first("serialise"):
+            logger.debug("entry_snapshot serialise failed (%s: %s)",
+                         type(exc).__name__, exc)
         return json.dumps({"v": SCHEMA_VERSION, "at": ts_for_db(),
                            "err": f"serialise {type(exc).__name__}: {exc}"})

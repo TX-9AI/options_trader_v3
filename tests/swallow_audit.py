@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
-tests/swallow_audit.py — v1.0 — 2026-07-30   (backlog item W.2)
+tests/swallow_audit.py — v1.1 — 2026-08-04   (backlog item W.2)
+
+v1.1 — 2026-08-04 — `--since <snapshot.json>` NAMES the new silent handlers
+        instead of only counting them. The 2026-08-03 conductor warned "silent
+        handlers ROSE 83 -> 87 — a new swallow was added" and then required a
+        manual census to find out WHICH, every time it fires. An alarm that
+        cannot point at what it detected gets read more slowly each time, which
+        is the failure mode WORKING_AGREEMENT §17 is about. Identity is
+        (file, func, guards) — NOT the line number, which shifts on any edit
+        above it and would report the whole file as new.
 
 WHY THIS EXISTS
     The week of 2026-07-27 produced seven defects that shared one shape: code
@@ -140,6 +149,51 @@ def scan(root):
     return sorted(out, key=lambda h: (h["tier"], h["file"], h["line"]))
 
 
+def _ident(h):
+    """Stable identity for diffing. Line numbers move whenever anything above
+    them changes, so including one would report an entire file as new after a
+    single-line edit — the same false-alarm class the tool exists to prevent."""
+    return (h["file"], h["func"], h["guards"])
+
+
+def _report_new(hits, snapshot_path):
+    """Print the silent handlers present now and absent from the snapshot.
+
+    Exit 0 when nothing was added, 1 when something was — so a caller can gate
+    on the code, and the OUTPUT still names them either way. Prints its own
+    verdict rather than relying on the exit status alone (the 2026-08-01
+    laundered-green lesson).
+    """
+    try:
+        with open(snapshot_path) as fh:
+            prior = json.load(fh)
+    except Exception as exc:                                 # noqa: BLE001
+        print(f"  cannot read snapshot {snapshot_path}: "
+              f"{type(exc).__name__}: {exc}")
+        return 2
+
+    now_sil   = [h for h in hits if h["loudness"].startswith("SILENT")]
+    prior_sil = {_ident(h) for h in prior
+                 if str(h.get("loudness", "")).startswith("SILENT")}
+    added = [h for h in now_sil if _ident(h) not in prior_sil]
+
+    print(f"  silent now: {len(now_sil)}   in snapshot: {len(prior_sil)}   "
+          f"NEW: {len(added)}")
+    if not added:
+        print("  ✓ no silent handler added since the snapshot")
+        return 0
+    print(f"\n{'-' * 76}")
+    for h in sorted(added, key=lambda x: (x["tier"], x["file"], x["line"])):
+        bare = " [BARE]" if h["bare"] else ""
+        print(f"  TIER {h['tier'] + 1}  {h['file']}:{h['line']}  "
+              f"{h['func']}{bare}")
+        print(f"          guards: {h['guards']}")
+    print(f"{'-' * 76}")
+    print("  A new silent handler is not automatically a defect — but it is a "
+          "decision\n  someone should have made on purpose. Classify each one.")
+    return 1
+
+
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=os.path.dirname(
@@ -147,9 +201,16 @@ def main(argv):
     ap.add_argument("--critical", action="store_true")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--since", default=None, metavar="SNAPSHOT.json",
+                    help="name the silent handlers added since a prior --json "
+                         "snapshot (identity = file+func+guards, not line)")
     a = ap.parse_args(argv[1:])
 
     hits = scan(os.path.expanduser(a.root))
+
+    if a.since:
+        return _report_new(hits, os.path.expanduser(a.since))
+
     if a.json:
         print(json.dumps(hits, indent=1, sort_keys=True))
         return 0

@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.58
+# docs/BACKLOG.md — v3.59
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -59,7 +59,8 @@ BAKED is changing nothing about today's data.
 |---|---|---|---|---|
 | **N.7 — entry snapshot capture** | ✅ 08-04 | ✅ 08-04 `0f78329` | ⬜ **Mon Aug 10** | control suite **146 passed / 1 skipped, rc=0** (read 08-04); ALL CANARIES GREEN; PARITY == origin; tree clean |
 | **N.5 — exit ladder latency** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | control suite **158 passed / 1 skipped, rc=0**; ALL CANARIES GREEN |
-| **N.8 — no regime-flip exit on a stale book** | ✅ 08-04 | ⬜ | ⬜ **Mon Aug 10** | desk suite **165 passed / 1 skipped**; 7 tests; deliberate-failure check passed |
+| **N.8 — no regime-flip exit on a stale book** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | control suite green, ALL CANARIES GREEN |
+| **W.2a — today's own swallows made audible + the alarm made specific** | ✅ 08-04 | ⬜ | ⬜ **Mon Aug 10** | silent count back to the 08-03 baseline of **87**; `--since` proven on three cases |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1233,6 +1234,44 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK→DEPLOY]` **W.2a — ✅ 2026-08-04. THE NIGHTLY SWALLOW CENSUS FLAGGED MY
+  OWN CODE, AND IT WAS RIGHT. Plus: the alarm now NAMES what it found.**
+  The 08-03 conductor warned *"silent handlers ROSE 83 → 87 — a new swallow was
+  added"*. Running the census against today's HEAD returned **94**: N.7/N.5/N.8
+  had added **seven** silent handlers, one of them a bare `except: pass` in
+  TIER 1 (risk/orders/record) inside `place_exit_order` — the exact pattern the
+  operator named as the go-live risk, added hours after saying so.
+  **ALL SEVEN ARE NOW `logs only`, DEBUG, once per site per process.** Loud
+  enough that a broken capture is findable; quiet enough that it can never spam
+  a session or become the reason a fill goes unrecorded. Behaviour is otherwise
+  byte-identical — every handler still returns exactly what it returned.
+  Silent count is back to **87**, the 08-03 baseline, so the next rise means
+  something again.
+  **TWO SELF-INFLICTED LESSONS, both caught by re-running the census rather than
+  by reasoning:**
+  (1) My first fix routed every log through a `_quiet()` helper. The census still
+  counted all five SILENT, because **it reads the HANDLER BODY** — a log behind
+  an indirection is invisible to it. Logger calls are now inline and the helper
+  only throttles. *Hiding a log from the census would defeat the census.*
+  (2) My throttle for the exit-engine handler reused `self._live_exit_alerted`,
+  and the classifier promptly read that debug-only handler as **"pages"**. A
+  census you can mislead by choosing a variable name is not a census. Own set
+  now (`_telemetry_logged`).
+  **AND THE ALARM ITSELF WAS INCOMPLETE.** It counted the rise and stopped, so
+  every firing cost a manual census to find out WHICH. `swallow_audit` **v1.1**
+  gains `--since <snapshot.json>`, and `eod_conductor` **v1.13.0** names up to
+  five additions inline in the warning (tier-1 first) — the conductor already
+  had both snapshots loaded, so the diff was free.
+  **IDENTITY IS (file, func, guards), NOT THE LINE NUMBER.** A line moves
+  whenever anything above it changes, so a line-keyed diff would report an
+  entire file as new after a one-line edit — the same false-alarm class the
+  tool exists to prevent. Proven on three cases: identical snapshot → 0 new,
+  rc 0; a planted `except: pass` → named with its tier and guard, rc 1; a
+  comment inserted at the top of a file → still 0 new.
+  **⬜ NOT DONE, deliberately:** the other 87 are NOT triaged here. Most are
+  correctly silent (guarded optional imports, journal emits that must never kill
+  a trade). Triaging them is W.2 proper and stays scheduled where it is — this
+  item only covers the ones this thread created and the alarm that reports them.
 - `[DESK→DEPLOY]` **N.8 — ✅ BUILT 2026-08-04. NO REGIME-FLIP EXIT ON A STALE
   BOOK. Operator directive; bakes Mon Aug 10.** *"Do not execute a regime flip
   exit on stale... wait for the next non-stale tick to decide if it's going to
@@ -2763,6 +2802,14 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.59 — 2026-08-04 — W.2a: MY OWN SWALLOWS, AND AN ALARM THAT NAMES THEM.**
+  The nightly census caught seven silent handlers added by N.7/N.5/N.8 today,
+  including a bare `except: pass` in tier 1. All seven now log at DEBUG once per
+  site; silent count is back to the 08-03 baseline of 87. Two fixes to my own
+  fix, both found by re-running the census: a log behind a helper is invisible to
+  it, and reusing the alert set made a debug handler read as "pages". Also
+  `swallow_audit` v1.1 `--since` + `eod_conductor` v1.13.0 so the warning names
+  the additions instead of only counting them.
 - **v3.58 — 2026-08-04 — N.8 BUILT (no regime-flip exit on a stale book); THE
   CONDUCTOR TELEGRAM GAP CLOSED AND VERIFIED; TWO OF MY OWN READINGS RETRACTED.**
   N.8 closes the branch v5.1 left open — a held or fallen-back label could still

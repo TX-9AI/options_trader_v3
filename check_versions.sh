@@ -1,4 +1,8 @@
 #!/bin/bash
+# v4.12 — 2026-08-04 — main header pin v5.2 -> v5.3, and +3 W.2a canaries. The
+#         pin FAILED on its own during the W.2a pass, which is the point of
+#         having it: a version bump that nobody re-pins is how the pin sat at
+#         v4.8 while the fleet ran v5.0.
 # v4.11 — 2026-08-04 — +3 canaries for main v5.2 (no regime-flip exit on a
 #         stale book). The ABSENCE check is the one that matters: the gate is a
 #         single argument, so a stale sync reverting it produces NO error and NO
@@ -266,7 +270,7 @@ check "analysis/trade_readiness.py"      "readiness_would_fire"         "v1.0 wo
 check "analysis/trade_readiness.py"      "TR_DEARM_SLOPE"               "v1.0 slope de-arm knob (falling confluence disarms)"
 check "analysis/trade_readiness.py"      "0.5 \*\* (dt / TR_SLOPE_HALFLIFE_S)" "v1.0 dt-aware slope EMA (wall-clock, no tick counters)"
 check "main.py"                          "_readiness.assess_all(ctx, regime)" "v4.3 readiness hooked in the every-tick block"
-check "main.py"                          "main.py — options_trader v5.2" "v5.2 main header current (no regime-flip exit on a stale book)"
+check "main.py"                          "main.py — options_trader v5.3" "v5.3 main header current (W.2a: capture handler logs inside its own except)"
 check "analysis/trade_readiness.py"      "readiness_staged_pick"        "v1.1 staged-pick journaling (calm-vs-spike experiment)"
 check "analysis/trade_readiness.py"      "TR_CONV_HALFLIFE_S"           "v1.1 smoothed-conviction EMA knob"
 check "tests/readiness_digest.py"        "readiness_digest_"            "v1.0 nightly digest tool present (conductor phase 9 target)"
@@ -382,6 +386,11 @@ check "tests/test_exit_latency.py"       "does_not_restart_the_clock"   "v1.0 mu
 
 # ── v5.2 (2026-08-04) — NO REGIME-FLIP EXIT ON A STALE BOOK ──────────────
 check "main.py"                          "_rgm_stale"                   "v5.2 stale gate present on the exit path"
+
+# ── W.2a (2026-08-04) — this thread's own swallows, made audible ─────────
+check "tests/swallow_audit.py"           "def _report_new"              "v1.1 --since names the new silent handlers"
+check "execution/exit_engine.py"         "_telemetry_logged"            "v4.13 telemetry throttle has its OWN set (reusing the alert set misread as pages)"
+check "analysis/entry_snapshot.py"       "def _first"                   "v1.2 inline logging + throttle (a log behind a helper is invisible to the census)"
 check "tests/test_stale_no_regime_flip.py" "hard_close_still_fires"     "v1.0 proves PRICE exits still fire with no label"
 if grep -q "regime=regime.primary_regime if regime else None," main.py 2>/dev/null; then
     echo "  ✗ STALE:   main.py passes the label to the exit path unconditionally — regime-flip exits can fire on a stale book again (v5.1 form is back)"

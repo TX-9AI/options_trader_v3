@@ -1,5 +1,10 @@
 """
 execution/exit_engine.py — Strategy-aware exit logic for all options positions.
+v4.13 — 2026-08-04 — W.2 follow-on: the v4.12 throttle reused the ALERT set,
+        so the census classified a debug-only handler as "pages". Own set now.
+v4.12 — 2026-08-04 — W.2: the v4.11 escalation guard was a bare `except: pass`
+        inside place_exit_order — a SILENT swallow in the census's tier 1. Now
+        DEBUG, once per process. No behaviour change.
 v4.11 — 2026-08-04 — EXIT LADDER LATENCY (N.5, log-only). place_exit_order() —
         the ONE seam every close routes through, paper and live — now stamps
         submit and fill instants, counts the passes the close took, flags
@@ -288,6 +293,13 @@ logger = logging.getLogger(__name__)
 THETA_MIN_HOLD_MIN       = 20      # blackout: no theta exit in the first N min after entry
 THETA_MIN_GAIN_PCT       = 0.10    # gain floor: don't protect a gain smaller than this
 MINUTES_PER_CALENDAR_DAY = 1440    # theta greek is $/share/CALENDAR day (not the 390 RTH min)
+
+
+# W.2 — throttle keys for TELEMETRY-only debug lines. Deliberately NOT the
+# alert set: swallow_audit classifies a handler by what its body names, and
+# reusing `_live_exit_alerted` made a debug-only handler read as "pages". A
+# census you can mislead by choosing a variable name is not a census.
+_telemetry_logged: set = set()
 
 
 @dataclass
@@ -1536,8 +1548,15 @@ class ExitEngine:
         try:
             if hard_close_order_mode(now_et()) == "market":
                 record["_exit_escalated"] = 1
-        except Exception:                                    # noqa: BLE001
-            pass
+        except Exception as exc:                             # noqa: BLE001
+            # W.2: this sat in TIER 1 (risk/orders/record) as a bare `pass` —
+            # the census's whole purpose. DEBUG, once per process, so a broken
+            # escalation flag is findable without ever touching the close.
+            if "n5-escalation" not in _telemetry_logged:
+                _telemetry_logged.add("n5-escalation")
+                logger.debug("N.5 escalation flag failed (%s: %s) — telemetry "
+                             "only, the close is unaffected",
+                             type(exc).__name__, exc)
 
         # ── PAPER: simulate the fill at the last-known mark and CONFIRM it ──────
         # A simulated close always succeeds on the first pass — there is no

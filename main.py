@@ -1,5 +1,9 @@
 """
-main.py — options_trader v5.2
+main.py — options_trader v5.3
+v5.3 — 2026-08-04 — W.2: _capture_entry_snapshot's handler now logs inside the
+        except itself. It always warned, but the census reads the HANDLER BODY,
+        so it was counted SILENT — and a census that miscounts is worse than
+        none. No behaviour change.
 v5.2 — 2026-08-04 — NO REGIME-FLIP EXIT ON A STALE BOOK (operator directive).
         v5.1 blocked ENTRIES on stale and held the committed label, but a HELD
         label is still a label: `_evaluate_continuation` fires `regime_flip` on
@@ -790,6 +794,11 @@ def _capture_entry_snapshot(ctx: dict, record: dict, direction: str) -> bool:
         else:
             return True
     except Exception as exc:                                 # noqa: BLE001
+        # Logged HERE as well as in the warning below so the W.2 census can see
+        # this handler is not silent — it reads the except body, not the code
+        # that follows it.
+        logger.debug("entry_snapshot capture raised (%s: %s)",
+                     type(exc).__name__, exc)
         reason = f"raised:{type(exc).__name__}"
         payload = ""
 
