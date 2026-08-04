@@ -1,4 +1,8 @@
 #!/bin/bash
+# v4.27 — 2026-08-04 — +2 canaries for the condor plan-lifetime audit and the
+#         corrected DIRECTIONAL_ONLY comment. The stale comment claimed single
+#         names were skipped; the config has enabled every box since 07-14, and
+#         reading the comment instead of the value cost an investigation.
 # v4.26 — 2026-08-04 — candle_feed v3.11 collapses both RTH checks into ONE
 #         predicate, and pull_today_ohlc v1.5 restores its guard to ON now that
 #         the real cause (v3.10) is fixed. The canary counts CALLS to the
@@ -367,9 +371,24 @@ check "tests/pitchfork_filter_audit.py"  "ACCEL/held bar"               "v1.5 ex
 check "pull_today_ohlc.sh"               'BOT=$(systemctl is-active optionsbot' "v1.3 guard reads optionsbot, not just the clock"
 
 
+check "tests/condor_plan_lifetime.py"    "WOULD A PAUSE HAVE HELPED"    "v1.0 measures the fix's premise, not just the deaths"
+check "main.py"                          "DIRECTIONAL_ONLY is EMPTY fleet-wide"  "stale single-names comment corrected"
+
 # ── candle_feed v3.10 (2026-08-04) — the gate that ate the backfill ───────
 check "data/candle_feed.py"              "addendum v3.11"               "v3.11 header present"
 check "data/candle_feed.py"              "def _idle_outside_session"    "v3.11 ONE predicate for both RTH checks"
+
+# ── condor approach telemetry (2026-08-04) — item AI's measurement ────────
+check "strategy/iron_condor_strategy.py" "v-approachalways"             "approach reported on EVERY plan death"
+check "strategy/iron_condor_strategy.py" "def _approach"                "approach helper present"
+check "tests/condor_approach.py"         "GEOMETRY_MAX"                 "v1.0 verdict thresholds pre-registered"
+_n_ab=$(grep -c "self._journal_abandon(plan" strategy/iron_condor_strategy.py 2>/dev/null || echo 0)
+if [ "$_n_ab" = "2" ]; then
+    echo "  ✓ PRESENT: both plan-death paths emit condor_abandon (found $_n_ab)"
+else
+    echo "  ✗ STALE:   only $_n_ab of 2 plan-death paths emit condor_abandon — the CANCEL branch is 23 of 23 deaths, so losing it makes item AI unmeasurable again"
+    MISS=$((MISS+1))
+fi
 check "pull_today_ohlc.sh"               'OT_PULL_RTH_GUARD:-1'         "v1.5 guard back ON by default (v3.10 fixed the real cause)"
 check "tests/test_candle_feed_once_exempt.py" "both_gates_go_through_the_one_predicate"  "v1.0 BOTH gates pinned to the shared predicate"
 _n_once=$(grep -c "self._idle_outside_session(once)" data/candle_feed.py 2>/dev/null || echo 0)

@@ -1532,6 +1532,66 @@ Per-strategy entry mechanics, gates and thresholds are in
 
 <!-- ================= Iron Condor (current, 2026-07-28) ================= -->
 
+##### Iron Condor — the PLAN LIFECYCLE, and why 23 plans produced 0 legs
+
+Added 2026-08-04 from a fleet-wide measurement. A condor never trades directly:
+it **plans**, then waits for price to reach a trigger. Everything below is about
+the gap between those two.
+
+**The plan's reject ladder** (`IronCondorStrategy.decide()`), in order — note
+which rungs are silent, because the absence of a log line is itself the signal:
+
+```
+1. outside 11:11-14:00 ET                       silent
+2. a plan already exists                        silent
+3. regime != RANGING                            silent   <- the common one
+4. VIX >= VIX_BUTTERFLY_DISABLE                 LOGS
+5. expected move <= 0                           DEBUG
+6. no liquid strike beyond the dual floor       LOGS
+```
+
+Upstream in `main.py` the box must also be **flat** (`attempt_new_entry` is
+gated on no open position) and **nothing else may have fired that tick** —
+condor is Priority 4, behind ORB, sweep, continuation and butterfly.
+
+**Both death paths, and the asymmetry that matters.** A live plan dies either at
+the 14:00 cutoff or on a directional label:
+
+- `CANCELLED before Leg 1` — regime flipped to TRENDING_BULL / TRENDING_BEAR /
+  BREAKOUT_VOLATILE. **Sets `self._plan = None`: the plan is destroyed, not
+  paused.** A later return to RANGING must build a new one.
+- Leg 2 does the opposite — it **PAUSES** on a directional tick. v3.2
+  (2026-07-23) made that change explicitly because *"previously this set
+  COMPLETE, permanently killing the structure on a single non-RANGING tick"* —
+  and its own comment records that **Leg 1 never got the same treatment**.
+
+**THE 2026-08-04 MEASUREMENT — 23 plans, 23 deaths, 0 legs, fleet-wide.**
+Cutoff fired **zero** times; every plan died on the cancel branch. But plan
+lifetimes ran **1-94 minutes, median ~30**, several 88-94 — so these plans were
+alive across most of the window. **Price never reached a trigger on any of
+them.** That is not label churn cutting plans short; it is the trigger sitting
+where price did not go. `nofloor=0` fleet-wide, so strike selection was not the
+constraint either.
+
+**What that leaves open — item AI, and the two answers need opposite fixes.**
+Either `CONDOR_TRIGGER_APPROACH = 0.65` is simply too far (a parameter to fit),
+or the MIDPOINT the distance is measured from is wrong (the anchor — AI's
+argument for a sloped median line rather than the Bollinger midline). Until
+2026-08-04 nothing could tell them apart: the approach telemetry existed but
+lived **only on the cutoff path**, which never fires.
+
+**Now instrumented on BOTH paths** (`iron_condor_strategy` v-approachalways):
+every dead plan logs how far price travelled toward each trigger as a fraction
+of the distance it needed, and emits a `condor_abandon` journal row.
+`tests/condor_approach.py` reads them and returns a pre-registered verdict —
+p90 under 40% is GEOMETRY, at or above 60% is PARAMETER, in between is neither
+established. It measures the **closer** side, because a plan needs only one leg
+to fire.
+
+**What it does not measure:** premium. Reaching a trigger is not earning a
+credit, and a nearer strike collects less. This bounds whether the entry is
+reachable — the side that had been failing silently.
+
 ##### Iron Condor — current model (supersedes the subsection above)
 
 **Strike selection — dual floor.** The short strike must clear BOTH

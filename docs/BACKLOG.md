@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.73
+# docs/BACKLOG.md — v3.74
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -70,7 +70,8 @@ BAKED is changing nothing about today's data.
 | **BF.1 — the RTH guard was eating the backfill** | ✅ 08-04 | ⬜ | ⬜ **tonight's reflash** | 8/8 guard states proven; 2 sessions of sat-out tape at stake |
 | **BF.2 — guard OFF by default (operator directive)** | ✅ 08-04 | ⬜ | ⬜ **tonight's reflash** | v1.4, both modes proven |
 | **BF.3 — THE REAL CAUSE: `--once` hung on the v3.9 RTH gate** | ✅ 08-04 | ✅ 08-04 | ✅ baked | **CONFIRMED WORKING on the box** |
-| **BF.4 — session guard reconfigured: one predicate, guard back ON** | ✅ 08-04 | ⬜ | ⬜ **next bake** | suite **229 passed / 1 skipped**; 8/8 pull states, 6 feed tests |
+| **BF.4 — session guard reconfigured: one predicate, guard back ON** | ✅ 08-04 | ⬜ | ⬜ **next bake** | suite 229 passed; 8/8 pull states |
+| **AI.1 — condor approach telemetry on every plan death** | ✅ 08-04 | ⬜ | ⬜ **next bake** | suite **239 passed / 1 skipped**; 10 tests; item AI becomes answerable |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1244,6 +1245,58 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK→DEPLOY]` **AI.1 — ✅ 2026-08-04. WHY THE CONDOR TOOK NOTHING: 23 PLANS,
+  23 DEATHS, 0 LEGS — AND THE ONE INSTRUMENT THAT EXPLAINS IT WAS UNREACHABLE.**
+  **THE MEASUREMENT (fleet-wide, date-scoped):** plans **23** across 11 symbols ·
+  `nofloor=0` · `vix_blk=0` · **cutoff fired 0 times** · every death on
+  `CANCELLED before Leg 1`.
+  **AND THE LIFETIMES KILL THE OBVIOUS EXPLANATION.** 1-94 minutes, **median
+  ~30**, several 88-94. My first read — plans dying to one-tick label churn —
+  is WRONG. These plans were alive across most of the 11:11-14:00 window and
+  **price never came within the trigger distance once, on any of them.** The
+  cancel is incidental; the plan was never going to fire before it.
+  **THAT IS ITEM AI, now with a number behind the mechanism:** *"0.65 of that
+  distance lands well OUTSIDE the band. So the plan needed a breakout-sized move
+  during RANGING, a regime defined by the absence of one."*
+  **THE INSTRUMENT EXISTED AND WAS BEHIND THE WRONG DOOR.**
+  `max_price_seen` / `min_price_seen` are tracked from a plan's first tick and
+  `_abandon_past_cutoff` reported the approach fractions — **only on the cutoff
+  path, which fires zero times.** So the fleet's actual behaviour was
+  unmeasurable while the code to measure it sat two branches away.
+  **BUILT:** `iron_condor_strategy` **v-approachalways** — `_approach()` /
+  `_approach_text()` / `_journal_abandon()`; BOTH death paths now log the same
+  line and emit a `condor_abandon` journal row (one per dead plan, joinable
+  offline instead of grepped). `tests/condor_approach.py` **v1.0** reads them.
+  **THE VERDICT IS PRE-REGISTERED IN THE TOOL, not chosen after the data:**
+  `p90 approach < 40%  -> GEOMETRY` (no value of CONDOR_TRIGGER_APPROACH reaches
+  it; the ANCHOR is wrong — AI's midpoint, the pitchfork/VWAP work).
+  `p90 >= 60%          -> PARAMETER` (fit 0.65 from the distribution).
+  `in between          -> NEITHER ESTABLISHED` — say so rather than pick.
+  It takes the **closer** side, because a plan needs only ONE leg to fire;
+  averaging both would report 45% for a plan whose call side reached 80%.
+  **⚠️ A LOW NUMBER WOULD NOT MEAN "LOWER THE TRIGGER".** The un-floored version
+  sold with no minimum distance and **bled P&L for ~3 weeks**. Reaching more
+  triggers by selling nearer the middle re-runs a known-losing experiment. That
+  is exactly why the verdict says ANCHOR rather than parameter below 40%.
+  **⬜ SECONDARY, and it is a real asymmetry:** Leg 2 **pauses** on a directional
+  tick; Leg 1 **destroys the plan** (`self._plan = None`). v3.2 fixed precisely
+  this for Leg 2 on 2026-07-23 and its own comment says *"Leg 1 never got the
+  same treatment."* Worth revisiting — but **not on this evidence**, since the
+  measurement now says the cancel is not what cost the fires.
+  **⬜ ALSO OPEN:** `cutoff=0` fleet-wide while MU held a plan past 13:50 ET. The
+  cutoff branch lives inside `check_leg_triggers()`, which only runs when the box
+  is FLAT — so a plan held behind an open directional position never formally
+  expires and just persists to the next-day reset. Plan-expiry accounting is
+  unreliable; do not read `cutoff` counts as plan lifetimes.
+  **⬜ NEXT:** run `python3 tests/condor_approach.py` after a session with the
+  new rows. Nothing to read before the bake — earlier sessions reported only the
+  regime, which IS the gap.
+  **CORRECTED IN THE SAME PASS:** `main.py`'s condor comment claimed the plan is
+  *"Skipped for directional-only instruments (single names)"*. **False since the
+  2026-07-14 directive** set `FULL_STRATEGY_INSTRUMENTS = set(STRIKE_INCREMENTS)`
+  — every box is eligible. That stale comment sent this investigation down the
+  wrong path for a turn.
+
 - `[DESK→DEPLOY]` **BF.4 — ✅ 2026-08-04. THE SESSION GUARD, RECONFIGURED THE WAY
   THE OPERATOR ASKED: reports and backfills pull outside RTH; fleet maintenance
   still cannot bombard the feed.**
@@ -3398,6 +3451,14 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.74 — 2026-08-04 — AI.1: THE CONDOR'S APPROACH TELEMETRY WAS BEHIND A DOOR
+  THAT NEVER OPENS.** 23 plans, 23 deaths, 0 legs fleet-wide — and the approach
+  measurement existed only on the cutoff path, which fired zero times. Plan
+  lifetimes of 1-94 minutes (median ~30) rule out label churn: price never
+  reached a trigger on any plan. Both death paths now report approach and emit a
+  `condor_abandon` row; `tests/condor_approach.py` returns a pre-registered
+  GEOMETRY/PARAMETER verdict for item AI. Also corrected main.py's stale
+  directional-only comment, which misdirected the investigation.
 - **v3.73 — 2026-08-04 — BF.4: THE SESSION GUARD RECONFIGURED AGAINST PURPOSE.**
   candle_feed v3.11 collapses both RTH checks into one predicate named for what
   it protects; pull_today_ohlc v1.5 restores its guard to ON now that v3.10 fixed

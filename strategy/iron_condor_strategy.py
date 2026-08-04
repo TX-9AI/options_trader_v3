@@ -1,4 +1,23 @@
 """
+v-approachalways — 2026-08-04 — APPROACH TELEMETRY ON EVERY PLAN DEATH.
+  The numbers already existed and were UNREACHABLE. `max_price_seen` /
+  `min_price_seen` are tracked from a plan's first tick and
+  `_abandon_past_cutoff` reported them — but only on the CUTOFF path.
+  Measured fleet-wide 2026-08-04: 23 plans, 23 deaths, **cutoff fired ZERO
+  times**; every plan died on CANCELLED-before-Leg-1, which reported nothing
+  but the regime it flipped to. The one instrument that answers "how close did
+  price get?" sat behind the one door that never opens.
+  WHAT IT UNBLOCKS — item AI, and the two answers need OPPOSITE fixes:
+  an approach fraction near ZERO means the trigger sits where price never goes
+  on this tape (the MIDPOINT is wrong — pitchfork/VWAP anchor work); near 0.6
+  means it is merely a little too far (CONDOR_TRIGGER_APPROACH is a parameter
+  to fit). A plan that reports only its cause of death cannot tell them apart.
+  Both death paths now log the same line and emit a `condor_abandon` journal
+  row, so the fleet answer is a JOIN rather than a night of greps.
+  WHY THE LIFETIME DATA MATTERS FOR READING IT: the same session showed plan
+  lifetimes of 1-94 minutes, median ~30, several running 88-94. These plans
+  were ALIVE across most of the window — so a low approach is not "no time",
+  it is "price never went there".
 v-declineloud — 2026-07-31 — AC: the "no liquid strike beyond dual floor" path
   was a SILENT return. On 2026-07-30 `grep -c "no liquid strike"` returned 0
   across all history and was read as "the dual floor never rejects" — it
@@ -474,6 +493,67 @@ class IronCondorStrategy(BaseOptionsStrategy):
         )
         return plan
 
+    # ── v3.9 — APPROACH TELEMETRY ON EVERY DEATH, NOT JUST THE CUTOFF ────────
+    # The numbers below already existed, and were unreachable. `max_price_seen`
+    # / `min_price_seen` are tracked from a plan's first tick, and
+    # _abandon_past_cutoff reported them — but ONLY on the cutoff path. Measured
+    # 2026-08-04 fleet-wide: 23 plans, 23 deaths, **cutoff fired ZERO times**.
+    # Every plan died on the CANCELLED-before-Leg-1 branch, which reported
+    # nothing but the regime it flipped to. The one instrument that could answer
+    # "how close did price get?" was behind the one door that never opens.
+    # THE QUESTION IT UNBLOCKS is item AI: whether CONDOR_TRIGGER_APPROACH=0.65
+    # is a parameter to fit or the MIDPOINT is wrong. Those need opposite fixes,
+    # and a plan that reports only its cause of death cannot tell them apart.
+    @staticmethod
+    def _approach(plan, chain, current_price) -> dict:
+        """How far price travelled toward each trigger, as a fraction of the
+        distance it needed. 1.0 means the trigger was reached.
+
+        Denominator is trigger-minus-spot-at-plan, NOT the band width: the
+        question is how much of the REQUIRED journey happened. A fraction near
+        zero says the trigger sits somewhere price never goes on this tape,
+        which is a geometry finding; a fraction near 0.6 says the trigger is
+        merely a little too far, which is a parameter finding.
+        """
+        s0 = plan.underlying_at_decision or current_price
+        cd = plan.call_trigger_price - s0
+        pd = s0 - plan.put_trigger_price
+        return {
+            "spot_at_plan": round(s0, 2),
+            "call_approach": round((plan.max_price_seen - s0) / cd, 4) if cd > 0 else None,
+            "put_approach": round((s0 - plan.min_price_seen) / pd, 4) if pd > 0 else None,
+            "max_seen": round(plan.max_price_seen, 2),
+            "min_seen": round(plan.min_price_seen, 2),
+            "call_trigger": round(plan.call_trigger_price, 2),
+            "put_trigger": round(plan.put_trigger_price, 2),
+            "short_put": plan.short_put_strike,
+            "short_call": plan.short_call_strike,
+            "em_at_plan": round(plan.expected_move or 0.0, 2),
+            "decided_at": plan.decided_at,
+        }
+
+    @staticmethod
+    def _approach_text(plan, a: dict) -> str:
+        def _p(v):
+            return "n/a" if v is None else f"{v:.0%}"
+        return (f"approach call {_p(a['call_approach'])} (max ${a['max_seen']:.2f} "
+                f"vs trig ${a['call_trigger']:.2f}) · put {_p(a['put_approach'])} "
+                f"(min ${a['min_seen']:.2f} vs trig ${a['put_trigger']:.2f}) · "
+                f"spot@plan ${a['spot_at_plan']:.2f} · strikes "
+                f"{a['short_put']:g}/{a['short_call']:g}")
+
+    @staticmethod
+    def _journal_abandon(plan, a: dict, cause: str) -> None:
+        """One row per dead plan, so the fleet's answer is a JOIN and not a
+        night of greps. Lazy import and fully swallowed: a journal failure must
+        never reach the trading loop (this module has never imported the
+        journal, and it must not start being able to break it)."""
+        try:
+            from analysis.signal_journal import journal
+            journal("condor_abandon", cause=cause, approach=a)
+        except Exception:                                          # noqa: BLE001
+            pass
+
     def _abandon_past_cutoff(self, plan, chain, current_price):
         """Close out an un-filled plan at the cutoff — loudly, with numbers.
 
@@ -484,25 +564,10 @@ class IronCondorStrategy(BaseOptionsStrategy):
         re-checked. A short at 1.0x EM when EM was $5.00 is at 1.25x EM if EM
         decays to $4.00 — which would FAIL the 1.2x guardrail if planned fresh.
         """
-        _s0 = plan.underlying_at_decision or current_price
-        _em0 = plan.expected_move or 0.0
-        try:
-            _em1 = self._expected_move_from_straddle(chain, current_price)
-        except Exception:                                          # noqa: BLE001
-            _em1 = 0.0
-        _cd = plan.call_trigger_price - _s0
-        _pd = _s0 - plan.put_trigger_price
-        _ca = ((plan.max_price_seen - _s0) / _cd) if _cd > 0 else 0.0
-        _pa = ((_s0 - plan.min_price_seen) / _pd) if _pd > 0 else 0.0
-        logger.info(
-            f"Condor: past cutoff, Leg 1 never fired — abandoned | "
-            f"approach call {_ca:.0%} (max ${plan.max_price_seen:.2f} vs trig "
-            f"${plan.call_trigger_price:.2f}) · put {_pa:.0%} (min "
-            f"${plan.min_price_seen:.2f} vs trig ${plan.put_trigger_price:.2f})"
-            f" · spot@plan ${_s0:.2f} · EM ${_em0:.2f}->${_em1:.2f} "
-            f"({((_em1 / _em0 - 1) * 100) if _em0 else 0:+.0f}%) · strikes "
-            f"{plan.short_put_strike:g}/{plan.short_call_strike:g}"
-        )
+        _a = self._approach(plan, chain, current_price)
+        logger.info("Condor: past cutoff, Leg 1 never fired — abandoned | %s",
+                    self._approach_text(plan, _a))
+        self._journal_abandon(plan, _a, "cutoff")
         plan.state = CondorState.CANCELLED
         self._plan = None
         return None
@@ -558,10 +623,16 @@ class IronCondorStrategy(BaseOptionsStrategy):
                         f"non-directional — plan alive, awaiting trigger"
                     )
                     return None
+                # v3.9: report the APPROACH here too. This is the branch that
+                # actually fires — 23 of 23 deaths on 2026-08-04 — so reporting
+                # only the regime made the fleet's real behaviour unmeasurable.
+                _a = self._approach(plan, chain, current_price)
                 logger.info(
-                    f"Condor CANCELLED before Leg 1: regime flipped to "
-                    f"{regime.primary_regime} (directional)"
+                    "Condor CANCELLED before Leg 1: regime flipped to %s "
+                    "(directional) | %s",
+                    regime.primary_regime, self._approach_text(plan, _a)
                 )
+                self._journal_abandon(plan, _a, "regime_flip")
                 plan.state = CondorState.CANCELLED
                 self._plan = None
                 return None

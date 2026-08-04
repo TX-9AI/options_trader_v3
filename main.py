@@ -1265,7 +1265,15 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     # Priority 4: Iron Condor — legged entry, RANGING fallback when no GEX pin.
     if not _iron_condor_strategy.has_active_plan:
         # Try to make a condor plan if no other signal fired and regime is RANGING.
-        # Skipped for directional-only instruments (single names).
+        # NOTE (2026-08-04): DIRECTIONAL_ONLY is EMPTY fleet-wide — config.py:220
+        # set FULL_STRATEGY_INSTRUMENTS = set(STRIKE_INCREMENTS) on the
+        # 2026-07-14 operator directive ("neutral strategies enabled FLEET-WIDE
+        # for data collection"), so EVERY box is condor-eligible. The old
+        # comment here read "Skipped for directional-only instruments (single
+        # names)" and was false for three weeks; it cost an investigation on
+        # 2026-08-04 that concluded only SPX and QQQ could plan condors. The
+        # check stays — it is correct if the set is ever narrowed again — but
+        # do not read it as describing today's fleet.
         if (signal is None and
                 not DIRECTIONAL_ONLY and
                 regime.primary_regime == Regime.RANGING):
