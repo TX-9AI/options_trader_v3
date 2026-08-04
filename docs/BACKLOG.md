@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.51
+# docs/BACKLOG.md — v3.52
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -44,6 +44,18 @@ Jul 30).
 ---
 
 ## PART 1 — THE SCHEDULE (open items, in accomplishment order)
+
+> **ID SPLIT 2026-08-04 (v3.52).** `A2.6` and `L1.9` were each TWO DIFFERENT
+> ITEMS sharing one ID. `evm_status` keys on the ID token, so each pair counted
+> twice in BAC/PV/overdue AND — the reason this is a defect and not untidiness —
+> marking either one ✅ would have satisfied the parser for BOTH, showing work
+> resolved that nobody did. Split to `A2.6a`/`A2.6b` and `L1.9a`/`L1.9b`.
+> **NOT YET DISAMBIGUATED:** bare `A2.6` and `L1.9` references elsewhere in this
+> file (around lines 331, 391, 2808, 2836) predate the split and have not been
+> re-pointed — they are flagged rather than guessed at, because the surrounding
+> text does not say which member of the pair it means. Resolve them the next
+> time either item is worked, and treat the two as separate until verified.
+
 
 **TAGS — what each open item actually requires.** Grep one to fill a session:
 `[DESK]` self-contained, no fleet, no data wait — workable ANY day, today included.
@@ -1056,7 +1068,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   (flat midline = pin conditions), **condor is genuinely ambiguous** — low
   realised vol against still-elevated IV is attractive, but a paused trend
   RESOLVES, and a condor sold into a coiled spring is short the resolution.
-- `[DESK]` **A2.6 — ⬆️ PROMOTED 2026-08-01: BOTH TOOLS ARE BUILT, TESTED AND
+- `[DESK]` **A2.6a — ⬆️ PROMOTED 2026-08-01: BOTH TOOLS ARE BUILT, TESTED AND
   SHIPPED (380a1bd). Startable the moment AM rebuilds the corpus — no sessions
   to wait for.** Tag moved DESK·DATA -> DESK: the gap is backfillable, so the
   only remaining dependency is our own regen, not the calendar.
@@ -1096,7 +1108,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   strategy, before any of it touches a gate. Hold open the outcome that the
   state is real, correctly identified, and still has no edge.
   *Original framing follows.*
-- `[DESK]` **A2.6 — `gap_pct`: the overnight gap is never MEASURED, and
+- `[DESK]` **A2.6b — `gap_pct`: the overnight gap is never MEASURED, and
   unlike everything else this week it is fully BACKFILLABLE.** Operator's point,
   2026-08-01: *"the gaps you see overnight from previous close to current open
   are big and meaningful, and they have to be reflected somewhere."*
@@ -1195,7 +1207,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   live capital. Every ramp bound, every acceptance check and the entire L1.11
   calibration track are fitted against the current formulation. Ship A2.2's
   targeted fix for go-live; take A2.3 in September with time to re-fit.
-- `[DESK]` **L1.9 bookmark tester proof.** Run against copies of real `ohlc/<date>/`
+- `[DESK]` **L1.9a — bookmark tester proof.** Run against copies of real `ohlc/<date>/`
   folders; prove byte-inert on the diary for warm-irrelevant days and prove the
   EOD conductor chain is untouched. The conductor is finally flawless — it stays
   that way.
@@ -1233,7 +1245,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
-- `[DESK]` **L1.9 — Graft the proven bookmark onto `validate_regime.sh`**, then run
+- `[DESK]` **L1.9b — Graft the proven bookmark onto `validate_regime.sh`**, then run
   `regime_backfill --rebuild` to re-score all dated diary rows warm. DONE = the
   diary reads TRENDING honestly on the days live boxes did.
   **HOW:** graft = the proven copy from Aug 2 replaces the live script (full-file,
@@ -2538,6 +2550,12 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.52 — 2026-08-04 — DUPLICATE IDs SPLIT.** `A2.6` and `L1.9` were each two
+  distinct items under one ID — a register defect, not a formatting one: the EVM
+  parser keys on the token, so a single ✅ would have closed both and credited
+  work nobody did. Now `A2.6a`/`A2.6b` and `L1.9a`/`L1.9b`. Bare cross-references
+  elsewhere in the file are flagged unresolved rather than guessed; the pairs are
+  treated as separate items until verified.
 - **v3.51 — 2026-08-04 — THE TWO-POPULATION SPLIT, AND FIVE MEASUREMENT
   DEFECTS CLEARED.** The operator's reframing governs the pre-go-live work from
   here: separate trades that were NEVER favorable — not for one tick, so there
