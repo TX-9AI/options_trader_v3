@@ -1,5 +1,30 @@
 """
-analysis/pitchfork.py — options_trader_v3 — v1.1
+analysis/pitchfork.py — options_trader_v3 — v1.2
+
+v1.2 — 2026-08-04 — §4.3.5 UNIQUENESS READING, SHIPPED DARK (default OFF).
+        AW measured hourly-fork coverage at 10.1% mean / 5.3% MEDIAN / 0.0% min
+        across 29 symbols, and SEPARATION is 39.8% of all rejections — by far
+        the largest single cause. v1.1 read §4.3.5 as take-the-last-three-and-
+        test: `alt[-3:]`, and if any filter rejected it, no fork at all. The
+        other reading is scan back for the most recent triple that SATISFIES
+        the filters. Both are readings of the same sentence; neither changes a
+        threshold, so this does NOT touch §10's overfitting surface.
+        NO NEW PARAMETER, and the reason is worth stating because it is what
+        makes the scan legitimate: RECENCY (R bars, measured on CONFIRMATION)
+        already bounds how far back a triple can qualify, and `alt` is ordered
+        in time, so once a candidate fails RECENCY every older candidate fails
+        it too. The scan terminates on the existing filter rather than on a
+        depth limit somebody would have to choose.
+        SHIPPED OFF (`uniqueness_scan=False`) so the two readings can be run
+        head-to-head on identical tape before either becomes the default —
+        the fork is weight 0 and gates nothing, so there is no cost to
+        measuring first. `last_scan_depth()` reports how many candidates were
+        tried, which is how the audit tells a scan that helped from one that
+        merely ran.
+        Look-ahead is unaffected: candidates are drawn from the same
+        already-confirmed pivot list, so scanning back can only reach pivots
+        that were knowable at now_idx.
+v1.1 — 2026-08-01 — REJECTION REASONS. build_fork returned a bare None, so when
 
 PF.1 CONSTRUCT. Andrews pitchfork geometry. Weight 0. Consumed by nothing,
 gating nothing. See docs/WHITEPAPER_pitchfork_overlay.md for the full design.
@@ -118,11 +143,18 @@ RECENCY_BARS     = 40      # R — P2's CONFIRMATION must be within R bars of no
 # in the geometry reads it, and it is deliberately NOT part of the return
 # contract, so no caller can start branching on it.
 _LAST_REJECT: Optional[str] = None
+_LAST_SCAN_DEPTH: int = 0
 
 
 def last_reject_reason() -> Optional[str]:
     """Reason the most recent build_fork() returned None, or None on success."""
     return _LAST_REJECT
+
+
+def last_scan_depth() -> int:
+    """How many candidate triples the last build_fork tried. 1 = the v1.1
+    behaviour (newest triple only). >1 means the §4.3.5 scan went back."""
+    return _LAST_SCAN_DEPTH
 
 
 def _reject(reason: str):
@@ -293,7 +325,8 @@ def build_fork(symbol: str, df: pd.DataFrame, timeframe: str, atr: float,
                variant: str = DEFAULT_VARIANT,
                now_idx: Optional[int] = None,
                significance_atr: float = SIGNIFICANCE_ATR,
-               recency_bars: int = RECENCY_BARS) -> Optional[Fork]:
+               recency_bars: int = RECENCY_BARS,
+               uniqueness_scan: bool = False) -> Optional[Fork]:
     """Build the one qualifying fork for (symbol, timeframe), or None.
 
     Pure function of the frame — same bars in, same fork out, always. `atr` is
@@ -319,7 +352,38 @@ def build_fork(symbol: str, df: pd.DataFrame, timeframe: str, atr: float,
     if len(alt) < 3:
         return _reject("FEWER_THAN_3_ALTERNATING_PIVOTS")
 
-    p0, p1, p2 = alt[-3], alt[-2], alt[-1]
+    # §4.3.5 — v1.1 read this as "take the last three and test". v1.2 can also
+    # scan back for the most recent triple that SATISFIES the filters. Ordered
+    # newest-first; RECENCY terminates the walk, so no depth parameter exists.
+    candidates = [(alt[i - 2], alt[i - 1], alt[i])
+                  for i in range(len(alt) - 1, 1, -1)]
+    if not uniqueness_scan:
+        candidates = candidates[:1]
+
+    global _LAST_SCAN_DEPTH
+    _LAST_SCAN_DEPTH = 0
+    first_reject: Optional[str] = None
+    for depth, (p0, p1, p2) in enumerate(candidates, start=1):
+        _LAST_SCAN_DEPTH = depth
+        fork = _qualify(symbol, df, timeframe, atr, variant, k, now_idx,
+                        significance_atr, recency_bars, p0, p1, p2,
+                        scanned=(depth > 1))
+        if fork is not None:
+            return fork
+        if first_reject is None:
+            first_reject = _LAST_REJECT
+        # alt is time-ordered, so an older candidate can only be less recent.
+        if _LAST_REJECT == "RECENCY":
+            break
+    return _reject(first_reject or "FEWER_THAN_3_ALTERNATING_PIVOTS")
+
+
+def _qualify(symbol, df, timeframe, atr, variant, k, now_idx,
+             significance_atr, recency_bars, p0, p1, p2, scanned=False):
+    """Run the §4.3 filter cascade on ONE candidate triple. Returns a Fork or
+    None; on None the reason is in `_LAST_REJECT`. Split out of build_fork in
+    v1.2 so the same cascade serves both readings of §4.3.5 — the filters
+    themselves are byte-for-byte what v1.1 applied."""
     passed: List[str] = []
 
     # 3. structural validity — bullish needs P2 > P0, bearish P2 < P0
@@ -351,7 +415,7 @@ def build_fork(symbol: str, df: pd.DataFrame, timeframe: str, atr: float,
     if (now_idx - p2.confirmed_idx) > recency_bars:
         return _reject("RECENCY")
     passed.append("recency")
-    passed.append("uniqueness")           # by construction: the last three
+    passed.append("uniqueness_scan" if scanned else "uniqueness")
 
     origin_idx, origin_price = _origin(p0, p1, variant)
     m_idx = (p1.idx + p2.idx) / 2.0
