@@ -1,4 +1,14 @@
 #!/bin/bash
+# v4.9 — 2026-08-04 — +7 canaries for the ENTRY SNAPSHOT (main v5.1 /
+#         trade_logger v3.10 / analysis/entry_snapshot.py v1.0), and the stale
+#         main-header pin corrected: it still read v4.8 while the fleet ran
+#         v5.0, so the one check whose whole job is "is main current" had been
+#         green on a two-version drift. Now pinned to v5.1.
+#         The load-bearing canary is the ABSENCE one on the condor call sites.
+#         The capture is log-only, so if a stale sync drops the ctx argument the
+#         condor legs simply stop being captured — no error, no alert, and the
+#         column keeps filling from the directional path, which is exactly what
+#         a working capture looks like. Nothing else in the repo can see that.
 # v4.8 — 2026-07-30 — +4 canaries for main v4.8: the opening warm-up now logs
 #         INFO rather than a WARNING that fired on 13/15 boxes every morning for
 #         designed behaviour, and regime_log/trades carry the engine that
@@ -243,7 +253,7 @@ check "analysis/trade_readiness.py"      "readiness_would_fire"         "v1.0 wo
 check "analysis/trade_readiness.py"      "TR_DEARM_SLOPE"               "v1.0 slope de-arm knob (falling confluence disarms)"
 check "analysis/trade_readiness.py"      "0.5 \*\* (dt / TR_SLOPE_HALFLIFE_S)" "v1.0 dt-aware slope EMA (wall-clock, no tick counters)"
 check "main.py"                          "_readiness.assess_all(ctx, regime)" "v4.3 readiness hooked in the every-tick block"
-check "main.py"                          "main.py — options_trader v4.8" "v4.8 main header current (opening gap declared + engine stamped)"
+check "main.py"                          "main.py — options_trader v5.1" "v5.1 main header current (entry-snapshot hook; was pinned at v4.8 while the fleet ran v5.0)"
 check "analysis/trade_readiness.py"      "readiness_staged_pick"        "v1.1 staged-pick journaling (calm-vs-spike experiment)"
 check "analysis/trade_readiness.py"      "TR_CONV_HALFLIFE_S"           "v1.1 smoothed-conviction EMA knob"
 check "tests/readiness_digest.py"        "readiness_digest_"            "v1.0 nightly digest tool present (conductor phase 9 target)"
@@ -338,6 +348,25 @@ check "execution/exit_engine.py"         "condor_tp pnl="               "v4.1 ti
 check "risk/risk_manager.py"             "leg_budget"                   "v3.2 condor vertical sized at FULL budget (was half)"
 check "analysis/chain_snapshot.py"       "def snapshot"                 "chain archival module present (full 0DTE chain -> .jsonl.gz)"
 check "analysis/chain_snapshot.py"       "vega"                         "chain archival keeps gamma+vega (signal_journal drops them)"
+
+# ── ENTRY SNAPSHOT (2026-08-04) — the TC.2 exit-counterfactual precursor ──
+# Log-only, which is precisely why it needs canaries: nothing downstream fails
+# when it stops. A missing capture produces NULLs that look identical to a quiet
+# session, and the bake-off it feeds cannot be run on rows banked without it.
+check "analysis/entry_snapshot.py"       "SCHEMA_VERSION"               "v1.0 entry-snapshot module present"
+check "analysis/entry_snapshot.py"       "_nearest_unfilled_fvg_in_favor"  "v1.0 anchor uses the exit engine's OWN finder (one lineage, not a copy)"
+check "database/trade_logger.py"         "def set_entry_snapshot"       "v3.10 snapshot writer present"
+check "database/trade_logger.py"         "return cur.rowcount > 0"      "v3.10 writer reports a REAL write (a no-op UPDATE must not read as success)"
+check "main.py"                          "_capture_entry_snapshot"      "v5.1 capture hooked on the directional entry path"
+check "tests/test_entry_snapshot.py"     "byte_identical_to_the_trails_own_answer"  "v1.0 parity test present (fails if the trail and the snapshot diverge)"
+# ABSENCE — the condor legs must still be handed ctx. Without it the helper
+# degrades to no capture BY DESIGN, so the failure is invisible by construction.
+if grep -q "_execute_condor_leg(leg_signal, state)" main.py 2>/dev/null; then
+    echo "  ✗ STALE:   main.py calls _execute_condor_leg WITHOUT ctx — condor legs are silently not captured (entry_snapshot NULL on every leg)"
+    MISS=$((MISS+1))
+else
+    echo "  ✓ PRESENT: v5.1 both condor call sites pass ctx (legs are captured)"
+fi
 check "main.py"                          "chain_snapshot import snapshot" "v4.2 chain archival wired into the every-tick GEX block"
 check "strategy/iron_condor_strategy.py" "Leg 2 PAUSED"                 "v3.2 leg 2 pauses on non-RANGING (was CANCELLED)"
 # ABSENCE: the half-size budget must be gone

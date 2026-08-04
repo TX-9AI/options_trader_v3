@@ -1,5 +1,24 @@
 """
-database/trade_logger.py — Options trade logging (SQLite). v3.9
+database/trade_logger.py — Options trade logging (SQLite). v3.10
+v3.10 — 2026-08-04 — ENTRY SNAPSHOT: `entry_snapshot` (TEXT, JSON written by
+        analysis/entry_snapshot.py) + set_entry_snapshot(), which RETURNS a
+        boolean instead of discarding it. Auto-migrated; NULL on every
+        pre-existing row and on any row whose capture failed.
+        WHY: the TC.2 exit bake-off compares BoS / trail / 5m-FVG on IDENTICAL
+        entries, and two of those three need the zone inventory the live engine
+        held at entry. BoS does not — it re-derives from entry price and the
+        post-entry tape — so only the FVG frame, its anchor, and the per-frame
+        bar depth are stored. The 5m frame is CONTINUOUS across sessions while
+        the banked tape is session-scoped RTH, so an offline reconstruction is
+        a different object, not a cheaper one (same divergence class as defect
+        S). Like v3.9 it pays off only in sessions recorded after it deploys,
+        so its value decreases every session until the 2026-08-21 freeze.
+        WHY IT RETURNS A BOOLEAN: update_fields() discards success, and
+        AlertManager._send discarding an existing boolean is precisely what
+        turned the blind-alert failure into a five-step hunt (item AU). A
+        capture that silently no-ops would leave a column of NULLs that looks
+        identical to "no trades taken".
+        TELEMETRY ONLY — nothing reads this column in the trading path.
 v3.9 — 2026-08-03 — MFE/MAE TIMESTAMPS: max_premium_seen_at /
         min_premium_seen_at (TEXT, UTC ISO via ts_for_db — the SAME base as
         entry_time, deliberately, because comparing a UTC field against an
@@ -76,6 +95,7 @@ v3.0 — 2026-07-10 — repo-wide v3.0 bump: Yahoo-Finance purge & data stream
         shared TastyTrade candle feed — see data/candle_feed.py). No logic
         change in this file.
 """
+# v3.10 (2026-08-04) — trades table also captures entry_snapshot: the FVG zones, the frame the trail would anchor to, the live StructureMap levels and the per-timeframe bar depth, all as held at the moment of the fill. Written by analysis/entry_snapshot.py via set_entry_snapshot(); the TC.2 exit bake-off is not computable without it. Auto-migrates. Observability only.
 # v-obs2 (2026-07-24) — trades table also captures swept_level_name + level_strength (what KIND of liquidity level a sweep fired against — named PDH/PDL/session vs equal-H/L). Sweep postmortems: does level conviction predict outcome? Auto-migrates.
 
 # v-obs (2026-07-24) — trades table now captures adx_at_entry, regime_conviction, flat_angle_deg (regime context at entry, for tape-fingerprint analysis). Auto-migrates existing dbs via ALTER TABLE. Observability only — no trade-mechanics change.
@@ -163,6 +183,7 @@ class TradeLogger:
         flat_angle_deg    REAL DEFAULT 0.0,
         swept_level_name  TEXT DEFAULT '',
         level_strength    REAL DEFAULT 0.0,
+        entry_snapshot    TEXT,
         is_fed_day        INTEGER DEFAULT 0,
         status            TEXT DEFAULT 'open',
         exit_reason       TEXT,
@@ -240,6 +261,11 @@ class TradeLogger:
             ("flat_angle_deg",    "REAL DEFAULT 0.0"),
             ("swept_level_name",  "TEXT DEFAULT ''"),   # v-obs: swept level kind (sweep postmortems)
             ("level_strength",    "REAL DEFAULT 0.0"),
+            # v3.10 — entry-time FVG/structure picture as JSON. NO DEFAULT and
+            # no empty-string sentinel: NULL means "not captured", and that has
+            # to stay distinguishable from a capture that ran and found nothing
+            # (which writes a real payload with "anchor":null).
+            ("entry_snapshot",    "TEXT"),
             ("regime_engine",     "TEXT DEFAULT ''"),   # v-eng: WHICH engine labelled this
         ]:
             try:
@@ -352,6 +378,28 @@ class TradeLogger:
                  premium, stamp,
                  premium, premium, premium, premium, trade_id)
             )
+
+    def set_entry_snapshot(self, trade_id: str, payload: str) -> bool:
+        """v3.10 — persist the entry-time snapshot JSON. Returns True only if a
+        row was actually updated.
+
+        It RETURNS rather than logs-and-swallows on purpose (item AU): a caller
+        that cannot tell "wrote it" from "wrote nothing" produces a column of
+        NULLs that reads exactly like a quiet session. rowcount is checked
+        because a wrong trade_id is a silent no-op in SQLite, not an error.
+        """
+        if not trade_id or not payload:
+            return False
+        try:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "UPDATE trades SET entry_snapshot=? WHERE trade_id=?",
+                    (payload, trade_id))
+                return cur.rowcount > 0
+        except Exception as exc:                             # noqa: BLE001
+            logger.warning("entry_snapshot write failed for %s: %s: %s",
+                           trade_id[:8], type(exc).__name__, exc)
+            return False
 
     def update_fields(self, trade_id: str, **fields):
         """Generic field updater (used by the broken-wing roll to flag legs)."""

@@ -183,6 +183,16 @@ Big-ticket changes only — what was added, removed, or fundamentally altered. T
 full per-file history is in the git log and in
 [`docs/HISTORY.md`](docs/HISTORY.md).
 
+**2026-08-04**
+- **Entry snapshot captured on every fill** (`analysis/entry_snapshot.py` v1.0 →
+  `trades.entry_snapshot`). The FVG zones, the frame the trail would anchor to, the
+  live structure levels and the per-timeframe bar depth, as held at the moment of the
+  fill. Log-only; nothing reads it in the trading path. It exists because the TC.2
+  exit bake-off compares BoS / trail / FVG *counterfactually on identical entries*, and
+  the live 5m frame is continuous across sessions where the banked tape is not — so
+  those zones cannot be rebuilt offline afterwards. See
+  [`docs/MECHANICS.md`](docs/MECHANICS.md) and BACKLOG N.7.
+
 **2026-07-28**
 - **Confluence engine excavated** (`regime_confluence` v1.3). `_sweep`,
   `_breakout`, `_ranging` and `_compression` rebuilt as accumulating evidence

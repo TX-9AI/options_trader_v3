@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.54
+# docs/BACKLOG.md — v3.55
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -1165,6 +1165,54 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK→DEPLOY]` **N.7 — ✅ BUILT 2026-08-04. THE TC.2 EXIT BAKE-OFF HAD NO
+  CAPTURE, AND ITS DATA WINDOW WAS ALREADY OPEN. Bakes Mon Aug 10.**
+  ROADMAP TC.2 states the counterfactual "LIKELY NEEDS AN OBSERVABILITY
+  PRECURSOR (log-only, can start pre-freeze like L3.1/L3.2)" and that precursor
+  appeared on no date in this file. Verified at HEAD before building
+  (`PRAGMA table_info(trades)` and the schema block): no FVG zones, no frame
+  identity, no per-timeframe depth on any trade row.
+  **WHY IT IS URGENT WHEN THE LOSSES ARE NOT.** The permissive posture is
+  deliberate and its P&L is not a finding (POSTMORTEM 2026-08-03, two-bucket
+  rule). But the loose stops only pay off if the calibration can later ask
+  *"would a different exit have done better on THIS entry?"* — and that question
+  is answered from rows, not from money. Every session that closes without the
+  capture is a session permanently outside the bake-off. Same shape as v3.9's
+  MFE/MAE timestamps: **value strictly decreasing until the Aug 21 freeze**, and
+  zero of it recoverable afterwards.
+  **WHAT WAS BUILT.** `analysis/entry_snapshot.py` **v1.0** (never raises;
+  build/to_json) · `trade_logger` **v3.10** (`entry_snapshot` TEXT, auto-migrated,
+  no DEFAULT so NULL keeps meaning *not captured*; `set_entry_snapshot()` RETURNS
+  a bool) · `main.py` **v5.1** (hook on the directional path and on BOTH condor
+  legs; `_execute_condor_leg` gains an optional `ctx`) · `check_versions` **v4.9**
+  (+7 canaries) · `tests/test_entry_snapshot.py` (17 tests).
+  **BoS IS DELIBERATELY NOT CAPTURED — correcting my own earlier claim in this
+  thread that it was missing.** `BOSTracker` seeds from entry price and direction,
+  both already columns, and ratchets on closed 1m candles: the BoS counterfactual
+  is a pure function of the post-entry tape. Reading HEAD, not reasoning, is what
+  changed that answer.
+  **WHAT IS GENUINELY IRRECOVERABLE, which is the whole justification:** the live
+  5m frame is CONTINUOUS across sessions while the banked tape is session-scoped
+  RTH, so a gap formed over the overnight boundary exists live and cannot exist in
+  any offline resample (defect S's divergence class); and frame DEPTH — AK's
+  finding — is gone when the tick ends.
+  **THE LOAD-BEARING CANARY IS THE ABSENCE ONE.** A log-only capture fails
+  silently by construction: if a stale sync drops `ctx` from a condor call site,
+  the legs stop being captured, no error is raised, and the column keeps filling
+  from the directional path — indistinguishable from working. `check_versions`
+  v4.9 greps for the ctx-less call form.
+  **VALIDATE — ONE FLEET COMMAND ON THE FIRST BAKED SESSION, no new tool:**
+  count non-NULL `entry_snapshot` against today's entered rows per box and read
+  the PER-BOX LINE, not the tally (option 56's lesson). Both numbers equal and
+  non-zero = capture alive on every path; non-zero directional with zero condor
+  legs = the ctx regression the absence canary exists to catch; zero everywhere on
+  a box that traded = the hook is not being reached. Then grep bot.log for
+  `entry_snapshot NOT captured` — once per reason per process, so ONE line can
+  stand for a whole session of misses.
+  **⬜ OPEN, deliberately not done here:** nothing CONSUMES the column yet. The
+  bake-off harness is TC.2 work and stays gated where the roadmap puts it — this
+  item exists so that when the season opens, the rows are already there. Do not
+  read the first days' payloads as a result; they are a sample being collected.
 - `[DESK]` **L1.9b — Graft the proven bookmark onto `validate_regime.sh`**, then run
   `regime_backfill --rebuild` to re-score all dated diary rows warm. DONE = the
   diary reads TRENDING honestly on the days live boxes did.
@@ -2575,6 +2623,13 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.55 — 2026-08-04 — N.7 FILED AND BUILT: the entry-snapshot capture.**
+  New item on Tue Aug 4, ✅ built same day, bakes Mon Aug 10. It closes a hole
+  that was invisible because it was in the ROADMAP rather than here: TC.2's
+  counterfactual names an observability precursor and the precursor had no date,
+  no owner and no code. Filed as scope DISCOVERED, not slippage — it adds to BAC
+  and EV together. Also corrects a claim made earlier in the same session that
+  BoS levels needed capturing: they do not, and reading HEAD is what settled it.
 - **v3.54 — 2026-08-04 — TWO DATES CORRECTED TO MATCH WHAT THE ITEMS SAY ABOUT
   THEMSELVES.** **AV** moved Sat Aug 1 → Thu Aug 13 and re-tagged `[DESK·DATA]`:
   dated due 08-01 while its own text records it OPENED 08-02 — due before it

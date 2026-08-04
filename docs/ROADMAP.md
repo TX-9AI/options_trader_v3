@@ -1,5 +1,10 @@
 # ROADMAP.md — options_trader v3: boolean regime gates → conviction-bar gating
 
+**v2.4 — 2026-08-04 — TC.2's observability precursor is BUILT, not pending** (BACKLOG
+N.7). The paragraph in TC.2 that called it "likely needed" has been rewritten with what
+reading HEAD settled: BoS re-derives from the post-entry tape and needs no capture; the
+FVG frame and its depth cannot be reconstructed offline at all. No other TC gate moves.
+
 **v2.3 — 2026-07-24 — TRADE CONSTRUCTION track added** as the fourth season, gated
 on the Layer-3 freeze. The L1→L2→L3 spine is the regime/timing engine (whether & when
 a trade fires); it never addressed trade *construction* — strike distance, contract
@@ -408,12 +413,22 @@ circularity discipline as every layer gating on the one beneath it.
     same entry and replay all three exit rules against the *same* post-entry price path
     (what would BoS have exited at, vs the trail, vs the FVG fill), the way the P5 harness
     does strike/EM counterfactuals. Comparing trades that historically *used* each exit is
-    invalid — that measures entry luck, not exit quality. LIKELY NEEDS AN OBSERVABILITY
-    PRECURSOR (log-only, can start pre-freeze like L3.1/L3.2): the counterfactual needs
-    the structure swing-points and the FVG zones *as they were at entry* recorded on the
-    trade — OHLC tape gives the price path, but FVG zones and BoS levels may not be logged
-    yet (same capture pattern as tonight's ADX / level-strength additions). OUTPUT feeds
-    back into which exit is assigned per strategy/regime.
+    invalid — that measures entry luck, not exit quality. **THE OBSERVABILITY PRECURSOR
+    IS BUILT — 2026-08-04, BACKLOG N.7** (`analysis/entry_snapshot.py` v1.0 →
+    `trades.entry_snapshot`, log-only, pre-freeze, deploys Mon Aug 10). Two corrections
+    to what this paragraph assumed. **BoS levels do NOT need recording:** `BOSTracker`
+    seeds from entry price and direction, both already columns, and ratchets on closed
+    1m candles, so its counterfactual is a pure function of the post-entry tape. **The
+    FVG zones DO,** and for a sharper reason than "may not be logged yet" — the live 5m
+    frame is CONTINUOUS across sessions while the banked tape is session-scoped RTH, so
+    a gap formed over the overnight boundary exists live and *cannot* exist in an
+    offline resample (defect S's divergence class). Per-timeframe bar DEPTH is captured
+    with them, because AK proved a vote cast on a starved frame is not the vote a warm
+    frame casts. **CONSEQUENCE FOR THIS SEASON'S SCHEDULE:** the bake-off can only ever
+    run on trades entered AFTER Aug 10, so its sample starts accruing then regardless of
+    when TC.2 opens — which is the whole reason the precursor was pulled forward rather
+    than built when the season starts. OUTPUT feeds back into which exit is assigned per
+    strategy/regime.
   **DONE means:** stop trigger, target ratio, and trail are each placed empirically —
   the stop against realized fill latency, the sweep stop/target against its win/loss
   magnitude, the trail against MFE-capture — not on fixed-percent guesses; AND the exit

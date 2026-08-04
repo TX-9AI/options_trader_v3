@@ -1,5 +1,21 @@
 """
-main.py — options_trader v5.0
+main.py — options_trader v5.1
+v5.1 — 2026-08-04 — ENTRY SNAPSHOT HOOK (log-only, freeze-safe). Every confirmed
+        fill — directional and both condor legs — now persists the entry-time
+        FVG/structure picture to trades.entry_snapshot via
+        analysis/entry_snapshot.py. Runs AFTER the record is written, so it
+        cannot reach the entry decision, the size, the strike or any exit; the
+        only thing it can do to a live position is nothing.
+        WHY HERE AND NOT IN entry_engine: one call site per path, in the file
+        that owns ctx, and it keeps a second lineage out of another agent's
+        file (working agreement §7). The condor helper gains an optional ctx
+        for the same reason — both of its callers already hold one.
+        THE CAPTURE'S OWN FAILURE IS AUDIBLE. set_entry_snapshot returns a
+        boolean and the payload carries `err`; a miss logs once per reason per
+        process (the _log_backfill_depth idiom, §17) rather than every fill or
+        never. A snapshot hook that fails silently would leave a column of
+        NULLs indistinguishable from a day with no trades — which is the exact
+        shape of every observability defect this repo has paid for.
 v4.9 — 2026-07-30 — DISPATCH ISOLATION. Each strategy evaluation now runs inside
         _safe_strategy(): a raise is logged at ERROR and returns None, so the
         priority cascade continues instead of aborting the tick. Before this, one
@@ -355,6 +371,7 @@ from data.options_chain import get_chain_fetcher
 from analysis.volatility_engine import get_volatility_engine
 from analysis.trend_engine import get_trend_engine
 from analysis.structure_analyzer import get_structure_analyzer
+from analysis.entry_snapshot import to_json as _entry_snapshot_json
 from analysis.liquidity_mapper import get_liquidity_mapper
 from analysis.regime_classifier import get_regime_classifier, RegimeState, Regime
 from analysis.orb_engine import get_orb_engine, ORBState
@@ -730,7 +747,43 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
     return regime
 
 
-def _execute_condor_leg(signal: "OptionsSignal", state: BotState):
+# ── Entry snapshot (v5.1) — log-only capture, one place, both entry paths ─────
+_snapshot_warned: set = set()   # reason -> logged once per process (§17 idiom)
+
+
+def _capture_entry_snapshot(ctx: dict, record: dict, direction: str) -> bool:
+    """Persist the entry-time FVG/structure picture onto the trade row.
+
+    Called only after a fill is confirmed and the row exists. Returns True on a
+    write. A failure is logged ONCE per reason per process and then never again:
+    a per-fill warning would be spam, and no warning at all is how three dead
+    timeframes went unnoticed for two weeks.
+    """
+    trade_id = (record or {}).get("trade_id", "")
+    try:
+        payload = _entry_snapshot_json(ctx, direction)
+        wrote = get_trade_logger().set_entry_snapshot(trade_id, payload)
+        if not wrote:
+            reason = "write-returned-false"
+        elif '"err"' in payload:
+            reason = "payload-error"
+        else:
+            return True
+    except Exception as exc:                                 # noqa: BLE001
+        reason = f"raised:{type(exc).__name__}"
+        payload = ""
+
+    if reason not in _snapshot_warned:
+        _snapshot_warned.add(reason)
+        logger.warning(
+            "entry_snapshot NOT captured (%s) for %s — this trade cannot enter "
+            "the TC.2 exit counterfactual; logged once per reason per process. "
+            "%s", reason, trade_id[:8], payload[:300])
+    return False
+
+
+def _execute_condor_leg(signal: "OptionsSignal", state: BotState,
+                        ctx: dict = None):
     """
     Execute a single condor leg (one vertical credit spread) from the
     OptionsSignal produced by IronCondorStrategy.check_leg_triggers().
@@ -906,6 +959,12 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState):
         status           = "open",
     )
     get_trade_logger().log_entry(record)
+    # v5.1 — a condor leg is "neutral": no in-favor side, so no trail anchor.
+    # The zone inventory is still captured — it bounds where the underlying had
+    # room to run toward either short strike. ctx is optional so a caller that
+    # cannot supply one degrades to no capture rather than to a raise.
+    if ctx is not None:
+        _capture_entry_snapshot(ctx, record, "neutral")
     get_position_manager(state.paper_trading).add_condor_leg(record)
 
     # Advance the plan (DECIDED -> LEG1_FILLED -> COMPLETE).
@@ -1182,7 +1241,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
                                   leg={"underlying": round(ctx["price"], 2)})
                 except Exception:
                     pass
-            _execute_condor_leg(leg_signal, state)
+            _execute_condor_leg(leg_signal, state, ctx)
 
     if signal is None:
         logger.info(f"STRATEGY: NO TRADE — regime={regime.primary_regime}")
@@ -1244,6 +1303,9 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     # ── Enter trade ───────────────────────────────────────────────────────────
     record = entry_eng.enter(signal=signal, score=score, sizing=sizing)
     if record:
+        # v5.1 — capture BEFORE anything else touches the row, but AFTER the
+        # fill: the picture we want is the one that produced this entry.
+        _capture_entry_snapshot(ctx, record, signal.direction)
         get_position_manager(state.paper_trading).set_open_position(record)
         get_alert_manager().send_entry_alert(record)
         logger.info(
@@ -1547,7 +1609,7 @@ def main_loop(state: BotState):
                         current_price = ctx["price"]
                     ))
                     if leg_signal is not None:
-                        _execute_condor_leg(leg_signal, state)
+                        _execute_condor_leg(leg_signal, state, ctx)
             else:
                 attempt_new_entry(ctx, regime, state)
 

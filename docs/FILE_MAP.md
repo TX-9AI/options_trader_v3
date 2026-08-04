@@ -1,6 +1,7 @@
 # FILE_MAP — every module, what it calls, and what calls it
 
-**Generated from the actual imports at HEAD, not from memory.** 87 Python modules
+**Generated from the actual imports at HEAD, not from memory.** 88 Python modules
+(87 → 88 on 2026-08-04: `analysis/entry_snapshot.py`, BACKLOG N.7)
 across 11 local packages. Use this for audits, for tracing blast radius before a
 change, and for answering "if I touch this, what breaks?"
 
@@ -49,7 +50,7 @@ Change these with the most care; a break here reaches everything downstream.
   - called by: _(entry point / leaf)_
 
 **`main.py`** — options_trader v4.4
-  - calls: `chain_snapshot.py`, `conviction_integrator.py`, `liquidity_mapper.py`, `orb_engine.py`, `regime_classifier.py`, `regime_confluence.py`, `structure_analyzer.py`, `trade_readiness.py`, `trend_engine.py`, `volatility_engine.py`, `config.py`, `data_cache.py`, `gex_data.py`, `macro_data.py`, `options_chain.py`, `tasty_client.py`, `trade_logger.py`, `broker_reconcile.py`, `entry_engine.py`, `limit_ladder.py`, `order_confirm.py`, `position_manager.py`, `alert_manager.py`, `risk_manager.py`, `session_guard.py`, `setup_scorer.py`, `butterfly_strategy.py`, `condor_roll.py`, `continuation_strategy.py`, `iron_condor_strategy.py`, `orb_strategy.py`, `sweep_reversal_strategy.py`, `time_utils.py`
+  - calls: `chain_snapshot.py`, `conviction_integrator.py`, `entry_snapshot.py`, `liquidity_mapper.py`, `orb_engine.py`, `regime_classifier.py`, `regime_confluence.py`, `structure_analyzer.py`, `trade_readiness.py`, `trend_engine.py`, `volatility_engine.py`, `config.py`, `data_cache.py`, `gex_data.py`, `macro_data.py`, `options_chain.py`, `tasty_client.py`, `trade_logger.py`, `broker_reconcile.py`, `entry_engine.py`, `limit_ladder.py`, `order_confirm.py`, `position_manager.py`, `alert_manager.py`, `risk_manager.py`, `session_guard.py`, `setup_scorer.py`, `butterfly_strategy.py`, `condor_roll.py`, `continuation_strategy.py`, `iron_condor_strategy.py`, `orb_strategy.py`, `sweep_reversal_strategy.py`, `time_utils.py`
   - called by: `test_phantom_pnl_recovery.py`
 
 **`query.py`** — OptionsTrader Performance Dashboard
@@ -74,6 +75,11 @@ Change these with the most care; a break here reaches everything downstream.
 **`__init__.py`**
   - calls: _(nothing local)_
   - called by: _(entry point / leaf)_
+
+**`entry_snapshot.py`** — entry-time FVG/structure capture (LOG-ONLY, never trades).
+  - calls: `exit_engine.py` (LAZY, inside the function — module-level it would drag the
+    TastyTrade SDK into every offline consumer of `analysis/`), `time_utils.py`
+  - called by: `main.py`
 
 **`chain_snapshot.py`** — full option-chain archival (LOG-ONLY, never trades).
   - calls: `config.py`

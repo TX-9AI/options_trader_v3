@@ -661,6 +661,51 @@ The directional-drift angle of the regime window at entry. Added 2026-07-24
 OBSERVATIONS, 2026-07-24 entry). Retained as per-trade context; do not build a
 gate on it without new evidence.
 
+##### `entry_snapshot` — TEXT (JSON), NULL when not captured
+The FVG zones, the frame the trail would anchor to, the live StructureMap levels
+and the per-timeframe bar depth — all **as held at the instant of the fill**.
+Added 2026-08-04 (`analysis/entry_snapshot.py` v1.0, `trade_logger` v3.10,
+`main.py` v5.1). Written on every confirmed entry: directional, butterfly, and
+both condor legs.
+
+**Why it exists.** The TC.2 exit bake-off compares break-of-structure, the trail
+and the 5-minute FVG exit **counterfactually on identical entries** — the only
+comparison that measures exit quality rather than entry luck. Two of those three
+rules need to know which gaps existed when the trade opened.
+
+**What is deliberately NOT in it, and this corrects a natural assumption.**
+Break-of-structure levels are absent on purpose. `BOSTracker` seeds from entry
+price and direction (both already columns) and ratchets forward on closed 1-minute
+candles, so a BoS counterfactual is a pure function of the post-entry tape and
+needs no capture. Storing it would be storage for nothing.
+
+**Why the rest genuinely cannot be reconstructed later:**
+- The trail anchors on the frame `_fvg_frame()` picks, and the live 5m frame is
+  **continuous across sessions** while the banked tape is session-scoped RTH. A
+  gap formed across the overnight boundary exists live and *cannot* exist in an
+  offline resample — the same divergence class as defect S's 1m contamination.
+- Frame **depth** is provenance: AK showed three of four timeframes had never
+  voted, and a vote cast on a starved frame is not the vote a warm frame casts.
+  Depth is gone the moment the tick ends.
+
+**Fields:** `v` schema version · `at` capture time (UTC ISO, same base as
+`entry_time` — never ET) · `px` underlying · `dir` long/short/neutral · `frame`
+5m or 1m · `anchor` the in-favor zone the trail would use · `fvg` up to 12
+most-recent zones on that frame · `swing` seq/res/sup/hi/lo · `depth` bars per
+timeframe · `err` present only on a failed capture.
+
+**What "good" looks like:** non-NULL on every row entered after the deploy.
+`anchor: null` is a **real observation** — the trail had no in-favor gap and fell
+back to the percentage leash — and must never be read as a missing value. A
+condor leg is `dir: neutral` and always has a null anchor by definition: there is
+no in-favor side. NULL in the column means *not captured*, which is why the
+column has no DEFAULT and no empty-string sentinel.
+
+**Known issue to watch on the first sessions:** capture failures are logged once
+per reason per process (`entry_snapshot NOT captured`), not once per fill — so
+one line in `bot.log` can stand for a whole session of misses. Read the line, not
+the count.
+
 ##### `swept_level_name` — string, `level_strength` — float 0.0–1.0
 For sweep trades: which liquidity level was swept, and its quality. Added
 2026-07-24 (commit `934f9d4`).
