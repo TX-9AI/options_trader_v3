@@ -1,4 +1,10 @@
 #!/bin/bash
+# v4.18 — 2026-08-04 — tcs_floor_durability v1.2: +2 canaries on the TERMINAL
+#         split. v1.1 measured INTRADAY violation, which is not what a
+#         defined-risk 0DTE spread loses on — it expires on the close. Collapsing
+#         terminal back onto intraday would restore an 82% "failure" rate for
+#         trades that would have expired fine, so the terminal test and the
+#         strike curve are both pinned by name.
 # v4.17 — 2026-08-04 — tcs_floor_durability v1.1: +2 canaries on the POPULATION
 #         FILTER. v1.0's first real run measured every floor the rolling
 #         lookback ever computed instead of the ARMED ones the strategy would
@@ -437,6 +443,8 @@ check "tests/tcs_floor_durability.py"    "seen.add(key)"                "v1.0 on
 check "tests/tcs_floor_durability.py"    "through = (c < floor)"        "v1.0 durability is CLOSE-based (acceptance, not a touch)"
 check "tests/tcs_floor_durability.py"    'default="ARMED"'              "v1.1 population defaults to ARMED (not every floor the lookback computed)"
 check "tests/tcs_floor_durability.py"    'stats\["not_armed"\]'          "v1.1 DORMANT floors are excluded and counted"
+check "tests/tcs_floor_durability.py"    "term_failed = (term_close < floor)"  "v1.2 TERMINAL outcome is measured at the bell, not from the intraday break"
+check "tests/tcs_floor_durability.py"    "STRIKE CURVE"                 "v1.2 terminal failure vs distance beyond the floor"
 check "tests/replay_confluence.py"       "from utils.regime_labels import label"  "v2.3 emitted-distribution line uses the shared map"
 check "tests/regime_diary.py"            "churn-cut"                    "v1.3 churn-cut on the L2 line (flips per committed switch)"
 check "tests/regime_diary.py"            "def rerender"                 "v1.3 --rerender rebuilds the md from the jsonl"

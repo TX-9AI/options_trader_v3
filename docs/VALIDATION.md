@@ -25,7 +25,7 @@ DOES; these describe how a claim about it gets TESTED.
 
 | tool | the question it answers | reads |
 |---|---|---|
-| `tests/tcs_floor_durability.py` | **Does the impulse floor hold?** The trend credit spread's entire premise — that committed order flow will not fully retrace — measured before the firing engine exists (TC.4b's stated prerequisite). | readiness journal + banked OHLC |
+| `tests/tcs_floor_durability.py` | **Does the impulse floor hold, and where must the short strike sit?** The trend credit spread's entire premise — that committed order flow will not fully retrace — measured before the firing engine exists (TC.4b's stated prerequisite). | readiness journal + banked OHLC |
 | `tests/gap_outcome_join.py` | Does outcome depend on gap class? `--pool gapflat` triples n and prints its own CONT-vs-REV legitimacy verdict. | `gap_pct.json` + `fleet_trades_<date>.json` |
 | `tests/a2_partition.py` | Is A2's 10:00 signature horizon co-truth, opening drive, or a gap artifact? | replay corpus |
 | `tests/post_exit_continuation.py` | After an exit fires, does price keep going the trade's way? | trades + tape |
@@ -51,7 +51,18 @@ DORMANT and the strategy would never have sold anything. `--machine ARMED` is th
 default for that reason. `--machine ANY` exists only so the two populations can be
 COMPARED — a result read from it is a result about arithmetic, not about a trade.
 
-*Its three outputs.* Durability by SD bucket **is** the fit for
+*Intraday vs TERMINAL — v1.2, and it is the distinction that decides TC.4.*
+"Did a 1m close ever go back through the floor?" is an INTRADAY VIOLATION rate. A
+defined-risk 0DTE spread does not lose when a level is touched; it loses on where
+price sits AT THE BELL. Both rates are reported, never merged, alongside the
+RECOVERY rate (violated intraday, fine at the close) — and the gap between them is
+the answer to *is the premise wrong, or is the strike too close?* The STRIKE CURVE
+prices that directly: terminal failure rate as a function of distance beyond the
+floor. The offset where it crosses a tolerance stated in advance IS the
+short-strike rule. It bounds RISK only — further OTM collects less credit, and
+this tool prices no credit at all.
+
+*Its three original outputs.* Durability by SD bucket **is** the fit for
 `TR_TCS_IMPULSE_SD_LO/HI` — the bound belongs where durability starts clearing,
 not where a prior guessed, and a flat curve says impulse magnitude is not what
 protects the floor. Penetration p90 on failures is a strike distance priced from

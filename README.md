@@ -146,6 +146,45 @@ paths are in [`docs/MECHANICS.md`](docs/MECHANICS.md).
   trade population AV's Aug 13 read and `conditional_tables` are measured on. If
   the floor holds, the build is fast, well-specified, and belongs in the **Aug 24
   paper deploy** — post-freeze, four weeks before full size.
+
+  **WHERE THIS STANDS — 2026-08-04, measured, not asserted.** First real runs of
+  `tests/tcs_floor_durability.py` over 2026-07-28 → 08-04:
+
+  | population | impulses | intraday floor held |
+  |---|---|---|
+  | ARMED (what the strategy would have sold beyond) | 2,812 | **17.9%** |
+  | ANY (every floor the rolling lookback computed) | 5,129 | 14.6% |
+
+  **THE PREMISE AS STATED IS NOT SUPPORTED.** Time-to-failure on the ARMED
+  population is **p10 1 min, p50 6 min**, p90 68. The tool pre-registered that a
+  single-digit p50 means *the thesis was wrong* rather than *the 0DTE ran out of
+  clock*, and that is what came back. Half of all violations happen within six
+  minutes of the impulse.
+
+  **BUT THE MEASURE DOES NOT MATCH HOW THE TRADE PAYS, and that is the live
+  question.** "Was the floor ever violated intraday" is not a defined-risk
+  spread's loss condition — **where price sits at the bell is.** A floor breached
+  at 10:04 and reclaimed by 15:00 expires fine. v1.2 therefore reports INTRADAY,
+  TERMINAL and RECOVERY separately and never merges them, plus a STRIKE CURVE:
+  terminal failure rate as a function of distance beyond the floor. The gap
+  between the intraday and terminal rates is the answer to *is the premise wrong,
+  or is the strike simply too close?*
+
+  **THE SD RAMP MAY NOT BE FITTABLE ON THIS POPULATION — a concrete problem for
+  TC.4b's stated method.** ARMED buckets came back `sub-aware n=0`, `aware n=5`,
+  `establish n=987`, `screaming n=1820`: **arming already requires magnitude**, so
+  there is no low-SD variance left to fit a ramp against. The two populated
+  buckets differ 15% vs 19% against an MDE of 4% — sitting on the detection limit,
+  so "durability rises with magnitude" is NOT established, only not-refuted. The
+  fit has to come from `--machine STAGING+` or it does not come at all.
+
+  **STRIKE DISTANCE, from the same run:** penetration on failures p50 0.862%,
+  p90 3.001%, p95 3.756%, max 6.597% of the floor price.
+
+  **DECISION POSTURE:** the engine stays unbuilt. Not on schedule grounds — on
+  the grounds that a premise which fails its own pre-registered test does not get
+  a firing engine until the terminal measure says whether the failure is the
+  thesis or the strike. See BACKLOG **TC.4b-pre**.
 - **Pitchfork sloped S/R** — designed, not built, gated on Layer 2. See
   [`docs/WHITEPAPER_pitchfork_overlay.md`](docs/WHITEPAPER_pitchfork_overlay.md).
 

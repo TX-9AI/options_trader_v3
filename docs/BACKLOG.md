@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.64
+# docs/BACKLOG.md — v3.65
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -63,7 +63,7 @@ BAKED is changing nothing about today's data.
 | **W.2a — today's own swallows made audible + the alarm made specific** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | silent count back to the 08-03 baseline of **87**; `--since` proven on three cases |
 | **D.1 — bull/bear were the same token in THREE renderers** | ✅ 08-04 | ✅ 08-04 | n/a (report-only) | 16 rows re-rendered on control; ALL CANARIES GREEN |
 | **AV.1 — the pooled gap read, with a legitimacy guard** | ✅ 08-04 | ✅ 08-04 | n/a (offline) | ALL CANARIES GREEN on control |
-| **TC.4b-pre — does the impulse floor hold?** | ✅ v1.1 08-04 | ⬜ | n/a (offline) | v1.0 RAN on the real corpus and measured the WRONG POPULATION; v1.1 filters to ARMED. 12 tests |
+| **TC.4b-pre — does the impulse floor hold?** | ✅ v1.2 08-04 | ⬜ | n/a (offline) | ARMED run done: intraday held **17.9%** on n=2,812, p50 time-to-failure **6 min**. v1.2 adds TERMINAL + strike curve. 15 tests |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1237,6 +1237,51 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK·DATA]` **TC.4b-pre — ARMED RESULT IS IN, AND IT IS NOT GOOD FOR THE
+  PREMISE AS STATED. v1.2 built to settle whether that is fatal.**
+  **THE NUMBERS (2026-07-28 → 08-04, `--machine ARMED`, n=2,812 distinct
+  impulses from 17,177 scored rows):**
+  `intraday floor held  17.9%`  ·  `time-to-failure  p10 1min / p50 6min / p90 68min`
+  `penetration on failures  p50 0.862% / p90 3.001% / p95 3.756% / max 6.597%`
+  `SD buckets: sub-aware n=0 · aware n=5 · establish n=987 (15%) · screaming n=1820 (19%), MDE 4%`
+  **THE PRE-REGISTRATION FIRED AND IT GETS HONOURED.** The tool's own text says a
+  single-digit p50 means *the thesis was wrong*, not *the 0DTE ran out of clock*.
+  p50 is **6 minutes**. Half of all violations happen within six minutes of the
+  impulse. That is the strategy's core claim failing on its own terms.
+  **BUT THE MEASURE DOES NOT MATCH HOW THE TRADE PAYS — stated plainly rather
+  than used quietly to rescue the strategy.** "Was the floor ever violated
+  intraday" is not a defined-risk spread's loss condition; **where price sits at
+  the bell is.** A floor breached at 10:04 and reclaimed by 15:00 expires fine and
+  v1.1 counted it a failure. So an 82% violation rate is NOT an 82% loss rate, and
+  the number that actually decides TC.4 had not been computed.
+  **v1.2 COMPUTES IT.** INTRADAY, TERMINAL and RECOVERY reported separately and
+  never merged, plus a **STRIKE CURVE** — terminal failure rate as a function of
+  distance beyond the floor. The offset where it crosses a tolerance stated in
+  advance IS the short-strike rule, priced from behaviour rather than a delta.
+  Same journal, same tape, no new collection.
+  **⬜ A SECOND FINDING, and it breaks TC.4b's stated METHOD.** TC.4b plans to fit
+  `TR_TCS_IMPULSE_SD_LO/HI` from this curve. On the ARMED population the curve
+  does not exist: `sub-aware n=0`, `aware n=5`. **Arming already requires
+  magnitude**, so there is no low-SD variance to fit against — the tool now says
+  so in its own output. The two populated buckets differ 15% vs 19% against an
+  MDE of 4%, i.e. exactly on the detection limit, so "durability rises with
+  magnitude" is **not established, only not-refuted**. The fit must come from
+  `--machine STAGING+` or it does not come at all. Re-aim TC.4b accordingly.
+  **⬜ NEXT, in order, both one command:**
+  (1) `python3 tests/tcs_floor_durability.py` — read TERMINAL, RECOVERY and the
+      strike curve. **Decide the tolerance BEFORE reading the curve**, or the
+      offset gets chosen to fit the answer.
+  (2) `python3 tests/tcs_floor_durability.py --machine STAGING+` — the only
+      population with low-SD mass, for the ramp fit.
+  **⬜ WHAT WOULD STILL BE MISSING even on a good terminal number:** this prices
+  no credit. Further OTM bounds risk and shrinks the premium, and the whole trade
+  is that trade-off. A terminal failure rate alone cannot say the strategy earns —
+  it can only say the strike distance where it stops bleeding.
+  **DECISION POSTURE UNCHANGED: the engine stays unbuilt.** Not on schedule
+  grounds — on the grounds that a premise which fails its own pre-registered test
+  does not get a firing engine until the terminal measure says whether the failure
+  is the thesis or the strike.
+
 - `[DESK·DATA]` **TC.4b-pre RESULT — ⚠️ FIRST RUN IS SUPERSEDED, AND THE
   CORRECTION IS THE FINDING. v1.1 ships the population filter.**
   **WHAT v1.0 REPORTED (2026-08-04, 5,129 "impulses" from 17,177 scored rows):**
@@ -2960,6 +3005,16 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.65 — 2026-08-04 — TC.4b-pre v1.2: THE ARMED RESULT, AND THE MEASURE IT
+  EXPOSED AS WRONG-SHAPED.** ARMED run: intraday floor held 17.9% on n=2,812, p50
+  time-to-failure 6 minutes — the tool's own pre-registration says that means the
+  thesis, not the clock. But intraday violation is not a defined-risk 0DTE's loss
+  condition, so v1.2 splits INTRADAY / TERMINAL / RECOVERY and adds a strike curve
+  that prices the offset directly. Second finding: the SD ramp cannot be fitted on
+  the ARMED population at all (arming already requires magnitude; sub-aware n=0),
+  which re-aims TC.4b's method at STAGING+. TC.4's status written into MECHANICS
+  and the README with the measured numbers, and VALIDATION updated with the
+  terminal/strike-curve semantics.
 - **v3.64 — 2026-08-04 — TC.4b-pre v1.1: THE FIRST RUN MEASURED THE WRONG
   POPULATION.** v1.0 scored every floor the impulse lookback ever computed rather
   than the ARMED ones the strategy would have traded — 5,129 "impulses" that were

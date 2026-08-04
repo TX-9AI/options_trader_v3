@@ -1,5 +1,5 @@
 """
-tests/test_tcs_floor_durability.py — v1.1 — 2026-08-04
+tests/test_tcs_floor_durability.py — v1.2 — 2026-08-04
 
 Plants worlds with a known answer and asserts the tool recovers each, the same
 way tests/test_a2_partition_recovers.py and tests/test_gap_pool.py do.
@@ -16,6 +16,11 @@ merely empty:
     back above it must read HELD, with the penetration recorded separately. If
     the two ever merge, the durability number silently becomes a stop-out
     statistic and stops answering the question the strategy asks.
+
+v1.2 — 2026-08-04 — three tests for the terminal/intraday split and the strike
+curve. The recovery case is the one that matters: v1.1 reported an 82% intraday
+violation rate on the real corpus, and without this distinction that reads as an
+82% LOSS rate for a trade that expires on the close.
 
 v1.1 — 2026-08-04 — fixtures now carry `machine`/`r`, and four tests cover the
 population filter. v1.0 shipped without it and its first real run measured every
@@ -177,6 +182,43 @@ def test_min_r_filters():
         out = _run(_world(tmp, _held_bars(), r=0.40), "--min-r", "0.55",
                    "--diagnose")
         assert "below_min_r          1" in out, out[:900]
+
+
+def test_a_violation_that_recovers_by_the_bell_is_terminal_OK():
+    """THE v1.2 DISTINCTION. Price closes through the floor at 14:03 and closes
+    back above it by the last bar. Intraday says violated; terminal says fine.
+    A defined-risk 0DTE spread expires on the second, not the first — merging
+    them is how an 82% intraday violation rate gets mistaken for an 82% loss
+    rate."""
+    bars = [("14:01", 101.0, 102.0, 100.5), ("14:03", 98.0, 100.4, 97.5),
+            ("14:10", 99.0, 99.5, 98.0), ("15:00", 100.5, 101.0, 99.5),
+            ("15:30", 101.5, 102.0, 101.0), ("15:45", 102.0, 102.5, 101.5)]
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _run(_world(tmp, bars))
+        assert "floor HELD    : 0 (0.0%)" in out, out[:900]
+        assert "terminal OK   : 1 (100.0%)" in out, out[:900]
+        assert "recovered     : 1 (100.0%)" in out, out[:900]
+
+
+def test_a_violation_that_stays_broken_fails_both():
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _run(_world(tmp, _broken_bars()))
+        assert "floor HELD    : 0 (0.0%)" in out, out[:900]
+        assert "terminal OK   : 0 (0.0%)" in out, out[:900]
+        assert "recovered     : 0 (0.0%)" in out, out[:900]
+
+
+def test_the_strike_curve_prices_distance():
+    """Terminal close is 98.0 against a floor of 100.0 — a 2% breach. A strike
+    AT the floor fails; a strike 3% beyond it (97.0) survives. The curve must
+    show exactly that crossing, because that crossing IS the rule."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _run(_world(tmp, _broken_bars()))
+        curve = out.split("STRIKE CURVE")[1]
+        rows = {l.split("%")[0].strip(): l for l in curve.splitlines()
+                if l.strip().startswith(("0.", "1.", "2.", "3."))}
+        assert "100.0%" in rows["0.00"], rows.get("0.00")
+        assert "0.0%" in rows["3.00"], rows.get("3.00")
 
 
 def test_min_sd_filters():

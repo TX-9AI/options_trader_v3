@@ -1,6 +1,28 @@
 #!/usr/bin/env python3
 """
-tests/tcs_floor_durability.py — v1.1 — 2026-08-04   (backlog TC.4b prerequisite)
+tests/tcs_floor_durability.py — v1.2 — 2026-08-04   (backlog TC.4b prerequisite)
+
+v1.2 — 2026-08-04 — TERMINAL OUTCOME + THE STRIKE-DISTANCE CURVE, because v1.1
+        answered a question the trade does not ask. "Did a 1m close EVER go back
+        through the floor before the bell?" is an INTRADAY VIOLATION rate. A
+        defined-risk 0DTE spread does not lose when the level is touched; it
+        loses on WHERE PRICE SITS AT THE BELL. A floor breached at 10:04 and
+        reclaimed by 15:00 expires fine, and v1.1 counted it as a failure.
+        So v1.2 reports BOTH and never merges them:
+          - INTRADAY (v1.1's number) — how often the level was violated at all.
+            Still the honest test of the premise AS STATED, and still the number
+            that says whether the impulse origin is respected.
+          - TERMINAL — the close nearest 15:45 relative to the floor. This is the
+            one that maps to money.
+          - RECOVERY — violated intraday, fine at the bell. The gap between the
+            two rates IS the answer to "is the premise wrong, or is the strike
+            just too close?"
+          - THE STRIKE CURVE — terminal failure rate as a function of distance
+            BEYOND the floor. That curve is the short-strike selector: it says
+            how far OTM the spread has to sit for terminal failure to reach a
+            tolerance you choose, priced from the state's own behaviour rather
+            than from a delta.
+        No new collection: same journal, same tape, same join.
 
 v1.1 — 2026-08-04 — `--machine ARMED` (and `--min-r`), BECAUSE v1.0's FIRST RUN
         MEASURED THE WRONG POPULATION. It scored every floor the track ever
@@ -263,8 +285,16 @@ def main(argv):
             depth = (floor - lo) if long_ else (h - floor)
             if depth > 0 and floor > 0:
                 pen = max(pen, 100.0 * depth / floor)
+        # v1.2 — TERMINAL: the close nearest the bell. `fwd` is sorted, so the
+        # last bar is the session's final print for this symbol. A short session
+        # (early close, truncated tape) ends where it ends — that is honest, and
+        # the bar count is reported so a thin day is visible rather than assumed.
+        term_close = fwd[-1][1]
+        term_failed = (term_close < floor) if long_ else (term_close > floor)
         results.append({**o, "held": broke_at is None,
-                        "mins_to_break": broke_at, "wick_pen_pct": pen})
+                        "mins_to_break": broke_at, "wick_pen_pct": pen,
+                        "term_close": term_close, "term_failed": term_failed,
+                        "fwd_bars": len(fwd)})
 
     if a.diagnose or not results:
         print("READINESS ROWS / JOIN DIAGNOSIS")
@@ -282,6 +312,8 @@ def main(argv):
             return 0
 
     held = [r for r in results if r["held"]]
+    term_ok = [r for r in results if not r["term_failed"]]
+    recovered = [r for r in results if not r["held"] and not r["term_failed"]]
     print(f"window        : {a.since} .. {a.until}")
     print(f"population    : machine={a.machine}"
           + (f"  min_r={a.min_r}" if a.min_r else "")
@@ -293,9 +325,21 @@ def main(argv):
           f"{stats['tcs_rows']} scored rows)")
     print(f"floor HELD    : {len(held)} ({100.0 * len(held) / len(results):.1f}%)"
           f"   — no 1m CLOSE back through the impulse origin before the bell")
+    print(f"terminal OK   : {len(term_ok)} "
+          f"({100.0 * len(term_ok) / len(results):.1f}%)"
+          f"   — price CLOSED on the safe side of the floor at the bell")
+    print(f"recovered     : {len(recovered)} "
+          f"({100.0 * len(recovered) / len(results):.1f}%)"
+          f"   — violated intraday, fine at the bell")
     print("definition    : CLOSE-based. A short strike is threatened by "
           "ACCEPTANCE beyond\n                a level, not by a touch; the wick "
-          "statistic is reported separately.\n")
+          "statistic is reported separately.")
+    print("READ THE TWO RATES TOGETHER. Intraday is the premise AS STATED — is "
+          "the\n                impulse origin respected at all. Terminal is "
+          "what a defined-risk 0DTE\n                spread actually pays on. A "
+          "large gap between them does not rescue the\n                premise; "
+          "it relocates the question to STRIKE DISTANCE, which the curve\n"
+          "                below answers.\n")
 
     # ── 1. durability by SD bucket — this is the ramp fit ───────────────────
     print("=" * 66)
@@ -312,9 +356,17 @@ def main(argv):
             print(f"  {name:<22} n={len(rs):<4} REFUSED (under n={MIN_N})")
             continue
         h = sum(1 for r in rs if r["held"])
+        t = sum(1 for r in rs if not r["term_failed"])
         rate = h / len(rs)
         hw = 1.96 * math.sqrt(rate * (1 - rate) / len(rs))
-        print(f"  {name:<22} n={len(rs):<4} held {rate:.0%} ±{hw:.0%}")
+        trate = t / len(rs)
+        thw = 1.96 * math.sqrt(trate * (1 - trate) / len(rs))
+        print(f"  {name:<22} n={len(rs):<4} intraday {rate:.0%} ±{hw:.0%}"
+              f"   terminal {trate:.0%} ±{thw:.0%}")
+    print("\n  ⚠ ON THE ARMED POPULATION THIS CURVE MAY NOT BE FITTABLE. Arming")
+    print("  already REQUIRES magnitude, so the low-SD buckets are near-empty by")
+    print("  construction and there is no variance to fit a ramp against. Run")
+    print("  --machine STAGING+ for the population that still has low-SD mass.")
     print("\n  Bucket EDGES are the current PRIORS, not a result. If durability")
     print("  rises monotonically across them the tiers are real; if it is flat,")
     print("  impulse magnitude is not what protects the floor and the ramp is")
@@ -349,6 +401,31 @@ def main(argv):
         print("\n  A floor that fails late is a 0DTE that ran out of clock, not "
               "a thesis\n  that was wrong. A p50 in single-digit minutes would "
               "say the opposite.")
+
+    # ── v1.2 — THE STRIKE CURVE: terminal failure vs distance beyond the floor
+    # This is the output that becomes a rule. Each row asks: if the short strike
+    # had been placed this far BEYOND the impulse floor, how often would price
+    # have closed through it at the bell? Read down until the rate reaches a
+    # tolerance you are willing to state in advance.
+    print("\n" + "=" * 66)
+    print("STRIKE CURVE — terminal failure vs distance BEYOND the floor")
+    print("=" * 66)
+    print(f"  {'offset':<10}{'terminal failures':>20}{'rate':>10}")
+    for off in (0.0, 0.25, 0.50, 0.75, 1.00, 1.50, 2.00, 3.00):
+        bad = 0
+        for r in results:
+            f0 = r["floor"]
+            strike = f0 * (1 - off / 100.0) if r["dir"] == "long" \
+                else f0 * (1 + off / 100.0)
+            through = (r["term_close"] < strike) if r["dir"] == "long" \
+                else (r["term_close"] > strike)
+            bad += 1 if through else 0
+        print(f"  {off:>5.2f}%    {bad:>18}{bad / len(results):>10.1%}")
+    print("\n  The offset where this crosses your tolerance IS the short-strike")
+    print("  rule — priced from the state's own behaviour rather than a fixed")
+    print("  delta. NOTE WHAT IT IS NOT: further OTM collects less credit, and")
+    print("  this table prices no credit at all. It bounds RISK, and the credit")
+    print("  side of that trade-off is a separate measurement.")
 
     # ── power ───────────────────────────────────────────────────────────────
     n = len(results)
