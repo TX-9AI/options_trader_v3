@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.68
+# docs/BACKLOG.md — v3.69
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -65,7 +65,8 @@ BAKED is changing nothing about today's data.
 | **AV.1 — the pooled gap read, with a legitimacy guard** | ✅ 08-04 | ✅ 08-04 | n/a (offline) | ALL CANARIES GREEN on control |
 | **TC.4b-pre — does the impulse floor hold?** | ✅ v1.3 08-04 | ✅ 08-04 | n/a (offline) | **CONTROL RUN: impulse − control TERMINAL = −0.3% ±2.3%. Dead null.** See below |
 | **PF.V — pitchfork variant sweep (§12 Q2)** | ✅ 08-04 | ✅ 08-04 | n/a (offline) | Answered: no-change. ACCEL/birth andrews 0.22 · mod_schiff 0.67 · schiff 3.61; adverse tine kills 81-97% in ALL THREE |
-| **ORB.1 — ORB was gated by the stale entry block** | ✅ 08-04 | ⬜ | ⬜ **fleet reflash tonight** | main v5.4; 6 tests + audit tool; desk suite green |
+| **ORB.1 — ORB was gated by the stale entry block** | ✅ 08-04 | ✅ 08-04 | ⬜ **fleet reflash tonight** | control suite 216 passed, ALL CANARIES GREEN |
+| **RPT.1 — report rollup (5 fixes, 2 repos)** | ✅ 08-04 | ⬜ | n/a (offline) | otv3 suite **223 passed / 1 skipped**; behavioural proof on all five |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1239,6 +1240,65 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK]` **RPT.1 — ✅ 2026-08-04. FIVE REPORTING FIXES, ALL OF THEM CASES
+  WHERE THE OUTPUT LOOKED RIGHT AND WAS NOT.**
+  **(1) devtools 47 was OOM-KILLED, not broken.** `line 341: 126055 Killed` is
+  SIGKILL (rc 137) — no traceback, no output. `a2_cooccurrence.load()` held
+  EVERY field of every tick across the whole corpus (now 17 sessions) and
+  `segments()` then copied them again per symbol. **Identical to
+  ramp_calibration v1.2**, which died producing no output on 13 sessions for the
+  same reason. **v1.2 slims at parse time** to the five keys the file actually
+  reads — measured 30,221 → 154 bytes on a representative record. No analysis
+  changes; the dropped fields were never read.
+  **THE GUARD SCANS THE SOURCE, NOT A LIST.** A future analysis reading a
+  dropped field would not crash — `.get()` returns None, arithmetic degrades to
+  zero, and the tool prints a clean table describing nothing. So the test greps
+  every `.get("…")` in the file and asserts `_KEEP` covers it. **My first draft
+  of that test matched only `r|rec|row.get(...)` and MISSED
+  `seg[i].get("price")`** — caught by the deliberate-failure run, and the regex
+  is now unqualified.
+  **(2) `excursion_report` was asking for a column it already had.** The
+  winner-giveback block printed *"add the extreme timestamps to telemetry before
+  the freeze"* — `trade_logger` **v3.9 shipped them on 2026-08-03**. v2.6 reads
+  them: **PEAK TIMING**, the fraction of the hold at which MFE landed, with
+  early/late shares. A high EARLY share is a loose trail; a high LATE share is a
+  move that ran to the exit and turned. **Opposite fixes, and giveback alone
+  cannot tell them apart** — which is the trail-vs-BOS question sitting under
+  today's 33% giveback. NULL on pre-deploy rows is REPORTED, never imputed: a
+  missing peak time is not a peak at time zero, and treating it as one would
+  manufacture the exact signal the measure exists to detect.
+  **(3) EXIT-REASON FAMILIES WERE FRAGMENTING THE SAMPLE.**
+  `regime_flip (LABEL)` carries the label in PARENTHESES, which survived the old
+  strip: 2026-08-04's twelve regime_flips became four cells of **6/4/1/1**,
+  every one REFUSED. `max_loss_floor_25pct` / `_24pct` split 2 and 1 by their own
+  config setting. Each fragment then honestly reported itself UNDERPOWERED —
+  **correct-looking output that can never reach a verdict.** Pooled, regime_flip
+  is one cell of 12 and reaches n=40 in ~4 sessions. `reason_detail()` preserves
+  the label, so pooling DEFERS the split rather than destroying it — the same
+  principle as `gap_outcome_join --pool`.
+  **(4) HEADLINE was printing false sentences.** 2026-08-04 announced
+  *"worst regime BREAKOUT_VOLATILE net +1041.50"* — the SECOND-BEST bucket, on a
+  profit, because only two cleared the n>=8 floor and both were positive. And
+  *"best day_of_week Tuesday"* / *"worst day_of_week Tuesday"* on a
+  single-session report. Arithmetically correct, semantically false, in the
+  section people skim. **v1.5** refuses the word with one eligible bucket and
+  tags it `LOWEST of N, not a loss` when every eligible bucket is positive.
+  **(5) ACCEL/birth was CONFOUNDED BY LIFETIME.** The 29-symbol sweep printed
+  andrews 0.22 against modified_schiff 0.67 — a 3x gap reading as "andrews
+  contains the move far better". But andrews has the SHORTEST median life (3 vs
+  6): a fork that dies at bar 3 has less time to be exceeded. **Per HELD BAR
+  it is ~0.073 / 0.112 / 0.516** — schiff stays disqualified and the
+  andrews-vs-modified gap falls to ~1.5x. Both printed; per held bar is the only
+  denominator comparable across variants with different lifetimes.
+  **⬜ STILL OPEN from the same review, deliberately not actioned:** the 27
+  sub-minute `trend_continuation_handoff` trades (0.5 min hold, 56%
+  never-favorable, lift 1.52) are a MECHANISM to find, not a strategy verdict to
+  file — and **AJ.2 on Aug 14 would otherwise read an execution artifact as
+  strategy quality.** And the sentiment join reads 0/85 with a fallback chain
+  (`strength_by_sym or strength or scores`) that cannot tell which quantity it
+  loaded; `scores` in `data/report.json` are the selector's COMPOSITE values on a
+  different scale entirely.
+
 - `[DESK→DEPLOY]` **ORB.1 — 🔴 ✅ FIXED 2026-08-04, GOING OUT ON TONIGHT'S
   RELOAD. THE FLAGSHIP HAS BEEN GATED OUT OF THE FIRST SIX MINUTES OF ITS OWN
   ENTRY WINDOW SINCE v5.0 DEPLOYED.**
@@ -3172,6 +3232,14 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.69 — 2026-08-04 — RPT.1: FIVE REPORTING FIXES ACROSS BOTH REPOS.**
+  devtools 47 was OOM-killed rather than broken (a2_cooccurrence v1.2 slims at
+  parse time, same failure and fix as ramp_calibration v1.2); excursion_report
+  v2.6 reads v3.9's peak timestamps it had been asking for and pools the
+  regime_flip / max_loss_floor families that were fragmenting every cell into
+  permanent REFUSAL; trade_report v1.5 stops calling a +$1,041 bucket "worst";
+  pitchfork audit v1.5 adds ACCEL per HELD BAR because per-birth rewarded the
+  most fragile variant. Every one is output that looked right and was not.
 - **v3.68 — 2026-08-04 — ORB.1: THE FLAGSHIP WAS GATED OUT OF ITS OWN OPENING
   WINDOW.** v5.0's stale-book entry block sits above the dispatch, so
   ORB_FIRES_REGARDLESS_OF_REGIME was unreachable on a stale tick and the fleet

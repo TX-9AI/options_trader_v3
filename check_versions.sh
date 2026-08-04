@@ -1,4 +1,10 @@
 #!/bin/bash
+# v4.22 — 2026-08-04 — +3 canaries: a2_cooccurrence v1.2's parse-time slim (the
+#         OOM that SIGKILLed devtools 47 with no traceback and no output) and
+#         the audit v1.5 ACCEL-per-held-bar denominator. The slim canary pins
+#         _KEEP by name because a future analysis reading a dropped field does
+#         not crash — it reads None, and the tool prints a clean table
+#         describing nothing.
 # v4.21 — 2026-08-04 — main v5.4: ORB EXEMPT FROM THE STALE ENTRY GATE, +3
 #         canaries and the header re-pinned. v5.0's block sat ABOVE the dispatch
 #         so ORB_FIRES_REGARDLESS_OF_REGIME was unreachable on a stale tick, and
@@ -330,6 +336,11 @@ check "main.py"                          "main.py — options_trader v5.4" "v5.4
 check "main.py"                          "_orb_exempt"                  "v5.4 confirmed ORB bypasses the stale entry block"
 check "main.py"                          "STALE book, but ORB is CONFIRMED"  "v5.4 the exempt path says why in the log"
 check "tests/orb_stale_block_audit.py"   "ORB confirmed"                "v1.0 the cost of the gate is measurable, not asserted"
+
+# ── rollup 2026-08-04 — the OOM and the confounded denominator ────────────
+check "tests/a2_cooccurrence.py"         "_KEEP = "                     "v1.2 records slimmed at parse time (devtools 47 was OOM-killed)"
+check "tests/test_a2_cooccurrence_slim.py" "covers_every_field_the_source_reads"  "v1.0 the slim is checked against the SOURCE, not a list"
+check "tests/pitchfork_filter_audit.py"  "ACCEL/held bar"               "v1.5 exposure denominator (per-birth is confounded by lifetime)"
 if grep -q "if not _orb_exempt:" main.py 2>/dev/null; then
     echo "  ✓ PRESENT: v5.4 the stale gate still blocks everything that is not a confirmed ORB"
 else

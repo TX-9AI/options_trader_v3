@@ -1,4 +1,11 @@
-# options_trader_v3/tests/a2_cooccurrence.py — v1.1
+# options_trader_v3/tests/a2_cooccurrence.py — v1.2
+# v1.2 — 2026-08-04 — SLIM AT PARSE TIME. devtools option 47 was SIGKILLed by
+#        the OOM killer (`Killed`, rc 137, no traceback and no output) once the
+#        replay corpus reached 17 sessions: load() held EVERY field of every
+#        tick and segments() then copied them all again per symbol. Records are
+#        now reduced to the five keys this file actually reads. Same failure and
+#        same fix as ramp_calibration v1.2, which died producing no output on a
+#        13-session run. No analysis changes — the dropped fields were never read.
 # v1.1 — 2026-07-22 — auto-discovery of the replay jsonl (validate_regime.sh
 #        v2.1 consolidated products to ~/day_trader_pro/reports/; the old
 #        data/harvest/<date>/ path is legacy). Prints what it loaded.
@@ -74,6 +81,33 @@ def discover() -> List[str]:
     return []
 
 
+# ── v1.1 — the fields this tool actually reads. Everything else in a replay
+# record (the full per-factor breakdown, every engine state object) is dropped
+# AT PARSE TIME rather than carried for the life of the run.
+#
+# WHY: option 47 was SIGKILLed by the OOM killer on 2026-08-04 — `Killed`, rc
+# 137, no traceback, no output. Not a code fault: the corpus reached 17 sessions
+# and this held every field of every tick, then `segments()` copied them all
+# again into per-symbol lists. Identical to ramp_calibration v1.2's failure,
+# which died producing NO OUTPUT on a 13-session run for the same reason and was
+# fixed the same way.
+# THE SLIM IS EXHAUSTIVE, NOT A GUESS: `sym`, `ts`, `price`, `scores`, `l2` are
+# the only keys read anywhere in this file (verified by enumerating every
+# .get() call), and `l2` is reduced to the two members used. A field added to a
+# future analysis must be added HERE too — hence the assertion in
+# tests/test_a2_cooccurrence_slim.py, which fails if a .get() appears for a key
+# the slim does not keep.
+_KEEP = ("sym", "ts", "price", "scores")
+
+
+def _slim(rec: dict) -> dict:
+    out = {k: rec.get(k) for k in _KEEP if k in rec}
+    l2 = rec.get("l2")
+    if isinstance(l2, dict):
+        out["l2"] = {"regime": l2.get("regime"), "c": l2.get("c")}
+    return out
+
+
 def load(paths: List[str]) -> List[dict]:
     import os
     recs, loaded = [], []
@@ -85,7 +119,7 @@ def load(paths: List[str]) -> List[dict]:
                     for line in fh:
                         line = line.strip()
                         if line:
-                            recs.append(json.loads(line))
+                            recs.append(_slim(json.loads(line)))
                     loaded.append((os.path.basename(path), len(recs) - n0))
             except FileNotFoundError:
                 print(f"  ! not found: {path}", file=sys.stderr)

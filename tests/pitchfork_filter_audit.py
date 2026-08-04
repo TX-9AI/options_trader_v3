@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 """
-tests/pitchfork_filter_audit.py — v1.4 — 2026-08-04
+tests/pitchfork_filter_audit.py — v1.5 — 2026-08-04
+
+v1.5 — 2026-08-04 — ACCEL PER HELD BAR, because per-birth was CONFOUNDED and
+       the first real run showed it. On the 29-symbol corpus v1.4 printed
+       andrews 0.22 against modified_schiff 0.67 — a 3x gap that reads as
+       "andrews contains the move far better". But andrews also has the SHORTEST
+       median life (3 bars against 6), and a fork that dies at bar 3 has less
+       time to be exceeded than one that lives to 7. The rate was measuring
+       longevity as much as geometry. Per HELD BAR the same run is roughly
+       0.073 / 0.112 / 0.516 — schiff stays disqualified, and the
+       andrews-vs-modified gap falls from ~3x to ~1.5x.
+       Both are printed. Per birth answers "how often does a fork get exceeded
+       in its lifetime"; per held bar answers "how often per unit of exposure",
+       and only the second is comparable across variants with different
+       lifetimes. Neither decides a default — §10's overfitting surface and
+       §12's consumer-sprawl risk are unchanged by a better denominator.
 
 v1.4 — 2026-08-04 — `--variant-sweep`, WHICH IS THE ONE PITCHFORK QUESTION NOT
        BLOCKED ON THE CALENDAR. v1.3 flagged 22 ACCELERATION events against 33
@@ -174,6 +189,7 @@ def _variant_sweep(root, syms, scan) -> int:
     for variant in VARIANTS:
         births = accel = touches = invalid = superseded = 0
         covs, lifetimes = [], []
+        covs_raw, bars_raw = [], []
         causes = collections.Counter()
         for sym in syms:
             h1 = _hourly(root, sym)
@@ -182,7 +198,10 @@ def _variant_sweep(root, syms, scan) -> int:
             av = atr_series(h1, 14).tolist()
             tr = replay(sym, h1, "1h", av, variant=variant,
                         uniqueness_scan=scan)
-            covs.append(tr.coverage(len(h1)))
+            _cov = tr.coverage(len(h1))
+            covs.append(_cov)
+            covs_raw.append(_cov)
+            bars_raw.append(len(h1))
             born_at = None
             for ev in tr.events:
                 if ev.kind == "BORN":
@@ -205,20 +224,25 @@ def _variant_sweep(root, syms, scan) -> int:
                         born_at = None
         covs.sort()
         med_cov = covs[len(covs) // 2] if covs else 0.0
+        # v1.5 — held bars, the honest denominator. Derived from the SAME span
+        # accounting coverage() uses, so the two can never disagree.
+        held_bars = sum(c * n for c, n in zip(covs_raw, bars_raw)) if covs_raw else 0.0
         lifetimes.sort()
         med_life = lifetimes[len(lifetimes) // 2] if lifetimes else None
         rows.append({"variant": variant, "births": births, "accel": accel,
                      "touch": touches, "inval": invalid, "sup": superseded,
-                     "cov": med_cov, "life": med_life, "causes": causes})
+                     "cov": med_cov, "life": med_life, "causes": causes,
+                     "held": held_bars})
 
-    print(f"  {'variant':<18}{'births':>8}{'med cov':>10}{'ACCEL/birth':>14}"
-          f"{'touch/birth':>13}{'med life':>10}")
+    print(f"  {'variant':<18}{'births':>8}{'med cov':>9}{'ACCEL/birth':>13}"
+          f"{'ACCEL/held bar':>16}{'touch/birth':>13}{'med life':>10}")
     for r in rows:
         ab = f"{r['accel'] / r['births']:.2f}" if r["births"] else "—"
+        ah = f"{r['accel'] / r['held']:.3f}" if r["held"] else "—"
         tb = f"{r['touch'] / r['births']:.2f}" if r["births"] else "—"
         life = r["life"] if r["life"] is not None else "—"
-        print(f"  {r['variant']:<18}{r['births']:>8}{r['cov']:>9.1%}"
-              f"{ab:>14}{tb:>13}{str(life):>10}")
+        print(f"  {r['variant']:<18}{r['births']:>8}{r['cov']:>8.1%}"
+              f"{ab:>13}{ah:>16}{tb:>13}{str(life):>10}")
 
     print("\n  CAUSE OF DEATH, per variant")
     for r in rows:
@@ -230,6 +254,10 @@ def _variant_sweep(root, syms, scan) -> int:
     print("\n" + "=" * 74)
     print("READING IT")
     print("=" * 74)
+    print("  READ ACCEL/HELD BAR FIRST. Per-birth is confounded by LIFETIME — a")
+    print("  variant whose forks die early has less time to be exceeded and looks")
+    print("  better for being fragile. Per held bar divides by exposure, which is")
+    print("  the only denominator comparable across variants with different lives.")
     print("  ACCELERATION/birth is the number v1.3 flagged. A rate near or above")
     print("  1.0 means the channel is routinely exceeded on the TREND side — the")
     print("  fork is describing a move narrower than the one that happened. If")

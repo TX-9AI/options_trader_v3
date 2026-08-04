@@ -1,5 +1,9 @@
 """
-tests/test_pitchfork_variant_sweep.py — v1.0 — 2026-08-04
+tests/test_pitchfork_variant_sweep.py — v1.1 — 2026-08-04
+
+v1.1 — 2026-08-04 — +2 tests for ACCEL per held bar (audit v1.5). The per-birth
+rate the first real run printed was confounded by lifetime and made the most
+FRAGILE variant look like the best-contained one.
 
 Covers `pitchfork_filter_audit --variant-sweep` (§12 open question 2).
 
@@ -112,6 +116,32 @@ def test_acceleration_is_reported_per_birth_not_raw():
     with tempfile.TemporaryDirectory() as tmp:
         out = _run(_tape(tmp), "--variant-sweep")
         assert "ACCEL/birth" in out, out[:1200]
+
+
+def test_accel_is_reported_per_held_bar_too():
+    """v1.5. Per-birth is confounded by lifetime: the first real 29-symbol run
+    printed andrews 0.22 vs modified_schiff 0.67, a 3x gap — but andrews also
+    had the shortest median life, so it simply had less time to be exceeded.
+    Per held bar the same run is ~0.073 vs ~0.112."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _run(_tape(tmp), "--variant-sweep")
+        assert "ACCEL/held bar" in out, out[:1200]
+        assert "READ ACCEL/HELD BAR FIRST" in out
+
+
+def test_held_bar_denominator_is_not_the_birth_count():
+    """If the two columns were identical the new one would be decoration."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _run(_tape(tmp), "--variant-sweep")
+        body = out.split("VARIANT SWEEP")[1].split("CAUSE OF DEATH")[0]
+        rows = [l.split() for l in body.splitlines()
+                if any(l.strip().startswith(v) for v in
+                       ("andrews", "schiff", "modified_schiff"))]
+        # columns: variant births cov accel/birth accel/held touch/birth life
+        pairs = [(r[3], r[4]) for r in rows if len(r) >= 5]
+        assert pairs, body
+        assert any(a != b for a, b in pairs), \
+            "per-birth and per-held-bar are identical — the denominator is wrong"
 
 
 def test_coverage_is_median_not_mean():
