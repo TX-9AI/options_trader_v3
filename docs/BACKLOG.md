@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.50
+# docs/BACKLOG.md — v3.51
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -404,7 +404,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   starvation until the warm depth fills it — the same signal Monday's live boxes
   produce. That is the instrumentation working, not a fault.
 
-- `[DESK]` **AP — ◐ SOURCE BUILT 2026-08-01; the fork itself ripens on its own.
+- `[DESK·DATA]` **AP — ◐ SOURCE BUILT 2026-08-01; the fork itself ripens on its own.
   The daily series now comes from OUR OWN TAPE, not a second feed.**
   §4.2 wants a daily fork at k=2 with R=40. `TIMEFRAMES["1d"]["candles"] = 10`,
   and ten daily bars cannot yield a k=2 triple with 5-bar separation. Worse than
@@ -909,33 +909,6 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   precisely because Andrews runs steep. That is a VARIANT question (§12 open
   question 2), not a threshold one, and `build_all_variants` already computes all
   three in parallel so it is measurable whenever we want it.
-
-- `[DESK]` **AX — THE EOD CONDUCTOR CANNOT SEND TELEGRAM. Every warning it has
-  ever raised went to a journal nobody reads.** Found 2026-08-03 in the conductor
-  log, immediately under a real warning it swallowed:
-  `[BACKFILL] ⚠️ 7 symbol(s) still without candles (AMD, AVGO, CVX, DIA, GLD, GS,
-  IWM)` followed by `[notify] missing DTP_TELEGRAM_TOKEN/DTP_TELEGRAM_CHAT_ID;
-  cannot send.`
-  **SAME SPLIT AS THE 08-01 BLIND-ALERT DRILL, one layer up.** The bot boxes carry
-  `TELEGRAM_TOKEN` / `TELEGRAM_CHAT_ID` baked into their systemd unit by
-  setup_ec2.sh; the CONTROL conductor looks for `DTP_`-prefixed variables that
-  were never set anywhere. Box credentials and control credentials are different
-  namespaces and only one of them was ever wired.
-  **CONSEQUENCE:** we have been running EOD blind. Not "the alert is noisy" —
-  the alert has never fired, so a nightly failure would look exactly like a
-  nightly success from outside the journal.
-  **FIX** is one line in the control environment, same shape as the 07-30
-  `DTP_REPORT_JSON` fix (item Y), and should be verified the same way: run the
-  conductor and confirm a message actually ARRIVES rather than that the code path
-  ran. `alert_manager` v1.10's lesson applies — a send that reports success
-  without checking delivery is worse than no send.
-  **⬜ ALSO RECORDED, a constraint rather than a defect:** the same log line says
-  **DXFeed history is same-evening only**, so a box that sat out a session can
-  NEVER have its candles backfilled afterwards. The short-tape gaps found 08-01
-  (p10 = 241 rows against a 391-row full session) are therefore PERMANENT once the
-  day passes. Tape coverage is use-it-or-lose-it, which raises the cost of a box
-  failing to wake and is worth weighing against the idle-cost argument for
-  shutting boxes down.
 
 - `[DESK]` **AY — THE GAP-DAY MISREAD: continuation fires into post-gap chop on a
   trend that already finished. Plus a SELECTION miss and an EXIT miss that the
@@ -2005,6 +1978,65 @@ file: everything above either ✅ or explicitly re-dated below.
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
 `docs/HISTORY.md` and the audits. Resolution date + fixing versions + the why.*
 
+- **AX ✅ 2026-08-03 — RESOLVED, and verified the only way this item allowed:
+  by a real warning ARRIVING in Telegram, not by the code path running.** The
+  control conductor read `DTP_`-prefixed variables that were never set anywhere,
+  while the bot boxes carry un-prefixed ones baked in by setup_ec2.sh — two
+  namespaces, one of them wired. Fixed with `EnvironmentFile` on the conductor
+  unit, the same file the other two timers already loaded. Operator confirmed
+  delivery 2026-08-03. The lesson is the one `alert_manager` v1.10 already
+  taught and this item restates at a second layer: an alert that has never
+  fired is indistinguishable from an alert with nothing to say, so the proof of
+  a notification path is the notification, never the exit code.
+- **AZ ✅ 2026-08-03 — RESOLVED. THE EXCURSION CUMULATIVE HAD NEVER WORKED,
+  on any run ever made.** `excursion_report._rows_from_dbs` globbed the UNDATED
+  filename form while harvest.py:166 writes `<SYM>_trades_<date>.db`, so it
+  matched zero files since v2.0 (2026-07-15) and every run silently fell back to
+  the single-day consolidated JSON — including the nightly automatic run as EOD
+  conductor phase 7, whose docstring says it reads the DBs.
+  `consolidate_trades.py:178` and `tests/gate_ledger.py:139` both glob the dated
+  form; this file was the lone outlier. **Scope is narrow and worth stating: no
+  single-day number was ever wrong** (the fallback is consolidated from the same
+  DBs) — only cumulative was impossible. Fixed in v2.3 along with three
+  same-class defects found in the same read: the fallback only announced itself
+  when the report was EMPTY; LEASH VERDICT iterated a hardcoded flavor tuple and
+  silently skipped every trail the fleet actually fires; FLOOR VERDICT matched
+  `hard_stop` but not `max_loss_floor`, reporting 1 floor stop on a day with 6.
+  `--since` over the fallback now REFUSES with rc=2 rather than labelling one
+  session cumulative. 12 tests, deliberate-failure verified.
+- **BA ✅ 2026-08-03 — RESOLVED. MENU 41 COULD NOT SEE CONCENTRATION.** `trade_report` carried
+  `by_exit_reason` and `by_session_date` as separate MARGINALS with no cross, so
+  it structurally could not answer whether an exit was a standing pattern or one
+  session — the question raised by `bos_exit` showing n=21 cumulative, identical
+  to its single-day n, while every other exit grew 3-6x. v1.4 adds EXIT REASON x
+  SESSION SPREAD (distinct sessions, heaviest date, its share, SINGLE-SESSION at
+  >=80% AND n >= min_n so a thin reason is never called a finding). It
+  immediately paid: the 07-23..08-03 "cumulative" is **67% two sessions** (07-31
+  n=116, 08-03 n=88 of 303). Same version fenced off `flag_runners_cut_early`,
+  which was computed over the pre-v5.0 flicker whose sub-minute holds drag both
+  medians to zero — the ratio is now reported both ways and the verdict is
+  WITHHELD above 10% sub-minute. On first contact: 23% sub-minute, correctly
+  withheld. 7 tests.
+- **BB ✅ 2026-08-03 — RESOLVED. consolidate_trades DOC DRIFT (v1.3, doc only).** Its
+  source line put the date before the `_trades` token — a THIRD field ordering,
+  disagreeing with its own `_DB_RE` nine lines below and with what harvest
+  writes — and its outputs were documented as landing in the day folder when they
+  go to `reports/` FLAT. v1.1.1 corrected the other path references and missed
+  these two. Filed as its own item because a stale filename in a docstring is
+  exactly what produced the excursion defect above.
+- **BC ✅ 2026-08-03 — RESOLVED. MFE/MAE TIMESTAMPS (trade_logger v3.9).** v3.8
+  stored the excursion extremes as VALUES with no time attached, which measures
+  how much a winner gave back and cannot ask whether it could have been
+  EXTENDED: a trade that peaked at minute 2 and bled for twenty minutes and one
+  that reversed on the last tick produce the identical (MFE, realized) pair and
+  call for opposite fixes. Added `max_premium_seen_at` / `min_premium_seen_at`
+  (UTC ISO via `ts_for_db`, the same base as entry_time — deliberately, since a
+  UTC-vs-ET comparison already inverted one verdict here). The stamp advances
+  only when the extreme advances; SQLite evaluates every SET right-hand side
+  against the ORIGINAL row, proven by ticking a real path through a real file
+  rather than by reading the SQL and agreeing with it. 6 tests,
+  deliberate-failure verified. Pre-existing rows read NULL — **consumers must
+  treat that as "not recorded", never as zero or as entry time.**
 - **AT ✅ 2026-08-01 — RESOLVED. The regen finished (15/15 dates, rc=0, ~5h50m)
   and all four tools were re-run on the clean corpus.** The contamination is
   cleared and the numbers in **AQ** and **AR** are no longer provisional.
@@ -2506,6 +2538,23 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.51 — 2026-08-04 — THE TWO-POPULATION SPLIT, AND FIVE MEASUREMENT
+  DEFECTS CLEARED.** The operator's reframing governs the pre-go-live work from
+  here: separate trades that were NEVER favorable — not for one tick, so there
+  was never anything to manage — from winners that gave gains back. The first is
+  a SELECTION problem, the second an EXTENSION problem, and pooling them is why
+  "which exit is losing money" kept returning the wrong answer. Standing
+  evidence: every losing exit has MFE ~ 0 (max_loss_floor_25pct -0%,
+  max_loss_floor_24pct 0%, orb_structure_stop +1%, bos_exit +2%, stop_hit +6%),
+  uniform across four exits and three strategies. Leading candidate cell
+  TRENDING_BEAR / ContinuationStrategy: n=30, 27% win, -$2,852.50, avg -$95.08 —
+  65% of continuation's whole loss in 17% of its trades. **bos_exit is NOT a
+  standing loser**: n=34 cumulative, net -$298; the -$2,757 was one session.
+  **The trail is not the candidate either** — trails hand back ~22% of peak and
+  still realize +15% to +30% on winners; that giveback IS the leash distance.
+  Tooling: excursion_report v2.3/v2.4/v2.5, trade_report v1.4,
+  consolidate_trades v1.3, trade_logger v3.9. AX resolved. AP re-tagged
+  `[DESK·DATA]` — it was counted against execution while waiting on ripening.
 - **v3.50 — 2026-08-03 — BOS IS NOT CUTTING LIVE MOVES; AY's THIRD ITEM
   CORRECTED.** `post_exit_continuation` v1.0 measured what giveback cannot — does
   price keep running after an exit fires — and `bos_exit` shows **no separation
