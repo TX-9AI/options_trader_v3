@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.67
+# docs/BACKLOG.md — v3.68
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -64,7 +64,8 @@ BAKED is changing nothing about today's data.
 | **D.1 — bull/bear were the same token in THREE renderers** | ✅ 08-04 | ✅ 08-04 | n/a (report-only) | 16 rows re-rendered on control; ALL CANARIES GREEN |
 | **AV.1 — the pooled gap read, with a legitimacy guard** | ✅ 08-04 | ✅ 08-04 | n/a (offline) | ALL CANARIES GREEN on control |
 | **TC.4b-pre — does the impulse floor hold?** | ✅ v1.3 08-04 | ✅ 08-04 | n/a (offline) | **CONTROL RUN: impulse − control TERMINAL = −0.3% ±2.3%. Dead null.** See below |
-| **PF.V — pitchfork variant sweep (§12 Q2)** | ✅ 08-04 | ⬜ | n/a (offline) | desk suite **210 passed / 1 skipped**; 6 planted-tape tests |
+| **PF.V — pitchfork variant sweep (§12 Q2)** | ✅ 08-04 | ✅ 08-04 | n/a (offline) | Answered: no-change. ACCEL/birth andrews 0.22 · mod_schiff 0.67 · schiff 3.61; adverse tine kills 81-97% in ALL THREE |
+| **ORB.1 — ORB was gated by the stale entry block** | ✅ 08-04 | ⬜ | ⬜ **fleet reflash tonight** | main v5.4; 6 tests + audit tool; desk suite green |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1238,6 +1239,55 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK→DEPLOY]` **ORB.1 — 🔴 ✅ FIXED 2026-08-04, GOING OUT ON TONIGHT'S
+  RELOAD. THE FLAGSHIP HAS BEEN GATED OUT OF THE FIRST SIX MINUTES OF ITS OWN
+  ENTRY WINDOW SINCE v5.0 DEPLOYED.**
+  **Operator's instinct, confirmed by reading HEAD rather than inferring:**
+  `main.py:1081` (v5.0) returns on a stale regime book BEFORE the chain fetch and
+  BEFORE `orb_regime_bypass` at ~1111. So `ORB_FIRES_REGARDLESS_OF_REGIME` — the
+  constant **defect V** created for exactly this purpose — was unreachable on any
+  stale tick. v5.0 re-gated the flagship through the back door.
+  **THE TIMING IS THE WHOLE POINT, and it is measured.** Fleet grep 2026-08-04:
+  `FIRST=09:35:01` on ALL 15 boxes, `LAST=09:39-09:41`. ORB entries open at
+  **09:35:00 sharp**. The block IS the cold-book warm-up, and it lands exactly on
+  the flagship's opening window. Operator: *"our morning open used to be our
+  strongest time of the day, especially with ORB."* Today the open was the only
+  losing phase — n=24, 42%, **-$225.50** — against midday +$2,244.
+  **THE OPERATOR NAMED THE CAUSE FAMILY AND WAS RIGHT ABOUT THE MECHANISM.**
+  Their guess was the bookmark; the bookmark is offline-replay only and cannot
+  touch the live path. But the WARM-UP was the right answer — v5.0 converted the
+  cold-book warm-up into an entry block, and ORB inherited it.
+  **THE FIX — a branch, not a deletion.** A CONFIRMED ORB (OPEN_LONG /
+  OPEN_SHORT) is exempt. Nothing else is: continuation, condor, butterfly and
+  sweep all condition on the label and stay blocked, so v5.0's real protection is
+  intact.
+  **WHY THE EXEMPTION IS PRINCIPLED.** v5.0's rule is *"opening a position is a
+  DECISION against a classification the engine cannot confirm."* ORB reads no
+  classification — break, retest, close back outside, graded on liquidity alone
+  since setup_scorer v1.4. There is no label for a stale label to invalidate.
+  **AND `stale` IS NOT `blind`.** It is the regime BOOK (a tick gap past
+  dt_max=90s); the FEED has its own guard, latch and pager (market_data v3.3 /
+  blindness_latch). A confirmed ORB break on a stale book reads FRESH PRICE and
+  no label. **Do not widen this to "ignore stale"** — that would delete a
+  protection that is real for every other strategy.
+  **MEASURED, NOT ASSERTED: `tests/orb_stale_block_audit.py` v1.0.** A blocked
+  entry leaves NO trade row — the refusal exists only as a log line, so bot.log
+  is the only place the counterfactual survives (`orb_state.json` is overwritten
+  every tick and cannot answer a question about 09:35 afterwards). It reports the
+  block window per session and how many minutes inside it had a CONFIRMED ORB.
+  **That count is an UPPER BOUND on opportunities refused** — sizing, grade,
+  liquidity-in-path and the daily-loss halt all sit downstream and none are
+  logged — and it is **not forgone P&L**. After the bake, the `exempt` column
+  appears where `blocked` used to and the two are the direct before/after.
+  **⬜ RUN IT ACROSS THE FLEET (option 14) once the reflash lands:**
+  `cd ~/options-trader && python3 tests/orb_stale_block_audit.py 2>&1 | tail -6; true`
+  A single box reading zero does not clear the gate — ORB confirms on a break AND
+  retest inside a four-to-six-minute window, so most boxes most days will be zero.
+  **The fleet total is the number.**
+  **⚠️ BOUNDARY FOR EVERY MORNING COMPARISON:** 2026-08-03 and 08-04 are the only
+  sessions with the block live. Any open-window fire-rate or ORB statistic that
+  spans this deploy is comparing two different machines.
+
 - `[DESK]` **PF.V — ✅ 2026-08-04. THE VARIANT SWEEP: `pitchfork_filter_audit`
   v1.4 `--variant-sweep`. The one pitchfork question that was not blocked on the
   calendar.**
@@ -3122,6 +3172,16 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.68 — 2026-08-04 — ORB.1: THE FLAGSHIP WAS GATED OUT OF ITS OWN OPENING
+  WINDOW.** v5.0's stale-book entry block sits above the dispatch, so
+  ORB_FIRES_REGARDLESS_OF_REGIME was unreachable on a stale tick and the fleet
+  lost 09:35:01-09:41 every session since it deployed — measured on all 15 boxes,
+  and the open was today's only losing phase. main v5.4 exempts a CONFIRMED ORB
+  and nothing else. Ships on tonight's reflash rather than the Aug 10 bake.
+  `orb_stale_block_audit` v1.0 turns the cost into an upper-bound count instead of
+  a claim. Also: PF.V answered as a no-change, with the real finding being that
+  adverse-tine kills 81-97% of forks in ALL THREE variants — a §5.3 prior
+  question, not a variant one.
 - **v3.67 — 2026-08-04 — TC.4's CONTROL VERDICT (−0.3% ±2.3%, and the strike
   curve INVERTS) + PF.V the pitchfork variant sweep.** The impulse origin survives
   no better than an arbitrary recent extreme, and is strictly worse at every

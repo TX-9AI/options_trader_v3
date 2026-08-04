@@ -1,4 +1,11 @@
 #!/bin/bash
+# v4.21 — 2026-08-04 — main v5.4: ORB EXEMPT FROM THE STALE ENTRY GATE, +3
+#         canaries and the header re-pinned. v5.0's block sat ABOVE the dispatch
+#         so ORB_FIRES_REGARDLESS_OF_REGIME was unreachable on a stale tick, and
+#         the fleet lost 09:35-09:41 of the flagship's window every session since
+#         it deployed. The ABSENCE canary is the load-bearing one: the v5.0
+#         unconditional form returns before ORB is ever consulted, raises
+#         nothing, and shows up only as fewer morning trades.
 # v4.20 — 2026-08-04 — +2 canaries for pitchfork_filter_audit v1.4's variant
 #         sweep. The load-bearing one pins that `variant` is THREADED to the
 #         replay: swallow it and the sweep still prints a clean three-row table,
@@ -319,7 +326,16 @@ check "analysis/trade_readiness.py"      "readiness_would_fire"         "v1.0 wo
 check "analysis/trade_readiness.py"      "TR_DEARM_SLOPE"               "v1.0 slope de-arm knob (falling confluence disarms)"
 check "analysis/trade_readiness.py"      "0.5 \*\* (dt / TR_SLOPE_HALFLIFE_S)" "v1.0 dt-aware slope EMA (wall-clock, no tick counters)"
 check "main.py"                          "_readiness.assess_all(ctx, regime)" "v4.3 readiness hooked in the every-tick block"
-check "main.py"                          "main.py — options_trader v5.3" "v5.3 main header current (W.2a: capture handler logs inside its own except)"
+check "main.py"                          "main.py — options_trader v5.4" "v5.4 main header current (ORB exempt from the stale entry gate)"
+check "main.py"                          "_orb_exempt"                  "v5.4 confirmed ORB bypasses the stale entry block"
+check "main.py"                          "STALE book, but ORB is CONFIRMED"  "v5.4 the exempt path says why in the log"
+check "tests/orb_stale_block_audit.py"   "ORB confirmed"                "v1.0 the cost of the gate is measurable, not asserted"
+if grep -q "if not _orb_exempt:" main.py 2>/dev/null; then
+    echo "  ✓ PRESENT: v5.4 the stale gate still blocks everything that is not a confirmed ORB"
+else
+    echo "  ✗ STALE:   main.py no longer branches the stale gate on _orb_exempt — either ORB is gated again (v5.0 form) or the gate was deleted outright"
+    MISS=$((MISS+1))
+fi
 check "analysis/trade_readiness.py"      "readiness_staged_pick"        "v1.1 staged-pick journaling (calm-vs-spike experiment)"
 check "analysis/trade_readiness.py"      "TR_CONV_HALFLIFE_S"           "v1.1 smoothed-conviction EMA knob"
 check "tests/readiness_digest.py"        "readiness_digest_"            "v1.0 nightly digest tool present (conductor phase 9 target)"

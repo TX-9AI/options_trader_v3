@@ -1,5 +1,21 @@
 """
-main.py — options_trader v5.3
+main.py — options_trader v5.4
+v5.4 — 2026-08-04 — ORB WAS BEING GATED BY THE STALE-BOOK ENTRY BLOCK, AND THAT
+        WAS NEVER INTENDED. v5.0 put the block ABOVE the dispatch, so it
+        returned before `orb_regime_bypass` ran and
+        ORB_FIRES_REGARDLESS_OF_REGIME — the constant defect V exists to
+        provide — became unreachable on a stale tick. MEASURED, not inferred:
+        the block ran 09:35:01 → 09:39-09:41 ET on ALL 15 boxes on 2026-08-04,
+        which is the first four to six minutes of ORB's own entry window (ORB
+        opens 09:35:00 sharp). Every session since v5.0 deployed lost that
+        window fleet-wide, and the flagship is the strategy the morning belongs
+        to.
+        A CONFIRMED ORB (OPEN_LONG / OPEN_SHORT) is now exempt. Nothing else is:
+        continuation, condor, butterfly and sweep all condition on the label and
+        stay blocked, so v5.0's actual protection is intact.
+        THIS IS NOT "IGNORE STALE". `stale` is the regime BOOK; the feed has its
+        own guard, latch and pager. A confirmed ORB break on a stale book reads
+        fresh price and no label at all.
 v5.3 — 2026-08-04 — W.2: _capture_entry_snapshot's handler now logs inside the
         except itself. It always warned, but the census reads the HANDLER BODY,
         so it was counted SILENT — and a census that miscounts is worse than
@@ -1078,10 +1094,36 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     # capital.
     # Open positions are unaffected: they keep being managed to exit by every
     # price-based stop.
+    # v5.4 — ORB IS EXEMPT, and this is a RESTORATION rather than a new licence.
+    # v5.0's gate sat ABOVE the dispatch, so it returned before
+    # `orb_regime_bypass` (line ~1111) could ever execute — which made
+    # ORB_FIRES_REGARDLESS_OF_REGIME, the constant defect V created for exactly
+    # this purpose, unreachable on any stale tick. Measured 2026-08-04: the
+    # block ran 09:35:01 → 09:39-09:41 ET on ALL 15 boxes, i.e. the first four
+    # to six minutes of ORB's own entry window, every session since v5.0.
+    # WHY ORB AND NOTHING ELSE. v5.0's rule is "opening a position is a DECISION
+    # against a classification the engine cannot confirm". ORB reads no
+    # classification: break, retest, close back outside — price structure only,
+    # graded on liquidity alone since setup_scorer v1.4. There is no label for a
+    # stale label to invalidate. Continuation, condor, butterfly and sweep all
+    # genuinely condition on the label and stay blocked.
+    # AND STALE IS NOT BLIND. `stale` is the REGIME BOOK (a tick gap past
+    # dt_max=90s); the feed has its own guard, latch and pager (market_data v3.3
+    # / blindness_latch). A confirmed ORB break on a stale book still has fresh
+    # price — which is the whole reason this exemption is safe and why it must
+    # NOT be widened to "ignore stale".
+    _orb_ctx = ctx.get("orb")
+    _orb_exempt = bool(
+        ORB_FIRES_REGARDLESS_OF_REGIME and _orb_ctx is not None
+        and getattr(_orb_ctx, "state", None) in (ORBState.OPEN_LONG,
+                                                 ORBState.OPEN_SHORT))
     if _l2_integ is not None and getattr(_l2_integ, "stale", False):
-        logger.info("Entry blocked: regime book is STALE — waiting for a tick "
-                    "that resolves it. (Open positions keep being managed.)")
-        return
+        if not _orb_exempt:
+            logger.info("Entry blocked: regime book is STALE — waiting for a tick "
+                        "that resolves it. (Open positions keep being managed.)")
+            return
+        logger.info("STALE book, but ORB is CONFIRMED — proceeding. ORB reads no "
+                    "regime label (defect V); price is not stale, the book is.")
 
 
     # ── Fetch options chain (shared across strategies) ────────────────────────
