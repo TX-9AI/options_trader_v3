@@ -1,5 +1,30 @@
 """
-database/trade_logger.py — Options trade logging (SQLite). v3.8
+database/trade_logger.py — Options trade logging (SQLite). v3.9
+v3.9 — 2026-08-03 — MFE/MAE TIMESTAMPS: max_premium_seen_at /
+        min_premium_seen_at (TEXT, UTC ISO via ts_for_db — the SAME base as
+        entry_time, deliberately, because comparing a UTC field against an
+        ET-offset one has already inverted one verdict here). Auto-migrated,
+        NULL on every pre-existing row.
+        WHY, and why it could not wait: v3.8 stored the excursion EXTREMES as
+        values with no time attached. That is enough to measure HOW MUCH a
+        winner gave back and useless for asking WHETHER IT COULD HAVE BEEN
+        EXTENDED — a trade that peaked at minute 2 and bled for twenty minutes
+        and one that ran to the exit and reversed on the last tick produce the
+        identical (MFE, realized) pair, and they call for opposite fixes: the
+        first says the leash is too loose, the second says the move simply
+        turned. No quantity of additional sessions resolves that; only the
+        timestamp does. It pays off ONLY in sessions recorded after it
+        deploys, so its value is strictly decreasing until the 2026-08-21
+        freeze.
+        TELEMETRY ONLY — no trade mechanics touched. The timestamp advances
+        only when the extreme itself advances (CASE on the pre-update row),
+        so it marks WHEN the peak/trough was set, not when it was last
+        re-confirmed. SQLite evaluates every SET right-hand side against the
+        ORIGINAL row regardless of clause order, so the CASE reads the old
+        extreme even though it is written alongside the new one — proven by
+        test_mfe_timestamp_tracks_only_new_highs rather than asserted.
+        Consumers MUST treat NULL as "not recorded" and never as zero or as
+        entry time: every row banked before this deploy has it.
 v3.1 — 2026-07-12 — F5 FIX (exit-reason integrity): new trail_stop column
         (schema + migration) + update_trail_stop(). The trail is now persisted
         separately; stop_premium is the immutable entry-time -25% floor.
@@ -193,6 +218,10 @@ class TradeLogger:
             ("current_premium", "REAL DEFAULT 0.0"),
             ("max_premium_seen", "REAL"),
             ("min_premium_seen", "REAL"),
+            # v3.9 — WHEN each extreme was set (UTC ISO). NULL = not recorded;
+            # never read it as zero or as entry time.
+            ("max_premium_seen_at", "TEXT"),
+            ("min_premium_seen_at", "TEXT"),
             ("orb_range_high",  "REAL DEFAULT 0.0"),
             ("orb_range_low",   "REAL DEFAULT 0.0"),
             ("short_strike",    "REAL DEFAULT 0.0"),
@@ -291,19 +320,37 @@ class TradeLogger:
                 (new_trail, trade_id)
             )
 
-    def update_current_premium(self, trade_id: str, premium: float):
-        """Update live mark price every tick — and (v3.8) the per-trade
-        MFE/MAE telemetry: max/min premium ever seen while open. This is the
-        evidence base for tuning every exit threshold (was the floor hit by
-        trades that then recovered? how much did trails give back vs capture?).
-        SQLite scalar MAX/MIN keep it one write; COALESCE seeds on first tick."""
+    def update_current_premium(self, trade_id: str, premium: float,
+                               ts: Optional[str] = None):
+        """Update live mark price every tick — and the per-trade MFE/MAE
+        telemetry: max/min premium ever seen while open, and (v3.9) WHEN each
+        extreme was set. This is the evidence base for tuning every exit
+        threshold (was the floor hit by trades that then recovered? how much
+        did trails give back vs capture — and did the peak come early or at
+        the exit?).
+        SQLite scalar MAX/MIN keep it one write; COALESCE seeds on first tick.
+        The _at columns use CASE on the PRE-UPDATE row, so they advance only
+        when the extreme itself advances rather than on every re-confirming
+        tick. SQLite evaluates all SET right-hand sides against the original
+        row, so the CASE sees the old extreme even though the new one is
+        assigned in the same statement.
+        ts is injectable for tests; production passes None and gets ts_for_db()
+        — the same UTC base as entry_time, never a local or ET clock."""
+        stamp = ts or ts_for_db()
         with self._connect() as conn:
             conn.execute(
                 "UPDATE trades SET current_premium=?, "
+                "max_premium_seen_at=CASE WHEN max_premium_seen IS NULL "
+                "    OR ? > max_premium_seen THEN ? ELSE max_premium_seen_at END, "
+                "min_premium_seen_at=CASE WHEN min_premium_seen IS NULL "
+                "    OR ? < min_premium_seen THEN ? ELSE min_premium_seen_at END, "
                 "max_premium_seen=MAX(COALESCE(max_premium_seen, ?), ?), "
                 "min_premium_seen=MIN(COALESCE(min_premium_seen, ?), ?) "
                 "WHERE trade_id=?",
-                (premium, premium, premium, premium, premium, trade_id)
+                (premium,
+                 premium, stamp,
+                 premium, stamp,
+                 premium, premium, premium, premium, trade_id)
             )
 
     def update_fields(self, trade_id: str, **fields):
