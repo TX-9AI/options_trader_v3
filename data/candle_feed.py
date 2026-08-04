@@ -1,5 +1,16 @@
 """
-data/candle_feed.py — addendum v3.10 (see below); original header follows.
+data/candle_feed.py — addendum v3.11 (see below); original header follows.
+v3.11 — 2026-08-04 — ONE PREDICATE, `_idle_outside_session(once)`, called from
+        both the reconnect gate and the RTH-over break. v3.9 wrote the condition
+        inline twice and v3.10 had to patch both; a fourth caller would have had
+        to remember a fourth time, and the whole incident was three independent
+        clock checks in a chain, two of which blocked the same operation. Pure
+        refactor — the decision is identical at both sites and service mode is
+        byte-equivalent to v3.10.
+        WHAT IT ENCODES: the gate exists to stop a box HOLDING a live
+        subscription with no session to serve. Reports and backfills hold
+        nothing, so they run outside RTH; the fleet-maintenance wake that
+        prompted v3.9 is still blocked, because that runs in SERVICE mode.
 v3.10 — 2026-08-04 — `--once` IS EXEMPT FROM BOTH RTH GATES. v3.9's gate never
         asked whether the run was a one-shot backfill, and neither did the
         RTH-over break inside the stream loop. A one-shot outside RTH therefore
@@ -631,6 +642,28 @@ class CandleFeed:
                        sym, tf, n, need, "" if n >= need else "  << SHORT — check entitlement")
             self.backfill_logged[(sym, tf)] = True
 
+    @staticmethod
+    def _idle_outside_session(once: bool) -> bool:
+        """Should this run stand down because no session needs serving?
+
+        ONE predicate, TWO call sites (the reconnect gate and the RTH-over
+        break). v3.9 wrote the same condition inline in both places and v3.10
+        had to patch both; a third caller would have had to remember a third
+        time. It is a method so the two can never disagree again.
+
+        THE DISTINCTION IS PURPOSE, NOT TIME — which is the whole lesson of
+        2026-08-01..08-04. What the gate protects against is a box HOLDING a
+        live DXLink subscription when there is no session to serve it: the
+        maintenance wake that put 29 boxes on the wire for work needing no
+        market data. A `--once` run holds nothing. It connects, pulls HISTORY
+        from 09:30, flushes and exits, and history does not stop existing at
+        16:00 — so gating it on the clock blocked the ONLY path the EOD candle
+        retrieval has, silently, for two sessions.
+
+        SERVICE MODE (once=False) is unchanged from v3.9 in every respect.
+        """
+        return not is_rth() and not once
+
     async def run(self, once: bool = False):
         session = get_session()
         backoff = RECONNECT_MIN_S
@@ -672,7 +705,7 @@ class CandleFeed:
             # it, and wrote a HEADER-ONLY csv. Two sessions of sat-out tape, and
             # DXFeed history is same-evening only — permanent at midnight.
             # It logged INFO the whole time and nothing raised.
-            if not is_rth() and not once:
+            if self._idle_outside_session(once):
                 _until = seconds_until_rth_open()
                 if _until > FEED_WARM_LEAD_S:
                     _nap = min(60.0, _until - FEED_WARM_LEAD_S)
@@ -760,7 +793,7 @@ class CandleFeed:
                             # again and sleep — the same hang, one layer down,
                             # with the backfill still undrained. Both sites had
                             # to move together or neither works.
-                            if not is_rth() and not once:
+                            if self._idle_outside_session(once):
                                 logger.info(
                                     "RTH over — closing DXLink socket and "
                                     "releasing all subscriptions until the next "

@@ -1,4 +1,10 @@
 #!/bin/bash
+# v4.26 — 2026-08-04 — candle_feed v3.11 collapses both RTH checks into ONE
+#         predicate, and pull_today_ohlc v1.5 restores its guard to ON now that
+#         the real cause (v3.10) is fixed. The canary counts CALLS to the
+#         predicate rather than matching a condition: three independent clock
+#         checks in a chain is what caused the outage, and a fourth written by
+#         hand is what this prevents.
 # v4.25 — 2026-08-04 — candle_feed v3.10: `--once` exempt from BOTH RTH gates.
 #         THE ABSENCE CANARY IS THE POINT — a bare `if not is_rth():` inside
 #         run() is the v3.9 form, and it hangs every EOD candle retrieval with
@@ -359,19 +365,21 @@ check "tests/pitchfork_filter_audit.py"  "ACCEL/held bar"               "v1.5 ex
 
 # ── pull_today_ohlc v1.3 (2026-08-04) — the guard that ate the backfill ───
 check "pull_today_ohlc.sh"               'BOT=$(systemctl is-active optionsbot' "v1.3 guard reads optionsbot, not just the clock"
-check "pull_today_ohlc.sh"               'GUARD="${OT_PULL_RTH_GUARD:-0}"'  "v1.4 guard OFF by default, one env var to restore"
+
 
 # ── candle_feed v3.10 (2026-08-04) — the gate that ate the backfill ───────
-check "data/candle_feed.py"              "addendum v3.10"               "v3.10 header present"
-check "tests/test_candle_feed_once_exempt.py" "both_rth_gates_are_exempted"  "v1.0 BOTH gates pinned (a one-gate fix hangs identically)"
-_n_once=$(grep -c "if not is_rth() and not once:" data/candle_feed.py 2>/dev/null || echo 0)
+check "data/candle_feed.py"              "addendum v3.11"               "v3.11 header present"
+check "data/candle_feed.py"              "def _idle_outside_session"    "v3.11 ONE predicate for both RTH checks"
+check "pull_today_ohlc.sh"               'OT_PULL_RTH_GUARD:-1'         "v1.5 guard back ON by default (v3.10 fixed the real cause)"
+check "tests/test_candle_feed_once_exempt.py" "both_gates_go_through_the_one_predicate"  "v1.0 BOTH gates pinned to the shared predicate"
+_n_once=$(grep -c "self._idle_outside_session(once)" data/candle_feed.py 2>/dev/null || echo 0)
 if [ "$_n_once" = "2" ]; then
-    echo "  ✓ PRESENT: v3.10 both RTH gates exempt --once (found $_n_once)"
+    echo "  ✓ PRESENT: v3.11 both RTH checks route through the one predicate (found $_n_once)"
 else
-    echo "  ✗ STALE:   candle_feed has $_n_once of 2 --once exemptions — an EOD candle pull outside RTH will sleep to its timeout and write a header-only csv; that day's sat-out tape is gone at midnight"
+    echo "  ✗ STALE:   candle_feed has $_n_once of 2 predicate calls — an EOD candle pull outside RTH will sleep to its timeout and write a header-only csv; that day's sat-out tape is gone at midnight"
     MISS=$((MISS+1))
 fi
-check "tests/test_pull_ohlc_guard.sh"    "THE CASE THAT WAS BROKEN"     "v1.0 guard decision table covered"
+check "tests/test_pull_ohlc_guard.sh"    "THE CASE IT EXISTS FOR"       "v1.2 guard decision table covered (guard ON by default)"
 if grep -q '\[ "$FEED" = "active" \] && \[ "$POSTCLOSE" = "0" \]; then' pull_today_ohlc.sh 2>/dev/null; then
     echo "  ✗ STALE:   pull_today_ohlc guard is back to the clock-only form — every sat-out box backfill wakes will write a header-only csv and that session's tape is gone at midnight"
     MISS=$((MISS+1))

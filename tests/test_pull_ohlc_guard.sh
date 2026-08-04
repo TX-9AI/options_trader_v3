@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test_pull_ohlc_guard.sh — v1.1 — 2026-08-04
+# tests/test_pull_ohlc_guard.sh — v1.2 — 2026-08-04
 #
 # v1.1 — the guard is OFF BY DEFAULT (v1.4, operator directive) and gated on
 #        OT_PULL_RTH_GUARD. Both modes are driven here: default must ALWAYS
@@ -35,18 +35,15 @@ decide() {
 fail=0
 chk(){ got=$(decide "$1" "$2" "$3" "$4"); [ "$got" = "$5" ] && s="ok " || { s="FAIL"; fail=1; }; \
        printf "  %s guard=%s feed=%-8s postclose=%s bot=%-8s -> %-7s (want %s)\n" "$s" "$1" "$2" "$3" "$4" "$got" "$5"; }
-echo "DEFAULT — guard OFF (v1.4): ALWAYS rebuilds, including under a live bot"
-chk 0 active   0 active   REBUILD
-chk 0 active   0 inactive REBUILD
-chk 0 active   1 active   REBUILD
-chk 0 inactive 0 active   REBUILD
-echo "OT_PULL_RTH_GUARD=1 — v1.3 behaviour, still correct when switched back on:"
-echo "  THE CASE THAT WAS BROKEN — sat-out box, mid-session, no bot:"
+echo "DEFAULT — guard ON (v1.5): refuses only for a LIVE BOT mid-session"
+echo "  THE CASE IT EXISTS FOR — trading box mid-session:"
+chk 1 active   0 active   SKIP
+echo "  REPORTS AND BACKFILLS — always allowed:"
 chk 1 active   0 inactive REBUILD
 chk 1 active   0 unknown  REBUILD
-echo "  THE CASE THE GUARD EXISTS FOR — trading box mid-session:"
-chk 1 active   0 active   SKIP
-echo "  POST-CLOSE and FEED-DOWN — rebuild either way:"
 chk 1 active   1 active   REBUILD
 chk 1 inactive 0 inactive REBUILD
+echo "ESCAPE HATCH OT_PULL_RTH_GUARD=0 — never refuses:"
+chk 0 active   0 active   REBUILD
+chk 0 active   0 inactive REBUILD
 exit $fail

@@ -32,14 +32,24 @@ def _run_body() -> str:
     return SRC[i:i + 12000]
 
 
-def test_both_rth_gates_are_exempted_for_once():
-    """Two sites, and they must move together."""
+def test_both_gates_go_through_the_one_predicate():
+    """v3.11 — two sites, ONE predicate, so they cannot disagree again.
+
+    v3.9 wrote the condition inline twice and v3.10 had to patch both. The
+    whole incident was three independent clock checks in a chain; collapsing
+    these two is what stops a fourth from being written by hand.
+    """
     body = _run_body()
-    n = len(re.findall(r"if not is_rth\(\) and not once:", body))
+    n = len(re.findall(r"self\._idle_outside_session\(once\)", body))
     assert n == 2, (
-        f"expected BOTH RTH gates to exempt --once, found {n}. The outer gate "
-        f"idles the reconnect loop; the inner one breaks the stream loop ABOVE "
-        f"the --once drain-exit. Fixing one leaves the same hang.")
+        f"expected BOTH gates to call _idle_outside_session(once), found {n}. "
+        f"The outer gate idles the reconnect loop; the inner one breaks the "
+        f"stream loop ABOVE the --once drain-exit.")
+
+
+def test_the_predicate_keys_on_purpose_not_only_the_clock():
+    assert "def _idle_outside_session(once: bool)" in SRC
+    assert "return not is_rth() and not once" in SRC
 
 
 def test_no_bare_rth_gate_survives_in_run():
@@ -61,7 +71,7 @@ def test_the_drain_exit_is_still_reachable():
     drain = body.index("--once: backfill drained")
     assert brk < drain, "layout changed — re-verify the break/drain ordering"
     guarded = body[brk - 300:brk]
-    assert "and not once" in guarded, \
+    assert "_idle_outside_session(once)" in guarded, \
         "the RTH-over break is no longer exempt for --once, so the drain-exit " \
         "below it is unreachable on a one-shot run outside RTH"
 
@@ -77,5 +87,5 @@ def test_the_service_path_still_idles_outside_rth():
 def test_the_header_records_what_it_cost():
     """The version header is the durable record of a silent, permanent data
     loss. If it goes, the next person reads a one-line boolean change."""
-    assert "v3.10" in SRC[:4000]
+    assert "v3.11" in SRC[:4000]
     assert "same-evening only" in SRC[:4000]

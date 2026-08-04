@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.72
+# docs/BACKLOG.md — v3.73
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -69,7 +69,8 @@ BAKED is changing nothing about today's data.
 | **RPT.1 — report rollup (5 fixes, 2 repos)** | ✅ 08-04 | ⬜ | n/a (offline) | otv3 suite **223 passed / 1 skipped**; behavioural proof on all five |
 | **BF.1 — the RTH guard was eating the backfill** | ✅ 08-04 | ⬜ | ⬜ **tonight's reflash** | 8/8 guard states proven; 2 sessions of sat-out tape at stake |
 | **BF.2 — guard OFF by default (operator directive)** | ✅ 08-04 | ⬜ | ⬜ **tonight's reflash** | v1.4, both modes proven |
-| **BF.3 — THE REAL CAUSE: `--once` hung on the v3.9 RTH gate** | ✅ 08-04 | ⬜ | ⬜ **tonight's reflash** | candle_feed v3.10; 4/4 states + 5 tests; **2 sessions of tape permanently lost** |
+| **BF.3 — THE REAL CAUSE: `--once` hung on the v3.9 RTH gate** | ✅ 08-04 | ✅ 08-04 | ✅ baked | **CONFIRMED WORKING on the box** |
+| **BF.4 — session guard reconfigured: one predicate, guard back ON** | ✅ 08-04 | ⬜ | ⬜ **next bake** | suite **229 passed / 1 skipped**; 8/8 pull states, 6 feed tests |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1243,6 +1244,46 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK→DEPLOY]` **BF.4 — ✅ 2026-08-04. THE SESSION GUARD, RECONFIGURED THE WAY
+  THE OPERATOR ASKED: reports and backfills pull outside RTH; fleet maintenance
+  still cannot bombard the feed.**
+  **THE RULE, and it is the whole lesson of 08-01 → 08-04: a guard must test the
+  thing it protects, not a proxy for it.** Three guards sat in one chain and all
+  three keyed on the CLOCK — two of them independently blocked the same
+  operation, and neither raised anything. Rewritten against purpose, each one
+  becomes obvious:
+  `candle_feed   protects: HOLDING a live subscription   ->  is this a one-shot?`
+  `pull_today    protects: a LIVE BOT on this box        ->  is optionsbot up?`
+  **`candle_feed` v3.11 — ONE PREDICATE, `_idle_outside_session(once)`, called
+  from both sites.** v3.9 wrote the condition inline twice; v3.10 had to patch
+  both; a fourth caller would have had to remember a fourth time. Pure refactor —
+  service mode is byte-equivalent to v3.10. The canary counts CALLS to the
+  predicate rather than matching a condition, so a hand-written clock check
+  anywhere in `run()` fails the audit.
+  **`pull_today_ohlc` v1.5 — GUARD BACK ON BY DEFAULT.** v1.4 disabled it at
+  operator direction while the failure was being diagnosed, and **the diagnosis
+  proved this guard was never the cause** — the 16:28 run was post-close with no
+  bot running, a state where it cannot fire. Leaving it off would have removed a
+  correct protection to pay for a bug elsewhere. `OT_PULL_RTH_GUARD=0` remains
+  the escape hatch and **should sit unused — a knob you HAVE to set is a design
+  smell.**
+  **WHAT EACH CALLER NOW GETS, which is the operator's requirement stated as
+  behaviour:**
+  `EOD report / backfill, post-close        -> runs (no bot, or postclose)`
+  `Backfill of a SAT-OUT box, mid-session   -> runs (no bot on that box)`
+  `Pull at a TRADING box, mid-session       -> REFUSED (would freeze its store ~200s)`
+  `candle-feed SERVICE, outside RTH         -> idles (the v3.9 maintenance-wake fix, intact)`
+  **WHY NOT DISABLE IT FROM THE CONDUCTOR** — the alternative considered and
+  rejected. It inverts this project's own standing rule (things go INTO the
+  conductor because a step someone must remember never happens; caller-side
+  disabling means every OTHER caller must remember). It makes identical code
+  behave differently by caller with nothing in the log saying which. And it
+  routes around a wrong condition instead of fixing it — which is what produced
+  the 14 phantom files in the first place.
+  **⬜ FOLLOW-ON, small:** `pull_today_ohlc`'s own RTH check could route through
+  the same helper rather than duplicating the shape in bash. Two languages, one
+  rule — worth doing when something else touches that file.
+
 - `[DESK→DEPLOY]` **BF.3 — 🔴 ✅ FOUND AND FIXED 2026-08-04. THE EOD CANDLE
   RETRIEVAL HAS BEEN DEAD SINCE 08-03 AND NOTHING RAISED. `candle_feed` v3.10.
   Ships on tonight's reflash — it is box-side.**
@@ -3357,6 +3398,14 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.73 — 2026-08-04 — BF.4: THE SESSION GUARD RECONFIGURED AGAINST PURPOSE.**
+  candle_feed v3.11 collapses both RTH checks into one predicate named for what
+  it protects; pull_today_ohlc v1.5 restores its guard to ON now that v3.10 fixed
+  the real cause. Reports and backfills run outside RTH, a pull at a live trading
+  box is still refused, and the v3.9 maintenance-wake protection is intact.
+  Rejected: disabling the guard from the conductor — it inverts the
+  build-it-into-the-conductor rule and routes around a wrong condition instead of
+  fixing it.
 - **v3.72 — 2026-08-04 — BF.3: THE REAL CAUSE. `candle_feed --once` has been
   unable to backfill outside RTH since v3.9's gate landed 2026-08-01.** The gate
   never checked `once`, so every EOD candle pull slept to its timeout and wrote a

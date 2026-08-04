@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # options_trader_v3/pull_today_ohlc.sh — one-shot EOD retrieval of TODAY's FULL 1-min session on THIS box.
+# v1.5 — 2026-08-04 — GUARD BACK ON BY DEFAULT. The v1.4 disable was a response
+#        to a misdiagnosis: the failing backfill was `candle_feed --once` hanging
+#        on ITS OWN RTH gate (v3.10), not this one. With that fixed, v1.3's
+#        condition is correct and protects a real case — a pull fired at a
+#        TRADING box mid-session stops its feed for ~200s while the bot reads a
+#        frozen store. Reports and backfills are unaffected: they run against
+#        boxes with no bot, or after the close. OT_PULL_RTH_GUARD=0 still
+#        disables it.
 # v1.4 — 2026-08-04 — RTH GUARD OFF BY DEFAULT (operator directive). Gated on
 #        OT_PULL_RTH_GUARD; set it to 1 to restore v1.3 behaviour. The refusal
 #        path is unchanged and still there — only its default flipped, so this
@@ -106,8 +114,14 @@ if [ "${1:-}" = "__work" ]; then
         # pass and restarted after, so there is never a second live producer on
         # this box either way.
         BOT=$(systemctl is-active optionsbot 2>/dev/null || echo unknown)
-        # v1.4 — OPERATOR DIRECTIVE 2026-08-04: the guard is OFF BY DEFAULT,
-        # pending a proper discussion. `OT_PULL_RTH_GUARD=1` restores it.
+        # v1.5 — RESTORED TO ON (default 1) now that the real cause is fixed.
+        # v1.4 turned it off at operator direction while the backfill failure was
+        # being diagnosed — and the diagnosis proved this guard was NOT the
+        # cause: the 16:28 run was post-close with no bot running, a state where
+        # it cannot fire. `candle_feed` v3.10 was. Leaving this off would have
+        # removed a protection that IS correct to pay for a bug elsewhere.
+        # `OT_PULL_RTH_GUARD=0` remains the escape hatch, and should sit unused —
+        # a knob you HAVE to set is a design smell.
         # WHAT IS BEING GIVEN UP, stated so the re-enable decision is informed:
         # with the guard off, a pull fired at a TRADING box during RTH will stop
         # its candle-feed for the ~200s producer pass. Its bot keeps running but
@@ -119,9 +133,9 @@ if [ "${1:-}" = "__work" ]; then
         # IT IS NOT A RISK AT ALL ON A BOX WITH NO BOT, which is the population
         # eod_backfill wakes — hence v1.3's narrower condition, which this knob
         # now sits on top of rather than replacing.
-        GUARD="${OT_PULL_RTH_GUARD:-0}"
+        GUARD="${OT_PULL_RTH_GUARD:-1}"
         if [ "$GUARD" != "1" ]; then
-            echo "RTH guard DISABLED (OT_PULL_RTH_GUARD=$GUARD) — operator directive 2026-08-04."
+            echo "RTH guard DISABLED via OT_PULL_RTH_GUARD=$GUARD (escape hatch; default is ON)."
             [ "$FEED" = "active" ] && [ "$POSTCLOSE" = "0" ] && [ "$BOT" = "active" ] && \
                 echo "⚠ RTH + optionsbot ACTIVE on this box: the feed will be stopped for the refill and the bot will read a FROZEN store for ~200s."
         fi
