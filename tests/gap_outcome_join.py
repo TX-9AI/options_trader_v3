@@ -1,7 +1,22 @@
 #!/usr/bin/env python3
 """
-tests/gap_outcome_join.py — v1.4 — 2026-08-02
+tests/gap_outcome_join.py — v1.5 — 2026-08-04
 
+v1.5 — 2026-08-04 — --pool gapflat, WITH ITS OWN LEGITIMACY TEST ATTACHED.
+         AV names collapsing the three-way split as the one lever that moves the
+         answerable date: n per cell roughly triples, taking a 0.10 R read from
+         ~2026-09-15 (after go-live) to inside the Aug 10-21 freeze window. It
+         also says, correctly, that whether the pooling is LEGITIMATE is a
+         judgement and not a given.
+         So the flag does not just merge the columns. Cells stay keyed on the
+         ORIGINAL class and the merge happens at print time, which makes the
+         homogeneity check free: for every row it reports CONT vs REV with a
+         band and states POOLABLE / NOT POOLABLE / UNDERPOWERED. Pooling two
+         arms that disagree would manufacture a null out of two real and
+         opposite effects — the one failure mode that makes a bigger n WORSE
+         than a smaller one, and it would be invisible in the pooled table.
+         A row marked NOT POOLABLE prints its pooled cell anyway, flagged, so
+         the number is never silently withheld and never silently trusted.
 v1.4 — 2026-08-02 — --metric r | winrate | pnl, BECAUSE pnl_usd IS UNDERPOWERED
        BY TWO ORDERS OF MAGNITUDE. The v1.3 clean-window run settled it: of 15
        cells only continuation cleared n=30, reporting CONT -12.3 ±90.1 and REV
@@ -168,6 +183,12 @@ import sys
 
 DEFAULT_GAPS = "~/day_trader_pro/reports/gap_pct.json"
 TRADES_GLOB = "~/day_trader_pro/reports/fleet_trades_*.json"
+# v1.5 — the pooled view. CONT and REV are both GAP DAYS; FLAT is the other day
+# shape. AV: "the ONE lever that moves the date is not waiting or re-slicing but
+# NOT SPLITTING THREE WAYS" — n per cell roughly triples, which is what puts a
+# 0.10 R read inside the freeze window instead of after go-live.
+POOLED_CLASSES = ("GAP", "FLAT")
+POOL_MAP = {"CONT": "GAP", "REV": "GAP", "FLAT": "FLAT"}
 DATE_RE = re.compile(r"(20\d\d-\d\d-\d\d)")
 CLASSES = ("CONT", "FLAT", "REV")
 
@@ -265,6 +286,11 @@ def main(argv) -> int:
                          "pnl = raw dollars, underpowered — see the header.")
     ap.add_argument("--diagnose", action="store_true",
                     help="report WHY trades failed to join, by date and symbol")
+    ap.add_argument("--pool", default="none", choices=("none", "gapflat"),
+                    help="gapflat: collapse CONT+REV into GAP (n per cell "
+                         "roughly triples). Prints a per-row CONT-vs-REV "
+                         "homogeneity verdict so an illegitimate pool is "
+                         "visible rather than averaged away.")
     ap.add_argument("--window", default="ALL",
                     help="restrict to an entry bucket: OPEN / DECAY / CLEAN / ALL")
     a = ap.parse_args(argv[1:])
@@ -421,11 +447,31 @@ def main(argv) -> int:
     print("                     PAPER fills — see the header's limits.\n")
 
     rows = sorted({k for k, _ in cells})
-    print(f"{'':<26}" + "".join(f"{c:>26}" for c in CLASSES))
+
+    # v1.5 — cells stay keyed on the ORIGINAL class; pooling happens HERE, so
+    # the un-pooled arms remain available for the homogeneity check below.
+    pooling = a.pool == "gapflat"
+    show_classes = POOLED_CLASSES if pooling else CLASSES
+
+    def vals(row, cls):
+        if not pooling:
+            return cells.get((row, cls), [])
+        out = []
+        for src, dst in POOL_MAP.items():
+            if dst == cls:
+                out.extend(cells.get((row, src), []))
+        return out
+
+    if pooling:
+        print("POOLED: CONT + REV -> GAP. Verdicts below say whether that was "
+              "legitimate\n        for each row; a NOT POOLABLE row's cell is "
+              "printed but must not be read.\n")
+
+    print(f"{'':<26}" + "".join(f"{c:>26}" for c in show_classes))
     for r in rows:
         line = f"{r[:25]:<26}"
-        for c in CLASSES:
-            xs = cells.get((r, c), [])
+        for c in show_classes:
+            xs = vals(r, c)
             if len(xs) < MIN_CELL_N:
                 line += f"{f'n={len(xs)} (refused)':>26}"
                 continue
@@ -437,11 +483,12 @@ def main(argv) -> int:
     print(f"\n  mean {unit_label} ±95%, win rate, n. Cells under n={MIN_CELL_N} refused.")
 
     # ── POWER, so an underpowered cell is never read as a null ──────────────
-    allvals = [v for xs in cells.values() for v in xs]
+    shown = {(r, c): vals(r, c) for r in rows for c in show_classes}
+    allvals = [v for xs in shown.values() for v in xs]
     if len(allvals) > 2:
         m_all = sum(allvals) / len(allvals)
         sd = math.sqrt(sum((x - m_all) ** 2 for x in allvals) / (len(allvals) - 1))
-        biggest = max((len(x) for x in cells.values()), default=0)
+        biggest = max((len(x) for x in shown.values()), default=0)
         # smallest difference detectable at 95%/80% with the largest cell we have
         detectable = (1.96 + 0.84) * sd * math.sqrt(2.0 / max(biggest, 1))
         print(f"\n  POWER: sd={sd:.3f} across all cells; largest cell n={biggest}.")
@@ -449,6 +496,33 @@ def main(argv) -> int:
               f"{detectable:.3f} {unit_label.split(' ')[0]}.")
         print("  A cell showing 'no difference' smaller than that is UNDERPOWERED,")
         print("  not null — the sample cannot see an effect that size yet.")
+
+    # ── v1.5 — WAS THE POOL LEGITIMATE? ─────────────────────────────────────
+    # Pooling two arms that disagree averages a real positive against a real
+    # negative and reports a null. That is the one way a LARGER n is worse than
+    # a smaller one, and in the pooled table above it is completely invisible.
+    if pooling:
+        print("\n" + "=" * 62)
+        print("POOL LEGITIMACY — CONT vs REV, the two arms merged into GAP")
+        print("=" * 62)
+        for r in rows:
+            cont, rev = cells.get((r, "CONT"), []), cells.get((r, "REV"), [])
+            if len(cont) < MIN_CELL_N or len(rev) < MIN_CELL_N:
+                print(f"  {r[:25]:<26} UNDERPOWERED — CONT n={len(cont)}, "
+                      f"REV n={len(rev)}; cannot say whether the pool is "
+                      f"legitimate")
+                continue
+            mc, hc, _ = _mean_ci(cont)
+            mr, hr, _ = _mean_ci(rev)
+            diff = abs(mc - mr)
+            band = math.sqrt(hc * hc + hr * hr)
+            verdict = "NOT POOLABLE" if diff > band else "poolable"
+            print(f"  {r[:25]:<26} CONT {mc:+.2f}±{hc:.2f}   REV {mr:+.2f}±{hr:.2f}"
+                  f"   |diff| {diff:.2f} vs band {band:.2f}   -> {verdict}")
+        print("\n  NOT POOLABLE means the two gap classes behave differently for")
+        print("  that row, so the GAP column above is an average of two real and")
+        print("  opposite effects. Read the three-way table for that row instead.")
+        print("  UNDERPOWERED is not permission — it means the question is open.")
 
     # ── the one comparison worth calling out explicitly ─────────────────────
     print("\n" + "=" * 62)
@@ -465,8 +539,8 @@ def main(argv) -> int:
     print()
     for r in rows:
         parts = []
-        for c in CLASSES:
-            xs = cells.get((r, c), [])
+        for c in show_classes:
+            xs = vals(r, c)
             parts.append(f"{c} med {_median(xs):+.1f}" if len(xs) >= MIN_CELL_N
                          else f"{c} —")
         print(f"  {r[:25]:<26} " + "   ".join(parts))

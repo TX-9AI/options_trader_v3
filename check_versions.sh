@@ -1,4 +1,10 @@
 #!/bin/bash
+# v4.15 — 2026-08-04 — +3 canaries for gap_outcome_join v1.5 (--pool gapflat).
+#         The pooled cell and its legitimacy verdict are ONE feature: pooling
+#         two arms that disagree manufactures a null from two real opposite
+#         effects, and the pooled table cannot show it. A sync that kept the
+#         flag and dropped the verdict would be worse than one that dropped
+#         both, so the verdict is pinned by name.
 # v4.14 — 2026-08-04 — labels are BULL/BEAR and the map is SHARED. The same
 #         truncation defect was found in tests/replay_confluence.py (the
 #         nightly emitted-distribution line the freeze watch reads) and in
@@ -406,6 +412,11 @@ check "analysis/entry_snapshot.py"       "def _first"                   "v1.2 in
 # ── regime_diary v1.3 (2026-08-04) — the diary could not tell bull from bear ──
 check "utils/regime_labels.py"           "\"TRENDING_BEAR\":     \"BEAR\""  "v1.0 shared label map (bull/bear distinguishable)"
 check "tests/regime_diary.py"            "LABEL = REGIME_LABELS"        "v1.4 diary uses the SHARED map, not a local copy"
+
+# ── gap_outcome_join v1.5 (2026-08-04) — the pooled read, with its own guard ──
+check "tests/gap_outcome_join.py"        "POOLED_CLASSES"               "v1.5 --pool gapflat present"
+check "tests/gap_outcome_join.py"        "POOL LEGITIMACY"              "v1.5 pooling prints its own CONT-vs-REV verdict"
+check "tests/test_gap_pool.py"           "test_opposite_arms_are_refused"  "v1.0 planted-divergence test present"
 check "tests/replay_confluence.py"       "from utils.regime_labels import label"  "v2.3 emitted-distribution line uses the shared map"
 check "tests/regime_diary.py"            "churn-cut"                    "v1.3 churn-cut on the L2 line (flips per committed switch)"
 check "tests/regime_diary.py"            "def rerender"                 "v1.3 --rerender rebuilds the md from the jsonl"

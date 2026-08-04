@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.61
+# docs/BACKLOG.md — v3.62
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -61,7 +61,8 @@ BAKED is changing nothing about today's data.
 | **N.5 — exit ladder latency** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | control suite **158 passed / 1 skipped, rc=0**; ALL CANARIES GREEN |
 | **N.8 — no regime-flip exit on a stale book** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | control suite green, ALL CANARIES GREEN |
 | **W.2a — today's own swallows made audible + the alarm made specific** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | silent count back to the 08-03 baseline of **87**; `--since` proven on three cases |
-| **D.1 — bull/bear were the same token in THREE renderers** | ✅ 08-04 | ⬜ | n/a (report-only) | desk suite **178 passed / 1 skipped**; 13 tests on reproductions of real rows |
+| **D.1 — bull/bear were the same token in THREE renderers** | ✅ 08-04 | ✅ 08-04 | n/a (report-only) | 16 rows re-rendered on control; ALL CANARIES GREEN |
+| **AV.1 — the pooled gap read, with a legitimacy guard** | ✅ 08-04 | ⬜ | n/a (offline) | desk suite **185 passed / 1 skipped**; 7 planted-world tests |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1235,6 +1236,38 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK]` **AV.1 — ✅ 2026-08-04. THE POOLING LEVER, BUILT WITH ITS OWN
+  LEGITIMACY TEST ATTACHED. `gap_outcome_join` v1.5 `--pool gapflat`.**
+  **AV** names this as the ONE lever that moves the answerable date: not waiting
+  and not re-slicing, but **not splitting three ways**. n per cell roughly
+  triples, which takes a **0.10 R** read from ~2026-09-15 — after go-live — to
+  inside the **Aug 10-21 freeze window**. AV also says, correctly, that whether
+  the pooling is LEGITIMATE is a judgement rather than a given.
+  **SO THE FLAG DOES NOT JUST MERGE THE COLUMNS.** Cells stay keyed on the
+  ORIGINAL class and the merge happens at print time, which makes the
+  homogeneity check free: every row reports CONT vs REV with a band and a
+  verdict — **POOLABLE / NOT POOLABLE / UNDERPOWERED**.
+  **WHY THAT GUARD IS THE POINT.** Pooling two arms that disagree averages a
+  real positive against a real negative and reports a null. That is the one way
+  a LARGER n is WORSE than a smaller one, and in the pooled table it is
+  completely invisible. The planted-world test makes it concrete: CONT +0.60 /
+  REV -0.60 prints a GAP cell of **+0.0 ± 0.1 at n=80** — a manufactured null —
+  beside a verdict reading NOT POOLABLE. A refused row still prints its cell,
+  flagged, because silently withholding a number is its own failure.
+  **UNDERPOWERED IS NOT PERMISSION.** A row whose arms are each under n=30
+  reports that the question is open, not that pooling is fine.
+  **⬜ HOW TO USE IT ON AUG 13:** run `--by strategy` BOTH ways. If the verdicts
+  say poolable, the pooled cells are the read and 0.10 R is reachable inside the
+  freeze. If any row says NOT POOLABLE, that row keeps the three-way table and
+  its own slower clock — and the disagreement is itself the finding, since it
+  means gap DIRECTION matters for that strategy and nothing in the fleet keys on
+  it.
+  **A TEST THAT LIED, caught by the deliberate-failure run.** My first
+  assertions grepped the section for the bare phrase `NOT POOLABLE`, which also
+  appears in the section's own closing explanation — so forcing every verdict to
+  "poolable" left the test GREEN. Anchored on the verdict arrow now. Same
+  assert-your-own-boilerplate trap as the changelog-prose canaries, three hours
+  apart, in a different file.
 - `[DESK]` **D.1 — ✅ 2026-08-04. THE DIARY HAS PRINTED THE SAME TOKEN FOR
   TRENDING_BULL AND TRENDING_BEAR SINCE v1.0, IN EVERY ROW OF EVERY SESSION.**
   Found by reading the 16-session scroll rather than by any check.
@@ -2846,6 +2879,13 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.62 — 2026-08-04 — AV.1: THE POOLED GAP READ.** `--pool gapflat` collapses
+  CONT+REV into GAP (n per cell roughly triples, putting a 0.10 R read inside the
+  freeze instead of after go-live) and prints a per-row CONT-vs-REV verdict, so
+  an illegitimate pool is visible rather than averaged into a manufactured null.
+  Seven planted-world tests. A first draft of two of those tests asserted against
+  the tool's own explanatory prose and passed on a broken tool — found by the
+  deliberate-failure run and re-anchored.
 - **v3.61 — 2026-08-04 — D.1 EXTENDED: BULL/BEAR, AND THE DEFECT WAS IN THREE
   RENDERERS NOT ONE.** Operator's labels replace my sign-suffixed pair. Grepping the
   truncation idiom instead of fixing the row in front of me found the same bug in
