@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.74
+# docs/BACKLOG.md — v3.75
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -71,7 +71,8 @@ BAKED is changing nothing about today's data.
 | **BF.2 — guard OFF by default (operator directive)** | ✅ 08-04 | ⬜ | ⬜ **tonight's reflash** | v1.4, both modes proven |
 | **BF.3 — THE REAL CAUSE: `--once` hung on the v3.9 RTH gate** | ✅ 08-04 | ✅ 08-04 | ✅ baked | **CONFIRMED WORKING on the box** |
 | **BF.4 — session guard reconfigured: one predicate, guard back ON** | ✅ 08-04 | ⬜ | ⬜ **next bake** | suite 229 passed; 8/8 pull states |
-| **AI.1 — condor approach telemetry on every plan death** | ✅ 08-04 | ⬜ | ⬜ **next bake** | suite **239 passed / 1 skipped**; 10 tests; item AI becomes answerable |
+| **AI.1 — condor approach telemetry on every plan death** | ✅ 08-04 | ✅ 08-04 | ⬜ **next bake** | 10 tests; item AI becomes answerable |
+| **N.9 — contract telemetry (premium decomposition)** | ✅ 08-04 | ⬜ | ⬜ **Mon Aug 10** | suite **247 passed / 1 skipped**; 8 tests; log-only |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -1245,6 +1246,57 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   Existing data; this IS the validation framework TC.4's bounds fit rides on.
 
 **⬜ Tue Aug 4**
+- `[DESK→DEPLOY]` **N.9 — ✅ 2026-08-04. CONTRACT TELEMETRY: the repo could say
+  WHAT the premium did and never WHY. Log-only, bakes Mon Aug 10.**
+  **THE GAP.** MFE, MAE, giveback, capture ratio and the floor sweep are all
+  correctly denominated in PREMIUM — that part was right and an earlier read of
+  mine calling them underlying-denominated was WRONG. What none of them carries
+  is a CAUSE. A -27% floor stop is indistinguishable between *the underlying went
+  against us*, *the underlying went nowhere and theta ate it*, and *we were right
+  and IV collapsed*. Three causes, three fixes, one number — and on 0DTE a
+  correct thesis that resolves slowly is a dud, which makes "was I right?" the
+  wrong question and "was I right FAST ENOUGH?" the right one.
+  **NOTHING NEW IS FETCHED.** `OptionContract` already carries bid/ask/mark/
+  delta/gamma/theta/vega/iv; `OptionsChain` carries spot_price/iv_rank. The chain
+  is polled every tick and these were read for strike selection and DISCARDED.
+  **TEN COLUMNS, NOT TWELVE.** `entry_mark` and `chain_spot_at_entry` were cut
+  from the first cut because **`entry_premium` and `underlying_entry` already
+  hold those facts**. Two names for one value is how a report ends up quietly
+  reading the stale one. Caught by reading the schema instead of assuming it.
+  **NULL = NOT CAPTURED, and there are no defaults.** A `0.0` default would make
+  every pre-v3.12 row look like a zero-delta entry.
+  **CAPTURED AT BOTH FILL SEAMS** — directional entry AND condor leg — matched on
+  the **OCC symbol**, not strike, because a condor's two legs share an underlying
+  and a session. Both pinned by canary; a strike match turns a test red.
+  **📊 AVAILABLE FOR REPORTING IMMEDIATELY.** Ordinary columns on `trades`, so
+  every existing consumer can read them with no plumbing: `excursion_report`
+  (40), `trade_report` (41), fleet consolidation (39), any pulled `trades.db`
+  (16). They are queryable the moment the first baked session lands — the reports
+  simply do not GROUP by them yet, which is a reporting choice and not a data
+  gap. Documented in **MECHANICS "Contract telemetry"** with the column table and
+  the four questions it opens.
+  **⬜ WHAT IT UNLOCKS ONCE SESSIONS ACCRUE:** (a) per-trade attribution —
+  `entry_theta` x hold gives decay in dollars, `underlying_entry` vs exit spot
+  gives direction, residual is IV+gamma; (b) **A TIME STOP** — bucket that
+  attribution by hold time and the crossover is where a correct thesis stops
+  paying for itself; this system has no such exit today (`hard_close_15:45` is a
+  session boundary, not a decay boundary); (c) the floor sweep's declared
+  *"ASSUMES: no slippage"* becomes MEASURED via `entry_ask - entry_bid`, and is
+  the basis for the paper-vs-live fill comparison from Aug 31; (d) whether the
+  10:00-11:00 hole (-$319 on n=120, the worst phase, against the open's +$9,761)
+  is post-open IV crush.
+  **⚠️ ONE READING CAUTION, recorded at build time rather than discovered later:**
+  `entry_delta` is a SELECTOR OUTPUT, not a market observation — the strike
+  chooser picked it. "0.30-delta does worse" is partly a statement about the
+  selector.
+  **⬜ OPEN — EXIT-SIDE CAPTURE IS NOT WIRED.** `place_exit_order(record, reason,
+  mark_price)` has **no chain in scope**, and plumbing one through a signature
+  used everywhere was not worth doing days before the freeze. Columns exist and
+  stay NULL. **Consequence for the first read: DIRECTION and THETA separate
+  cleanly; IV and gamma stay merged in the residual.** Say "residual", not "IV
+  crush", until it lands. Do it post-freeze, either by passing the chain or by
+  capturing at the main-loop level where `ctx["chain"]` already exists.
+
 - `[DESK→DEPLOY]` **AI.1 — ✅ 2026-08-04. WHY THE CONDOR TOOK NOTHING: 23 PLANS,
   23 DEATHS, 0 LEGS — AND THE ONE INSTRUMENT THAT EXPLAINS IT WAS UNREACHABLE.**
   **THE MEASUREMENT (fleet-wide, date-scoped):** plans **23** across 11 symbols ·
@@ -3451,6 +3503,13 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.75 — 2026-08-04 — N.9 CONTRACT TELEMETRY.** trade_logger v3.12 + main v5.5
+  persist the contract's own state at fill (delta/gamma/theta/iv, bid/ask,
+  iv_rank) from values already in memory and previously discarded. Closes the
+  gap between "what the premium did" and "why": direction vs decay vs crush were
+  one number. Ten columns, not twelve — entry_premium and underlying_entry
+  already held the mark and the spot. Available to every existing report
+  immediately; documented in MECHANICS. Exit-side capture deferred with reason.
 - **v3.74 — 2026-08-04 — AI.1: THE CONDOR'S APPROACH TELEMETRY WAS BEHIND A DOOR
   THAT NEVER OPENS.** 23 plans, 23 deaths, 0 legs fleet-wide — and the approach
   measurement existed only on the cutoff path, which fired zero times. Plan

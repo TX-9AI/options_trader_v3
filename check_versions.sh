@@ -1,4 +1,9 @@
 #!/bin/bash
+# v4.28 — 2026-08-04 — N.9 contract telemetry. Canaries pin the OCC-symbol match
+#         and BOTH fill seams: matching on strike would attribute one condor
+#         leg's greeks to the other, and a condor leg that skipped the capture
+#         would be invisible in the decomposition while still appearing in P&L.
+#         Neither failure raises anything.
 # v4.27 — 2026-08-04 — +2 canaries for the condor plan-lifetime audit and the
 #         corrected DIRECTIONAL_ONLY comment. The stale comment claimed single
 #         names were skipped; the config has enabled every box since 07-14, and
@@ -382,6 +387,19 @@ check "data/candle_feed.py"              "def _idle_outside_session"    "v3.11 O
 check "strategy/iron_condor_strategy.py" "v-approachalways"             "approach reported on EVERY plan death"
 check "strategy/iron_condor_strategy.py" "def _approach"                "approach helper present"
 check "tests/condor_approach.py"         "GEOMETRY_MAX"                 "v1.0 verdict thresholds pre-registered"
+
+# ── N.9 contract telemetry (2026-08-04) — premium decomposition ───────────
+check "database/trade_logger.py"         "def set_entry_contract"       "v3.12 contract telemetry setter"
+check "database/trade_logger.py"         '("entry_delta",       "REAL")' "v3.12 columns migrate (NULL = not captured, no defaults)"
+check "main.py"                          "def _capture_entry_contract"  "v5.5 capture at the fill seam"
+check "tests/test_entry_contract.py"     "matched_on_occ_symbol"        "v1.0 OCC match pinned (strike would cross condor legs)"
+_n_cap=$(grep -c "_capture_entry_contract(ctx, record)" main.py 2>/dev/null || echo 0)
+if [ "$_n_cap" = "2" ]; then
+    echo "  ✓ PRESENT: N.9 captures at BOTH fill seams (directional + condor leg)"
+else
+    echo "  ✗ STALE:   only $_n_cap of 2 fill seams capture contract telemetry — those trades appear in P&L but cannot enter the direction-vs-theta-vs-IV read"
+    MISS=$((MISS+1))
+fi
 _n_ab=$(grep -c "self._journal_abandon(plan" strategy/iron_condor_strategy.py 2>/dev/null || echo 0)
 if [ "$_n_ab" = "2" ]; then
     echo "  ✓ PRESENT: both plan-death paths emit condor_abandon (found $_n_ab)"

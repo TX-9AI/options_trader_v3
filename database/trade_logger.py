@@ -1,5 +1,25 @@
 """
-database/trade_logger.py — Options trade logging (SQLite). v3.11
+database/trade_logger.py — Options trade logging (SQLite). v3.12
+v3.12 — 2026-08-04 — CONTRACT TELEMETRY (entry_delta/gamma/theta/iv,
+        entry+exit bid/ask, exit_iv, chain_iv_rank) via set_entry_contract() /
+        set_exit_contract(). TEN columns, not twelve: `entry_mark` and
+        `chain_spot_at_entry` were dropped from the first cut because
+        `entry_premium` and `underlying_entry` ALREADY HOLD THOSE FACTS. Two
+        names for one value is how a report ends up quietly reading the stale
+        one. Auto-migrates.
+        Observability only — nothing gates on these.
+        THE GAP IT CLOSES: every other instrument in this repo measures the
+        UNDERLYING's path (MFE/MAE, floor durability, strike curves, regime
+        labels) while the P&L is PREMIUM. Without the contract's own state,
+        "wrong on direction", "right but theta ate it" and "IV crushed after
+        the open" collapse into one number — and on 0DTE that is the whole game.
+        NOTHING NEW IS FETCHED: OptionContract already carries bid/ask/mark/
+        delta/gamma/theta/vega/iv and OptionsChain carries spot_price/iv_rank.
+        They were read for strike selection and discarded.
+        NULLS ARE LOAD-BEARING: rows from before this shipped must stay
+        distinguishable from a capture that ran, so there are no defaults.
+        See docs/MECHANICS.md "Contract telemetry" for what is collected and
+        which reports read it.
 v3.11 — 2026-08-04 — EXIT LATENCY (N.5): exit_submit_ts / exit_fill_ts /
         exit_latency_ms / exit_ladder_steps / exit_escalated /
         exit_mark_at_trigger, plus set_exit_latency() (returns a bool, same
@@ -300,6 +320,28 @@ class TradeLogger:
             ("exit_escalated",      "INTEGER"),
             ("exit_mark_at_trigger", "REAL"),
             ("regime_engine",     "TEXT DEFAULT ''"),   # v-eng: WHICH engine labelled this
+            # v3.12 — CONTRACT TELEMETRY. Every one of these values was already
+            # in memory at fill time (OptionContract carries bid/ask/mark/delta/
+            # gamma/theta/vega/iv; OptionsChain carries spot_price/iv_rank) and
+            # was read for strike selection and then DISCARDED. Nothing new is
+            # fetched, subscribed or computed.
+            # WHY IT MATTERS: every instrument in this repo measures the
+            # UNDERLYING's path, but the P&L is PREMIUM. Without these, "wrong
+            # on direction", "right but theta ate it" and "IV crushed" are one
+            # number — and on 0DTE they are the whole game.
+            # NULL means NOT CAPTURED and is load-bearing: rows written before
+            # this shipped must stay distinguishable from a capture that ran.
+            # No defaults, for the same reason entry_snapshot has none.
+            ("entry_delta",       "REAL"),
+            ("entry_gamma",       "REAL"),
+            ("entry_theta",       "REAL"),
+            ("entry_iv",          "REAL"),
+            ("entry_bid",         "REAL"),
+            ("entry_ask",         "REAL"),
+            ("exit_bid",          "REAL"),
+            ("exit_ask",          "REAL"),
+            ("exit_iv",           "REAL"),
+            ("chain_iv_rank",     "REAL"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {definition}")
@@ -432,6 +474,67 @@ class TradeLogger:
         except Exception as exc:                             # noqa: BLE001
             logger.warning("entry_snapshot write failed for %s: %s: %s",
                            trade_id[:8], type(exc).__name__, exc)
+            return False
+
+    # ── v3.12 — contract telemetry ──────────────────────────────────────────
+    def set_entry_contract(self, trade_id: str, c: dict) -> bool:
+        """Persist the CONTRACT's own state at entry. Returns True on a write.
+
+        `entry_delta` IS A SELECTOR OUTPUT, NOT A MARKET OBSERVATION — the
+        strike chooser picked it. So "0.30-delta entries do worse" is partly a
+        statement about the selector, not about the market, and any analysis
+        that reads it must say so. Recorded here rather than discovered in three
+        weeks.
+
+        BID AND ASK, NOT MARK. Mark is already stored as `entry_premium`, and
+        spot at entry as `underlying_entry` — both predate this. Adding them
+        again would have created two names for one fact, which is how a report
+        ends up silently reading the stale one. The BID/ASK PAIR is what is
+        genuinely new: mark is the midpoint, fills are not, and the spread is
+        the only thing that can turn the floor sweep's declared "ASSUMES: no
+        slippage" into a measured quantity — and the basis for the
+        paper-vs-live fill comparison once live trading starts.
+        """
+        if not trade_id or not isinstance(c, dict):
+            return False
+        cols = ("entry_delta", "entry_gamma", "entry_theta", "entry_iv",
+                "entry_bid", "entry_ask", "chain_iv_rank")
+        vals = [c.get(k) for k in cols]
+        if all(v is None for v in vals):
+            return False
+        try:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "UPDATE trades SET "
+                    + ", ".join(f"{k}=?" for k in cols)
+                    + " WHERE trade_id=?", (*vals, trade_id))
+                conn.commit()
+                return cur.rowcount > 0
+        except Exception:                                        # noqa: BLE001
+            return False
+
+    def set_exit_contract(self, trade_id: str, c: dict) -> bool:
+        """Persist the contract's state at the CONFIRMED close.
+
+        `exit_iv` beside `entry_iv` is the IV-crush measurement — the most
+        likely explanation for the 10:00-11:00 phase being the worst on the
+        board, and currently indistinguishable from being wrong on direction.
+        """
+        if not trade_id or not isinstance(c, dict):
+            return False
+        cols = ("exit_bid", "exit_ask", "exit_iv")
+        vals = [c.get(k) for k in cols]
+        if all(v is None for v in vals):
+            return False
+        try:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "UPDATE trades SET "
+                    + ", ".join(f"{k}=?" for k in cols)
+                    + " WHERE trade_id=?", (*vals, trade_id))
+                conn.commit()
+                return cur.rowcount > 0
+        except Exception:                                        # noqa: BLE001
             return False
 
     def set_exit_latency(self, trade_id: str, submit_ts: str, fill_ts: str,

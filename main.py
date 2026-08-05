@@ -788,7 +788,71 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
 
 
 # ── Entry snapshot (v5.1) — log-only capture, one place, both entry paths ─────
-_snapshot_warned: set = set()   # reason -> logged once per process (§17 idiom)
+_snapshot_warned: set = set()
+_contract_warned: set = set()   # reason -> logged once per process (§17 idiom)
+
+
+def _capture_entry_contract(ctx: dict, record: dict) -> bool:
+    """v5.5 (N.9) — persist the CONTRACT's own state at entry.
+
+    Every value here was ALREADY IN MEMORY: `OptionContract` carries
+    bid/ask/mark/delta/gamma/theta/vega/iv and `OptionsChain` carries
+    spot_price/iv_rank. They were read for strike selection and discarded.
+    Nothing new is fetched, subscribed or computed.
+
+    WHY: every other instrument in this repo reports WHAT the premium did.
+    None reports WHY. A -27% floor stop is currently indistinguishable between
+    "the underlying went against us", "the underlying went nowhere and theta
+    ate it", and "we were right and IV collapsed" — three causes, three
+    different fixes, one number. On 0DTE that distinction is the whole game.
+
+    Matched on the OCC symbol the row was actually filled on, not on strike:
+    two legs of a condor share an underlying and a session, and picking the
+    wrong side would attribute one leg's greeks to the other.
+
+    Log-only. A failure warns once per reason per process and never gates.
+    """
+    trade_id = (record or {}).get("trade_id", "")
+    occ = (record or {}).get("option_symbol", "")
+    reason = ""
+    try:
+        chain = (ctx or {}).get("chain")
+        con = None
+        if chain is not None and occ:
+            for c in list(getattr(chain, "calls", []) or []) + \
+                     list(getattr(chain, "puts", []) or []):
+                if getattr(c, "symbol", "") == occ:
+                    con = c
+                    break
+        if con is None:
+            reason = "contract-not-found"
+        else:
+            payload = {
+                "entry_delta": getattr(con, "delta", None),
+                "entry_gamma": getattr(con, "gamma", None),
+                "entry_theta": getattr(con, "theta", None),
+                "entry_iv":    getattr(con, "iv", None),
+                "entry_bid":   getattr(con, "bid", None),
+                "entry_ask":   getattr(con, "ask", None),
+                "chain_iv_rank": getattr(chain, "iv_rank", None),
+            }
+            if get_trade_logger().set_entry_contract(trade_id, payload):
+                return True
+            reason = "write-returned-false"
+    except Exception as exc:                                 # noqa: BLE001
+        # Logged INLINE so the W.2 swallow census can see this handler is not
+        # silent — it reads the except body, not the code after it.
+        logger.debug("entry_contract capture raised (%s: %s)",
+                     type(exc).__name__, exc)
+        reason = f"raised:{type(exc).__name__}"
+
+    if reason not in _contract_warned:
+        _contract_warned.add(reason)
+        logger.warning(
+            "entry_contract NOT captured (%s) for %s — this trade cannot enter "
+            "the premium-decomposition read (direction vs theta vs IV); logged "
+            "once per reason per process.", reason, trade_id[:8])
+    return False
 
 
 def _capture_entry_snapshot(ctx: dict, record: dict, direction: str) -> bool:
@@ -1010,6 +1074,7 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState,
     # cannot supply one degrades to no capture rather than to a raise.
     if ctx is not None:
         _capture_entry_snapshot(ctx, record, "neutral")
+        _capture_entry_contract(ctx, record)          # v5.5 (N.9)
     get_position_manager(state.paper_trading).add_condor_leg(record)
 
     # Advance the plan (DECIDED -> LEG1_FILLED -> COMPLETE).
@@ -1385,6 +1450,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
         # v5.1 — capture BEFORE anything else touches the row, but AFTER the
         # fill: the picture we want is the one that produced this entry.
         _capture_entry_snapshot(ctx, record, signal.direction)
+        _capture_entry_contract(ctx, record)          # v5.5 (N.9)
         get_position_manager(state.paper_trading).set_open_position(record)
         get_alert_manager().send_entry_alert(record)
         logger.info(

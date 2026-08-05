@@ -1532,6 +1532,79 @@ Per-strategy entry mechanics, gates and thresholds are in
 
 <!-- ================= Iron Condor (current, 2026-07-28) ================= -->
 
+
+##### Contract telemetry — WHAT IS COLLECTED AND WHO CAN READ IT
+
+Added 2026-08-04 (N.9; `trade_logger` v3.12, `main` v5.5). **Log-only —
+nothing gates on any of it.**
+
+**The gap it closes.** Every existing instrument reports WHAT the premium did —
+MFE, MAE, giveback, capture ratio, the floor sweep — and they are correctly
+denominated in PREMIUM, which is where the P&L lives. None of them reports WHY.
+A -27% floor stop is indistinguishable between *the underlying went against us*,
+*the underlying went nowhere and theta ate it*, and *we were right and IV
+collapsed*. Three causes, three different fixes, one number. On 0DTE that
+distinction is the whole game — a correct thesis that resolves slowly is a dud.
+
+**Nothing new is fetched.** `OptionContract` already carries
+bid/ask/mark/delta/gamma/theta/vega/iv and `OptionsChain` carries
+spot_price/iv_rank. The chain is polled every tick and these values were read
+for strike selection and then discarded. This persists them.
+
+**Columns on `trades` (all NULLable, no defaults — see below):**
+
+| column | what it is |
+|---|---|
+| `entry_delta` | contract delta at fill. **A SELECTOR OUTPUT, not a market observation** — the strike chooser picked it, so "0.30-delta does worse" is partly a statement about the selector |
+| `entry_gamma`, `entry_theta` | greeks at fill; theta is the decay rate the trade started against |
+| `entry_iv` | contract IV at fill |
+| `entry_bid`, `entry_ask` | the SPREAD at fill |
+| `chain_iv_rank` | session-level IV context |
+| `exit_bid`, `exit_ask`, `exit_iv` | **columns exist, NOT YET POPULATED — see the open item below** |
+
+**Already stored, deliberately not duplicated:** `entry_premium` (the mark),
+`exit_premium`, `underlying_entry` (spot at entry), `vix_at_entry`. Two names
+for one fact is how a report ends up quietly reading the stale one.
+
+**NULL means NOT CAPTURED, and that is load-bearing.** There are no defaults: a
+row from before this shipped must stay distinguishable from a capture that ran.
+A default of `0.0` would make every pre-deploy trade look like a zero-delta
+entry.
+
+**Captured at both fill seams** — the directional entry and the condor leg —
+matched on the **OCC symbol** the row actually filled on, not on strike, because
+a condor's two legs share an underlying and a session.
+
+**AVAILABLE FOR REPORTING NOW.** These are ordinary columns on `trades`, so
+every consumer that already reads that table can use them with no plumbing:
+`excursion_report` (option 40), `trade_report` (option 41), the fleet
+consolidation into `fleet_trades_<date>.json` (option 39), and any offline tool
+that opens a pulled `trades.db` (option 16). Nothing needs to be added for the
+data to be queryable — the reports simply do not GROUP by these fields yet.
+
+**What becomes answerable once sessions accrue:**
+
+- **Direction vs decay vs crush.** `entry_theta` x hold duration gives the decay
+  cost in dollars; `underlying_entry` versus the exit spot gives the directional
+  component; the residual is IV and gamma. That is a per-trade attribution.
+- **Where a correct thesis stops paying.** Bucket that attribution by hold time
+  and the crossover is a **TIME STOP** — an exit this system does not currently
+  have. `hard_close_15:45` is a session boundary, not a decay boundary.
+- **The slippage assumption.** The floor sweep states *"ASSUMES: fill AT the
+  floor, no slippage"*. `entry_ask - entry_bid` turns that from a declared
+  assumption into a measured distribution, and is the basis for the
+  paper-versus-live fill comparison once live trading starts on Aug 31.
+- **The 10:00-11:00 hole.** That phase is the worst on the board (-$319 across
+  120 trades) while the open is the best (+$9,761). `entry_iv` beside a later
+  exit IV is the most direct test of whether that is post-open IV crush.
+
+**⬜ OPEN — exit-side capture is NOT wired.** `place_exit_order(record, reason,
+mark_price)` has no chain in scope, and plumbing one through a signature used
+everywhere was not worth doing days before the behavioral freeze. The columns
+exist and stay NULL until it is. **Consequence for the first read:** the
+decomposition can separate DIRECTION and THETA, but IV and gamma stay merged in
+the residual. Say "residual", not "IV crush", until the exit side lands.
+
 ##### Iron Condor — the PLAN LIFECYCLE, and why 23 plans produced 0 legs
 
 Added 2026-08-04 from a fleet-wide measurement. A condor never trades directly:
