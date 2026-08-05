@@ -168,15 +168,48 @@ def trade_dims(t: dict) -> dict:
 
 
 class Cell:
-    __slots__ = ("n", "wins", "pnl")
+    # v1.4 — `dates` is not decoration. Without it a cell reports n=48 with a
+    # confidence interval and NO WAY TO SEE that all 48 came from two sessions.
+    # The 2026-08-05 headline named BREAKOUT_VOLATILE x ORBStrategy x B at n=48,
+    # P(win) 25%, interval excluding 50% — a starve candidate on its face, and
+    # the tool could not say whether it was a standing pattern or two bad days.
+    # trade_report and excursion_report both carry a SESSION SPREAD block for
+    # exactly this; the conditional table, which is the tool a DISABLE decision
+    # would actually be read from, did not.
+    __slots__ = ("n", "wins", "pnl", "dates")
 
     def __init__(self):
         self.n, self.wins, self.pnl = 0, 0, 0.0
+        self.dates = defaultdict(int)
 
-    def add(self, net):
+    def add(self, net, date=""):
         self.n += 1
         self.wins += 1 if net > 0 else 0
         self.pnl += net
+        if date:
+            self.dates[date] += 1
+
+    @property
+    def sessions(self) -> int:
+        return len(self.dates)
+
+    @property
+    def top_share(self) -> float:
+        """Fraction of the cell contributed by its single busiest date."""
+        return (max(self.dates.values()) / self.n) if self.n and self.dates else 0.0
+
+    def spread_flag(self) -> str:
+        """The warning a reader needs BEFORE acting on this cell.
+
+        Deliberately mirrors the excursion report's wording: an underpowered or
+        concentrated cell is an ABSENT MEASUREMENT, not a null result. A cell
+        that is 80%+ one date is a one-day event wearing a multi-session label.
+        """
+        if self.sessions < 3:
+            return f"  <- {self.sessions} SESSION(S), not a standing pattern"
+        if self.top_share >= 0.80:
+            return f"  <- SINGLE-SESSION ({self.top_share:.0%} on one date)"
+        return ""
 
 
 TRADE_GROUPINGS = [
@@ -203,7 +236,7 @@ def build_trade_tables(rows):
             continue
         d = trade_dims(t)
         for g in TRADE_GROUPINGS:
-            tables[g][tuple(d[k] for k in g)].add(net)
+            tables[g][tuple(d[k] for k in g)].add(net, (t.get("entry_time") or "")[:10])
     return tables
 
 
@@ -251,14 +284,23 @@ def fmt_cell(key, c: Cell) -> str:
     lo, hi = wilson(p, c.n)
     exp = c.pnl / c.n if c.n else 0.0
     name = " × ".join(key)
-    return (f"  {name:<46} n={c.n:<4} P(win)={p:5.1%} "
-            f"[{lo:4.0%},{hi:4.0%}]  E[net]=${exp:8.2f}  Σ=${c.pnl:9.2f}")
+    return (f"  {name:<46} n={c.n:<4} sess={c.sessions:<3} P(win)={p:5.1%} "
+            f"[{lo:4.0%},{hi:4.0%}]  E[net]=${exp:8.2f}  Σ=${c.pnl:9.2f}"
+            f"{c.spread_flag()}")
 
 
 def build_headline(dates, rows, tables, min_n):
     """One honest line. Names a cell ONLY when its Wilson 95% interval clears
     50% — otherwise it reports that nothing has separated from chance, which is
-    the expected (and correct) answer for the first weeks of sample."""
+    the expected (and correct) answer for the first weeks of sample.
+
+    v1.4 — the line now carries SESSION COUNT and a concentration flag. The
+    Wilson interval answers "is this distinguishable from chance", which is a
+    question about n. It says nothing about whether the n came from eight
+    sessions or two, and a cell drawn from two days is a fact about those days.
+    Both questions have to be answered before a cell can justify DISABLING a
+    combination, and this line is where that decision gets read from.
+    """
     base = f"CT: {len(rows)} closed trades / {len(dates)} session(s)"
     best = worst = None
     for g in TRADE_GROUPINGS:
@@ -270,11 +312,13 @@ def build_headline(dates, rows, tables, min_n):
             exp = c.pnl / c.n
             label = " × ".join(key)
             if lo > 0.50 and (best is None or exp > best[0]):
-                best = (exp, f"{label} n={c.n} P(win)={p:.0%} [{lo:.0%},{hi:.0%}] "
-                             f"E=${exp:,.2f}")
+                best = (exp, f"{label} n={c.n} sess={c.sessions} "
+                             f"P(win)={p:.0%} [{lo:.0%},{hi:.0%}] "
+                             f"E=${exp:,.2f}{c.spread_flag()}")
             if hi < 0.50 and (worst is None or exp < worst[0]):
-                worst = (exp, f"{label} n={c.n} P(win)={p:.0%} [{lo:.0%},{hi:.0%}] "
-                              f"E=${exp:,.2f}")
+                worst = (exp, f"{label} n={c.n} sess={c.sessions} "
+                              f"P(win)={p:.0%} [{lo:.0%},{hi:.0%}] "
+                              f"E=${exp:,.2f}{c.spread_flag()}")
     parts = [base]
     if best:
         parts.append(f"best: {best[1]}")

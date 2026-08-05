@@ -1,4 +1,10 @@
 #!/bin/bash
+# v4.30 — 2026-08-05 — conditional_tables v1.4 reports SESSION SPREAD. The 08-05
+#         headline named a starve candidate at n=48 with an interval excluding
+#         50%, and the tool could not say whether that was eight sessions or two
+#         bad days. The canary pins the DATE REACHING Cell.add, not just the
+#         flag: dropping it leaves every cell claiming to be a standing pattern
+#         and raises nothing.
 # v4.29 — 2026-08-05 — W.2b: the three TIER-1 handlers the 2026-08-05 census
 #         flagged now log inline. All three shipped the previous evening, hours
 #         after the W.2a lesson was written down — the census caught them in one
@@ -402,6 +408,11 @@ check "tests/test_entry_contract.py"     "matched_on_occ_symbol"        "v1.0 OC
 check "database/trade_logger.py"         "set_entry_contract failed"    "v3.13 handler is AUDIBLE to the swallow census"
 check "database/trade_logger.py"         "set_exit_contract failed"     "v3.13 handler is AUDIBLE to the swallow census"
 check "strategy/iron_condor_strategy.py" "condor_abandon journal failed" "v-audibleabandon handler is AUDIBLE"
+
+# ── conditional_tables v1.4 (2026-08-05) — session spread on every cell ────
+check "tests/conditional_tables.py"      "def spread_flag"              "v1.4 concentration warning present"
+check "tests/conditional_tables.py"      't.get("entry_time"'           "v1.4 the DATE reaches Cell.add (wiring, not just the flag)"
+check "tests/test_conditional_session_spread.py" "reaches_the_cell_from_a_trade_ROW" "v1.0 wiring test present"
 _n_cap=$(grep -c "_capture_entry_contract(ctx, record)" main.py 2>/dev/null || echo 0)
 if [ "$_n_cap" = "2" ]; then
     echo "  ✓ PRESENT: N.9 captures at BOTH fill seams (directional + condor leg)"

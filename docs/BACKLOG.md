@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.76
+# docs/BACKLOG.md — v3.77
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -2939,6 +2939,34 @@ file: everything above either ✅ or explicitly re-dated below.
 ---
 
 **⬜ Wed Aug 5**
+- `[DESK]` **CT.1 — ✅ 2026-08-05. THE CONDITIONAL TABLE COULD NOT SEE SESSION
+  SPREAD, AND IT IS THE TOOL A DISABLE DECISION GETS READ FROM.**
+  **THE TRIGGER:** the 08-05 headline named
+  `BREAKOUT_VOLATILE x ORBStrategy x B  n=48  P(win)=25%  [15%,39%]  E=-$32.03`.
+  The Wilson interval excludes 50%, so on its face that is the **first genuine
+  starve candidate** the project has produced. And the tool could not say
+  whether the 48 trades came from eight sessions or two bad days.
+  **THE DISTINCTION MATTERS BECAUSE THEY ARE DIFFERENT QUESTIONS.** Wilson
+  answers *"is this distinguishable from chance"* — a question about n. It is
+  SILENT on whether the n is a standing pattern. `trade_report` and
+  `excursion_report` both carry a SESSION SPREAD block for exactly this;
+  `conditional_tables` did not, and it is the one a starve decision reads.
+  **v1.4:** every `Cell` tracks its dates. Rows and the headline now carry
+  `sess=N` plus a flag — `<3 SESSION(S), not a standing pattern` or
+  `SINGLE-SESSION (X% on one date)`. **The flag WARNS, it does not filter**: a
+  flagged cell still reports its real n, win rate and expectancy, because
+  suppressing it would hide a finding rather than qualify it.
+  **THE TEST I DIDN'T WRITE FIRST, caught by the deliberate-failure run:** every
+  assertion built a `Cell` by hand, so removing the date at the
+  `build_trade_tables` call site left the whole file GREEN — the exact
+  regression the guard exists to catch, invisible to the guard. There is now a
+  wiring test that goes trade-row -> table -> cell, and the canary pins the call
+  site rather than the flag.
+  **⬜ NEXT, before the ORBxB cell can justify anything:** re-run
+  `conditional_tables` and read `sess=` on that row. Fewer than three sessions,
+  or 80%+ on one date, and it is a bad-day record rather than a combination to
+  starve.
+
 - `[DESK]` **W.2b — ✅ 2026-08-05. THE CENSUS CAUGHT ME IN ONE CYCLE, AND IT WAS
   RIGHT ALL THREE TIMES.** Silent handlers 87 -> 89 overnight, all three new
   ones **TIER 1** and all three mine from the previous evening:
@@ -3526,6 +3554,12 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.77 — 2026-08-05 — CT.1: conditional_tables v1.4 reports session spread.**
+  The 08-05 headline produced the project's first credible starve candidate
+  (BREAKOUT_VOLATILE x ORB x B, n=48, interval excluding 50%) and the tool could
+  not say whether it was a standing pattern or two bad days. Cells now carry
+  sess=N and a concentration flag that warns without filtering. The wiring test
+  was missing from the first draft and the deliberate-failure run found it.
 - **v3.76 — 2026-08-05 — W.2b: the swallow census flagged three new TIER-1
   handlers overnight and was right about all of them.** All three were mine from
   the previous evening, shipped hours after W.2a's lesson was recorded; one I had
