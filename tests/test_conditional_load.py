@@ -30,18 +30,19 @@ import tempfile
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOOL = os.path.join(REPO, "tests", "conditional_tables.py")
 
-COLS = ("symbol,strategy,setup_type,setup_grade,direction,regime,"
+COLS = ("trade_id,symbol,strategy,setup_type,setup_grade,direction,regime,"
         "vix_at_entry,is_condor_leg,contracts,pnl_usd,entry_time,"
         "exit_reason,paper_trade").split(",")
-VALS = ("AAA", "ORBStrategy", "ORB Long", "A", "long", "TRENDING_BULL",
+VALS = ("t1", "AAA", "ORBStrategy", "ORB Long", "A", "long", "TRENDING_BULL",
         15.0, 0, 1, 50.0, "2026-08-04T14:00:00", "bos_exit", 1)
 DATE = "2026-08-04"
 
 
-def _db(dirpath, name):
+def _db(dirpath, name, tid="t1"):
     con = sqlite3.connect(os.path.join(dirpath, name))
     con.execute("CREATE TABLE trades (%s)" % ", ".join(f"{c} TEXT" for c in COLS))
-    con.execute("INSERT INTO trades VALUES (%s)" % ",".join("?" * len(COLS)), VALS)
+    con.execute("INSERT INTO trades VALUES (%s)" % ",".join("?" * len(COLS)),
+                (tid,) + VALS[1:])
     con.commit()
     con.close()
 
@@ -58,8 +59,8 @@ def _world(names):
     root = tempfile.mkdtemp()
     day = os.path.join(root, DATE)
     os.makedirs(day)
-    for n in names:
-        _db(day, n)
+    for i, n in enumerate(names):
+        _db(day, n, tid=f"t{i}")
     return root
 
 
@@ -84,6 +85,58 @@ def test_the_old_glob_would_have_missed_it():
     day = os.path.join(root, DATE)
     assert len(glob.glob(os.path.join(day, "*_trades.db"))) == 1
     assert len(glob.glob(os.path.join(day, "*_trades*.db"))) == 2
+
+
+def test_the_same_trade_in_two_dated_folders_counts_once():
+    """THE APPENDING-LOG PROBLEM. Each box's trades.db is CUMULATIVE, so a
+    harvest that copies the whole file into every dated folder reproduces the
+    same trade once per subsequent folder. Before v1.6 nothing de-duplicated —
+    `trade_id` was not even SELECTed — and the inflated n made every Wilson
+    interval about 1.7x too narrow at 3x duplication."""
+    root = tempfile.mkdtemp()
+    for d in ("2026-08-03", DATE):
+        day = os.path.join(root, d)
+        os.makedirs(day)
+        _db(day, f"AAA_trades_{d}.db", tid="same-trade")
+    r = subprocess.run(
+        [sys.executable, TOOL, "--since", "2026-08-03", "--trades-root", root,
+         "--journal-root", tempfile.mkdtemp(),
+         "--reports-dir", tempfile.mkdtemp(), "--quiet"],
+        capture_output=True, text=True, cwd=REPO)
+    assert "1 closed trades" in r.stdout, r.stdout
+    assert "de-duplicated 1 repeated row" in r.stdout, r.stdout
+
+
+def test_high_duplication_names_the_SOURCE():
+    """A consumer-side guard that hid the problem would be worse than none —
+    the harvest is what needs fixing."""
+    root = tempfile.mkdtemp()
+    for d in ("2026-08-03", DATE):
+        day = os.path.join(root, d)
+        os.makedirs(day)
+        _db(day, f"AAA_trades_{d}.db", tid="same-trade")
+    r = subprocess.run(
+        [sys.executable, TOOL, "--since", "2026-08-03", "--trades-root", root,
+         "--journal-root", tempfile.mkdtemp(),
+         "--reports-dir", tempfile.mkdtemp(), "--quiet"],
+        capture_output=True, text=True, cwd=REPO)
+    assert "fix the SOURCE" in r.stdout, r.stdout
+
+
+def test_a_row_without_a_trade_id_is_kept_not_dropped():
+    """A systematically id-less strategy would otherwise vanish from the tables
+    entirely — a silent zero, which is the family this file exists to prevent."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ct", TOOL)
+    ct = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ct)
+    a = ct._dedup_key({"trade_id": "", "symbol": "AAA",
+                       "entry_time": "x", "exit_reason": "y",
+                       "pnl_usd": 1.0, "contracts": 1})
+    b = ct._dedup_key({"trade_id": "", "symbol": "BBB",
+                       "entry_time": "x", "exit_reason": "y",
+                       "pnl_usd": 1.0, "contracts": 1})
+    assert a[0] == "composite" and a != b
 
 
 def test_an_empty_load_refuses_instead_of_reporting_a_null():

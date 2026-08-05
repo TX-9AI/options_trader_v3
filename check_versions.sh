@@ -1,4 +1,9 @@
 #!/bin/bash
+# v4.32 — 2026-08-05 — conditional_tables v1.6 DE-DUPLICATES. The box DBs are
+#         cumulative and the harvest copies them into every dated folder, so the
+#         same trade was counted once per subsequent day. trade_id was not even
+#         SELECTed. Inflated n makes Wilson intervals too NARROW — cells look
+#         decisive when they are not.
 # v4.31 — 2026-08-05 — conditional_tables v1.5: the trade-DB glob had NEVER
 #         matched a file, and an empty load printed a statistical verdict. Both
 #         canaries are absence-shaped in spirit — the failure mode is a tool that
@@ -420,6 +425,9 @@ check "tests/test_conditional_session_spread.py" "reaches_the_cell_from_a_trade_
 check "tests/conditional_tables.py"      '*_trades*.db'                 "v1.5 glob matches the DATED filename the fleet actually writes"
 check "tests/conditional_tables.py"      "LOAD FAILED"                  "v1.5 an empty load refuses instead of reporting a null"
 check "tests/test_conditional_load.py"   "refuses_instead_of_reporting_a_null" "v1.0 empty-load guard present"
+check "tests/conditional_tables.py"      "def _dedup_key"               "v1.6 de-duplicates across dated folders"
+check "tests/conditional_tables.py"      "trade_id,symbol"              "v1.6 trade_id is SELECTed (it was not)"
+check "tests/test_conditional_load.py"   "two_dated_folders_counts_once" "v1.0 de-dup guard present"
 _n_cap=$(grep -c "_capture_entry_contract(ctx, record)" main.py 2>/dev/null || echo 0)
 if [ "$_n_cap" = "2" ]; then
     echo "  ✓ PRESENT: N.9 captures at BOTH fill seams (directional + condor leg)"

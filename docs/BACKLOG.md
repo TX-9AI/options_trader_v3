@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.78
+# docs/BACKLOG.md — v3.79
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -2939,6 +2939,32 @@ file: everything above either ✅ or explicitly re-dated below.
 ---
 
 **⬜ Wed Aug 5**
+- `[DESK→DEPLOY]` **CT.3 — ✅ CONSUMER GUARD 2026-08-05; ⬜ SOURCE FIX PENDING.
+  THE APPENDING TRADE LOGS ARE POLLUTING EVERY READ.**
+  Each box's `trades.db` is **CUMULATIVE**, and the harvest copies the whole file
+  into every dated folder — so a trade from 07-23 appears in all 22 subsequent
+  folders. `conditional_tables` de-duplicated NOTHING; **`trade_id` was not even
+  in the SELECT**. `trade_report` has collapsed 1112 rows to 388 unique for
+  weeks; this tool was reading the 1112.
+  **WORSE THAN INFLATED TOTALS: n DRIVES THE WILSON INTERVAL.** At 3x
+  duplication every interval is ~1.7x too NARROW. The 2026-08-05 read of
+  `ORB x A [53%,61%]` vs `ORB x B [37%,45%]` as NON-OVERLAPPING was made on
+  inflated n and **must be re-run before it justifies anything.**
+  **v1.6 de-duplicates** on `trade_id`, falls back to a composite key rather
+  than dropping id-less rows (a systematically id-less strategy would vanish
+  entirely), and **prints the duplication share, naming the SOURCE above 25%** —
+  a consumer guard that hid the problem would be worse than none.
+  **⬜ SOURCE FIX — operator directive 2026-08-05: "each day's report should
+  reflect 1 trading day on the bot boxes." Two routes:**
+  **(A)** date-stamp `DB_PATH` (`trades_<date>.db`) — cleanest shape, the file
+  IS the day; but it moves the LIVE WRITE PATH and every literal `trades.db`
+  reference (configure.sh archive, devtools 16, harvest globs) must move with
+  it. A missed one reads empty or stale, silently.
+  **(B)** filter at harvest — box keeps its cumulative DB for its own
+  reconciliation, the harvest exports only that date's rows into the dated
+  artifact. Satisfies the requirement exactly, cannot break trading.
+  **RECOMMENDED: B now, A post-freeze.**
+
 - `[DESK]` **CT.2 — ✅ 2026-08-05. THE CONDITIONAL TABLE HAD NEVER READ A TRADE
   DB, AND SAID "NO CELL SEPARATED FROM CHANCE" ANYWAY.**
   **(a) THE GLOB NEVER MATCHED.** Harvested files are `<SYM>_trades_<date>.db`;
@@ -3578,6 +3604,12 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.79 — 2026-08-05 — CT.3: conditional_tables v1.6 de-duplicates.** The box
+  DBs are cumulative and the harvest copies them into every dated folder, so the
+  same trade counted once per subsequent day; trade_id was not even SELECTed.
+  Inflated n makes Wilson intervals too narrow, so the 08-05 ORB grade-A/B split
+  must be re-read before it justifies anything. Source fix pending: harvest-side
+  date filter now, date-stamped DB post-freeze.
 - **v3.78 — 2026-08-05 — CT.2: conditional_tables had never loaded a trade DB.**
   The glob required the filename to END in `_trades.db`; the fleet writes
   `<SYM>_trades_<date>.db`. excursion_report hit and documented the same bug and

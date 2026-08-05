@@ -1,7 +1,22 @@
 #!/usr/bin/env python3
 """
-tests/conditional_tables.py — v1.5 — Conditional-probability tables from the
+tests/conditional_tables.py — v1.6 — Conditional-probability tables from the
 
+v1.6 — 2026-08-05 — DE-DUPLICATION. Each box's `trades.db` is CUMULATIVE, so a
+  harvest that copies the whole file into every dated folder reproduces the same
+  trade once per subsequent folder. This tool de-duplicated NOTHING — `trade_id`
+  was not even in the SELECT. `trade_report` has been collapsing 1112 rows to
+  388 unique for weeks; this tool was reading the 1112.
+  WHY IT IS WORSE THAN INFLATED TOTALS: n drives the Wilson interval. A 3x
+  duplication makes every interval about 1.7x too NARROW, so cells look decisive
+  when they are not — and the 2026-08-05 read of
+  `ORBStrategy x A [53%,61%]` vs `x B [37%,45%]` as NON-OVERLAPPING was made on
+  exactly that inflated n.
+  Rows without a `trade_id` fall back to a composite key rather than being
+  dropped: a systematically id-less strategy would otherwise vanish from the
+  tables entirely.
+  THIS IS THE CONSUMER-SIDE GUARD ONLY. The source is the harvest, and the tool
+  now says so out loud when duplication exceeds 25%.
 v1.5 — 2026-08-05 — TWO FIXES, BOTH ABOUT SILENT ZEROS.
   (a) THE GLOB HAD NEVER MATCHED ANYTHING. Harvested files are named
       `<SYM>_trades_<date>.db`; this globbed `*_trades.db`, which requires the
@@ -148,9 +163,24 @@ def wilson(p_hat: float, n: int, z: float = 1.96):
 
 # ── trades mode ──────────────────────────────────────────────────────────────
 
-TRADE_COLS = ("symbol,strategy,setup_type,setup_grade,direction,regime,"
+TRADE_COLS = ("trade_id,symbol,strategy,setup_type,setup_grade,direction,regime,"
               "vix_at_entry,is_condor_leg,contracts,pnl_usd,entry_time,"
               "exit_reason,paper_trade")
+
+
+def _dedup_key(t: dict):
+    """Identity of a trade, for de-duplication across date folders.
+
+    `trade_id` when present. A row without one falls back to a composite of the
+    fields that cannot collide for two genuinely different trades — DROPPING it
+    would be worse than double-counting, because a systematically id-less
+    strategy would vanish from the tables entirely.
+    """
+    tid = t.get("trade_id")
+    if tid:
+        return ("id", tid)
+    return ("composite", t.get("symbol"), t.get("entry_time"),
+            t.get("exit_reason"), t.get("pnl_usd"), t.get("contracts"))
 
 
 def load_trades(trades_root: str, dates):
@@ -165,7 +195,7 @@ def load_trades(trades_root: str, dates):
     `*_trades*.db` matches both spellings, so a future rename in either
     direction does not silently empty the corpus again.
     """
-    rows = []
+    rows, seen, dup = [], set(), 0
     for d in dates:
         for db in sorted(glob.glob(os.path.join(trades_root, d, "*_trades*.db"))):
             try:
@@ -174,11 +204,17 @@ def load_trades(trades_root: str, dates):
                     f"SELECT {TRADE_COLS} FROM trades "
                     "WHERE pnl_usd IS NOT NULL AND exit_reason IS NOT NULL")
                 for r in cur.fetchall():
-                    rows.append(dict(zip(TRADE_COLS.split(","), r), _date=d))
+                    t = dict(zip(TRADE_COLS.split(","), r), _date=d)
+                    k = _dedup_key(t)
+                    if k in seen:
+                        dup += 1
+                        continue
+                    seen.add(k)
+                    rows.append(t)
                 con.close()
             except sqlite3.Error as e:
                 print(f"  warn: {os.path.basename(db)}: {e}", file=sys.stderr)
-    return rows
+    return rows, dup
 
 
 def trade_dims(t: dict) -> dict:
@@ -460,7 +496,23 @@ def main():
         print(f"CT: no dated folders yet under {args.trades_root}")
         return 0
 
-    rows = load_trades(args.trades_root, dates)
+    rows, dup = load_trades(args.trades_root, dates)
+    # v1.6 — THE APPENDING-LOG PROBLEM, MADE VISIBLE. Each box's trades.db is
+    # CUMULATIVE, so a harvest that copies the whole file into every date folder
+    # reproduces the same trade once per subsequent folder. Nothing here
+    # de-duplicated: `trade_id` was not even SELECTed. `trade_report` has been
+    # collapsing 1112 rows to 388 unique for weeks — this tool was reading the
+    # 1112.
+    # WHY IT IS WORSE THAN INFLATED TOTALS: n drives the Wilson interval. A 3x
+    # duplication makes every interval ~1.7x too NARROW, so cells look decisive
+    # when they are not — in the tool the Aug 8-9 calibration fits are read from.
+    if dup:
+        share = dup / (dup + len(rows))
+        print(f"CT: de-duplicated {dup:,} repeated row(s) "
+              f"({share:.0%} of everything read) -> {len(rows):,} unique trades."
+              + ("  ⚠️ HIGH — the harvest is copying cumulative DBs into every "
+                 "dated folder; fix the SOURCE, this is only the consumer-side "
+                 "guard." if share >= 0.25 else ""))
     # v1.5 — REFUSE LOUDLY ON AN EMPTY LOAD. On 2026-08-05 this printed
     # "CT: 0 closed trades / 10 session(s) · no cell separated from chance yet"
     # — a confident verdict on an empty corpus, while the conductor's run of the
