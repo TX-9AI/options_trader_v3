@@ -419,6 +419,65 @@ thresholds must not be the sessions used to validate the scorer.
 
 ---
 
+
+##### A2 — TREND and RANGE co-occurrence: a CO-TRUTH, and what it does NOT buy
+
+Settled 2026-08-05 across two measurements. Recorded here so it is not
+re-opened.
+
+**It is not a contradiction.** TRENDING reads a ~70-minute lookback, RANGING a
+~25-minute one. A tick scoring both above 0.5 is a slow uptrend containing a
+tight recent range — both labels are correct about their own horizon. The old
+acceptance check asserted mutual exclusion and therefore FAILED every session
+the harness ever ran (16 diary sessions, all 4/5). It is now a **banded metric**
+(`A2_BAND_HI = 8%`, observed 3.0-5.3%) that passes in-band and can finally raise
+a real alarm out of it. **A check that always fails is not a check.**
+
+**The HTF trend carries NO forward information for the LTF range.** Measured
+over 175,302 ticks, 6,860 of them co-occurring (3.9%), with RANGE_ONLY as the
+control:
+
+```
++10 bars: range-in-bull-trend median drift  -0.001%  vs a plain range
++20 bars:                                   +0.003%
++30 bars:                                   +0.011%
+```
+
+The tool's own pre-registered criterion was *"a materially positive lift
+supports treating HTF direction as a drift/bias term on the LTF range"*. At
+n≈3,500 per bucket, +0.011% at thirty minutes is a rounding error on a 0DTE
+contract. **So HTF direction is NOT a usable drift term inside a range**, and
+any proposal to use it as a tiebreaker is measured and rejected, not untested.
+
+**What the co-occurrence DOES cost, and it is not prediction.** On those ticks
+Layer 2 commits to a trend label **98% of the time** — TRENDING_BULL 50.6%,
+TRENDING_BEAR 47.8%, RANGING **1.5%** — because argmax makes the labels compete.
+So on 3.9% of all ticks a genuine range state is INVISIBLE to every strategy
+gated on RANGING, which is the condor and the butterfly. The loss is not a worse
+forecast; it is a co-truth suppressing half of itself.
+
+**⚠️ AND THE CONVICTION IS PEGGED WHILE IT PREDICTS NOTHING.** Median conviction
+on those commits is **1.00** for both BULL and BEAR — the integrator is maximally
+confident on exactly the ticks where the drift study says that direction has no
+forward content. **Confidence and predictive value have come apart.** That is a
+finding about L2's conviction scale, not about A2, and it bears on the L1 freeze:
+a label can be certain and uninformative at the same time.
+
+**⬜ THE OPEN CANDIDATE (post-freeze): split A2 into two independently weighted
+axes** rather than competing labels, so a range inside a trend is both. It would
+NOT improve prediction — that is settled above. It would stop RANGING losing
+argmax on ticks where it is true.
+**GATE IT ON A MEASUREMENT FIRST, not on the argument.** The replay corpus
+already holds all 6,860 ticks with both scores, so one offline pass answers: if
+RANGING had won there, how many condor plans would have existed, and in which
+regimes? A handful means the architecture change buys little; the condor's
+missing population means it has its justification with a number attached. Run it
+in the Aug 8-9 slot — it is offline and changes nothing.
+**Scope warning:** this makes regimes AXES rather than mutually exclusive
+competitors, so every consumer reading `primary_regime` is affected — the
+condor's RANGING gate, the continuation's TRENDING gate, the exit-side regime
+flip. Post-freeze only.
+
 ##### 5. Provenance & boundary ledger
 
 - **Read from HEAD `49d7af8`:** all engine fields, enums, config thresholds, v1.3

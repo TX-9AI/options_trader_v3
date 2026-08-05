@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.81
+# docs/BACKLOG.md — v3.82
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -2086,6 +2086,47 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   danger band. All from the existing readiness journal + OHLC; no gap.
 
 **⬜ Wed Aug 5**
+- `[DESK]` **A2.R — ✅ CLOSED AS RESEARCH 2026-08-05, plus one candidate and one
+  warning. Full write-up in MECHANICS "A2 — TREND and RANGE co-occurrence".**
+  **THE DRIFT STUDY CAME BACK NULL, and that is a result.** 175,302 ticks, 6,860
+  co-occurring (3.9%), RANGE_ONLY as the control:
+  `+10 bars -0.001%  ·  +20 bars +0.003%  ·  +30 bars +0.011%` median drift for
+  range-in-bull-trend versus a plain range, n≈3,500 per bucket. The tool's
+  PRE-REGISTERED criterion was "a materially positive lift supports treating HTF
+  direction as a drift/bias term on the LTF range". **+0.011% at thirty minutes
+  is a rounding error on a 0DTE contract.** HTF direction is not a usable drift
+  term inside a range — measured and rejected, not untested. **Do not re-open
+  it.**
+  **WHAT THE CO-OCCURRENCE ACTUALLY COSTS.** L2 commits to a TREND label on
+  **98%** of those ticks (BULL 50.6%, BEAR 47.8%, RANGING **1.5%**) because
+  argmax makes the labels compete. So on 3.9% of all ticks a genuine range state
+  is INVISIBLE to every RANGING-gated strategy — the condor and the butterfly,
+  and the condor is the one that has been starving all week. The loss is not a
+  worse forecast; **it is a co-truth suppressing half of itself.**
+  **⚠️ THE FINDING I WOULD CARRY INTO THE L1 FREEZE:** median conviction on those
+  commits is **1.00** for both BULL and BEAR — the integrator is MAXIMALLY
+  CONFIDENT on precisely the ticks where the drift study says the direction has
+  no forward content. **Confidence and predictive value have come apart.** That
+  is about L2's conviction scale, not about A2, and it means a label can be
+  certain and uninformative at once. Worth stating before anything downstream
+  treats conviction 1.00 as evidence.
+  **⬜ CANDIDATE (POST-FREEZE): split A2 into two independently weighted axes**
+  so a range inside a trend is BOTH, instead of one losing argmax. It would NOT
+  improve prediction — settled above. It would stop RANGING losing on ticks where
+  it is true.
+  **⬜ GATE IT ON A MEASUREMENT, NOT THE ARGUMENT — Aug 8-9, offline, changes
+  nothing:** the replay corpus already holds all 6,860 ticks with both scores, so
+  one pass answers *if RANGING had won there, how many condor plans would have
+  existed, and in which regimes?* A handful means the change buys little; the
+  condor's missing population means it has its justification with a number.
+  **SCOPE WARNING:** this makes regimes AXES rather than mutually exclusive
+  competitors, so every consumer of `primary_regime` is affected — the condor's
+  RANGING gate, continuation's TRENDING gate, the exit-side regime flip. Post
+  Aug 21 only.
+  **ALSO TODAY: 5/5 ACCEPTANCE FOR THE FIRST TIME**, and the tape is fully
+  recovered — 11,293 ticks across 29 symbol-sessions against 08-03/08-04's
+  degraded ~3,650 across 15.
+
 - `[DESK]` **L1.CAL.2 — post-graft ramp re-read (verifies the L1.CAL correction
   before L1.11 fits anything).** L1.9 grafts the bookmark onto
   `validate_regime.sh` on Tue Aug 4 and re-scores the diary. The day after,
@@ -3642,6 +3683,15 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.82 — 2026-08-05 — A2.R: the co-occurrence question is CLOSED as research.**
+  The drift study is null (+0.011% at 30 bars vs control, n≈3,500) against its own
+  pre-registered criterion, so HTF direction is not a drift term inside a range.
+  What co-occurrence costs is not forecast quality but RANGING losing argmax on
+  98% of those ticks, hiding a true range state from the condor and butterfly.
+  Recorded alongside it: L2 commits at conviction 1.00 on exactly those ticks —
+  confidence and predictive value have come apart. Split-into-axes filed as a
+  post-freeze candidate, gated on an offline measurement rather than the argument.
+  Full write-up in MECHANICS.
 - **v3.81 — 2026-08-05 — RD.1: readiness_digest's headline and its fit
   suggestions measured different things.** The pegged count read RAW factor
   values while the suggestions read the RAMPED output — and the headline is what
