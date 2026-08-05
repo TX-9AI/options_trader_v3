@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.80
+# docs/BACKLOG.md — v3.81
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -2939,6 +2939,23 @@ file: everything above either ✅ or explicitly re-dated below.
 ---
 
 **⬜ Wed Aug 5**
+- `[DESK]` **RD.1 — ✅ 2026-08-05. THE READINESS HEADLINE COUNTED A DIFFERENT
+  THING FROM THE LIST IT POINTS AT.**
+  `npeg` measured peg rates on the RAW `_val` series; **FIT SUGGESTIONS measure
+  the RAMPED output.** So the Telegram number could disagree with the list it
+  sends you to — and the headline is what gets acted on. 2026-08-05 reported
+  **"9 pegged factor(s)"** on the raw definition.
+  **THE RAMPED OUTPUT IS THE RIGHT ONE**, and it is this section's own premise:
+  *"a corroborator pegged at its bound is a constant wearing new clothes."* A RAW
+  value at its bound is frequently just what that factor IS — a binary
+  corroborator is 0 or 1 by construction and flagging it says nothing. A RAMPED
+  output at its bound is the term contributing nothing that varies.
+  `npeg = len(fits)` — one definition, and the wording now says **"pegged
+  ramp(s)"**.
+  **⬜ CONSEQUENCE FOR AUG 8-9:** the real count is whatever FIT SUGGESTIONS
+  lists, not 9. Size the calibration slot against that number after the next
+  digest, not against the headline that has been running.
+
 - `[DESK]` **A2.W — ✅ 2026-08-05. A2 STOPS BEING A CHECK THAT ALWAYS FAILS.**
   Sixteen diary sessions, every one 4/5, every one the same check. The
   excavation already settled the cause and it is the INVARIANT that is wrong:
@@ -3625,6 +3642,11 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.81 — 2026-08-05 — RD.1: readiness_digest's headline and its fit
+  suggestions measured different things.** The pegged count read RAW factor
+  values while the suggestions read the RAMPED output — and the headline is what
+  people act on. One definition now; the real pegged-ramp count is whatever FIT
+  SUGGESTIONS lists, which is what the Aug 8-9 slot should be sized against.
 - **v3.80 — 2026-08-05 — A2.W: A2 becomes a banded metric.** It had failed every
   session since the harness existed because the invariant was wrong, not the
   engine — different lookbacks, so co-occurrence is a real state. A permanently

@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
 # tests/readiness_digest.py — options_trader_v3
+# v1.2 — 2026-08-05 — THE HEADLINE COUNTED A DIFFERENT THING FROM THE LIST IT
+#         POINTS AT. `npeg` measured peg rates on the RAW `_val` series while
+#         FIT SUGGESTIONS measure the RAMPED output, so the number people read
+#         could disagree with the suggestions it sends them to. The premise of
+#         this whole section is about the RAMP — "a corroborator pegged at its
+#         bound is a constant wearing new clothes" — and a RAW value at its
+#         bound is frequently just what that factor is (a binary corroborator
+#         is 0 or 1 by construction). 2026-08-05 reported "9 pegged factor(s)"
+#         on the raw definition; the ramped count is what the Aug 8-9 fits
+#         should be sized against. Now `npeg = len(fits)` — one definition,
+#         and the wording says "pegged ramp(s)".
 # v1.1 — 2026-07-28 — FACTOR CALIBRATION SECTION. v1.0 reported the machine
 #         (states, R, arm episodes) but not the FACTORS, which is the same
 #         omission ramp_calibration.py exists to prevent one layer down: a
@@ -205,12 +216,19 @@ def digest(day_dir, date):
         for a in anticipations:
             lines.append(f"    {a['sym']} {a['strategy']}: armed {a['armed_since']} -> fired {a['fired_at']}")
     out_json["anticipations"] = anticipations
-    npeg = sum(1 for k in per for fk, v in per[k]["factors"].items()
-               if fk.endswith("_val") and v and
-               (sum(1 for x in v if x >= PEG_HI) / len(v) > PEG_ALARM or
-                sum(1 for x in v if x <= PEG_LO) / len(v) > PEG_ALARM))
+    # v1.3 — COUNT THE SAME THING THE FIT SUGGESTIONS DO. This counted peg rates
+    # on the RAW `_val` series while the fits (above) measure the RAMPED output,
+    # so the headline and the list it points at could disagree — and the number
+    # people read is the headline. The module's own premise is about the ramp:
+    # "a corroborator pegged at its bound is a constant wearing new clothes."
+    # A RAW value at its bound is frequently just what that factor is (a binary
+    # corroborator is 0 or 1 by construction); a RAMPED output at its bound is
+    # the term contributing nothing that varies, which is the actual alarm.
+    # 2026-08-05 reported "9 pegged factor(s)" on the raw definition — the
+    # ramped count is what the Aug 8-9 fits should be sized against.
+    npeg = len(fits)
     headline = (f"🧭 readiness {date}: "
-                + (f"{npeg} pegged factor(s) — see FIT SUGGESTIONS; " if npeg else "")
+                + (f"{npeg} pegged ramp(s) — see FIT SUGGESTIONS; " if npeg else "")
                 + (", ".join(f"{k} wf={per[k]['would_fire']} arm={len(per[k]['arm_spans'])}"
                              for k in sorted(per)) if per
                    else "no readiness rows yet (journal not harvested or fleet pre-v4.4)"))
