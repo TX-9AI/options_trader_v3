@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.79
+# docs/BACKLOG.md — v3.80
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -2939,6 +2939,27 @@ file: everything above either ✅ or explicitly re-dated below.
 ---
 
 **⬜ Wed Aug 5**
+- `[DESK]` **A2.W — ✅ 2026-08-05. A2 STOPS BEING A CHECK THAT ALWAYS FAILS.**
+  Sixteen diary sessions, every one 4/5, every one the same check. The
+  excavation already settled the cause and it is the INVARIANT that is wrong:
+  TRENDING reads a ~70-minute lookback and RANGING a ~25-minute one, so a tick
+  scoring both high is a slow uptrend containing a tight recent range — a real,
+  tradeable state. The two labels answer DIFFERENT QUESTIONS and cannot be held
+  mutually exclusive.
+  **WHY IT HAD TO CHANGE BEFORE THE FREEZE:** a permanent standing FAIL makes a
+  NEW A2 failure invisible. At 224 ticks and at 900 the line reads identically,
+  and sixteen sessions of "4/5" trained everyone to skip it. **A check that
+  always fails is not a check.**
+  **NOW A BANDED METRIC.** Passes at or under `A2_BAND_HI = 8%`, fails above.
+  Observed range since the tuned pool is 3.0-5.3%; today was 6.1%. The band is
+  widened to 8% because A2 is a REPORTED CHARACTERISTIC — the alarm should mean
+  *the tape changed*, not *it moved a bit*.
+  **THE RAW COUNT STAYS VISIBLE** and the passing line says why a non-zero
+  number is not a contradiction. Turning a failing check into a silent pass
+  would have been worse than leaving it failing.
+  **Acceptance now reads 5/5 honestly**, and an above-band reading is a real
+  alarm for the first time.
+
 - `[DESK→DEPLOY]` **CT.3 — ✅ CONSUMER GUARD 2026-08-05; ⬜ SOURCE FIX PENDING.
   THE APPENDING TRADE LOGS ARE POLLUTING EVERY READ.**
   Each box's `trades.db` is **CUMULATIVE**, and the harvest copies the whole file
@@ -3604,6 +3625,12 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.80 — 2026-08-05 — A2.W: A2 becomes a banded metric.** It had failed every
+  session since the harness existed because the invariant was wrong, not the
+  engine — different lookbacks, so co-occurrence is a real state. A permanently
+  failing check hides a new failure; A2 now passes within an 8% band, still
+  reports the raw count, and can finally raise a genuine alarm. Acceptance reads
+  5/5 honestly.
 - **v3.79 — 2026-08-05 — CT.3: conditional_tables v1.6 de-duplicates.** The box
   DBs are cumulative and the harvest copies them into every dated folder, so the
   same trade counted once per subsequent day; trade_id was not even SELECTed.

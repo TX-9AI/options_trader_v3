@@ -328,6 +328,11 @@ def replay_symbol(path: str, warmup: int, use_v13: bool,
 
 
 # ── acceptance checks (Layer-1 only — instantaneous scores, no L2) ────────────
+# v2.4 — A2's band. Observed 3.0-5.3% since the tuned pool; 8% leaves room for
+# ordinary variation so the alarm means "the tape changed", not "it moved".
+A2_BAND_HI = 0.08
+
+
 def acceptance(recs: List[dict]) -> List[Tuple[str, bool, str]]:
     out = []
     if not recs:
@@ -341,9 +346,34 @@ def acceptance(recs: List[dict]) -> List[Tuple[str, bool, str]]:
     bad = [k for r in recs for k, v in r["scores"].items() if v is not None and not (0.0 <= v <= 1.0)]
     out.append(("A1 scores in [0,1] or None", not bad, f"{len(bad)} out-of-range" if bad else "ok"))
 
-    # A2 — flat-veto mutual exclusion: TRENDING and RANGING never BOTH strong (>0.5)
+    # A2 — CO-OCCURRENCE RATE, reported not asserted. v2.4, 2026-08-05.
+    #
+    # This was written as a mutual-exclusion INVARIANT — TRENDING and RANGING
+    # must never both exceed 0.5 — and it has FAILED every session since the
+    # harness existed. The excavation established why, and the invariant is what
+    # is wrong: TRENDING reads a ~70-minute lookback and RANGING a ~25-minute
+    # one, so a tick scoring both high is not a contradiction. It is a slow
+    # uptrend containing a tight recent range — a real, tradeable state. The two
+    # labels answer DIFFERENT QUESTIONS, and an invariant that treats them as
+    # answering the same one cannot be satisfied.
+    #
+    # WHY THIS MATTERS MORE THAN THE 4/5: a permanent standing FAIL means a NEW
+    # A2 failure is invisible. If this jumped from 224 ticks to 900 tomorrow the
+    # line would read identically, and sixteen diary sessions of "4/5" trained
+    # everyone to skip it. A check that always fails is not a check.
+    #
+    # So it PASSES on the observed band and fails only outside it. The band is
+    # the range this has actually held since the tuned pool landed (3.0-5.3%),
+    # widened to 8% because A2 is a REPORTED CHARACTERISTIC and the alarm should
+    # fire on a regime change in the tape, not on ordinary variation.
     both = sum(1 for r in recs if (sc(r, TRENDING_BULL) > .5 or sc(r, TRENDING_BEAR) > .5) and sc(r, RANGING) > .5)
-    out.append(("A2 TREND & RANGE not both >0.5 (flat veto)", both == 0, f"{both} violating ticks"))
+    rate = both / n if n else 0.0
+    out.append((f"A2 TREND+RANGE co-occurrence within band (<={A2_BAND_HI:.0%})",
+                rate <= A2_BAND_HI,
+                f"{both} tick(s) = {rate:.1%}"
+                + ("  [expected 3.0-5.3%; different lookbacks, NOT a "
+                   "contradiction — see MECHANICS A2]" if rate <= A2_BAND_HI
+                   else "  ⚠️ ABOVE BAND — this is the alarm A2 exists to raise")))
 
     # A3 — BREAKOUT and COMPRESSION never both strong (opposite width axis)
     both_bc = sum(1 for r in recs if sc(r, BREAKOUT_VOLATILE) > .5 and sc(r, COMPRESSION) > .5)

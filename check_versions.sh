@@ -1,4 +1,10 @@
 #!/bin/bash
+# v4.33 — 2026-08-05 — A2 becomes a BANDED METRIC. It had failed every session
+#         since the harness existed (16 diary sessions, all 4/5) because the
+#         invariant was wrong, not the engine: TRENDING reads ~70min and RANGING
+#         ~25min, so both scoring high is a real state. A permanently-failing
+#         check hides a NEW failure — the canary pins the band so nobody quietly
+#         reverts it to `both == 0`.
 # v4.32 — 2026-08-05 — conditional_tables v1.6 DE-DUPLICATES. The box DBs are
 #         cumulative and the harvest copies them into every dated folder, so the
 #         same trade was counted once per subsequent day. trade_id was not even
@@ -428,6 +434,8 @@ check "tests/test_conditional_load.py"   "refuses_instead_of_reporting_a_null" "
 check "tests/conditional_tables.py"      "def _dedup_key"               "v1.6 de-duplicates across dated folders"
 check "tests/conditional_tables.py"      "trade_id,symbol"              "v1.6 trade_id is SELECTed (it was not)"
 check "tests/test_conditional_load.py"   "two_dated_folders_counts_once" "v1.0 de-dup guard present"
+check "tests/replay_confluence.py"       "A2_BAND_HI"                   "v2.4 A2 is a banded metric, not an unsatisfiable invariant"
+check "tests/test_a2_band.py"            "far_above_the_band_still_fails" "v1.0 A2 can still raise a real alarm"
 _n_cap=$(grep -c "_capture_entry_contract(ctx, record)" main.py 2>/dev/null || echo 0)
 if [ "$_n_cap" = "2" ]; then
     echo "  ✓ PRESENT: N.9 captures at BOTH fill seams (directional + condor leg)"
