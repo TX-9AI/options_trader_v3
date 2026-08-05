@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.77
+# docs/BACKLOG.md — v3.78
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -2939,6 +2939,30 @@ file: everything above either ✅ or explicitly re-dated below.
 ---
 
 **⬜ Wed Aug 5**
+- `[DESK]` **CT.2 — ✅ 2026-08-05. THE CONDITIONAL TABLE HAD NEVER READ A TRADE
+  DB, AND SAID "NO CELL SEPARATED FROM CHANCE" ANYWAY.**
+  **(a) THE GLOB NEVER MATCHED.** Harvested files are `<SYM>_trades_<date>.db`;
+  the tool globbed `*_trades.db`, which requires the name to END in
+  `_trades.db`. **`excursion_report` hit the IDENTICAL bug and documented it** —
+  *"every consumer that globbed `*_trades_<date>.db` correctly; this file was
+  the outlier"* — and the fix was never carried across. Now `*_trades*.db`, so a
+  rename in either direction cannot empty the corpus again.
+  **(b) AN EMPTY LOAD REPORTED A VERDICT.** A manual run printed
+  `CT: 0 closed trades / 10 session(s) · no cell separated from chance yet`
+  while the conductor's run of the SAME tool that afternoon found **717**. A
+  null result and a failed load shared one sentence — **in the tool the Aug 8-9
+  calibration fits are read from.** Now exits **rc=2**, names the cause, and
+  states "This is NOT a null result".
+  **DELIBERATELY PRESERVED:** an empty root with no dated folders is still
+  rc=0 — the conductor must never be marked failed by a quiet night. The new
+  refusal fires only when folders exist and nothing matched, which is a PATH or
+  NAMING fault.
+  **THE PATTERN WORTH NAMING:** a tool that runs clean, exits 0 and reports a
+  null on a corpus it never read. That is the third instance this week
+  (candle_feed `--once` sleeping to its timeout; the RTH guard writing
+  header-only CSVs; this). All three were invisible because the OUTPUT LOOKED
+  NORMAL.
+
 - `[DESK]` **CT.1 — ✅ 2026-08-05. THE CONDITIONAL TABLE COULD NOT SEE SESSION
   SPREAD, AND IT IS THE TOOL A DISABLE DECISION GETS READ FROM.**
   **THE TRIGGER:** the 08-05 headline named
@@ -3554,6 +3578,12 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.78 — 2026-08-05 — CT.2: conditional_tables had never loaded a trade DB.**
+  The glob required the filename to END in `_trades.db`; the fleet writes
+  `<SYM>_trades_<date>.db`. excursion_report hit and documented the same bug and
+  the fix was never carried across. Also: an empty load now refuses rc=2 instead
+  of printing "no cell separated from chance yet" — a verdict on a corpus it
+  never read, in the tool the Aug 8-9 fits are read from.
 - **v3.77 — 2026-08-05 — CT.1: conditional_tables v1.4 reports session spread.**
   The 08-05 headline produced the project's first credible starve candidate
   (BREAKOUT_VOLATILE x ORB x B, n=48, interval excluding 50%) and the tool could

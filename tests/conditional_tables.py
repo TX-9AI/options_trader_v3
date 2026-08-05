@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 """
-tests/conditional_tables.py — v1.1 — Conditional-probability tables from the
+tests/conditional_tables.py — v1.5 — Conditional-probability tables from the
+
+v1.5 — 2026-08-05 — TWO FIXES, BOTH ABOUT SILENT ZEROS.
+  (a) THE GLOB HAD NEVER MATCHED ANYTHING. Harvested files are named
+      `<SYM>_trades_<date>.db`; this globbed `*_trades.db`, which requires the
+      name to END in `_trades.db`. `excursion_report` hit the identical bug and
+      documented it — "every consumer that globbed `*_trades_<date>.db`
+      correctly; this file was the outlier" — and the fix was never carried
+      across. Now `*_trades*.db`, which matches both spellings.
+  (b) AN EMPTY LOAD NOW REFUSES LOUDLY. On 2026-08-05 a manual run printed
+      "0 closed trades / 10 session(s) · no cell separated from chance yet"
+      while the conductor's run of the same tool found 717 — a confident verdict
+      on an empty corpus. A null result and a failed load must not share a
+      sentence, least of all in the tool the Aug 8-9 calibration fits are read
+      from. Exits rc=2 and names the cause.
+v1.4 — 2026-08-05 — session spread on every cell (see Cell.spread_flag).
         fleet's own record: P(win), fee-adjusted expectancy, and sample counts
         per conditioning cell. The empirical substrate for placing the L3
         conviction bars (ROADMAP Phase 3): a bar belongs at the fee-adjusted-ROI
@@ -139,9 +154,20 @@ TRADE_COLS = ("symbol,strategy,setup_type,setup_grade,direction,regime,"
 
 
 def load_trades(trades_root: str, dates):
+    """Read every closed row from each box's per-day DB.
+
+    v1.5 — THE GLOB WAS WRONG AND HAD NEVER MATCHED ANYTHING. Harvested files
+    are named `<SYM>_trades_<date>.db`, and `*_trades.db` requires the name to
+    END in `_trades.db` — so this matched ZERO files. `excursion_report` hit the
+    identical bug and documented it ("every consumer that globbed
+    `*_trades_<date>.db` correctly; this file was the outlier"); the fix was
+    never carried across to here.
+    `*_trades*.db` matches both spellings, so a future rename in either
+    direction does not silently empty the corpus again.
+    """
     rows = []
     for d in dates:
-        for db in sorted(glob.glob(os.path.join(trades_root, d, "*_trades.db"))):
+        for db in sorted(glob.glob(os.path.join(trades_root, d, "*_trades*.db"))):
             try:
                 con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
                 cur = con.execute(
@@ -435,6 +461,24 @@ def main():
         return 0
 
     rows = load_trades(args.trades_root, dates)
+    # v1.5 — REFUSE LOUDLY ON AN EMPTY LOAD. On 2026-08-05 this printed
+    # "CT: 0 closed trades / 10 session(s) · no cell separated from chance yet"
+    # — a confident verdict on an empty corpus, while the conductor's run of the
+    # SAME tool that afternoon found 717 trades. A null result and a failed load
+    # are indistinguishable in that sentence, and this is the tool the Aug 8-9
+    # calibration fits get read from.
+    # The dated folders exist (checked above) but held no matching DB, so this
+    # is a PATH or NAMING fault, not a quiet night — and it says which.
+    if dates and not rows:
+        found = sum(len(glob.glob(os.path.join(args.trades_root, d, "*")))
+                    for d in dates)
+        print(f"CT: 🚨 LOAD FAILED — {len(dates)} dated folder(s) under "
+              f"{args.trades_root} but ZERO trade rows read "
+              f"({found} file(s) present, none matched *_trades*.db).")
+        print("    This is NOT a null result. Check the path and the DB "
+              "filenames before reading any verdict from this tool.")
+        return 2
+
     tables = build_trade_tables(rows)
     journal_stats = load_journal(args.journal_root, dates)
 

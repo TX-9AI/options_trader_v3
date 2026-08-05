@@ -1,4 +1,8 @@
 #!/bin/bash
+# v4.31 — 2026-08-05 — conditional_tables v1.5: the trade-DB glob had NEVER
+#         matched a file, and an empty load printed a statistical verdict. Both
+#         canaries are absence-shaped in spirit — the failure mode is a tool that
+#         runs clean, exits 0 and reports a null on a corpus it never read.
 # v4.30 — 2026-08-05 — conditional_tables v1.4 reports SESSION SPREAD. The 08-05
 #         headline named a starve candidate at n=48 with an interval excluding
 #         50%, and the tool could not say whether that was eight sessions or two
@@ -413,6 +417,9 @@ check "strategy/iron_condor_strategy.py" "condor_abandon journal failed" "v-audi
 check "tests/conditional_tables.py"      "def spread_flag"              "v1.4 concentration warning present"
 check "tests/conditional_tables.py"      't.get("entry_time"'           "v1.4 the DATE reaches Cell.add (wiring, not just the flag)"
 check "tests/test_conditional_session_spread.py" "reaches_the_cell_from_a_trade_ROW" "v1.0 wiring test present"
+check "tests/conditional_tables.py"      '*_trades*.db'                 "v1.5 glob matches the DATED filename the fleet actually writes"
+check "tests/conditional_tables.py"      "LOAD FAILED"                  "v1.5 an empty load refuses instead of reporting a null"
+check "tests/test_conditional_load.py"   "refuses_instead_of_reporting_a_null" "v1.0 empty-load guard present"
 _n_cap=$(grep -c "_capture_entry_contract(ctx, record)" main.py 2>/dev/null || echo 0)
 if [ "$_n_cap" = "2" ]; then
     echo "  ✓ PRESENT: N.9 captures at BOTH fill seams (directional + condor leg)"
