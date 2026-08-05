@@ -1,4 +1,10 @@
 """
+v-audibleabandon — 2026-08-05 — `_journal_abandon`'s handler logs inside its
+  except body. Flagged by the swallow census as a new TIER-1 silent handler the
+  morning after it shipped. The swallow itself is correct and unchanged — a
+  journal failure must never reach the trading loop — but a bare `pass` makes
+  "deliberate" and "accidental" indistinguishable to the audit, which is the
+  whole point of the audit.
 v-approachalways — 2026-08-04 — APPROACH TELEMETRY ON EVERY PLAN DEATH.
   The numbers already existed and were UNREACHABLE. `max_price_seen` /
   `min_price_seen` are tracked from a plan's first tick and
@@ -551,8 +557,17 @@ class IronCondorStrategy(BaseOptionsStrategy):
         try:
             from analysis.signal_journal import journal
             journal("condor_abandon", cause=cause, approach=a)
-        except Exception:                                          # noqa: BLE001
-            pass
+        except Exception as exc:                                   # noqa: BLE001
+            # v-audibleabandon — logged INLINE. The 2026-08-05 swallow census
+            # flagged this as a new TIER-1 silent handler, and it was right to:
+            # I called the bare `pass` deliberate when I wrote it, but the
+            # census reads the handler BODY, and "deliberately swallowed" and
+            # "accidentally swallowed" are indistinguishable from the outside.
+            # The swallow is still correct — a journal failure must never reach
+            # the trading loop — it just has to be AUDIBLE. Debug level, because
+            # this fires per dead plan and a warning would be spam.
+            logger.debug("condor_abandon journal failed (%s: %s)",
+                         type(exc).__name__, exc)
 
     def _abandon_past_cutoff(self, plan, chain, current_price):
         """Close out an un-filled plan at the cutoff — loudly, with numbers.

@@ -1,4 +1,10 @@
 #!/bin/bash
+# v4.29 — 2026-08-05 — W.2b: the three TIER-1 handlers the 2026-08-05 census
+#         flagged now log inline. All three shipped the previous evening, hours
+#         after the W.2a lesson was written down — the census caught them in one
+#         cycle, which is the system working. Canaries pin the log calls, not
+#         the handlers: the swallow is correct in all three cases, the SILENCE
+#         was not.
 # v4.28 — 2026-08-04 — N.9 contract telemetry. Canaries pin the OCC-symbol match
 #         and BOTH fill seams: matching on strike would attribute one condor
 #         leg's greeks to the other, and a condor leg that skipped the capture
@@ -393,6 +399,9 @@ check "database/trade_logger.py"         "def set_entry_contract"       "v3.12 c
 check "database/trade_logger.py"         '("entry_delta",       "REAL")' "v3.12 columns migrate (NULL = not captured, no defaults)"
 check "main.py"                          "def _capture_entry_contract"  "v5.5 capture at the fill seam"
 check "tests/test_entry_contract.py"     "matched_on_occ_symbol"        "v1.0 OCC match pinned (strike would cross condor legs)"
+check "database/trade_logger.py"         "set_entry_contract failed"    "v3.13 handler is AUDIBLE to the swallow census"
+check "database/trade_logger.py"         "set_exit_contract failed"     "v3.13 handler is AUDIBLE to the swallow census"
+check "strategy/iron_condor_strategy.py" "condor_abandon journal failed" "v-audibleabandon handler is AUDIBLE"
 _n_cap=$(grep -c "_capture_entry_contract(ctx, record)" main.py 2>/dev/null || echo 0)
 if [ "$_n_cap" = "2" ]; then
     echo "  ✓ PRESENT: N.9 captures at BOTH fill seams (directional + condor leg)"

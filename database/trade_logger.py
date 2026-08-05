@@ -1,5 +1,11 @@
 """
-database/trade_logger.py — Options trade logging (SQLite). v3.12
+database/trade_logger.py — Options trade logging (SQLite). v3.13
+v3.13 — 2026-08-05 — the two v3.12 setters now LOG INSIDE their except bodies.
+        The 2026-08-05 swallow census flagged both as new TIER-1 silent
+        handlers (87 -> 89) the morning after W.2a's lesson was written down:
+        the census reads the HANDLER BODY, so a bare `return False` is silent
+        no matter what the caller does. No behaviour change — the callers still
+        warn once per reason and nothing gates on the result.
 v3.12 — 2026-08-04 — CONTRACT TELEMETRY (entry_delta/gamma/theta/iv,
         entry+exit bid/ask, exit_iv, chain_iv_rank) via set_entry_contract() /
         set_exit_contract(). TEN columns, not twelve: `entry_mark` and
@@ -510,7 +516,16 @@ class TradeLogger:
                     + " WHERE trade_id=?", (*vals, trade_id))
                 conn.commit()
                 return cur.rowcount > 0
-        except Exception:                                        # noqa: BLE001
+        except Exception as exc:                                 # noqa: BLE001
+            # v3.13 — logged INLINE. The W.2 swallow census reads the HANDLER
+            # BODY, so a bare `return False` here reads as a silent TIER-1
+            # handler — and the 2026-08-05 census caught this one the morning
+            # after the lesson was written down. The caller already warns once
+            # per reason; this line exists so the census can see the handler is
+            # not swallowing, and so a DB-level failure is distinguishable from
+            # "the row was not there".
+            logger.debug("set_entry_contract failed (%s: %s) for %s",
+                         type(exc).__name__, exc, trade_id[:8])
             return False
 
     def set_exit_contract(self, trade_id: str, c: dict) -> bool:
@@ -534,7 +549,10 @@ class TradeLogger:
                     + " WHERE trade_id=?", (*vals, trade_id))
                 conn.commit()
                 return cur.rowcount > 0
-        except Exception:                                        # noqa: BLE001
+        except Exception as exc:                                 # noqa: BLE001
+            # v3.13 — inline, same reason as set_entry_contract above.
+            logger.debug("set_exit_contract failed (%s: %s) for %s",
+                         type(exc).__name__, exc, trade_id[:8])
             return False
 
     def set_exit_latency(self, trade_id: str, submit_ts: str, fill_ts: str,

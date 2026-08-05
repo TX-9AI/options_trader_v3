@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.75
+# docs/BACKLOG.md — v3.76
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -2938,6 +2938,29 @@ file: everything above either ✅ or explicitly re-dated below.
 
 ---
 
+**⬜ Wed Aug 5**
+- `[DESK]` **W.2b — ✅ 2026-08-05. THE CENSUS CAUGHT ME IN ONE CYCLE, AND IT WAS
+  RIGHT ALL THREE TIMES.** Silent handlers 87 -> 89 overnight, all three new
+  ones **TIER 1** and all three mine from the previous evening:
+  `trade_logger:513 set_entry_contract` · `trade_logger:537 set_exit_contract` ·
+  `iron_condor_strategy:554 _journal_abandon`.
+  **THE UNCOMFORTABLE PART:** I wrote W.2a's lesson — *"log calls routed through
+  a helper are invisible to the census; inline only"* — and then shipped three
+  bare handlers hours later. One of them (`_journal_abandon`) I explicitly
+  described as deliberately swallowed. **The census cannot tell "deliberate"
+  from "accidental" — that is precisely why it reads the handler body.**
+  **THE SWALLOWS ARE ALL STILL CORRECT.** A journal failure must never reach the
+  trading loop; a setter that cannot write must not raise into a fill path.
+  Nothing about the control flow changed. What changed is that each now logs
+  INLINE at debug, so the census sees a handler that speaks and a real DB
+  failure is distinguishable from "the row was not there".
+  **Result: 89 -> 86**, one below the 08-04 baseline (another thread made a
+  fourth handler audible in the same window).
+  **THE GENERALISABLE BIT:** "correctly silent" is not a property a static audit
+  can verify, so it is not a defence. If a handler is right to swallow, it still
+  has to say so out loud — the alternative is that every future silent TIER-1
+  handler gets waved through on the same reasoning.
+
 ## PART 3 — RESOLVED REGISTER (condensed; kept so fixes don't get quietly reverted)
 
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
@@ -3503,6 +3526,11 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.76 — 2026-08-05 — W.2b: the swallow census flagged three new TIER-1
+  handlers overnight and was right about all of them.** All three were mine from
+  the previous evening, shipped hours after W.2a's lesson was recorded; one I had
+  called deliberately silent. The swallows are correct and unchanged — each now
+  logs inline so the census can see it. 89 -> 86.
 - **v3.75 — 2026-08-04 — N.9 CONTRACT TELEMETRY.** trade_logger v3.12 + main v5.5
   persist the contract's own state at fill (delta/gamma/theta/iv, bid/ask,
   iv_rank) from values already in memory and previously discarded. Closes the
