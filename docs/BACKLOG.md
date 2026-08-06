@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.83
+# docs/BACKLOG.md — v3.84
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -2199,6 +2199,116 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   wins on its fit set is unproven and the 20° default stands.
 
 **⬜ Thu Aug 6**
+- `[DESK·DATA]` **RGM.1 — 🔴 OPEN. THE FLEET IS CHURNING, NOT TRADING. Layer-2
+  label instability is the largest single problem on the board, and three
+  offline tools have narrowed it without closing it.**
+
+  **THE SYMPTOM.** 2026-08-06: 95 trades, **-$3,129**, 40% win, **median hold
+  0.3 min**, 68% sub-minute. `regime_flip` exits grew **12 -> 43 -> 59** across
+  08-04/05/06 and are now the fleet's dominant behaviour. RANGING was 56 of 95
+  entries and `regime_flip (RANGING)` closed **54** of them at ~0% excursion in
+  either direction. Never-favorable hit 65% at the 2% cut against 35%
+  cumulative.
+
+  **THE SCALE.** L2 is `always-argmax` (its own log line). It commits **~20
+  label switches per symbol per session** — 586 across 29 symbols on 08-05,
+  against 961 raw L1 flips, so it does damp 1.6x. **Operator prior, from
+  discretionary experience: a real session contains ONE OR TWO regime changes.**
+  A tape that starts trending and goes sideways; a muted open that catches a
+  move late. Not dozens. **That is a 10-20x discrepancy between what the engine
+  reports and what the market does**, and the prior is the more credible of the
+  two.
+
+  **TOOLS BUILT (all pushed, all offline, all read-only):**
+  `tests/regime_switch_cost.py` **v1.1** — sweeps a switching cost over the
+  replay corpus. Streams one file at a time and keeps only the scores; v1.0 was
+  **OOM-killed**, the THIRD tool in this repo to die of load-everything-then-
+  filter (after ramp_calibration and a2_cooccurrence).
+  `tests/score_series.py` **v1.0** — sparkline dump of one symbol-day's
+  per-regime scores, so the question can be answered by looking rather than by
+  another summary statistic.
+  `tests/veto_attribution.py` **v1.1** — attributes zero<->nonzero transitions
+  to the hard veto that flipped, and separates BRANCH CHANGES (a veto key
+  appearing or disappearing) from true veto flips.
+
+  **FINDING 1 — A SWITCHING COST DOES NOT FIX IT.** `delta=0` gives **25.1
+  switches/sym/day**, which matches L2's own ~20 and validates the harness.
+  `delta=0.30` — a third of the entire score range — only reaches **8.2**, with
+  median hold 23 ticks (~6 minutes). **Gradual decay, no cliff.** On a planted
+  world with two real regime changes buried in noise, `delta=0.10` collapsed
+  churn from 104 to 2.5. Real tape does not behave that way, so the churn is
+  **not** argmax tying on a margin.
+
+  **FINDING 2 — WHY. THE GRAMMAR IS MULTIPLICATIVE** (regime_confluence's own
+  header): `score_R = (∏ hard_veto ∈{0,1}) · (∏ soft_necessary ∈[0,1]) ·
+  (Σ w·corroborator)`. **A single hard veto at 0 annihilates the score**,
+  however strong every corroborator is. So a regime transition is a BOOLEAN
+  FLIPPING, not a score crossing — and **hysteresis cannot fight a boolean**.
+  The same fact means **re-weighting corroborators would change little**: the
+  weights live in the LAST term, which is multiplied by zero on most ticks.
+
+  **FINDING 3 — THE SCORES ARE SPARSE, NOT BINARY.** Fleet-wide, share of ticks
+  at exactly 0 / exactly 1 / in between:
+  `SWEEP_REVERSAL 96.0/0.0/4.0 · COMPRESSION 79.5/0.0/20.5 ·`
+  `TRENDING_BEAR 73.0/10.9/16.1 · TRENDING_BULL 71.2/11.9/16.9 ·`
+  `BREAKOUT_VOLATILE 63.8/0.1/36.0 · RANGING 45.7/0.0/54.3`
+  Only the trend regimes ever peg at 1.0. **SWEEP_REVERSAL is effectively not
+  participating** — above zero on 4% of ticks across 19 sessions.
+
+  **FINDING 4 — VETO ATTRIBUTION, 19 sessions (07-13..08-06):**
+  `RANGING (branch change: veto_flat) 13,860 = 70%`
+  `BREAKOUT (no veto changed — soft)   8,325 = 100%`
+  `RANGING veto_flat                   4,261 = 21%`
+  `COMPRESSION veto_inside             1,834 = 44%`
+  `COMPRESSION veto_flat               1,199 = 29%`
+  `TRENDING_BULL veto_dir  874 = 48% · TRENDING_BEAR veto_dir 841 = 49%`
+  `TRENDING_BULL veto_struct 566 = 31%`
+  totals: RANGING 19,837 · BREAKOUT 8,325 · COMPRESSION 4,198 ·
+  TRENDING_BULL 1,806 · TRENDING_BEAR 1,701 · SWEEP 271.
+
+  **FINDING 5 — BREAKOUT_VOLATILE HAS `hard_vetoes=[]`.** No hard gates at all,
+  so its 8,325 transitions are pure soft crossings. **A switching cost WOULD
+  help BREAKOUT specifically**, which partly rehabilitates
+  `regime_switch_cost` — right fix, wrong regime.
+
+  **FINDING 6 — RANGING's `veto_flat` IS COSMETIC.** Its full path passes
+  `hard_vetoes=[1.0]` (hardcoded) while publishing `"veto_flat": 1.0`. The LIVE
+  `veto_flat` belongs to COMPRESSION. RANGING emits THREE breakdown shapes
+  (last 3 sessions): `20,249` full path (11 keys, veto_flat=1.0) · `4,224`
+  angle >= FLAT_ANGLE_CUT_DEG early return (3 keys, veto_flat=0.0) · `1,752`
+  **no bar window** (adx, is_expanding, path, price_vs_bb, reason — NO veto
+  key). Over all 19 sessions the reason split is `(evaluated) 174,610 = 93.6%`
+  vs `no bar window 11,972 = 6.4%`.
+
+  **⬜ CURRENT HYPOTHESIS, HELD LOOSELY.** RANGING drops into its
+  no-bar-window fallback on 6.4% of ticks **in short isolated bursts** rather
+  than one contiguous warm-up block. Each isolated burst produces TWO
+  zero-crossings (in and out), which is how ~11,972 fallback ticks generate
+  ~13,860 branch-change transitions. **If so this is a BAR-AVAILABILITY problem
+  wearing a classification costume** — the same family as the
+  `trend vote STARVED 1d: 10 bars, need 55` warnings and the thin tape
+  (MSFT 390 ticks on 08-06 against ~750 for a full session).
+
+  **⬜ THE VERY NEXT STEP — probe written, NOT YET RUN.** Measure the RUN
+  LENGTHS of RANGING's fallback and the session index where it first appears.
+  Mostly **1-tick runs** => the closes array flaps on individual ticks, a
+  plumbing bug and the most fixable version. **Long runs** => genuine warm-up or
+  outage. First-fallback p50 near 0 => benign warm-up; p50 mid-session (300+)
+  => the window is LOST after being established, which is worse.
+
+  **⚠️ THREE WRONG TURNS ON THIS THREAD, recorded so they are not repeated:**
+  (1) assumed hysteresis was the fix — the sweep refuted it; (2) read one MSFT
+  chart as "binary switches" — the fleet table showed sparse-zero instead;
+  (3) called BREAKOUT's 100%-no-veto a tool bug — it is correct. Plus two tool
+  bugs of my own: v1.0 credited RANGING with 4,929 `veto_flat` flips that were
+  branch-change artifacts, and I argued "you cannot have more crossings than
+  states" when an isolated 1-tick run yields two. **I inferred from source twice
+  and was wrong twice. Measure first.**
+
+  **⚠️ SCOPE:** everything above is read-only analysis. Any change to the veto
+  grammar, a switching cost, or the RANGING fallback is a Layer-1/2 behavioural
+  change and is **POST-FREEZE**.
+
 - `[DESK]` **Level.1 — hierarchy + Overnight High/Low, build on the TESTER** (queued 07-24).
   Add `overnight_high`/`overnight_low` (extremes across the Asia+London span) to
   LiquidityMap as a named tier; replace the flat `is_named` bool with graded
@@ -3723,6 +3833,15 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.84 — 2026-08-06 — RGM.1: the fleet is churning, not trading.** Median
+  hold 0.3 min, regime_flip exits 12->43->59 across three sessions, RANGING
+  closing 54 of 95 trades at ~0% excursion. Three offline tools built
+  (regime_switch_cost, score_series, veto_attribution). A switching cost does NOT
+  fix it — the grammar is multiplicative, so a transition is a boolean flip and
+  hysteresis cannot fight a boolean. Scores are sparse (45-96% exactly zero).
+  RANGING's dominant cause is a BRANCH change into its no-bar-window fallback,
+  which points at bar availability rather than the market. Next step: fallback
+  run-lengths and first-appearance index.
 - **v3.83 — 2026-08-05 — VW.1: VWAP was computed every tick and never written
   down.** vwap_orientation has never run — not a broken tool but one built
   against a schema that never landed; a scan of 11,138 journal records found no
