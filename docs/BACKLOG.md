@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.84
+# docs/BACKLOG.md — v3.85
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -73,6 +73,7 @@ BAKED is changing nothing about today's data.
 | **BF.4 — session guard reconfigured: one predicate, guard back ON** | ✅ 08-04 | ⬜ | ⬜ **next bake** | suite 229 passed; 8/8 pull states |
 | **AI.1 — condor approach telemetry on every plan death** | ✅ 08-04 | ✅ 08-04 | ⬜ **next bake** | 10 tests; item AI becomes answerable |
 | **N.9 — contract telemetry (premium decomposition)** | ✅ 08-04 | ⬜ | ⬜ **Mon Aug 10** | suite **247 passed / 1 skipped**; 8 tests; log-only |
+| **RGM.1 probe — RANGING fallback run lengths** | ✅ 08-06 | ⬜ | n/a (offline, read-only) | `tests/rng_probe.py` v1.0; proven on a planted corpus with known run lengths (5/5 runs, histogram, warm-up/mid split, gap classification, implied crossings) before issue. **NOT YET RUN on the real corpus — that run is the deliverable, not this file.** |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -2289,12 +2290,36 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   `trend vote STARVED 1d: 10 bars, need 55` warnings and the thin tape
   (MSFT 390 ticks on 08-06 against ~750 for a full session).
 
-  **⬜ THE VERY NEXT STEP — probe written, NOT YET RUN.** Measure the RUN
-  LENGTHS of RANGING's fallback and the session index where it first appears.
-  Mostly **1-tick runs** => the closes array flaps on individual ticks, a
-  plumbing bug and the most fixable version. **Long runs** => genuine warm-up or
-  outage. First-fallback p50 near 0 => benign warm-up; p50 mid-session (300+)
-  => the window is LOST after being established, which is worse.
+  **⬜ THE VERY NEXT STEP — probe SHIPPED as `tests/rng_probe.py` v1.0 (08-06),
+  NOT YET RUN on the corpus.** Measures the RUN LENGTHS of RANGING's fallback
+  and the session index where it first appears. Mostly **1-tick runs** => the
+  input flaps on individual ticks, a plumbing bug and the most fixable version.
+  **Long runs** => genuine warm-up or outage. First-fallback p50 near 0 =>
+  benign warm-up; p50 mid-session (300+) => the window is LOST after being
+  established, which is worse.
+
+  **TWO DISCRIMINATORS ADDED BEYOND THE ORIGINAL SPEC**, both free from the
+  tape. (a) **The ts gap ENTERING each mid-session run.** A gap of 1 minute
+  means the tape was contiguous and the INPUT flapped; a gap > 1 minute means
+  bars were missing. This matters because of a source fact verified at HEAD:
+  `replay_confluence` v2.1 builds `closes` as the last-25 slice of a GROWING
+  frame, so in this corpus **`closes` can never revert to None after bar 25** —
+  a mid-session fallback here can only be `atr_current` going None, or a run
+  sitting after a tape gap. The probe separates those two rather than leaving
+  the answer to inference, which is how the last two wrong turns happened.
+  (b) **Implied crossings counted with `veto_attribution` v1.1's own semantics**
+  (a crossing exists only where the ADJACENT EVALUATED tick scored non-zero;
+  session edges and zero-to-zero neighbours contribute none) instead of a flat
+  2-per-burst, so the comparison against 13,860 is apples-to-apples. If implied
+  ≈ 13,860 the burst arithmetic holds and the fallback explains the branch
+  changes; materially short and something ELSE is toggling RANGING's key set.
+
+  Proven on a planted corpus with known run lengths before issue (5 planted runs
+  recovered as 5, with the exact histogram, warm-up/mid split, gap
+  classification and crossing count). Read-only, stdlib-only, streams one file
+  at a time — the fourth tool in this repo would otherwise have been the fourth
+  to die of load-everything-then-filter. **The RUN is the deliverable; this file
+  is not a finding.**
 
   **⚠️ THREE WRONG TURNS ON THIS THREAD, recorded so they are not repeated:**
   (1) assumed hysteresis was the fix — the sweep refuted it; (2) read one MSFT
@@ -3833,6 +3858,19 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.85 — 2026-08-06 — RGM.1: the fallback run-length probe ships.**
+  `tests/rng_probe.py` v1.0 — the measurement the investigation has been blocked
+  on. Answers whether RANGING's 11,972 no-bar-window ticks are one contiguous
+  warm-up block or short isolated bursts, and therefore whether the churn is a
+  bar-availability problem wearing a classification costume. Two discriminators
+  beyond the original spec: the ts gap entering each mid-session run (tape
+  contiguous => the input flapped, a plumbing bug; tape gapped => missing bars),
+  and implied crossings counted with veto_attribution v1.1's semantics so the
+  13,860 branch-change figure is checked like-for-like. Recorded honestly:
+  **BUILT and proven on a planted corpus, NOT YET RUN on the real corpus** — the
+  run is the deliverable and EV does not move until it produces a verdict.
+  Read-only; any resulting fix to the veto grammar or the RANGING fallback
+  remains POST-FREEZE.
 - **v3.84 — 2026-08-06 — RGM.1: the fleet is churning, not trading.** Median
   hold 0.3 min, regime_flip exits 12->43->59 across three sessions, RANGING
   closing 54 of 95 trades at ~0% excursion. Three offline tools built
