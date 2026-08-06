@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.85
+# docs/BACKLOG.md — v3.86
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -74,6 +74,7 @@ BAKED is changing nothing about today's data.
 | **AI.1 — condor approach telemetry on every plan death** | ✅ 08-04 | ✅ 08-04 | ⬜ **next bake** | 10 tests; item AI becomes answerable |
 | **N.9 — contract telemetry (premium decomposition)** | ✅ 08-04 | ⬜ | ⬜ **Mon Aug 10** | suite **247 passed / 1 skipped**; 8 tests; log-only |
 | **RGM.1 probe — RANGING fallback run lengths** | ✅ 08-06 | ⬜ | n/a (offline, read-only) | `tests/rng_probe.py` v1.0; proven on a planted corpus with known run lengths (5/5 runs, histogram, warm-up/mid split, gap classification, implied crossings) before issue. **NOT YET RUN on the real corpus — that run is the deliverable, not this file.** |
+| **RGM.1 — emission-law attribution + counterfactual** | ✅ 08-06 | ⬜ | n/a (offline, read-only) | `tests/emission_law_sweep.py` v1.0; harness **99.9%** faithful against the REAL integrator on a planted one-change world, where the current law gives **141.5 switches/symbol-day** and protect-below-hold gives **1.0** — a cliff, not the delta sweep's slope. **NOT YET RUN on the real corpus.** |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -2330,9 +2331,67 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   states" when an isolated 1-tick run yields two. **I inferred from source twice
   and was wrong twice. Measure first.**
 
-  **⚠️ SCOPE:** everything above is read-only analysis. Any change to the veto
-  grammar, a switching cost, or the RANGING fallback is a Layer-1/2 behavioural
-  change and is **POST-FREEZE**.
+  **⬜ FINDING 7 — THE EMISSION LAW HAS AN UNPROTECTED BRANCH** (read directly
+  from `conviction_integrator` v2.0 `_emit` at HEAD, 08-06). While the
+  incumbent's conviction is **>= theta_hold (0.45)** a challenger displaces it
+  only by clearing **theta_commit (0.65)** AND beating it by
+  **delta_displace (0.12)**. The moment the incumbent falls **below 0.45** the
+  code executes `self.incumbent = top_r` **unconditionally, every tick** — no
+  commit bar, no margin, no dwell. A challenger at conviction 0.05 takes the
+  label and can lose it again on the next tick.
+
+  **This contradicts the module's own stated design contract**, in its header:
+  *"Fast to recognize, slow to abandon… A single-tick flicker can never move the
+  emitted label off a held regime."* Below theta_hold that is not what the code
+  does. By the operator's three-way split this is **CATEGORY 2 —
+  CORRECTNESS**, a contributor not doing the job it was designed for, not a
+  category-3 tuning preference.
+
+  **IT ALSO EXPLAINS FINDING 1.** `regime_switch_cost`'s delta models
+  `delta_displace`, which exists ONLY in the protected branch. If the churn
+  lives below theta_hold, that sweep was tuning a knob that is not in the path
+  where the churn happens — **right knob, wrong branch**, the same shape as
+  F5's right-fix-wrong-regime. It accounts for the gradual-decay-no-cliff
+  signature that never made sense for a real hysteresis knob.
+
+  **AND IT SINGLES OUT RANGING.** Its params are `tau_up=780s` (~13 min to
+  build) against `tau_dn0=60s` at low conviction — slow to rise, fast to fade,
+  so RANGING spends disproportionate time below 0.45, inside the unprotected
+  branch. RANGING is 56 of 95 entries and 54 of the regime_flip exits.
+  Consistent; **not yet proven.**
+
+  **⬜ THE MEASUREMENT — `tests/emission_law_sweep.py` v1.0, BUILT 08-06, NOT
+  YET RUN on the corpus.** The replay records carry `l2.cv`, the full
+  post-update conviction vector, so candidate emission laws can be re-decided
+  over convictions that were actually observed — no engine run, no tape, no
+  re-integration. It reports three things: the share of ticks the incumbent
+  spends below theta_hold (is the unprotected branch the NORMAL operating mode
+  or an edge case?); every observed switch attributed to its branch by the
+  engine's OWN recorded trigger string rather than by my reading; and
+  counterfactual switches per symbol-day under protect-below-hold and under
+  added dwell, against the operator's 2-4 prior.
+  **Harness validation is output #0 and gates the rest** — the baseline variant
+  must reproduce the recorded label sequence, exactly as delta=0 had to
+  reproduce the engine's ~20 switches before the delta sweep meant anything.
+  On a planted one-change world driven through the REAL integrator it agrees
+  **99.9%**, and there the current law yields **141.5 switches/symbol-day**
+  against protect-below-hold's **1.0** — a CLIFF, which is the signature the
+  delta sweep never produced. Dwell 12 over-damps to 0.0 and misses the real
+  change, so the tool can detect over-correction as well as churn.
+
+  **⚠️ WHAT A STEADIER LABEL DOES NOT PROVE.** A law emitting one regime all
+  day scores zero switches and is worthless. Stability is necessary, not
+  sufficient; whether the steadier label is the CORRECT label is the
+  `session_labels.jsonl` agreement question and neither tool touches it.
+
+  **⚠️ SCOPE + TIMING.** Everything above is read-only analysis. But F7 is a
+  contract defect whose output CORRUPTS THE SAMPLE — every `regime_flip
+  (RANGING)` row banked at ~0% excursion will later be counted as evidence
+  about ranging regimes and it is not — which is Bucket 1 under the two-bucket
+  frame, fix-on-sight. The natural slot is therefore the **Mon Aug 10
+  calibration deploy, BEFORE the L2.6 freeze window opens**, not post-freeze.
+  It changes what gets traded (the label drives dispatch AND the regime_flip
+  exit), so it is the operator's call under the standing division of labour.
 
 - `[DESK]` **Level.1 — hierarchy + Overnight High/Low, build on the TESTER** (queued 07-24).
   Add `overnight_high`/`overnight_low` (extremes across the Asia+London span) to
@@ -3858,6 +3917,20 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.86 — 2026-08-06 — RGM.1 F7: the emission law stops protecting the label
+  below theta_hold.** Above 0.45 conviction a challenger must clear commit AND
+  a margin; below 0.45 the incumbent is replaced by bare argmax every tick, with
+  no commit bar, no margin and no dwell — contradicting the module's own header
+  contract that a single-tick flicker can never move a held label. This is a
+  correctness defect, not a tuning preference, and it explains why the switching
+  cost failed: delta lives only in the protected branch, so that sweep tuned a
+  knob outside the path where the churn happens. RANGING is singled out by its
+  own asymmetry (13 min to build, ~1 min to fade), which parks it below the hold
+  line. `tests/emission_law_sweep.py` v1.0 re-decides candidate laws over the
+  RECORDED conviction vectors — 99.9% faithful on a planted world, where the
+  current law gives 141.5 switches/symbol-day and protect-below-hold gives 1.0,
+  a cliff rather than the delta sweep's slope. **BUILT, NOT YET RUN on the
+  corpus.** Recorded honestly: a steadier label is not thereby a correct one.
 - **v3.85 — 2026-08-06 — RGM.1: the fallback run-length probe ships.**
   `tests/rng_probe.py` v1.0 — the measurement the investigation has been blocked
   on. Answers whether RANGING's 11,972 no-bar-window ticks are one contiguous
