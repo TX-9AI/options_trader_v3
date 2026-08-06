@@ -167,6 +167,27 @@ def main(argv):
     print(f"  DESK overdue  {len(desk_overdue):>3}   <- ACCOUNTABILITY: due, open, "
           f"and nothing blocking it")
 
+    # v1.3 — NAME THEM. The count alone cannot be acted on: deciding what to
+    # drop before a gate needs the list, and reading it meant opening BACKLOG by
+    # hand. A schedule variance you cannot attribute to specific work is a
+    # number, not a status.
+    # DESK first and separately, because the two kinds of lateness have
+    # DIFFERENT CAUSES and different responses — a late [DESK] item is
+    # performance (nothing blocked it), a late [DESK·DATA] item is a DC&A
+    # dependency waiting on sessions that have not accrued. Briefing them
+    # together would misattribute the variance.
+    if desk_overdue:
+        print(f"\n  DESK — LATE ON US ({len(desk_overdue)}), oldest first:")
+        for i in sorted(desk_overdue, key=lambda x: x["day"]):
+            print(f"     {i['day']}  ({(asof - i['day']).days:>2}d)  {i['name'][:62]}")
+    other_overdue = [i for i in late if i["tag"] != "DESK"]
+    if other_overdue:
+        print(f"\n  WAITING ON SOMETHING ({len(other_overdue)}) — data, a fleet "
+              f"window, or a bake:")
+        for i in sorted(other_overdue, key=lambda x: x["day"]):
+            print(f"     {i['day']}  ({(asof - i['day']).days:>2}d)  "
+                  f"[{i['tag']}] {i['name'][:52]}")
+
     remaining = bac - ev
     print(f"\n  remaining: {remaining}")
     by_tag = {}
