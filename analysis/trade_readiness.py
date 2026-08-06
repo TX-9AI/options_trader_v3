@@ -633,6 +633,43 @@ class TradeReadinessEngine:
         tr.machine = m
         return transition, would_fire, prev_machine
 
+    @staticmethod
+    def _market_snapshot(ctx: dict) -> dict:
+        """VWAP context for this tick, journaled on every readiness record.
+
+        WHY IT IS HERE. `volatility_engine` has computed `vwap` and
+        `price_vs_vwap` all along and NOTHING PERSISTED THEM. A key scan of
+        2026-08-05's journal — 11,138 records, every event type — found no
+        VWAP-shaped field anywhere, which is why `vwap_orientation` has never
+        once run. It is not a broken tool; it was built against a schema that
+        never landed.
+        WHY IT MATTERS NOW: item AI's candidate fix for the condor is a
+        VWAP-ANCHORED midpoint instead of the flat Bollinger midline. That
+        cannot be evaluated on data that does not exist, so every session
+        between now and the decision is history we either have or do not — the
+        same use-it-or-lose-it logic as the candle tape.
+        `dist_pct` is SIGNED and expressed as a percentage of VWAP, so it is
+        comparable across a $30 symbol and a $900 one. `price_vs_vwap` is
+        carried alongside rather than derived from it, because the engine sets
+        NONE when there is no volume and a computed sign would silently invent
+        an orientation there.
+        Log-only. Returns {} rather than raising: this must never reach the
+        trading loop.
+        """
+        try:
+            vol = (ctx or {}).get("vol")
+            px = float((ctx or {}).get("price") or 0.0)
+            vw = float(getattr(vol, "vwap", 0.0) or 0.0) if vol else 0.0
+            if vw <= 0 or px <= 0:
+                return {"vwap": None, "price_vs_vwap": "NONE", "dist_pct": None}
+            return {"vwap": round(vw, 4),
+                    "price_vs_vwap": getattr(vol, "price_vs_vwap", "NONE"),
+                    "dist_pct": round(100.0 * (px - vw) / vw, 4)}
+        except Exception:                                        # noqa: BLE001
+            return {}
+
+    _mkt: dict = {}
+
     def _journal(self, key: str, event: str, prev: Optional[str] = None):
         if self._emit is None:
             return
@@ -642,6 +679,7 @@ class TradeReadinessEngine:
                 "strategy": key, "machine": tr.machine, "prev": prev,
                 "r": round(tr.r, 3), "slope_per_min": round(tr.slope, 4),
                 "peak_r": round(tr.peak_r, 3), "factors": tr.factors,
+                "market": self._mkt,
                 "bars": {"stage": TR_STAGE_BAR, "arm": TR_ARM_BAR,
                          "fire": TR_FIRE_BAR}})
         except Exception as e:                    # noqa: BLE001 — log-only, never the loop
@@ -656,6 +694,8 @@ class TradeReadinessEngine:
         observational record is the point.
         """
         now = self._clock()
+        # v1.5 — one snapshot per tick, shared by every track's journal record.
+        self._mkt = self._market_snapshot(ctx)
         try:
             computed = {
                 "continuation": self._continuation(ctx, regime),

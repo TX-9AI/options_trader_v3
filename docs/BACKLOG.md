@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.82
+# docs/BACKLOG.md — v3.83
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -2086,6 +2086,46 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   danger band. All from the existing readiness journal + OHLC; no gap.
 
 **⬜ Wed Aug 5**
+- `[DESK→DEPLOY]` **VW.1 — ✅ 2026-08-05. VWAP WAS COMPUTED EVERY TICK AND NEVER
+  WRITTEN DOWN. Log-only; bakes with the next fleet cycle.**
+  **THE FINDING.** `vwap_orientation` has been exiting **rc=1** for at least two
+  nights. It is not a broken tool — a key scan of 2026-08-05's journal (11,138
+  records, EVERY event type) found **no VWAP-shaped field anywhere**:
+  `hits: ['fa.floor_px', 'fa.origin_px']`, which are the condor's impulse
+  fields. The tool was built against a schema that never landed, so it has
+  **never once run.**
+  **AND THE VALUE EXISTED THE WHOLE TIME.** `volatility_engine` carries `vwap`
+  and `price_vs_vwap` on its state and has since well before this. Nothing
+  persisted them.
+  **WHY IT COULD NOT WAIT FOR THE FREEZE.** Item **AI**'s candidate fix for the
+  condor is a **VWAP-ANCHORED midpoint** instead of the flat Bollinger midline —
+  the leading option if `condor_approach` returns GEOMETRY next week. It cannot
+  be evaluated on data that does not exist, so every session from here is history
+  we either have or do not. Same use-it-or-lose-it logic as the candle tape.
+  **BUILT:** `trade_readiness` v1.5 — `_market_snapshot(ctx)` emits
+  `{vwap, price_vs_vwap, dist_pct}` on EVERY readiness record, one snapshot per
+  tick shared by all six tracks. `dist_pct` is SIGNED and a percentage of VWAP,
+  so a $30 symbol and a $900 one are comparable; a dollar gap would let the
+  expensive names dominate every pooled read.
+  **`price_vs_vwap` IS READ FROM THE ENGINE, NEVER DERIVED FROM THE SIGN.** The
+  engine sets NONE when there is no volume, and a computed sign would always have
+  an opinion exactly where the engine deliberately has none. Behavioural tests
+  could NOT tell the two apart (the no-volume path returns early), so the guard
+  is source-level — found by the deliberate-failure run.
+  **⬜ WHY THE PITCHFORK DOES NOT REPLACE THIS:** the fork exists on ~5% of bars
+  (median coverage 5.3%, half the symbols under 5%). A fork-anchored midpoint is
+  available one tick in twenty; VWAP is available on every tick of every session.
+  They are also different objects — VWAP is a volume-weighted centre of gravity,
+  the median line is a geometric trend projection. Keep both journaled and the
+  comparison stays possible.
+  **⬜ STILL BROKEN: `vwap_orientation`'s OTHER lookups.** Even with VWAP
+  present, its `CAND` map wants `strategy` and `direction` at the TOP level; the
+  journal has `readiness.strategy` and `factors.dir`. Three renames, and it
+  cannot run until they land.
+  **NOTED IN PASSING:** today's journal already carries `condor_plan: 49`,
+  `condor_abandon: 43`, `condor_leg: 2` — AI.1's telemetry is live, and **two
+  condor legs actually fired**, the first all week.
+
 - `[DESK]` **A2.R — ✅ CLOSED AS RESEARCH 2026-08-05, plus one candidate and one
   warning. Full write-up in MECHANICS "A2 — TREND and RANGE co-occurrence".**
   **THE DRIFT STUDY CAME BACK NULL, and that is a result.** 175,302 ticks, 6,860
@@ -3683,6 +3723,13 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.83 — 2026-08-05 — VW.1: VWAP was computed every tick and never written
+  down.** vwap_orientation has never run — not a broken tool but one built
+  against a schema that never landed; a scan of 11,138 journal records found no
+  VWAP field anywhere while volatility_engine had it on its state all along.
+  trade_readiness v1.5 emits {vwap, price_vs_vwap, dist_pct} per tick, signed and
+  percent-of-VWAP so symbols are comparable. Needed before the freeze because
+  AI's condor fix is VWAP-anchored and cannot be tested on absent history.
 - **v3.82 — 2026-08-05 — A2.R: the co-occurrence question is CLOSED as research.**
   The drift study is null (+0.011% at 30 bars vs control, n≈3,500) against its own
   pre-registered criterion, so HTF direction is not a drift term inside a range.

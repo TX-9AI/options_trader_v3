@@ -1,4 +1,10 @@
 #!/bin/bash
+# v4.35 — 2026-08-05 — VWAP reaches the journal. volatility_engine has computed
+#         vwap/price_vs_vwap all along and nothing persisted them — a key scan of
+#         11,138 records found no VWAP field anywhere, which is why
+#         vwap_orientation has never run. The canary pins the EMIT, not just the
+#         helper: a value computed, available and never written is exactly the
+#         failure being fixed.
 # v4.34 — 2026-08-05 — readiness_digest v1.2: the headline pegged count and the
 #         FIT SUGGESTIONS list now measure the SAME thing (ramped output). They
 #         disagreed, and the headline is what people act on.
@@ -440,6 +446,9 @@ check "tests/test_conditional_load.py"   "two_dated_folders_counts_once" "v1.0 d
 check "tests/replay_confluence.py"       "A2_BAND_HI"                   "v2.4 A2 is a banded metric, not an unsatisfiable invariant"
 check "tests/test_a2_band.py"            "far_above_the_band_still_fails" "v1.0 A2 can still raise a real alarm"
 check "tests/readiness_digest.py"        "npeg = len(fits)"             "v1.2 headline counts the same pegged RAMPS the fits list"
+check "analysis/trade_readiness.py"      "def _market_snapshot"         "v1.5 VWAP context helper"
+check "analysis/trade_readiness.py"      '"market": self._mkt'          "v1.5 the journal actually EMITS it (a computed value never written is the bug)"
+check "tests/test_readiness_market_snapshot.py" "READ_from_the_engine_not_derived" "v1.0 side comes from the engine, never a derived sign"
 check "tests/test_readiness_peg_count.py" "counts_ramps_not_raw_values"  "v1.0 one definition of pegged"
 _n_cap=$(grep -c "_capture_entry_contract(ctx, record)" main.py 2>/dev/null || echo 0)
 if [ "$_n_cap" = "2" ]; then
