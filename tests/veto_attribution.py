@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """
-tests/veto_attribution.py — v1.0 — 2026-08-06
+tests/veto_attribution.py — v1.1 — 2026-08-06
 
 WHICH VETO IS CAUSING THE CHURN? For every tick where a regime's score crosses
 between ZERO and NON-ZERO, reports which hard veto changed state.
+
+v1.1 — a veto key that APPEARS or DISAPPEARS between ticks is a BRANCH CHANGE,
+not a veto flip. v1.0 counted it as one, and credited RANGING with 4,929
+`veto_flat` transitions when RANGING's veto_flat is a hardcoded 1.0 that never
+changes — the live one belongs to COMPRESSION. Branch changes now get their own
+row, and they matter: they mean the regime switched between its full window path
+and its reduced vol-only fallback, which is a BAR-AVAILABILITY event rather than
+a market one.
 
 WHY THIS IS THE RIGHT QUESTION. The scoring grammar is multiplicative and
 documented in regime_confluence's own header:
@@ -115,8 +123,25 @@ def main(argv) -> int:
                     if was_zero != is_zero:
                         totals[reg] += 1
                         # WHICH veto changed across this transition?
-                        changed = [k for k in set(vt) | set(was_vt)
-                                   if vt.get(k) != was_vt.get(k)]
+                        # v1.1 — A KEY THAT APPEARS OR DISAPPEARS IS NOT A VETO
+                        # FLIP. Several regimes have two evaluation branches (a
+                        # window path and a reduced vol-only fallback) that
+                        # publish DIFFERENT key sets. v1.0 compared
+                        # vt.get(k) != was_vt.get(k), so a missing key read as a
+                        # change — and that is how RANGING was credited with
+                        # 4,929 `veto_flat` transitions when its veto_flat is a
+                        # HARDCODED 1.0 that never changes. The live veto_flat
+                        # belongs to COMPRESSION.
+                        # A branch change is a real and separate cause: it means
+                        # the regime switched between full and fallback
+                        # evaluation, which is a BAR-AVAILABILITY event, not a
+                        # market one. It gets its own row.
+                        both = set(vt) & set(was_vt)
+                        changed = [k for k in both if vt[k] != was_vt[k]]
+                        appeared = set(vt) ^ set(was_vt)
+                        if appeared and not changed:
+                            trans[(reg, f"(branch change: {'/'.join(sorted(appeared))[:26]})")] += 1
+                            continue
                         if not changed:
                             # zero<->nonzero with NO veto change means the
                             # corroborator sum or a soft term did it — a
