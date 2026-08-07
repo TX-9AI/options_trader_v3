@@ -1,5 +1,13 @@
 """
-config.py — options_trader v4.2
+config.py — options_trader v4.3
+v4.3 — 2026-08-07 — CNT.1: CONT_BREAKOUT_DIRECTION + CONT_BREAKOUT_MIN_ADX.
+        Standalone continuation may now fire under BREAKOUT_VOLATILE, taking
+        direction from the trend engine's `overall_direction` instead of from
+        the label (which carries none). Gated on ADX rather than on
+        regime.conviction, because under a non-trending label the conviction
+        floor is skipped and BREAKOUT's conviction is not the trend's. Tagged
+        `trend_continuation_breakout` so it scores separately.
+
 v4.2 — 2026-08-07 — SWP.1: SWEEP_SETUP_FLOOR (OT_SWEEP_SETUP_FLOOR, default
         0.05). Sweep stops gating on the regime label and gates on the L1
         _sweep SETUP SCORE. The label wins 0.4% of live ticks and is exactly
@@ -482,6 +490,32 @@ POLL_INTERVAL_SECONDS       = 15
 # ─── REGIME CLASSIFICATION ────────────────────────────────────────────────────
 
 ADX_TREND_THRESHOLD         = 25
+
+# ── CNT.1 — continuation under BREAKOUT_VOLATILE (2026-08-07, operator's call) ─
+# Standalone continuation was barred under BREAKOUT for a structural reason, not
+# a quality one: `continuation_strategy` derives DIRECTION FROM THE LABEL
+# (TRENDING_BULL -> long, TRENDING_BEAR -> short) and BREAKOUT_VOLATILE asserts
+# volatility EXPANSION without saying which way, so no branch could assign one.
+# The runaway handoff already solves this by taking direction from the ORB.
+# This does the same thing from the trend engine's own vote.
+#
+# WHY A SEPARATE ADX FLOOR RATHER THAN THE CONVICTION FLOOR: under a non-trending
+# label `_label_trending` is False, so continuation's `CONTINUATION_CONV_FLOOR`
+# check is SKIPPED ENTIRELY — the same hole the handoff path has. Reusing
+# `regime.conviction` would be worse than nothing, since under BREAKOUT it is
+# BREAKOUT's conviction, not the trend's. The direction is coming from the trend
+# engine, so the quality bar must come from there too.
+#
+# DEFAULT = ADX_TREND_THRESHOLD (25), the same bar the rest of the system uses to
+# call a trend a trend. A PRIOR, not a fit — deliberately permissive for the
+# collection phase per the operator ("to gather data").
+# Entries take setup_type `trend_continuation_breakout` so the rollup can score
+# this path SEPARATELY from _standalone and _handoff. Without that split the
+# data this is being turned on to collect would be unreadable.
+CONT_BREAKOUT_DIRECTION = os.environ.get(
+    "OT_CONT_BREAKOUT_DIRECTION", "1").strip().lower() not in ("0", "false", "no", "off")
+CONT_BREAKOUT_MIN_ADX   = float(os.environ.get("OT_CONT_BREAKOUT_MIN_ADX",
+                                               str(ADX_TREND_THRESHOLD)))
 ADX_RANGE_THRESHOLD         = 25   # v3.3 (2026-07-14): was 20 — closed the ADX
                                    # DEAD ZONE. _is_ranging required adx<20 while
                                    # _is_trending requires adx>=25, so ordinary

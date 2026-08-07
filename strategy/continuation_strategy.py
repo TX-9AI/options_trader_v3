@@ -160,6 +160,7 @@ CONTINUATION_FVG_TAG_MIN     = 0.01   # cents the 1m wick must penetrate the FVG
 # v1.2 (2026-07-22): sourced from config (env OT_CONT_STOP_PCT), tightened
 # 0.40 -> 0.25. Regime-flip remains the PRIMARY exit; this is the backstop.
 from config import CONTINUATION_STOP_LOSS_PCT   # 0.25 default
+from config import CONT_BREAKOUT_DIRECTION, CONT_BREAKOUT_MIN_ADX  # CNT.1
 CONTINUATION_TP_PCT          = 1.0    # nominal; runner is exhaustion-trailed, not TP-capped
 CONTINUATION_HANDOFF_CONV_RELAX = 0.10  # handoff path lowers the conviction floor by this
 
@@ -288,10 +289,28 @@ class ContinuationStrategy(BaseOptionsStrategy):
         """
         # ── 1. GATE: must be a trending regime ──────────────────────────────
         rgm = regime.primary_regime
+        is_breakout_dir = False          # CNT.1 — set by the BREAKOUT branch below
         if rgm == Regime.TRENDING_BULL:
             direction, option_side = "long", "call"
         elif rgm == Regime.TRENDING_BEAR:
             direction, option_side = "short", "put"
+        elif (CONT_BREAKOUT_DIRECTION
+              and rgm == Regime.BREAKOUT_VOLATILE
+              and getattr(trend, "overall_direction", "NEUTRAL") in ("BULLISH", "BEARISH")
+              and float(getattr(trend, "primary_adx", 0.0) or 0.0) >= CONT_BREAKOUT_MIN_ADX):
+            # CNT.1 — BREAKOUT_VOLATILE asserts volatility EXPANSION and says
+            # nothing about direction, which is the ONLY reason this trade was
+            # barred here; it was never a judgement that breakout tape is poor
+            # continuation tape. The trend engine has the missing half, so take
+            # it from there — the same move the runaway handoff already makes,
+            # sourced from the vote instead of from the ORB.
+            # ADX is the quality bar because `_label_trending` is False under
+            # this label, so the CONTINUATION_CONV_FLOOR check below is skipped
+            # and `regime.conviction` here would be BREAKOUT's, not the trend's.
+            _bd = getattr(trend, "overall_direction", "NEUTRAL")
+            direction   = "long" if _bd == "BULLISH" else "short"
+            option_side = "call" if direction == "long" else "put"
+            is_breakout_dir = True
         elif is_handoff and handoff_direction in ("long", "short"):
             # v-runaway-fix: a runaway ORB proved directional force even if the
             # regime LABEL has since flipped (commonly to SWEEP_REVERSAL/BREAKOUT).
@@ -432,7 +451,9 @@ class ContinuationStrategy(BaseOptionsStrategy):
 
         signal = OptionsSignal(
             strategy_name    = self.name(),
-            setup_type       = "trend_continuation" + ("_handoff" if is_handoff else "_standalone"),
+            setup_type       = "trend_continuation" + ("_handoff" if is_handoff
+                                                       else "_breakout" if is_breakout_dir
+                                                       else "_standalone"),
             direction        = direction,
             option_side      = option_side,
             underlying_entry = current_price,

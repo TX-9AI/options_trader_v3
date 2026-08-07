@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.92
+# docs/BACKLOG.md — v3.93
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -81,6 +81,7 @@ BAKED is changing nothing about today's data.
 | **MEM.1 — SPX leak: confirmed and traced** | ✅ 08-07 | ⬜ | ⬜ **needs an RTH run** | two-sample fleet RSS: 14 boxes flat (MU −1.9 MB, NVDA −4.5 MB), **SPX +93.5 MB in 16.4 min = 5.7 MB/min**; QQQ control **+8 KB**. `tests/mem_tracer.py` v1.0 built; diff machinery proven on a planted 10 MB leak. |
 | **SWP.1 — ungate sweep from regime** | ✅ 08-07 tool | ⬜ | ⬜ **needs the floor + a bake** | operator ruling: sweep is an EVENT, not a regime. Fleet log grep confirmed **zero sweep activity 08-07** — every `Sweep strike:` line was CONTINUATION readiness (`target=0.45` = `TR_CONT_TARGET_DELTA`). `tests/sweep_score_dist.py` v1.0 sets the gate floor from the corpus; proven on planted data. |
 | **SWP.1 — THE UNGATING, BUILT** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.2** (`SWEEP_SETUP_FLOOR` 0.05, `OT_SWEEP_SETUP_FLOOR`), main **v5.6**, sweep_reversal_strategy **v3.3**, `tests/test_sweep_ungated.py` 6 pass incl. a PLTR-guard canary. Deliberate-failure test passed. Sandbox suite 231 passed / 1 skipped (7 failures = missing tastytrade SDK, identical at origin HEAD). **Authoritative suite run on control NOT yet read.** |
+| **CNT.1 — continuation under BREAKOUT** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.3** (`CONT_BREAKOUT_DIRECTION`, `CONT_BREAKOUT_MIN_ADX` 25), main **v5.7**, continuation_strategy direction branch, `tests/test_continuation_breakout.py` 6 pass, deliberate-failure test passed. Tagged `trend_continuation_breakout` so it scores separately. Sandbox 237 passed / 1 skipped. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
@@ -2523,6 +2524,42 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   It changes what gets traded (the label drives dispatch AND the regime_flip
   exit), so it is the operator's call under the standing division of labour.
 
+- `[DESK]` **CNT.1 — 🟡 SHIPPED-NOT-BAKED. CONTINUATION MAY NOW FIRE UNDER
+  BREAKOUT_VOLATILE.** Operator's call 2026-08-07: *"I want to ungate the
+  continuation trade on breakout to gather data. Let's assign it the
+  direction."*
+  **THE BAR WAS STRUCTURAL, NOT A QUALITY JUDGEMENT.** `continuation_strategy`
+  derives direction FROM THE LABEL — `TRENDING_BULL → long/call`,
+  `TRENDING_BEAR → short/put`, `elif is_handoff → the runaway's direction`,
+  `else return None`. BREAKOUT_VOLATILE asserts volatility EXPANSION and says
+  nothing about which way, so there was no branch that could assign one. Nobody
+  ever decided breakout tape was poor continuation tape.
+  **THE FIX TAKES THE MISSING HALF FROM THE TREND ENGINE** — `trend.overall_
+  direction` (BULLISH/BEARISH; NEUTRAL self-vetoes), the same field `_sweep`
+  already reads to compute `opposed`. This is the runaway handoff's move,
+  sourced from the vote rather than from the ORB.
+  **⚠️ WHY AN ADX BAR AND NOT THE CONVICTION FLOOR — the trap this avoids:**
+  under a non-trending label `_label_trending` is False, so continuation's
+  `CONTINUATION_CONV_FLOOR` check is **SKIPPED ENTIRELY** — the identical hole
+  the handoff path carries. Falling back to `regime.conviction` would be worse
+  than nothing, because under BREAKOUT that is BREAKOUT's conviction, not the
+  trend's. Direction comes from the trend engine, so the quality bar comes from
+  there too: `primary_adx >= CONT_BREAKOUT_MIN_ADX`, default **25 =
+  ADX_TREND_THRESHOLD**, the same bar the rest of the system uses to call a
+  trend a trend. A PRIOR, not a fit.
+  **⚠️ ENTRIES ARE TAGGED `trend_continuation_breakout`.** The point of turning
+  this on is to COLLECT DATA on it; pooled under `_standalone` it would be
+  invisible against 141 trades of existing history. Pinned by a test.
+  **WIDENING THE DISPATCH TUPLE ALONE DOES NOT OPEN THE TRADE** — the strategy's
+  direction branch does, and it self-vetoes on a directionless tape. Also pinned.
+  Kill switch `OT_CONT_BREAKOUT_DIRECTION=0`.
+  **CONTEXT FROM THE 11-SESSION ROLLUP that makes this worth watching closely:**
+  continuation's entire loss is the SHORT side — TRENDING_BULL/Continuation 193
+  trades **+$19**, RANGING/Continuation 82 **+$578.50**, BREAKOUT/Continuation
+  (handoff only, today) 48 **+$12**, but **TRENDING_BEAR/Continuation 57 trades
+  −$3,035.50**. So the new path's SHORT entries are the ones to score first, and
+  the separate tag is what makes that possible.
+
 - `[DESK]` **SWP.1 — 🔴 OPEN. SWEEP MUST STOP GATING ON REGIME.** Operator
   ruling 2026-08-07: *"Sweep isn't a regime. The trade should only require a
   move into a named liquidity pool/level, accompanied by a rejection or
@@ -4250,6 +4287,17 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.93 — 2026-08-07 — CNT.1: continuation ungated on BREAKOUT_VOLATILE, with
+  direction supplied by the trend engine.** The bar was never a quality
+  judgement — the label carries no direction, so no branch could assign one.
+  `trend.overall_direction` supplies it; NEUTRAL self-vetoes; `primary_adx >= 25`
+  is the quality bar, chosen because under a non-trending label continuation's
+  conviction floor is skipped and BREAKOUT's conviction is not the trend's.
+  Entries tagged `trend_continuation_breakout` so the rollup can score them apart
+  from the 141-trade `_standalone` history — without that split the data this is
+  being turned on to collect would be unreadable. config v4.3, main v5.7,
+  strategy branch, 6 tests, deliberate-failure test passed.
+  **SHIPPED, NOT BAKED.**
 - **v3.92 — 2026-08-07 — SWP.1 BUILT: sweep no longer gates on the regime
   label.** Dispatch qualifies on the L1 `_sweep` setup score, whose three hard
   vetoes are the operator's spec verbatim — named level, rejected back through,

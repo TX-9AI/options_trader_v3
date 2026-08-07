@@ -1,5 +1,18 @@
 """
-main.py — options_trader v5.6
+main.py — options_trader v5.7
+v5.7 — 2026-08-07 — CNT.1: CONTINUATION DISPATCH OPENED TO BREAKOUT_VOLATILE.
+        Operator's call, to gather data. The bar was structural, not a quality
+        judgement: continuation derives DIRECTION from the label, and
+        BREAKOUT_VOLATILE asserts volatility expansion without saying which way,
+        so no branch could assign one. continuation_strategy now takes direction
+        from `trend.overall_direction` when the label is BREAKOUT, gated on
+        `primary_adx >= CONT_BREAKOUT_MIN_ADX` (default 25) — an ADX bar rather
+        than a conviction bar, because under a non-trending label continuation's
+        conviction floor is skipped and BREAKOUT's conviction is not the trend's.
+        Entries are tagged `trend_continuation_breakout` so the cross-day rollup
+        scores this path separately from _standalone and _handoff.
+        Kill switch: OT_CONT_BREAKOUT_DIRECTION=0.
+
 v5.6 — 2026-08-07 — SWP.1: SWEEP UNGATED FROM THE REGIME LABEL. Operator's
         ruling — sweep is an EVENT, not a market state. The dispatch required
         `regime.primary_regime == Regime.SWEEP_REVERSAL`; that label wins 0.4%
@@ -1315,9 +1328,16 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     # pullback via the looser handoff gate — even if the regime label has since
     # flipped to SWEEP_REVERSAL/BREAKOUT (a runaway commonly flips it). The
     # standalone (stricter) path still requires a trending label.
+    # CNT.1 (v5.7) — BREAKOUT_VOLATILE added. The strategy decides whether it
+    # can actually take it: it fires only if the trend engine's own vote gives a
+    # direction (BULLISH/BEARISH, not NEUTRAL) AND primary_adx clears
+    # CONT_BREAKOUT_MIN_ADX. Widening this tuple alone would NOT open the trade —
+    # the direction branch inside the strategy is what does, and it self-vetoes
+    # on a directionless tape.
     if signal is None and (
             _is_runaway
-            or regime.primary_regime in (Regime.TRENDING_BULL, Regime.TRENDING_BEAR)):
+            or regime.primary_regime in (Regime.TRENDING_BULL, Regime.TRENDING_BEAR,
+                                         Regime.BREAKOUT_VOLATILE)):
         cont_sig = _safe_strategy("Continuation", lambda: _continuation_strategy.generate_signal(
             regime        = regime,
             vol_state     = ctx["vol"],
