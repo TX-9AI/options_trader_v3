@@ -90,4 +90,10 @@ def test_trending_paths_are_untouched():
     src = _code("strategy", "continuation_strategy.py")
     assert 'if rgm == Regime.TRENDING_BULL:' in src
     assert 'elif rgm == Regime.TRENDING_BEAR:' in src
-    assert 'elif is_handoff and handoff_direction in ("long", "short"):' in src
+    # CNT.3 (2026-08-07) legitimately rewrote this branch to add the
+    # COMPRESSION block, so the assertion moved from the branch's EXACT TEXT to
+    # its INTENT: the handoff path must still EXIST. Pinning exact text made
+    # this canary fire on a correct change — a canary that fires on intended
+    # edits gets loosened under pressure, which is how it stops protecting
+    # anything. Assert what must remain true, not what the line looked like.
+    assert 'is_handoff and handoff_direction in ("long", "short")' in src

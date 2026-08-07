@@ -1,5 +1,14 @@
 """
 strategy/sweep_reversal_strategy.py — Post-liquidity-sweep reversal for options.
+v3.4 — 2026-08-07 — SWP.2: SHORT SWEEPS GET THEIR OWN FLOOR
+        (`SWEEP_SETUP_FLOOR_SHORT`, default 0.20; longs stay at 0.05). Three
+        measures agree that long and short are not the same trade — win rate
+        81% vs 33%, never-favourable 4% vs 33%, and forward drift building to
+        +0.314 vs falling to −0.290. n=6 on the short side is thin, so this is a
+        PRIOR carried by the MECHANISM (the 07-27 PLTR short-into-strength
+        incident), not a fit. ⚠️ With SWEEP capped near 0.265 this NEAR-DISABLES
+        shorts; that is deliberate and is stated rather than disguised.
+
 v3.3 — 2026-08-07 — SWP.1: THE REGIME GATE IS GONE. Operator's ruling — sweep is
         an EVENT, not a market state. `generate_signal` refused unless the
         committed label was SWEEP_REVERSAL; that label wins 0.4% of live ticks,
@@ -71,6 +80,7 @@ import logging
 from typing import Optional
 
 from strategy.base_strategy import BaseOptionsStrategy, OptionsSignal
+from config import SWEEP_SETUP_FLOOR, SWEEP_SETUP_FLOOR_SHORT   # SWP.2
 from analysis.regime_classifier import RegimeState   # v3.3: `Regime` no longer
 # imported — the enum was used ONLY by the removed label gate. Leaving a dead
 # import would let a future edit silently re-introduce the gate it belongs to.
@@ -181,6 +191,22 @@ class SweepReversalStrategy(BaseOptionsStrategy):
                 chain, macro, df_1m, current_price, conv
             )
         elif sweep.kind == "high_sweep":
+            # SWP.2 — SHORT SWEEPS CLEAR A HIGHER BAR THAN LONGS. Over 12
+            # sessions: long 27 trades / 81% WR / +$2,844 / 4% never-favourable
+            # / forward drift building to +0.314 at 30 bars with 67% positive;
+            # short 6 / 33% / −$1,403.50 / 33% never-favourable / drift −0.290
+            # with 33% positive. n=6 is thin, so this is a PRIOR — what earns it
+            # is that the MECHANISM agrees: the 07-27 PLTR incident was exactly
+            # a short reversal into a +7.2% up-trending tape.
+            # ⚠️ SWEEP's score is capped near 0.265, so a 0.20 floor NEAR-
+            # DISABLES shorts rather than trimming them. Deliberate at
+            # −$233/trade, and named as such so nobody reads it as a dial.
+            if conv < SWEEP_SETUP_FLOOR_SHORT:
+                logger.debug(
+                    "Sweep SHORT blocked: setup %.3f < short floor %.2f "
+                    "(longs use %.2f)", conv, SWEEP_SETUP_FLOOR_SHORT,
+                    SWEEP_SETUP_FLOOR)
+                return None
             return self._short_reversal(
                 sweep, regime, vol_state, structure, liq_map,
                 chain, macro, df_1m, current_price, conv

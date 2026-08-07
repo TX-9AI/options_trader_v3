@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.96
+# docs/BACKLOG.md — v3.97
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -85,6 +85,7 @@ BAKED is changing nothing about today's data.
 | **CNT.2 — insurance gate (BOS blind window)** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.4** (`CONT_INSURANCE_STOP`), exit_engine **v4.14** (gate 2c), `tests/test_insurance_stop.py` 7 pass, deliberate-failure test passed. Sandbox 244 passed / 1 skipped. Arms the already-stamped `underlying_stop` ONLY while `BOSTracker.protected_level is None`. |
 | **RGM.3 — sweep leaves the regime set** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | conviction_integrator **v2.2**; `INTEGRATED_REGIMES` 6→5, tie-break head SWEEP→BREAKOUT_VOLATILE, RegimeParams row removed. Scorer UNTOUCHED (SWP.1 depends on it). `tests/test_sweep_not_a_regime.py` 6 pass, deliberate-failure verified. Sandbox 250 passed / 1 skipped. |
 | **DRF.1 — trigger-conditioned drift + ORB positive control** | ✅ 08-07 | ⬜ | n/a (offline) | `tests/trigger_drift.py` v1.0; planted proof separated a +0.02%/bar window (ORB Long median +0.200%, 100% positive) from noise (−0.010%) against a null arm at 0.000%, 40/40 triggers matched through the UTC→ET conversion. **NOT YET RUN on the real corpus.** |
+| **SWP.2 + CNT.3 — the two Tier-1 priors** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.5**, sweep_reversal_strategy **v3.4**, continuation branch. `tests/test_tier1_priors.py` 6 pass, deliberate-failure verified. Sandbox 256 passed / 1 skipped. Both are PRIORS carried by mechanism, not fits. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
 
@@ -2528,6 +2529,37 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   It changes what gets traded (the label drives dispatch AND the regime_flip
   exit), so it is the operator's call under the standing division of labour.
 
+- `[DESK]` **SWP.2 — 🟡 SHIPPED-NOT-BAKED. SWEEP SHORTS CLEAR A HIGHER FLOOR.**
+  Three independent measures over 12 sessions say long and short sweeps are not
+  the same trade: **win rate 81% vs 33%**, **never-favourable 4% vs 33%**, and
+  **forward drift BUILDING +0.001 → +0.081 → +0.314 (52/56/67% positive) versus
+  falling −0.148 → −0.215 → −0.290 (33% positive)**. Dollars agree: +$2,844 on
+  27 vs −$1,403.50 on 6.
+  **n=6 IS THIN AND THIS IS A PRIOR, NOT A FIT.** What earns it is the
+  MECHANISM, which predates the data: the 2026-07-27 PLTR incident was exactly a
+  short reversal into a +7.2% up-trending tape, and is why `trend_opp` exists at
+  all. The data agrees with a known mechanism rather than deciding on its own.
+  **⚠️ CALL IT WHAT IT IS: THIS NEAR-DISABLES SHORTS.** SWEEP's score is capped
+  near **0.265** (measured max, 08-07 replay — it is the only scorer with an
+  age-decay soft-necessary, half-life 3 bars), so a 0.20 floor admits only the
+  top sliver. At −$233/trade that is defensible, but it is a near-disable
+  wearing a threshold and must be read that way, not as a dial.
+  `OT_SWEEP_SETUP_FLOOR_SHORT=0.05` restores parity with longs without a deploy;
+  longs are untouched at 0.05.
+
+- `[DESK]` **CNT.3 — 🟡 SHIPPED-NOT-BAKED. THE RUNAWAY HANDOFF DOES NOT FIRE
+  UNDER COMPRESSION.** COMPRESSION/Continuation is **39 trades, 28% WR, −$454**,
+  and COMPRESSION is the **worst never-favourable cell in the book at 80%**
+  (LIFT 1.98, n=45).
+  **WHY THOSE 39 EXIST AT ALL:** continuation cannot enter on a compression
+  LABEL — every direction branch requires TRENDING or BREAKOUT — so all 39 are
+  RUNAWAY HANDOFFS, which ignore the label by design.
+  **THE MECHANISM IS A FLAT CONTRADICTION: a runaway asserts EXPANSION while the
+  label asserts COILING.** The handoff's licence to ignore the label is exactly
+  what makes it valuable after a real runaway (the label commonly flips to
+  BREAKOUT or SWEEP); this is the one place that licence clearly costs.
+  `OT_CONT_HANDOFF_IN_COMPRESSION=1` restores the old behaviour.
+
 - `[DESK]` **DRF.1 — 🔴 OPEN. THE DRIFT MEASUREMENT NEEDS A POSITIVE CONTROL
   BEFORE ANYTHING IS CONCLUDED FROM IT.**
   `a2_cooccurrence` (option 47) measures forward drift from LABEL STATES and
@@ -4439,6 +4471,20 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.97 — 2026-08-07 — SWP.2 + CNT.3: the first tuning changes carried by
+  data, both filed as PRIORS rather than fits.** Sweep shorts get their own
+  0.20 floor (longs stay 0.05) on three agreeing measures plus the PLTR
+  mechanism — and it is stated plainly that against a ~0.265 score ceiling this
+  near-disables shorts rather than trimming them. The runaway handoff stops
+  firing under COMPRESSION, where it is 28% WR / −$454 and sits in the worst
+  never-favourable cell at 80%, because a runaway asserts expansion while the
+  label asserts coiling. Both env-reversible. config v4.5, strategy v3.4, 6
+  tests, deliberate-failure verified.
+  One canary of my own had to be loosened: CNT.1's test pinned the handoff
+  branch's EXACT TEXT and fired on CNT.3's correct edit. Rewritten to assert the
+  branch still EXISTS — a canary that fires on intended changes gets loosened
+  under pressure, which is how it stops protecting anything.
+  **SHIPPED, NOT BAKED.**
 - **v3.96 — 2026-08-07 — DRF.1: the drift measurement gets a positive control.**
   Option 47 finds no forward drift in any label state, but it only ever had a
   null control — nothing in it is known to carry edge, so it has never been shown

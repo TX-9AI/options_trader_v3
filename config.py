@@ -1,5 +1,14 @@
 """
-config.py — options_trader v4.4
+config.py — options_trader v4.5
+v4.5 — 2026-08-07 — SWP.2 + CNT.3, the two Tier-1 tuning priors.
+        SWEEP_SETUP_FLOOR_SHORT (default 0.20) separates short sweeps from
+        longs — three measures agree and the PLTR mechanism backs it, but n=6
+        and a 0.20 floor against a ~0.265 score ceiling is a NEAR-DISABLE, not
+        a dial. CONT_HANDOFF_BLOCK_COMPRESSION stops the runaway handoff firing
+        under COMPRESSION (39 trades, 28% WR, and the worst never-favourable
+        cell at 80%) — a runaway asserts expansion while the label asserts
+        coiling.
+
 v4.4 — 2026-08-07 — CNT.2: CONT_INSURANCE_STOP (OT_CONT_INSURANCE, default on).
         Arms the already-stamped `underlying_stop` as a structural early
         invalidator for continuation, ONLY while BOSTracker.protected_level is
@@ -389,6 +398,42 @@ SWEEP_DELTA_TOLERANCE       = 0.04   # acceptable band around the target delta
 # Permissiveness cannot steal from other setups: sweep is Priority 2.5 behind
 # `if signal is None`, so ORB and Continuation always get first refusal.
 SWEEP_SETUP_FLOOR = float(os.environ.get("OT_SWEEP_SETUP_FLOOR", "0.05"))
+
+# ── SWP.2 — SWEEP SHORTS GET THEIR OWN, HIGHER FLOOR (2026-08-07) ─────────────
+# Long and short sweeps are not the same trade and the data says so on THREE
+# independent measures over 12 sessions:
+#   Sweep Reversal Long   27 trades · 81% WR · +$2,844 · 4% never-favourable ·
+#                         forward drift BUILDING +0.001 → +0.081 → +0.314 with
+#                         52% → 56% → 67% of trades positive
+#   Sweep Reversal Short   6 trades · 33% WR · −$1,403.50 · 33% never-favourable ·
+#                         drift −0.148 → −0.215 → −0.290, 33% positive
+# n=6 is THIN and this is NOT a fit — it is a PRIOR, and what earns it is that
+# the MECHANISM agrees: the 2026-07-27 PLTR incident was exactly a short
+# reversal into a +7.2% up-trending tape, which is why `trend_opp` exists.
+#
+# ⚠️ SAY THE HONEST THING ABOUT THIS NUMBER: SWEEP's score is CAPPED near 0.265
+# (measured max on the 08-07 replay; it is the only scorer with an age-decay
+# soft-necessary, half-life 3 bars). A short floor of 0.20 therefore fires only
+# in the top sliver of sweep scores and NEAR-DISABLES shorts. That may well be
+# correct at −$233/trade — but it is a near-disable wearing a threshold, and it
+# should be read that way rather than as a tuning dial.
+# Longs are untouched at 0.05. Set equal to SWEEP_SETUP_FLOOR to restore the
+# single-floor behaviour.
+SWEEP_SETUP_FLOOR_SHORT = float(
+    os.environ.get("OT_SWEEP_SETUP_FLOOR_SHORT", "0.20"))
+
+# ── CNT.3 — THE HANDOFF DOES NOT FIRE UNDER COMPRESSION (2026-08-07) ──────────
+# COMPRESSION/Continuation is 39 trades, 28% WR, −$454, and COMPRESSION is the
+# WORST never-favourable cell in the book: 80% (LIFT 1.98, n=45).
+# Continuation cannot enter on a compression LABEL — the direction branches
+# require TRENDING_BULL/BEAR or BREAKOUT — so all 39 of those are RUNAWAY
+# HANDOFFS, which ignore the label by design.
+# THE MECHANISM IS A CONTRADICTION: a runaway asserts EXPANSION while the label
+# asserts COILING. The handoff's licence to ignore the label is what makes it
+# valuable after a real runaway; this is the one place it clearly costs.
+# OT_CONT_HANDOFF_IN_COMPRESSION=1 restores the old behaviour.
+CONT_HANDOFF_BLOCK_COMPRESSION = os.environ.get(
+    "OT_CONT_HANDOFF_IN_COMPRESSION", "0").strip().lower() in ("0", "false", "no", "off")
 SWEEP_MIN_REJECTION_PCT     = 0.003
 SWEEP_MAX_AGE_BARS          = 8
 # Entry-window tuning (separate pass from detection). The recovery window is now

@@ -161,6 +161,7 @@ CONTINUATION_FVG_TAG_MIN     = 0.01   # cents the 1m wick must penetrate the FVG
 # 0.40 -> 0.25. Regime-flip remains the PRIMARY exit; this is the backstop.
 from config import CONTINUATION_STOP_LOSS_PCT   # 0.25 default
 from config import CONT_BREAKOUT_DIRECTION, CONT_BREAKOUT_MIN_ADX  # CNT.1
+from config import CONT_HANDOFF_BLOCK_COMPRESSION                  # CNT.3
 CONTINUATION_TP_PCT          = 1.0    # nominal; runner is exhaustion-trailed, not TP-capped
 CONTINUATION_HANDOFF_CONV_RELAX = 0.10  # handoff path lowers the conviction floor by this
 
@@ -311,7 +312,21 @@ class ContinuationStrategy(BaseOptionsStrategy):
             direction   = "long" if _bd == "BULLISH" else "short"
             option_side = "call" if direction == "long" else "put"
             is_breakout_dir = True
-        elif is_handoff and handoff_direction in ("long", "short"):
+        elif (is_handoff and handoff_direction in ("long", "short")
+              and not (CONT_HANDOFF_BLOCK_COMPRESSION
+                       and rgm == Regime.COMPRESSION)):
+            # CNT.3 — THE HANDOFF DOES NOT FIRE UNDER COMPRESSION.
+            # COMPRESSION/Continuation is 39 trades, 28% WR, −$454, and
+            # COMPRESSION is the WORST never-favourable cell in the book at 80%
+            # (LIFT 1.98, n=45). Continuation cannot enter on a compression
+            # LABEL — the branches above require TRENDING or BREAKOUT — so all
+            # 39 of those are RUNAWAY HANDOFFS, which ignore the label by
+            # design.
+            # THE MECHANISM IS A CONTRADICTION: a runaway asserts EXPANSION
+            # while the label asserts COILING. The handoff's licence to ignore
+            # the label is exactly what makes it valuable after a real runaway;
+            # this is the one place it clearly costs.
+            # OT_CONT_HANDOFF_IN_COMPRESSION=1 restores the old behaviour.
             # v-runaway-fix: a runaway ORB proved directional force even if the
             # regime LABEL has since flipped (commonly to SWEEP_REVERSAL/BREAKOUT).
             # Trust the runaway's direction for the handoff entry. Non-handoff
