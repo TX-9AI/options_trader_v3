@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.89
+# docs/BACKLOG.md — v3.90
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -78,6 +78,7 @@ BAKED is changing nothing about today's data.
 | **RGM.1 F7 — the emission fix + live A/B** | ✅ 08-06 | ⬜ | ⬜ **needs a bake** | conviction_integrator **v2.1**, main **v5.5**, `tests/test_emission_protection.py` (7 pass, incl. a v2.0 control that MUST flip), `tests/label_agreement.py` v1.0. Sandbox suite **224 passed / 1 skipped**; 8 collection failures are the missing `tastytrade` SDK and are IDENTICAL at origin HEAD. **Authoritative suite run happens on control as part of the deploy — not yet read.** |
 | **RGM.2 — Layer-1 discrimination census** | ✅ 08-07 | ⬜ | n/a (offline, read-only) | `tests/discrimination_census.py` v1.0; every planted count recovered exactly (101 dead / 50 one-live / 30 tight-gap / 20 wide-gap). **NOT YET RUN on the corpus.** |
 | **RGM.1 F7 — MEASURED END TO END** | ✅ 08-07 | ✅ 08-07 | ⬜ **needs a bake** | real-tape A/B on 08-06: **20.8 → 4.2 switches/symbol-day**, `L1 IDENTICAL`, re-emitted baseline 661 on BOTH files (conviction dynamics unchanged). Agreement gate over 19 sessions: TREND modal **63.4→69.1%**, in-family **47.5→57.8%**. Suite 287/rc=0. Evidence archived to `~/evidence_rgm1_20260806/` |
+| **MEM.1 — SPX leak: confirmed and traced** | ✅ 08-07 | ⬜ | ⬜ **needs an RTH run** | two-sample fleet RSS: 14 boxes flat (MU −1.9 MB, NVDA −4.5 MB), **SPX +93.5 MB in 16.4 min = 5.7 MB/min**; QQQ control **+8 KB**. `tests/mem_tracer.py` v1.0 built; diff machinery proven on a planted 10 MB leak. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
@@ -2520,6 +2521,51 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   It changes what gets traded (the label drives dispatch AND the regime_flip
   exit), so it is the operator's call under the standing division of labour.
 
+- `[DESK]` **MEM.1 — 🔴 OPEN. THE SPX OPTIONSBOT LEAK IS REAL, ISOLATED AND
+  MEASURED.** Two option-14 RSS samples 16.4 minutes apart, 15 boxes:
+  **fourteen FLAT** — most moved by kilobytes, and MU **−1.9 MB** / NVDA
+  **−4.5 MB** actually FELL, which is what a healthy allocator returning memory
+  looks like. **SPX went 297,532K → 390,984K = +93.5 MB = 5.7 MB/min.**
+  **QQQ IS THE CONTROL THAT CLOSES IT:** comparable chain, also ALWAYS_ON,
+  **+8 KB in 16 minutes.** Growth is therefore NOT proportional to chain size —
+  it is binary. SPX retains, QQQ does not.
+  **THIS EXONERATES THE F7 BAKE.** All 15 boxes run conviction_integrator v2.1
+  as of 08-06 night; a fleet-wide change cannot produce a one-box leak, and the
+  08-06 OOM predates the bake. The amplification worry (F7 holds positions
+  longer → more open-position chain lookups) is downgraded, NOT closed.
+  **THE CEILING IS PHYSICAL RAM, NOT A CGROUP LIMIT:** `MemoryMax=infinity`
+  fleet-wide, boxes are 951 MB with **ZERO SWAP**, and every box already sits at
+  73–79% used with ~200–250 MB available. No swap means no degraded stage — the
+  kernel goes straight from tight to `status=9/KILL`, and it picks the largest
+  RSS. That is why the peak reads an identical 419M on both 08-06 and 08-07: not
+  a cap being hit, but the level at which optionsbot + candle-feed + OS exceeds
+  951 MB.
+  **ARITHMETIC OFFERED AS CONSISTENCY, NOT EVIDENCE:** 5.7 MB/min over a 15s
+  tick is ~1.4 MB retained per tick; a 724-option SPX chain at ~2 KB/object is
+  ~1.4 MB — the size of exactly one full chain build. Source reading came up
+  EMPTY (`_struct_cache` is keyed by symbol and overwritten, `chain_snapshot`
+  holds one string bucket), which is exactly why the next step measures.
+  **HOW — `tests/mem_tracer.py` v1.0, BUILT 08-07, NOT YET RUN.** Drives the
+  real per-tick sequence from main.py's GEX block (`fetch_chain` →
+  `compute_gex` → `chain_snapshot`) under `tracemalloc`, diffing a WARM
+  reference against a later snapshot so first-tick caches that are SUPPOSED to
+  persist are not counted as a leak. Reports the top sites by retained size with
+  file:line and a full traceback. Diff machinery proven against a planted 10 MB
+  leak (recovered 10.0 MB, correct site).
+  **IT ALSO REPORTS RSS ALONGSIDE THE TRACED TOTAL, and that divergence is a
+  finding in its own right:** if RSS climbs while traced memory does not, the
+  retention is NOT in Python objects — a C extension, allocator arena
+  fragmentation or unclosed handles — and the answer is a different tool, not a
+  different guess.
+  **⚠️ RUN CONSTRAINT, ENFORCED IN CODE:** the probe is a SECOND ~200 MB process
+  on a 951 MB box with ~206 MB available and no swap. Running it beside the live
+  bot can itself trigger the OOM killer, which would pick the LIVE bot as the
+  largest RSS. It refuses to start below `--min-avail-mb` (default 320). Either
+  stop optionsbot on SPX for the run, or **resize the box first** — resizing is
+  reversible and is wanted anyway if the verdict is structural.
+  **⚠️ SWAP IS NOT THE REMEDY HERE.** A swapfile delays 5.7 MB/min by hours; it
+  does not stop it. Worth having fleet-wide as a cushion, filed separately.
+
 - `[DESK]` **RGM.2 — 🔴 OPEN. THE LAYER-1 DISCRIMINATION PROBLEM.** F7 stops the
   LABEL thrashing; it does nothing about the EVIDENCE the label is chosen from.
   The operator's framing and it is the right one: recognition is fast but it is
@@ -4096,6 +4142,17 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.90 — 2026-08-07 — MEM.1: the SPX leak is confirmed, isolated to one box,
+  and now has a tracer.** Fourteen boxes flat over 16.4 minutes (two of them
+  falling); SPX +93.5 MB = 5.7 MB/min, with QQQ at +8 KB as the control that
+  rules out chain size. Same code fleet-wide, so the F7 bake is exonerated. The
+  ceiling turned out to be physical RAM — 951 MB boxes, no cgroup limit, zero
+  swap, already 73–79% used — which explains the identical 419M peaks on two
+  consecutive days. `tests/mem_tracer.py` v1.0 diffs a warm tracemalloc
+  reference across the real per-tick chain path and names the retaining line;
+  it refuses to start without headroom, because a second 200 MB process on that
+  box would get the LIVE bot killed. **BUILT, NOT YET RUN — needs RTH and either
+  a stopped bot or a resized instance.**
 - **v3.89 — 2026-08-07 — RGM.1 F7 CLOSED AS MEASURED; the churn has a cause, a
   fix, and five independent checks.** 96.9% of label switches came from an
   emission branch with no commit bar, no margin and no dwell, at a median
