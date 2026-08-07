@@ -1,5 +1,11 @@
 """
-config.py — options_trader v4.3
+config.py — options_trader v4.4
+v4.4 — 2026-08-07 — CNT.2: CONT_INSURANCE_STOP (OT_CONT_INSURANCE, default on).
+        Arms the already-stamped `underlying_stop` as a structural early
+        invalidator for continuation, ONLY while BOSTracker.protected_level is
+        None — i.e. only in the window BOS cannot cover — then hands off.
+        Exits tag `insurance_stop`.
+
 v4.3 — 2026-08-07 — CNT.1: CONT_BREAKOUT_DIRECTION + CONT_BREAKOUT_MIN_ADX.
         Standalone continuation may now fire under BREAKOUT_VOLATILE, taking
         direction from the trend engine's `overall_direction` instead of from
@@ -512,6 +518,41 @@ ADX_TREND_THRESHOLD         = 25
 # Entries take setup_type `trend_continuation_breakout` so the rollup can score
 # this path SEPARATELY from _standalone and _handoff. Without that split the
 # data this is being turned on to collect would be unreadable.
+# ── CNT.2 — the INSURANCE gate for continuation (2026-08-07, operator's call) ─
+# BOS (exit_engine 2b) is continuation's thesis invalidator and it is
+# deliberately UNGATED on P&L — but `BOSTracker.protected_level` starts None and
+# is only set once the trade makes a new CLOSING HIGH past entry. So BOS is
+# structurally BLIND until the trade goes favourable in the underlying, and that
+# blind window is exactly where the 45 max_loss_floor trades die at −29% with
+# MFE +1%.
+#
+# THE LEVEL IS ALREADY COMPUTED AND STORED, and until now was dead in the
+# decision path: continuation_strategy:447/450 stamps
+# `underlying_stop = gap.bottom - 0.5*atr` (long) / `gap.top + 0.5*atr` (short)
+# on every entry, trade_logger:206 persists it, and the ONLY reader was
+# query.py:233 — for display.
+#
+# WHY STRUCTURAL AND NOT A TIGHTER PREMIUM FLOOR: a premium-percent stop on 0DTE
+# measures gamma, not thesis. The floor sweep proved a tighter one nets ~zero
+# because it cuts winners that merely dip (peak is late, drawdown is early).
+# This level is the ENTRY PREMISE INVERTED — continuation enters on a pullback
+# INTO an unfilled 5m FVG expecting resumption, so price closing beyond the far
+# edge plus a half-ATR buffer means the pullback was the reversal continuing.
+#
+# WHY IT DOES NOT REOPEN THE JULY DECISION: `underlying_stop` was rejected as
+# THE exit for two reasons — "a gap fill is NOT trend failure" and "the FVG
+# level is STATIC so it protects nothing once the trade works". Neither applies
+# to a gate that lives ONLY while BOS has no protected level and yields the
+# instant it does. It fills the hole that decision knowingly left; it does not
+# overturn it.
+#
+# ⚠️ THE LEVEL HAS NEVER BEEN READ BY ANYTHING THAT TRADES, so it has no track
+# record. Exits are tagged `insurance_stop` so the cross-day rollup scores this
+# path separately from max_loss_floor and bos_exit — without that split the data
+# this exists to collect is unreadable. Kill switch: OT_CONT_INSURANCE=0.
+CONT_INSURANCE_STOP = os.environ.get(
+    "OT_CONT_INSURANCE", "1").strip().lower() not in ("0", "false", "no", "off")
+
 CONT_BREAKOUT_DIRECTION = os.environ.get(
     "OT_CONT_BREAKOUT_DIRECTION", "1").strip().lower() not in ("0", "false", "no", "off")
 CONT_BREAKOUT_MIN_ADX   = float(os.environ.get("OT_CONT_BREAKOUT_MIN_ADX",

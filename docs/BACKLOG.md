@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.93
+# docs/BACKLOG.md — v3.94
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -82,6 +82,7 @@ BAKED is changing nothing about today's data.
 | **SWP.1 — ungate sweep from regime** | ✅ 08-07 tool | ⬜ | ⬜ **needs the floor + a bake** | operator ruling: sweep is an EVENT, not a regime. Fleet log grep confirmed **zero sweep activity 08-07** — every `Sweep strike:` line was CONTINUATION readiness (`target=0.45` = `TR_CONT_TARGET_DELTA`). `tests/sweep_score_dist.py` v1.0 sets the gate floor from the corpus; proven on planted data. |
 | **SWP.1 — THE UNGATING, BUILT** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.2** (`SWEEP_SETUP_FLOOR` 0.05, `OT_SWEEP_SETUP_FLOOR`), main **v5.6**, sweep_reversal_strategy **v3.3**, `tests/test_sweep_ungated.py` 6 pass incl. a PLTR-guard canary. Deliberate-failure test passed. Sandbox suite 231 passed / 1 skipped (7 failures = missing tastytrade SDK, identical at origin HEAD). **Authoritative suite run on control NOT yet read.** |
 | **CNT.1 — continuation under BREAKOUT** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.3** (`CONT_BREAKOUT_DIRECTION`, `CONT_BREAKOUT_MIN_ADX` 25), main **v5.7**, continuation_strategy direction branch, `tests/test_continuation_breakout.py` 6 pass, deliberate-failure test passed. Tagged `trend_continuation_breakout` so it scores separately. Sandbox 237 passed / 1 skipped. |
+| **CNT.2 — insurance gate (BOS blind window)** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.4** (`CONT_INSURANCE_STOP`), exit_engine **v4.14** (gate 2c), `tests/test_insurance_stop.py` 7 pass, deliberate-failure test passed. Sandbox 244 passed / 1 skipped. Arms the already-stamped `underlying_stop` ONLY while `BOSTracker.protected_level is None`. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
@@ -2524,6 +2525,49 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   It changes what gets traded (the label drives dispatch AND the regime_flip
   exit), so it is the operator's call under the standing division of labour.
 
+- `[DESK]` **CNT.2 — 🟡 SHIPPED-NOT-BAKED. THE INSURANCE GATE FOR CONTINUATION.**
+  Operator's call 2026-08-07: *"BOS being unable to save a trade that went bad
+  out of the gate — that is correct. So we need a smart insurance policy for
+  that situation."*
+  **THE HOLE IS EXACT AND OBSERVABLE.** `BOSTracker.protected_level` starts
+  `None` and is set only when the trade makes a new CLOSING HIGH past entry. So
+  BOS (gate 2b) — continuation's thesis invalidator, deliberately UNGATED on
+  P&L — is structurally BLIND on a trade that goes wrong from the first tick.
+  That is precisely the population that runs to the floor: **45 trades, realized
+  −29%, MFE +1%.**
+  **THE HANDOFF NEEDS NO TIME WINDOW.** 2c arms ONLY while
+  `protected_level is None` and disarms permanently the instant BOS has a level
+  to defend. No overlap, no double jeopardy, no arbitrary N-minute knob — the
+  condition IS the blind window.
+  **THE LEVEL WAS ALREADY COMPUTED AND WAS DEAD CODE.**
+  `continuation_strategy:447/450` stamps
+  `underlying_stop = gap.bottom − 0.5*atr` (long) / `gap.top + 0.5*atr` (short)
+  at entry; `trade_logger:206` persists it; the ONLY reader was `query.py:233`,
+  for display. Zero new telemetry.
+  **STRUCTURAL, NOT PREMIUM-PERCENT — and that is the whole point.** A tighter
+  premium floor was MEASURED to net ≈ −0.15 units because it cuts winners that
+  merely dip (peak is late, drawdown early). This level is the ENTRY PREMISE
+  INVERTED: continuation enters on a pullback INTO an unfilled 5m FVG expecting
+  resumption, so a close beyond the far edge plus a half-ATR buffer means the
+  pullback was the reversal continuing. Reads `iloc[-2]` — the same fully-closed
+  candle BOS reads, so the two gates cannot disagree about what price did.
+  **IT DOES NOT REOPEN THE JULY DECISION.** `underlying_stop` was rejected as
+  THE exit because "a gap fill is NOT trend failure" and "the FVG level is
+  STATIC so it protects nothing once the trade works". Neither objection applies
+  to a gate that lives only while BOS is blind and yields the moment it wakes.
+  This fills the hole that decision knowingly left.
+  **⚠️ THE LEVEL HAS NEVER BEEN READ BY ANYTHING THAT TRADES** — no track
+  record, treat as an untested prior. Exits tag `insurance_stop` so the rollup
+  scores it apart from `max_loss_floor` (45) and `bos_exit` (111). Kill switch
+  `OT_CONT_INSURANCE=0`.
+  **⚠️ MAGNITUDE NOT YET QUANTIFIABLE.** Pricing it needs per-trade replay of 1m
+  tape against the stamped level; stored MFE/MAE cannot answer it. The only
+  anchor is that `bos_exit` trades die at MAE **−5%** against the floor's
+  **−29%**.
+  **BUILD NOTE:** `_bos` construction was hoisted OUT of the `df_1m is not None`
+  guard so 2c cannot reference an unbound name — the same NameError class as
+  defect W. Pinned by a test.
+
 - `[DESK]` **CNT.1 — 🟡 SHIPPED-NOT-BAKED. CONTINUATION MAY NOW FIRE UNDER
   BREAKOUT_VOLATILE.** Operator's call 2026-08-07: *"I want to ungate the
   continuation trade on breakout to gather data. Let's assign it the
@@ -4287,6 +4331,18 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.94 — 2026-08-07 — CNT.2: the insurance gate, covering BOS's blind
+  window.** BOS is already continuation's ungated thesis invalidator, but its
+  tracker has no protected level until the trade first goes favourable — so it
+  cannot reach a trade that fails from the first tick, which is the 45-trade
+  population dying at −29% with MFE +1%. Gate 2c arms the already-stamped
+  `underlying_stop` (dead code until now, read only by query.py) ONLY while
+  `protected_level is None`, making the handoff exact without a time knob.
+  Structural rather than premium-percent, because the floor sweep proved a
+  tighter premium stop nets ~zero by cutting winners that merely dip. Tagged
+  `insurance_stop`. config v4.4, exit_engine v4.14, 7 tests,
+  deliberate-failure test passed. **SHIPPED, NOT BAKED — and the level has never
+  been read by anything that trades, so it is an untested prior.**
 - **v3.93 — 2026-08-07 — CNT.1: continuation ungated on BREAKOUT_VOLATILE, with
   direction supplied by the trend engine.** The bar was never a quality
   judgement — the label carries no direction, so no branch could assign one.

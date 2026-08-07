@@ -1,5 +1,21 @@
 """
 execution/exit_engine.py — Strategy-aware exit logic for all options positions.
+v4.14 — 2026-08-07 — CNT.2 INSURANCE GATE (2c), continuation only. BOS (2b) is
+        the thesis invalidator and is deliberately ungated on P&L, but
+        `BOSTracker.protected_level` is None until the trade makes a new closing
+        high past entry — so BOS is structurally BLIND on a trade that goes
+        wrong from the first tick, and that is exactly the population running to
+        the floor at −29% with MFE +1% (45 trades, 11 sessions). 2c arms the
+        already-stamped `underlying_stop` ONLY while `protected_level is None`
+        and disarms the instant BOS has a level, so the handoff is exact and
+        needs no time window. Structural, not premium-percent: a tighter premium
+        floor was measured to net ~zero because it cuts winners that merely dip.
+        Exits tag `insurance_stop` so the rollup scores it apart from
+        max_loss_floor and bos_exit. `_bos` construction moved OUT of the df_1m
+        guard so 2c cannot reference an unbound name. OT_CONT_INSURANCE=0 to
+        disable. The level has never been read by anything that trades — treat
+        it as an untested prior.
+
 v4.13 — 2026-08-04 — W.2 follow-on: the v4.12 throttle reused the ALERT set,
         so the census classified a debug-only handler as "pages". Own set now.
 v4.12 — 2026-08-04 — W.2: the v4.11 escalation guard was a bare `except: pass`
@@ -271,6 +287,7 @@ from config import (
     PAPER_TRADING, CONTRACT_MULTIPLIER,
     BUTTERFLY_MAX_HOLD_MIN, TRAIL_LOCK_PCT, TRAIL_ACTIVATION_PCT, FVG_MIN_SIZE_PCT,
     THETA_LOOKAHEAD_MIN, RTH_MINUTES, FVG_TRAIL_ARM_PCT, FVG_TRAIL_LOCK_PCT,
+    CONT_INSURANCE_STOP,
     MAX_LOSS_PCT, POST_TARGET_TRAIL_LOCK_PCT, FVG_FLOOR_MAX_LOCK_PCT,
     USE_5M_FVG_TRAIL, SWEEP_POST_TARGET_TRAIL,
     CONTINUATION_EXHAUST_EXT_ATR, CONTINUATION_EXHAUST_MIN_GAIN,
@@ -1365,13 +1382,56 @@ class ExitEngine:
         #     actual structure failure and trails the gain structurally. The FVG
         #     remains the ENTRY (proven repeatedly on 2026-07-31); it is not the
         #     exit.
+        # v4.14 — `_bos` is created unconditionally so gate 2c can read its
+        # `protected_level`. Previously it was constructed inside the df_1m
+        # guard; leaving it there would make 2c reference an unbound name on a
+        # tick with no 1m frame — the same NameError class as defect W.
+        _bos = self._get_bos_tracker(trade_id, str(record.get("direction", "")).lower(),
+                                     float(record.get("underlying_entry", 0.0) or 0.0))
         if df_1m is not None:
-            _bos = self._get_bos_tracker(trade_id, str(record.get("direction", "")).lower(),
-                                         float(record.get("underlying_entry", 0.0) or 0.0))
             if _bos.update(df_1m):
                 decision.should_exit = True
                 decision.exit_reason = f"bos_exit pnl={pnl_pct:.1%}"
                 return decision
+
+        # 2c. INSURANCE (v4.14, CNT.2) — the ONLY gate that covers BOS's blind
+        #     window. `BOSTracker.protected_level` starts None and is set only
+        #     when the trade makes a new CLOSING HIGH past entry, so 2b above
+        #     cannot fire on a trade that went wrong from the first tick — which
+        #     is precisely the population that runs to the floor at −29% with
+        #     MFE +1%.
+        #
+        #     ARMED ONLY WHILE `protected_level is None`, so the handoff is
+        #     EXACT and needs no time window: the instant BOS has a level to
+        #     defend, BOS owns the trade and this disarms permanently. No
+        #     overlap, no double jeopardy.
+        #
+        #     THE LEVEL IS STRUCTURAL, NOT PREMIUM. `underlying_stop` is stamped
+        #     at entry by continuation_strategy:447/450 as
+        #     gap.bottom − 0.5*atr (long) / gap.top + 0.5*atr (short) and until
+        #     now was read ONLY by query.py for display. A premium-percent stop
+        #     on 0DTE measures gamma, not thesis — the floor sweep proved a
+        #     tighter one nets ~zero because it cuts winners that merely dip.
+        #     This is the ENTRY PREMISE INVERTED: continuation enters on a
+        #     pullback INTO an unfilled 5m FVG expecting resumption, so a close
+        #     beyond the far edge plus a half-ATR buffer means the pullback was
+        #     the reversal continuing.
+        #
+        #     Uses iloc[-2] — the last FULLY CLOSED 1m candle — the same bar BOS
+        #     reads, so the two gates can never disagree about what price did.
+        if (CONT_INSURANCE_STOP and df_1m is not None and len(df_1m) >= 2
+                and _bos.protected_level is None):
+            _ins = float(record.get("underlying_stop", 0.0) or 0.0)
+            if _ins > 0:
+                _dirn = str(record.get("direction", "")).lower()
+                _close = float(df_1m["close"].iloc[-2])
+                _broke = (_close < _ins) if _dirn == "long" else (_close > _ins)
+                if _broke:
+                    decision.should_exit = True
+                    decision.exit_reason = (
+                        f"insurance_stop pnl={pnl_pct:.1%} "
+                        f"close={_close:.2f} lvl={_ins:.2f}")
+                    return decision
 
         # 3. HARD FLOOR — 25% premium loss (v4.0; was the blanket 40%).
         #    Disaster backstop only: regime-flip above is the real stop and
