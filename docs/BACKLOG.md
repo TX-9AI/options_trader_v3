@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.90
+# docs/BACKLOG.md — v3.91
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -79,6 +79,7 @@ BAKED is changing nothing about today's data.
 | **RGM.2 — Layer-1 discrimination census** | ✅ 08-07 | ⬜ | n/a (offline, read-only) | `tests/discrimination_census.py` v1.0; every planted count recovered exactly (101 dead / 50 one-live / 30 tight-gap / 20 wide-gap). **NOT YET RUN on the corpus.** |
 | **RGM.1 F7 — MEASURED END TO END** | ✅ 08-07 | ✅ 08-07 | ⬜ **needs a bake** | real-tape A/B on 08-06: **20.8 → 4.2 switches/symbol-day**, `L1 IDENTICAL`, re-emitted baseline 661 on BOTH files (conviction dynamics unchanged). Agreement gate over 19 sessions: TREND modal **63.4→69.1%**, in-family **47.5→57.8%**. Suite 287/rc=0. Evidence archived to `~/evidence_rgm1_20260806/` |
 | **MEM.1 — SPX leak: confirmed and traced** | ✅ 08-07 | ⬜ | ⬜ **needs an RTH run** | two-sample fleet RSS: 14 boxes flat (MU −1.9 MB, NVDA −4.5 MB), **SPX +93.5 MB in 16.4 min = 5.7 MB/min**; QQQ control **+8 KB**. `tests/mem_tracer.py` v1.0 built; diff machinery proven on a planted 10 MB leak. |
+| **SWP.1 — ungate sweep from regime** | ✅ 08-07 tool | ⬜ | ⬜ **needs the floor + a bake** | operator ruling: sweep is an EVENT, not a regime. Fleet log grep confirmed **zero sweep activity 08-07** — every `Sweep strike:` line was CONTINUATION readiness (`target=0.45` = `TR_CONT_TARGET_DELTA`). `tests/sweep_score_dist.py` v1.0 sets the gate floor from the corpus; proven on planted data. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
@@ -2521,6 +2522,61 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   It changes what gets traded (the label drives dispatch AND the regime_flip
   exit), so it is the operator's call under the standing division of labour.
 
+- `[DESK]` **SWP.1 — 🔴 OPEN. SWEEP MUST STOP GATING ON REGIME.** Operator
+  ruling 2026-08-07: *"Sweep isn't a regime. The trade should only require a
+  move into a named liquidity pool/level, accompanied by a rejection or
+  exhaustion. I never asked for a regime called 'sweep'."*
+  **THE RULING IS RIGHT AND THREE INDEPENDENT LINES ALREADY SAID SO:**
+  `auto_label` treats SWEEP as a SINGLE-EVENT tag; `label_agreement`'s own notes
+  record that BREAKOUT and SWEEP are "single-event properties, not
+  session-dominant states"; and the census has SWEEP winning **0.4% of live
+  ticks** with **96% exact zeros**. A regime is a persistent condition of the
+  tape; a sweep is a thing that happens at 10:47. Filing it as a regime was a
+  category error, and the 96% zero rate is what that error looks like in data.
+  **THE TRADE IS GATED TWICE**, both on the label: `main.py` ~1325
+  (`regime.primary_regime == Regime.SWEEP_REVERSAL`) and
+  `sweep_reversal_strategy.py:121`. And it sits at Priority 2.5 behind
+  `if signal is None`, so ORB and Continuation both get first refusal.
+  **F7 NARROWED IT FURTHER — a predictable cost of the emission fix.** Under
+  v2.0 the label could flip to SWEEP on a momentary argmax at conviction 0.05;
+  under v2.1 a challenger needs 0.65 AND a 0.12 margin, which a regime scoring
+  zero 96% of the time will rarely reach. The agreement gate's one recorded
+  debit — SWEEP in-family falling 3.5% → 1.3% — was the leading indicator, and
+  it was explained away rather than heeded.
+  **⚠️ THE PLTR PROTECTION IS INSIDE THE SCORE, NOT THE STRATEGY.**
+  `regime_confluence.py:680` computes `trend_opp = 1.0 - (opp_adx * opp_mom)`
+  and passes it as `soft_necessary`. Fully opposed → 0 → SWEEP annihilated →
+  label never commits → gate never opens. **So the regime gate is currently
+  CARRYING the trend-opposition protection** from the 07-27 PLTR incident
+  (shorted a +7.2% up-trending tape, −27.8%). Remove the gate without
+  relocating it and that failure mode returns. NON-NEGOTIABLE.
+  **HOW — use the L1 `_sweep` SCORE as the gate AND the conviction, without
+  requiring it to win the argmax.** `_sweep` already computes exactly the
+  operator's condition set: named-level match, `rejq_val`, `exh_val`,
+  `age_decay`, `trend_opp`. `main.py` already computes the full confluence every
+  tick, so the score and breakdown are ALREADY IN HAND — passing them costs
+  nothing. That solves all three dependencies at once: trend_opp travels WITH
+  the score, the strategy gets its own setup conviction for
+  `_sweep_target_delta` (today it reads `regime.conviction`, which after
+  ungating would be the AMBIENT regime's conviction — a nonsense input to sweep
+  strike selection), and the label gate disappears.
+  **⚠️ THE FLOOR MUST COME FROM DATA.** The old gate was effectively "wins the
+  argmax". Post-excavation pooled sweeps were WEAK (old max 0.125), so a
+  0.55-style floor blocks everything and 0.05 fires on noise.
+  `tests/sweep_score_dist.py` v1.0 prints the nonzero-score distribution and
+  what each candidate floor would admit, in ticks and in symbol-days. Ship the
+  choice as a stated PRIOR behind `OT_SWEEP_SETUP_FLOOR` (operator's category 1
+  — set a baseline where none exists), not as a fit.
+  **⚠️ SECOND DEFECT FOUND IN THE SAME LOG SWEEP, unrelated to the gate:**
+  `select_sweep_strike` logs `band empty->nearest` constantly and lands on
+  deltas from **0.19 to 0.55** against a 0.45 target, because
+  `SWEEP_DELTA_TOLERANCE = 0.04` is empty on most chains. That is degrading
+  CONTINUATION staged picks today and will degrade sweep the moment it fires.
+  **⚠️ A LOG LINE THAT LIES:** `select_sweep_strike` is a SHARED selector and its
+  message names the FUNCTION, not the caller — so continuation's staged picks
+  emit thousands of lines a day reading "Sweep strike:". Rename it or add the
+  caller. It cost a wrong conclusion in this very session.
+
 - `[DESK]` **MEM.1 — 🔴 OPEN. THE SPX OPTIONSBOT LEAK IS REAL, ISOLATED AND
   MEASURED.** Two option-14 RSS samples 16.4 minutes apart, 15 boxes:
   **fourteen FLAT** — most moved by kilobytes, and MU **−1.9 MB** / NVDA
@@ -4142,6 +4198,19 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.91 — 2026-08-07 — SWP.1 opened: sweep stops being a regime.** Operator
+  ruling that sweep is an event, not a market state — confirmed by three
+  independent lines already in the record. A fleet log grep proved ZERO sweep
+  activity for the session; every `Sweep strike:` line came from CONTINUATION
+  readiness through a shared selector whose log message names the function
+  rather than the caller (`target=0.45` = `TR_CONT_TARGET_DELTA`). Design
+  settled: gate on the L1 `_sweep` SCORE rather than the committed label, which
+  keeps the PLTR trend-opposition protection inside the score where it already
+  lives and gives the strategy its own setup conviction. Floor to be set from
+  `tests/sweep_score_dist.py` v1.0 and shipped as a stated prior behind
+  `OT_SWEEP_SETUP_FLOOR`. Two adjacent defects filed: an empty delta band
+  landing picks from 0.19 to 0.55, and a log line that misattributes continuation
+  work to sweep. **TOOL BUILT; the change is NOT written and NOT baked.**
 - **v3.90 — 2026-08-07 — MEM.1: the SPX leak is confirmed, isolated to one box,
   and now has a tracer.** Fourteen boxes flat over 16.4 minutes (two of them
   falling); SPX +93.5 MB = 5.7 MB/min, with QQQ at +8 KB as the control that
