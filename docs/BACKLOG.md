@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.87
+# docs/BACKLOG.md — v3.88
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -76,6 +76,7 @@ BAKED is changing nothing about today's data.
 | **RGM.1 probe — RANGING fallback run lengths** | ✅ 08-06 | ⬜ | n/a (offline, read-only) | `tests/rng_probe.py` v1.0; proven on a planted corpus with known run lengths (5/5 runs, histogram, warm-up/mid split, gap classification, implied crossings) before issue. **NOT YET RUN on the real corpus — that run is the deliverable, not this file.** |
 | **RGM.1 — emission-law attribution + counterfactual** | ✅ 08-06 | ⬜ | n/a (offline, read-only) | `tests/emission_law_sweep.py` v1.0; harness **99.9%** faithful against the REAL integrator on a planted one-change world, where the current law gives **141.5 switches/symbol-day** and protect-below-hold gives **1.0** — a cliff, not the delta sweep's slope. **NOT YET RUN on the real corpus.** |
 | **RGM.1 F7 — the emission fix + live A/B** | ✅ 08-06 | ⬜ | ⬜ **needs a bake** | conviction_integrator **v2.1**, main **v5.5**, `tests/test_emission_protection.py` (7 pass, incl. a v2.0 control that MUST flip), `tests/label_agreement.py` v1.0. Sandbox suite **224 passed / 1 skipped**; 8 collection failures are the missing `tastytrade` SDK and are IDENTICAL at origin HEAD. **Authoritative suite run happens on control as part of the deploy — not yet read.** |
+| **RGM.2 — Layer-1 discrimination census** | ✅ 08-07 | ⬜ | n/a (offline, read-only) | `tests/discrimination_census.py` v1.0; every planted count recovered exactly (101 dead / 50 one-live / 30 tight-gap / 20 wide-gap). **NOT YET RUN on the corpus.** |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -2431,6 +2432,58 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   It changes what gets traded (the label drives dispatch AND the regime_flip
   exit), so it is the operator's call under the standing division of labour.
 
+- `[DESK]` **RGM.2 — 🔴 OPEN. THE LAYER-1 DISCRIMINATION PROBLEM.** F7 stops the
+  LABEL thrashing; it does nothing about the EVIDENCE the label is chosen from.
+  The operator's framing and it is the right one: recognition is fast but it is
+  not DISCRIMINATING, and a stable label chosen from an undiscriminating vector
+  is still a guess — just a steadier one.
+  **THE MECHANISM IS THE GRAMMAR.** A hard veto at 0 does not merely lower a
+  score, it **destroys the ordering**: every vetoed regime lands on the same
+  value, so two regimes at 0.00 are not "weak by different amounts", they are
+  indistinguishable. F3 already showed 45.7-96.0% of scores sit at exactly 0
+  per regime; what is NOT yet known is the property of the VECTOR — on a given
+  tick, is there anything to choose between?
+  **HOW (step 0, built 08-07, NOT YET RUN):** `tests/discrimination_census.py`
+  v1.0 reads the `scores` block already in the corpus — no engine run. Reports
+  (1) DEAD TICKS, all six at exactly 0, where the label falls to
+  `_TIEBREAK_ORDER` whose head is SWEEP_REVERSAL, a regime above zero on 4% of
+  ticks — a material share here is the same family of silent defect as the
+  case-mismatch gate that made L2 unreachable for weeks; (2) zero-argmax ticks;
+  (3) SEPARATION, the #1−#2 gap, computed with dead ticks EXCLUDED so a
+  degenerate vector cannot masquerade as a close contest; (4) live regimes per
+  tick. Proven on planted data with every count recovered exactly.
+  **HOW (step 0b, NOT BUILT):** the conviction distribution AT ENTRY, from the
+  signal journal. L3 gates on conviction, so if entries only fire high the
+  undiscriminated half of the session is already being declined and the harm is
+  bounded; if entries fire near 0.3 the gates are not protecting and this
+  jumps the queue. **This is the number that sets RGM.2's priority.**
+  **THE THREE FIX FAMILIES, once the census names the shape:**
+  **A — targeted veto softening** (floor or steep ramp instead of
+  annihilation), which preserves ordering. Must be SELECTIVE and evidenced per
+  veto: REGIME_TRUTHS §0 holds that premium regimes deliberately keep mass in
+  vetoes because the expensive error is CLAIMING the regime, and the v1.3
+  excavation already proved a blanket re-slot backfires (COMPRESSION scored
+  0.25 on wide-band RANGE tape). Small enough to land pre-freeze IF one or two
+  vetoes dominate.
+  **B — change the accumulation seam.** `_combine()` is the SINGLE seam all
+  five scorers route through, so log-odds / noisy-OR is a one-function change,
+  not another excavation: a strong negative becomes a large negative
+  contribution rather than an annihilator and the vector stays ordered. This is
+  closest to the 07-27 intent — "a departure from Boolean architecture toward a
+  truly conviction-scaled consensus model". **POST-FREEZE.**
+  **C — split into AXES** rather than six mutually-exclusive labels. A2.R
+  established cross-horizon co-occurrence is a REAL state, so forcing one
+  argmax collapses a truth the tape supports. Emit trendiness / volatility
+  expansion / location and let each strategy gate on the axis it needs.
+  Architectural — realistically **POST-GO-LIVE**.
+  **⚠️ CALENDAR HONESTY:** B and C are not landing before 08-31. Only the
+  census, step 0b, and possibly a narrow A fit before the freeze.
+  **⚠️ WHAT THE CENSUS CANNOT SAY:** not that the scores are WRONG. A veto
+  that fires often may be correctly describing a condition that genuinely comes
+  and goes. It measures whether there is information to RANK with;
+  `label_agreement.py` asks whether the ranking is right, and
+  `veto_attribution.py` asks which veto did it.
+
 - `[DESK]` **Level.1 — hierarchy + Overnight High/Low, build on the TESTER** (queued 07-24).
   Add `overnight_high`/`overnight_low` (extremes across the Asia+London span) to
   LiquidityMap as a named tier; replace the flat `is_named` bool with graded
@@ -3955,6 +4008,17 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.88 — 2026-08-07 — RGM.2 opened: the Layer-1 discrimination problem gets
+  a tool before it gets an opinion.** F7 fixed WHICH label is emitted; RGM.2 is
+  about whether the score vector carries enough information to choose one at
+  all. The insight that makes it measurable: a hard veto does not lower a
+  score, it destroys the ORDERING, so the question is not per-regime zero rates
+  (already known) but whether a given TICK has anything to choose between.
+  `tests/discrimination_census.py` v1.0 answers it off the existing corpus with
+  no engine run — dead ticks, zero-argmax ticks, #1−#2 separation with dead
+  ticks excluded, and live-regime count. Filed with three fix families ranked
+  by surgicality and an honest calendar: only the census and a narrow veto fix
+  fit before the freeze. **BUILT, NOT YET RUN.**
 - **v3.87 — 2026-08-06 — RGM.1 F7: the unprotected branch is closed, behind a
   live A/B.** `conviction_integrator` v2.1 applies commit+margin in both
   branches and holds the incumbent when nothing qualifies, restoring the
