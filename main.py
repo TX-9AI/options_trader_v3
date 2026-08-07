@@ -1,5 +1,17 @@
 """
-main.py — options_trader v5.7
+main.py — options_trader v5.8
+v5.8 — 2026-08-07 — MEM.2: in-process tracemalloc, gated by OT_MEM_TRACE.
+        The standalone probe failed FOUR times in an afternoon and never once
+        for a reason about memory — wrong box, un-pulled file, `tmux sh -c`
+        inheriting neither .bashrc nor the unit environment (so no credentials
+        and OT_INSTRUMENT defaulting to QQQ on the SPX box), and finally an
+        `xargs env` workaround that echoed every secret to the terminal. All
+        four are the same root cause: a second process cannot easily inherit the
+        trading environment. **The bot already has it.**
+        Costs one bool test per tick when off; tracemalloc is not even imported.
+        ⚠️ When ON it adds ~10-30% memory overhead, which on a 951 MB box is
+        itself a risk — enable on the RESIZED SPX box only, never fleet-wide.
+
 v5.7 — 2026-08-07 — CNT.1: CONTINUATION DISPATCH OPENED TO BREAKOUT_VOLATILE.
         Operator's call, to gather data. The bar was structural, not a quality
         judgement: continuation derives DIRECTION from the label, and
@@ -505,6 +517,7 @@ _l1_scorer   = RegimeConfluenceScorer() if _L2_OK else None
 _l2_integ    = ConvictionIntegrator() if _L2_OK else None
 # v5.5 — last (live, shadow) emission pair, so the A/B logs on CHANGE only.
 _l2_ab: dict = {}
+
 # v5.0 — the last label L2 actually committed, held across stale ticks so the bot
 # never swaps the smoother for the raw classifier mid-position. `since` is set on
 # the first stale tick of a stretch and cleared on recovery, purely so a long
@@ -539,6 +552,14 @@ if TYPE_CHECKING:                     # v4.9 — resolves the quoted annotation 
 from strategy.orb_strategy import ORBStrategy
 from strategy.sweep_reversal_strategy import SweepReversalStrategy
 from config import SWEEP_SETUP_FLOOR
+from utils import mem_trace          # MEM.2 — in-process tracemalloc, env-gated
+
+# MEM.2 — start at import. Deliberately placed BELOW this import and not
+# beside the engine banner higher up: `_l2_ab` and the banner both live
+# above the import block, so a call there is an unbound name. The
+# undefined-name gate caught exactly that on the first attempt.
+# No-op unless OT_MEM_TRACE is set; tracemalloc is not imported otherwise.
+mem_trace.start(logger)
 from strategy.butterfly_strategy import ButterflyStrategy
 from strategy.iron_condor_strategy import IronCondorStrategy
 from strategy.continuation_strategy import ContinuationStrategy
@@ -723,6 +744,7 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
                 # the divergence pair, never per tick — a per-tick line is spam,
                 # not observability (WORKING_AGREEMENT §17). Observational: the
                 # shadow gates nothing and is never read to trade.
+                mem_trace.tick(logger)   # MEM.2 — no-op unless OT_MEM_TRACE
                 _ab = (st.regime, st.shadow_regime)
                 if st.shadow_regime and _ab != _l2_ab.get("pair"):
                     _l2_ab["pair"] = _ab

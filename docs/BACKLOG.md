@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.98
+# docs/BACKLOG.md — v3.99
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -97,6 +97,7 @@ BAKED is changing nothing about today's data.
 | **RGM.3 — sweep leaves the regime set** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | conviction_integrator **v2.2**; `INTEGRATED_REGIMES` 6→5, tie-break head SWEEP→BREAKOUT_VOLATILE, RegimeParams row removed. Scorer UNTOUCHED (SWP.1 depends on it). `tests/test_sweep_not_a_regime.py` 6 pass, deliberate-failure verified. Sandbox 250 passed / 1 skipped. |
 | **DRF.1 — trigger-conditioned drift + ORB positive control** | ✅ 08-07 | ⬜ | n/a (offline) | `tests/trigger_drift.py` v1.0; planted proof separated a +0.02%/bar window (ORB Long median +0.200%, 100% positive) from noise (−0.010%) against a null arm at 0.000%, 40/40 triggers matched through the UTC→ET conversion. **NOT YET RUN on the real corpus.** |
 | **SWP.2 + CNT.3 — the two Tier-1 priors** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.5**, sweep_reversal_strategy **v3.4**, continuation branch. `tests/test_tier1_priors.py` 6 pass, deliberate-failure verified. Sandbox 256 passed / 1 skipped. Both are PRIORS carried by mechanism, not fits. |
+| **MEM.2 — in-process tracemalloc** | ✅ 08-07 | ⬜ | ⬜ **SPX only, needs a bake** | `utils/mem_trace.py` v1.0 + main **v5.8**; env-gated `OT_MEM_TRACE`, one bool test per tick when off. mem_tracer v1.1 gets the symbol banner + empty-fetch abort. Sandbox 256 passed / 1 skipped. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
 
@@ -4482,6 +4483,23 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.99 — 2026-08-07 — MEM.2: the memory tracer moves INSIDE the bot.** The
+  standalone probe failed four times in one afternoon and not once for a reason
+  about memory — wrong box, un-pulled file, `tmux sh -c` inheriting neither
+  .bashrc nor the systemd unit environment (no credentials, and OT_INSTRUMENT
+  defaulting to QQQ on the SPX box), and an `xargs env` workaround that echoed
+  every secret to the terminal. One root cause: a second process cannot easily
+  inherit the trading environment, and **the bot already has it**.
+  `utils/mem_trace.py` is env-gated by `OT_MEM_TRACE`, costs one bool test per
+  tick when off, and takes a WARM reference before diffing so first-tick caches
+  are not reported as growth. It also says so explicitly when RSS climbs while
+  traced memory does not — that divergence means the leak is not in Python
+  objects and tracemalloc cannot see it.
+  ⚠️ tracemalloc adds ~10-30% memory overhead, which on a 951 MB box is itself a
+  risk: **SPX only, which is why it was resized first.** Never fleet-wide.
+  main v5.8. mem_tracer v1.1 finally gets the symbol banner and the empty-fetch
+  abort that were flagged after the FIRST failed run and not shipped — that gap
+  then cost two more runs.
 - **v3.98 — 2026-08-07 — THE SLIP IS NOW IN THE SCHEDULE, not just in the
   changelog.** v3.95 recorded the DECISION; the dated plan still read the old
   one, so `evm_status.py` would have briefed the wrong PV and every overdue count

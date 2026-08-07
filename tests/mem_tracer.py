@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-tests/mem_tracer.py — v1.0 — 2026-08-07
+tests/mem_tracer.py — v1.1 — 2026-08-07
 
 Names the ALLOCATION SITE behind the SPX leak, instead of guessing at it.
 
@@ -48,6 +48,13 @@ USAGE (on the SPX box, RTH, with optionsbot stopped or the box resized)
     python3 tests/mem_tracer.py --ticks 20 --interval 5 --no-snapshot
 
 CHANGELOG
+  v1.1 — 2026-08-07 — prints the SYMBOL on line one, and ABORTS after 3 empty
+         fetches instead of producing a meaningless table. Both were flagged
+         after the first failed run and not shipped; the same gap then cost two
+         more runs. Superseded for live use by MEM.2 (utils/mem_trace.py),
+         which runs INSIDE the bot and so cannot have the environment problem
+         at all — this file remains useful only where the environment is
+         already correct.
   v1.0 — 2026-08-07 — first issue, after the two-sample RSS trace confirmed the
          leak is real, SPX-only and ~5.7 MB/min. Built to name a line rather
          than re-litigate `_fetch_current_premium`, which prior work already
@@ -108,8 +115,18 @@ def main(argv) -> int:
         print("re-run. Override with --min-avail-mb 0 only if you mean it.")
         return 0
 
+    # v1.1 — ANNOUNCE THE SYMBOL ON LINE ONE. v1.0 ran on the SPX box against
+    # QQQ (OT_INSTRUMENT was unset under `tmux sh -c`) and the only clue was an
+    # error three lines down. A wrong-instrument run must be obvious immediately.
+    try:
+        from config import INSTRUMENT
+        print(f"TRACING SYMBOL: {INSTRUMENT}   (from OT_INSTRUMENT)")
+    except Exception as e:                                       # noqa: BLE001
+        print(f"could not resolve INSTRUMENT: {e}")
+
     from data.options_chain import get_chain_fetcher
     fetcher = get_chain_fetcher()
+    _empty = 0
     compute_gex = None
     if not a.no_gex:
         from data.gex_data import compute_gex
@@ -131,8 +148,21 @@ def main(argv) -> int:
                 if not a.no_snapshot:
                     from analysis.chain_snapshot import snapshot as csnap
                     csnap(chain, underlying_price=price, regime=None)
+            if chain is None:
+                _empty += 1
         except Exception as e:                                   # noqa: BLE001
             print(f"  tick {i}: call failed: {e}")
+            _empty += 1
+        # v1.1 — ABORT ON REPEATED EMPTY FETCHES. v1.0 looped 40 times against a
+        # dead fetcher and printed a plausible-looking table that meant nothing —
+        # the same laundered-output failure this repo keeps catching elsewhere.
+        if _empty >= 3:
+            print(f"\nABORTING after {_empty} empty/failed fetches — no chain is "
+                  "reaching this process, so nothing below would mean anything.")
+            print("Check: right box? RTH? OT_INSTRUMENT and TT_* present in THIS "
+                  "process (a tmux `sh -c` inherits neither .bashrc nor the "
+                  "systemd unit environment)?")
+            return 0
 
         cur, _peak = tracemalloc.get_traced_memory()
         note = ""
