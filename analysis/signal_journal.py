@@ -1,5 +1,16 @@
 """
 analysis/signal_journal.py — signal-time instrumentation (LOG-ONLY, never trades).
+v1.2 — 2026-08-07 — N.7: every row carries `ruleset`, the short commit this
+        process is running. Resolved ONCE at import — a `git rev-parse` per
+        journal line would put a subprocess in the trading loop, and a process
+        runs one ruleset for its whole life anyway.
+        WHY: every cross-date analysis of these rows has been pooling decisions
+        from different engines with no way to say so. L3.2a could only emit
+        `decision_hash: null`; the same gap was named on 07-29 about engine
+        identity. Falls back to "unknown" rather than a partial hash — a wrong
+        hash is worse than an absent one because it looks attributable.
+        Log-only, no trading behaviour touched.
+
 v1.1 — 2026-07-31 — N.2 + N.3: signal_ctx now carries `rrr` (reward:risk from the
         underlying levels, None when levels are absent — NOT 0.0, since "no stop"
         and "worst possible trade" must stay distinguishable), plus sweep-only
@@ -215,6 +226,46 @@ def macro_ctx(macro) -> dict:
         return None
 
 
+# ── v1.2 — RULESET STAMP (N.7) ────────────────────────────────────────────────
+# Every analysis that pools journal rows across dates is pooling DECISIONS FROM
+# DIFFERENT ENGINES, and until now nothing recorded which. 2026-08-07 alone
+# changed the emission law (conviction_integrator v2.2), the regime set (sweep
+# left the argmax), two dispatch gates (SWP.1, CNT.1), an exit gate (CNT.2) and
+# two floors (SWP.2, CNT.3). A rejection ledger or gate calibration spanning
+# that window averages six rulesets and cannot say so.
+#
+# This is the same gap named on 2026-07-29 about ENGINE IDENTITY, where the fix
+# proposed then was exactly this: stamp the producer onto the row so quarantine
+# becomes a WHERE clause instead of a 15-box log archaeology dig. L3.2a hit it
+# again from the other side and could only emit `decision_hash: null`.
+#
+# Resolved ONCE at import, not per row: `git rev-parse` per journal line would
+# add a subprocess to the trading loop, which is exactly the kind of cost that
+# does not belong there. A process runs one ruleset for its whole life, so
+# import time is the correct and only moment this can change.
+# "unknown" when git is unavailable — NEVER a fabricated or partial hash, since
+# a wrong hash is worse than an absent one: it would silently pool engines while
+# LOOKING attributable.
+def _resolve_ruleset() -> str:
+    try:
+        import subprocess                                        # noqa: PLC0415
+        r = subprocess.run(
+            ["git", "-C", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+             "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5)
+        return (r.stdout or "").strip() or "unknown"
+    except Exception:                                            # noqa: BLE001
+        return "unknown"
+
+
+_RULESET = _resolve_ruleset()
+
+
+def ruleset() -> str:
+    """The commit this process is running. Stamped on every journal row."""
+    return _RULESET
+
+
 def journal(event: str, **sections):
     """
     Append one JSONL event line. Swallows ALL exceptions — a journal failure
@@ -225,7 +276,8 @@ def journal(event: str, **sections):
         now = datetime.now(tz=ET)
         row = {"ts_et": now.isoformat(timespec="seconds"),
                "symbol": _SYMBOL,
-               "event": event}
+               "event": event,
+               "ruleset": _RULESET}   # v1.2 — which engine made this decision
         for k, v in sections.items():
             if v is not None:
                 row[k] = v

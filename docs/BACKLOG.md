@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.01
+# docs/BACKLOG.md — v4.02
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -100,6 +100,7 @@ BAKED is changing nothing about today's data.
 | **MEM.2 — in-process tracemalloc** | ✅ 08-07 | ⬜ | ⬜ **SPX only, needs a bake** | `utils/mem_trace.py` v1.0 + main **v5.8**; env-gated `OT_MEM_TRACE`, one bool test per tick when off. mem_tracer v1.1 gets the symbol banner + empty-fetch abort. Sandbox 256 passed / 1 skipped. |
 | **GATE.1 — label_agreement v1.1** | ✅ 08-07 | ⬜ | n/a (offline) | each tag scored over ITS OWN timeframe: TREND whole-session, PIN last hour, BREAKOUT/SWEEP **NOT SCORED** (single-event tags, no breach timestamp). v1.0's PIN 8.9% / BREAKOUT 2.8% / SWEEP 0.0% are RETRACTED. |
 | **L3.2a — rejection ledger** | ✅ 08-07 build | ⬜ | n/a (offline) | `analysis/rejection_ledger.py` v1.0 + 3 tests, deliberate-failure verified. Planted proof: vwap blocking longs into a falling tape → 100% DODGED; rrr blocking shorts → 100% MISSED. **NOT YET RUN on the real journals.** |
+| **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
 
@@ -4485,6 +4486,31 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.02 — 2026-08-07 — N.7: journal rows now say which engine made the
+  decision.** Every cross-date analysis of these rows has been pooling decisions
+  from different rulesets with no way to declare it — L3.2a could only emit
+  `decision_hash: null`, and the same gap was named on 07-29 about engine
+  identity, where this was the fix proposed and not built. 08-07 alone changed
+  the emission law, the regime set, two dispatch gates, an exit gate and two
+  floors. `signal_journal` v1.2 stamps `ruleset` on every row, resolved ONCE at
+  import — a `git rev-parse` per line would put a subprocess in the trading
+  loop, and a process runs one ruleset for its whole life anyway. Falls back to
+  `"unknown"` rather than a partial hash: a wrong hash is worse than an absent
+  one because it looks attributable. Log-only.
+  **⚠️ IT ONLY APPLIES FORWARD.** Every row banked before this deploy has no
+  ruleset, so the 12-session history stays un-attributable. L3.2a's cross-date
+  totals keep their caveat until a week of stamped rows exists.
+  **⚠️ AND L3.2a's FIRST RUN NEEDS A NULL ARM BEFORE IT IS QUOTED.** 2,451 rows:
+  retest_near_miss 73% MISSED, invalid_signal 63%, scored:REJECT 78%,
+  sizing_rejected 53% — all majority MISSED, which looks like every gate is too
+  tight. But MFE >= 0.10% over 20 bars is a bar ordinary intraday range clears
+  most of the time, and the ledger has NO NULL — the same omission that made
+  `a2_cooccurrence` unreadable until ORB gave it a positive control. **Read the
+  MFE/MAE RATIO instead:** retest_near_miss 1.04 and invalid_signal 0.91 are
+  SYMMETRIC (noise, 2,271 of the rows); `sizing_rejected` is **0.15** — adverse
+  excursion 6.5x favourable, genuinely dodging damage despite its 53% label; and
+  `scored:REJECT` at **1.31** is the only real too-tight candidate (n=142).
+  v1.1 owes a seeded random arm and the ratio as headline.
 - **v4.01 — 2026-08-07 — L3.2a: the rejection ledger, the first look at what the
   system DECLINED.** Every measurement so far — never-favourable, the floor
   sweep, trigger drift, excursions — reads only trades that FIRED, so none can
