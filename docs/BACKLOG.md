@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.99
+# docs/BACKLOG.md — v4.00
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -98,6 +98,7 @@ BAKED is changing nothing about today's data.
 | **DRF.1 — trigger-conditioned drift + ORB positive control** | ✅ 08-07 | ⬜ | n/a (offline) | `tests/trigger_drift.py` v1.0; planted proof separated a +0.02%/bar window (ORB Long median +0.200%, 100% positive) from noise (−0.010%) against a null arm at 0.000%, 40/40 triggers matched through the UTC→ET conversion. **NOT YET RUN on the real corpus.** |
 | **SWP.2 + CNT.3 — the two Tier-1 priors** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.5**, sweep_reversal_strategy **v3.4**, continuation branch. `tests/test_tier1_priors.py` 6 pass, deliberate-failure verified. Sandbox 256 passed / 1 skipped. Both are PRIORS carried by mechanism, not fits. |
 | **MEM.2 — in-process tracemalloc** | ✅ 08-07 | ⬜ | ⬜ **SPX only, needs a bake** | `utils/mem_trace.py` v1.0 + main **v5.8**; env-gated `OT_MEM_TRACE`, one bool test per tick when off. mem_tracer v1.1 gets the symbol banner + empty-fetch abort. Sandbox 256 passed / 1 skipped. |
+| **GATE.1 — label_agreement v1.1** | ✅ 08-07 | ⬜ | n/a (offline) | each tag scored over ITS OWN timeframe: TREND whole-session, PIN last hour, BREAKOUT/SWEEP **NOT SCORED** (single-event tags, no breach timestamp). v1.0's PIN 8.9% / BREAKOUT 2.8% / SWEEP 0.0% are RETRACTED. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
 
@@ -4483,6 +4484,17 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.00 — 2026-08-07 — GATE.1: the acceptance gate stops asking the wrong
+  question of three of its four tags.** v1.0 scored every tag against the
+  SESSION-MODAL label, but only TREND is a whole-session characterisation. PIN
+  is a LAST-HOUR property, so a day that trended from the open and coiled into
+  the close was counted as a miss. BREAKOUT and SWEEP are SINGLE-EVENT tags and
+  are now reported **NOT SCORED** — scoring them needs a breach timestamp that
+  `session_labels.jsonl` does not carry, and a wrong number is worse than none.
+  **v1.0's PIN 8.9% / BREAKOUT 2.8-6.4% / SWEEP 0.0% are RETRACTED** — they were
+  the tool's error, not the engine's, and they were quoted once before that was
+  caught. TREND's numbers (63.4% → 69.1% modal, 47.5% → 57.8% in-family) are
+  UNAFFECTED, so the F7 verdict they carried still stands.
 - **v3.99 — 2026-08-07 — MEM.2: the memory tracer moves INSIDE the bot.** The
   standalone probe failed four times in one afternoon and not once for a reason
   about memory — wrong box, un-pulled file, `tmux sh -c` inheriting neither

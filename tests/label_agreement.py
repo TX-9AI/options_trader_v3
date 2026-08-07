@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-tests/label_agreement.py — v1.0 — 2026-08-06
+tests/label_agreement.py — v1.1 — 2026-08-07
 
 RGM.1 GATE: IS THE STEADIER LABEL THE *RIGHT* LABEL? Everything measured so far
 says the emission fix makes the label STABLE (17.6 -> 3.3 switches/symbol-day).
@@ -47,6 +47,16 @@ USAGE
     python3 tests/label_agreement.py --since 2026-07-20
 
 CHANGELOG
+  v1.1 — 2026-08-07 — EACH TAG SCORED OVER ITS OWN TIMEFRAME. v1.0 compared
+         every tag against the SESSION-MODAL label, but only TREND is a
+         whole-session characterisation. PIN is a LAST-HOUR property, so a day
+         that trends then coils into the close was scored as a miss. BREAKOUT
+         and SWEEP are SINGLE-EVENT tags and are now reported as NOT SCORED
+         rather than given a number — scoring them needs a breach timestamp that
+         session_labels.jsonl does not carry, and a wrong number is worse than
+         none. The v1.0 PIN 8.9% / BREAKOUT 2.8% / SWEEP 0.0% figures were MY
+         tool asking the wrong question, and they were quoted once before that
+         was caught.
   v1.0 — 2026-08-06 — first issue, as the acceptance gate for the F7 emission
          fix. Built BEFORE the fix was proposed for deploy, so the criterion
          could not be chosen to suit the result.
@@ -75,6 +85,26 @@ EXPECTED = {
     "BREAKOUT": {"BREAKOUT_VOLATILE"},
     "SWEEP":    {"SWEEP_REVERSAL"},
 }
+
+# ── v1.1 — EACH TAG IS SCORED OVER ITS OWN TIMEFRAME ──────────────────────────
+# v1.0 compared every tag against the SESSION-MODAL label, and only TREND is a
+# genuine whole-session characterisation. That mismatch produced PIN 8.9% /
+# BREAKOUT 2.8% / SWEEP 0.0% — numbers that looked like engine blindness and
+# were actually MY tool asking the wrong question. They were quoted once before
+# the error was caught.
+#   TREND     — auto_label: body fraction + close position over the WHOLE day.
+#               Session-modal is the right comparison. UNCHANGED.
+#   PIN       — auto_label: LAST-HOUR range fraction. A day that trends from the
+#               open then coils into the close is correctly PIN, yet its session
+#               modal should NOT be COMPRESSION. Scored over the last 60 min.
+#   BREAKOUT  — SINGLE-EVENT tags (prior-session extreme breached / breached and
+#   SWEEP       reclaimed). Scoring them needs the BREACH TIMESTAMP, which is not
+#               in session_labels.jsonl and cannot be recovered from the replay
+#               corpus without the prior session's extremes. **NOT SCORED** —
+#               reported as unscoreable rather than given a number that is not
+#               evidence. Printing a wrong number is worse than printing none.
+WINDOW = {"TREND": None, "PIN": 60}          # None = whole session, int = last N min
+UNSCOREABLE = ("BREAKOUT", "SWEEP")
 
 
 def _top(cv):
@@ -145,7 +175,7 @@ def main(argv):
         return 0
 
     # per law: tag -> [modal-hits, n, summed in-family tick share]
-    agree = {law: collections.defaultdict(lambda: [0, 0, 0.0])
+    agree = {law: collections.defaultdict(lambda: [0, 0, 0.0, 0])
              for law in ("current", "protected")}
     untagged = matched = 0
 
@@ -167,13 +197,14 @@ def main(argv):
             if not cv:
                 continue
             sym = r.get("sym", "?")
-            s = st.setdefault(sym, {"current": [None, False, collections.Counter()],
-                                    "protected": [None, False, collections.Counter()]})
+            s = st.setdefault(sym, {"current": [None, False, []],
+                                    "protected": [None, False, []]})
+            ts = r.get("ts") or ""
             for law, protect in (("current", False), ("protected", True)):
-                inc, armed, ctr = s[law]
+                inc, armed, seq = s[law]
                 inc, armed = emit(cv, inc, armed, protect)
-                ctr[inc] += 1
-                s[law] = [inc, armed, ctr]
+                seq.append((ts, inc))          # v1.1 — keep TIME, not just counts
+                s[law] = [inc, armed, seq]
 
         for sym, s in st.items():
             t = day_tags.get(sym)
@@ -182,10 +213,18 @@ def main(argv):
                 continue
             matched += 1
             for law in ("current", "protected"):
-                ctr = s[law][2]
-                total = sum(ctr.values()) or 1
-                modal = ctr.most_common(1)[0][0]
+                seq = s[law][2]
                 for tag in t:
+                    if tag in UNSCOREABLE:
+                        agree[law][tag][3] += 1     # counted, never rated
+                        continue
+                    win = WINDOW.get(tag)
+                    sub = seq if win is None else seq[-win:]
+                    if not sub:
+                        continue
+                    ctr = collections.Counter(lbl for _ts, lbl in sub)
+                    total = sum(ctr.values()) or 1
+                    modal = ctr.most_common(1)[0][0]
                     fam = EXPECTED[tag]
                     cell = agree[law][tag]
                     cell[0] += 1 if modal in fam else 0
@@ -203,6 +242,10 @@ def main(argv):
     for tag in ("TREND", "PIN", "BREAKOUT", "SWEEP"):
         c, p_ = agree["current"][tag], agree["protected"][tag]
         n = c[1]
+        if tag in UNSCOREABLE:
+            print(f"  {tag:<10}{c[3]:>5}   NOT SCORED — single-event tag; needs a "
+                  f"breach timestamp")
+            continue
         if not n:
             print(f"  {tag:<10}{0:>5}   (no labelled symbol-days)")
             continue
@@ -214,8 +257,13 @@ def main(argv):
     print("  expected regime family. Modal is the headline; in-family is the")
     print("  same claim without the winner-take-all rounding.")
     print()
-    print("  A tag characterises a WHOLE SESSION, so this measures the dominant")
-    print("  read of a day, not per-tick accuracy — no per-tick truth exists.")
+    print("  v1.1: each tag is scored over ITS OWN timeframe — TREND over the")
+    print("  whole session, PIN over the LAST HOUR (that is what auto_label")
+    print("  measures). BREAKOUT and SWEEP are single-EVENT tags and are NOT")
+    print("  scored at all: without a breach timestamp any number here would be")
+    print("  the wrong question asked confidently, which is what v1.0 did.")
+    print("  Still a DOMINANT-read measure inside each window, not per-tick")
+    print("  accuracy — no per-tick truth exists anywhere.")
     print("  Untagged symbol-days are EXCLUDED, not scored as RANGING: absence")
     print("  of a tag is not evidence of a range.")
     return 0
