@@ -2,6 +2,23 @@
 options_trader_v3/analysis/conviction_integrator.py — Layer 2: persistence
 (conviction-integrator) regime engine.
 
+v2.2 — 2026-08-07 — SWEEP_REVERSAL LEAVES THE INTEGRATION SET (RGM.3).
+        Operator: "sweep isn't a regime, it's a strategy — where did that even
+        come from?" It came from being filed in the Regime enum despite
+        MECHANICS.md heading its own section "EVENT OVERLAY". It is the only
+        scorer with an age-decay soft-necessary (half-life 3 bars), so its score
+        halves every three minutes and can never win an argmax against states
+        that peg at 1.0 — measured 22% non-zero but p90 0.0, max 0.265,
+        dominant 1%.
+        `INTEGRATED_REGIMES` and `_TIEBREAK_ORDER` drop it; its RegimeParams row
+        goes with them. The SCORER IS UNTOUCHED — SWP.1's dispatch gate reads
+        that score and depends on it.
+        ⚠️ THE TIE-BREAK HEAD MOVES from SWEEP_REVERSAL to BREAKOUT_VOLATILE, so
+        all-zero ticks (4.2%, measured) stop being labelled with an event that
+        did not occur.
+        ⚠️ EVERY POOLED PER-REGIME STATISTIC IS NOW ON A DIFFERENT BASIS and is
+        NOT comparable to the 12-session history banked before this.
+
 v2.1 — 2026-08-06 — THE UNPROTECTED BRANCH IS CLOSED (RGM.1 / F7).
 
         THE DEFECT. v2.0's emission law protected the incumbent only while its
@@ -128,15 +145,39 @@ except Exception:                                 # pragma: no cover - isolation
     COMPRESSION       = "COMPRESSION"
     SWEEP_REVERSAL    = "SWEEP_REVERSAL"
 
+# ── RGM.3 (v2.2) — SWEEP_REVERSAL IS NOT A REGIME AND NEVER WAS ──────────────
+# `docs/MECHANICS.md:304` heads its own section "SWEEP_REVERSAL (EVENT OVERLAY —
+# hard-veto triple x age-decay)". It is the only one of the six the
+# documentation does not call a regime, and it is the only scorer carrying an
+# AGE-DECAY soft-necessary: 0.5 ** (sweep_age_bars / 3). Its score HALVES every
+# three minutes BY CONSTRUCTION.
+#
+# A decaying score entered into an argmax against persistent states that peg at
+# 1.0 cannot win — not by tuning, structurally. Measured 2026-08-07 on an
+# 11,231-tick replay: SWEEP was non-zero on 22% of ticks yet p90 = 0.0,
+# max = 0.265, dominant on 1%. TRENDING_BULL: max 1.0, dominant 31%.
+#
+# So SWEEP leaves the INTEGRATION set. The SCORER STAYS EXACTLY AS IT IS —
+# `regime_confluence._sweep` still runs every tick and its score still reaches
+# `ctx["l1"].scores`, because SWP.1's dispatch gate now DEPENDS on it. Removing
+# it from the integrator changes what can be EMITTED as a label, nothing about
+# what is measured.
+#
+# ⚠️ THIS ALSO MOVES THE TIE-BREAK HEAD. SWEEP was first, so on an all-zero
+# tick the emitted label WAS SWEEP_REVERSAL — the engine's least-supported
+# regime won precisely the ticks where it knew nothing (4.2% of them, measured).
+# The head is now BREAKOUT_VOLATILE, which is at least a state the tape can be
+# in. A dead tick still deserves scrutiny, but it no longer names an event that
+# did not happen.
 INTEGRATED_REGIMES = (
     TRENDING_BULL, TRENDING_BEAR, RANGING,
-    BREAKOUT_VOLATILE, COMPRESSION, SWEEP_REVERSAL,
+    BREAKOUT_VOLATILE, COMPRESSION,
 )
 
 # Deterministic tie-break priority when convictions are exactly equal
 # (mirrors the v1.x decision hierarchy; in practice ties are measure-zero).
 _TIEBREAK_ORDER = {r: i for i, r in enumerate((
-    SWEEP_REVERSAL, BREAKOUT_VOLATILE, COMPRESSION,
+    BREAKOUT_VOLATILE, COMPRESSION,
     TRENDING_BULL, TRENDING_BEAR, RANGING,
 ))}
 
@@ -175,7 +216,8 @@ class IntegratorParams:
         BREAKOUT_VOLATILE: RegimeParams(tau_up=40.0,  tau_dn0=25.0, lam=2.2),
         # Sweeps are events: recognized fast, and must DIE fast when stale —
         # low lam so banked sweep conviction cannot squat over a breakout.
-        SWEEP_REVERSAL:    RegimeParams(tau_up=25.0,  tau_dn0=15.0, lam=1.5),
+        # SWEEP_REVERSAL removed in v2.2 — it is an event overlay, not an
+        # integrated regime. Its scorer is untouched; see RGM.3 above.
         # Compression builds over minutes.
         COMPRESSION:       RegimeParams(tau_up=180.0, tau_dn0=40.0, lam=2.0),
         # RANGING commits SLOWLY by design: on real tape, trends held a
@@ -484,7 +526,7 @@ if __name__ == "__main__":                     # pragma: no cover
         s = ig.update(t, e)
         if s.regime not in ALL:
             bad += 1
-    check("emitted label always one of the six", bad == 0, f"{bad} violations")
+    check("emitted label always one of the INTEGRATED set", bad == 0, f"{bad} violations")
 
     print("(2) convergence — constant RANGING evidence 0.8")
     ig = ConvictionIntegrator(); t = 0.0

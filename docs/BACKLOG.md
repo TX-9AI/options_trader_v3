@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.94
+# docs/BACKLOG.md — v3.95
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -83,6 +83,8 @@ BAKED is changing nothing about today's data.
 | **SWP.1 — THE UNGATING, BUILT** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.2** (`SWEEP_SETUP_FLOOR` 0.05, `OT_SWEEP_SETUP_FLOOR`), main **v5.6**, sweep_reversal_strategy **v3.3**, `tests/test_sweep_ungated.py` 6 pass incl. a PLTR-guard canary. Deliberate-failure test passed. Sandbox suite 231 passed / 1 skipped (7 failures = missing tastytrade SDK, identical at origin HEAD). **Authoritative suite run on control NOT yet read.** |
 | **CNT.1 — continuation under BREAKOUT** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.3** (`CONT_BREAKOUT_DIRECTION`, `CONT_BREAKOUT_MIN_ADX` 25), main **v5.7**, continuation_strategy direction branch, `tests/test_continuation_breakout.py` 6 pass, deliberate-failure test passed. Tagged `trend_continuation_breakout` so it scores separately. Sandbox 237 passed / 1 skipped. |
 | **CNT.2 — insurance gate (BOS blind window)** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.4** (`CONT_INSURANCE_STOP`), exit_engine **v4.14** (gate 2c), `tests/test_insurance_stop.py` 7 pass, deliberate-failure test passed. Sandbox 244 passed / 1 skipped. Arms the already-stamped `underlying_stop` ONLY while `BOSTracker.protected_level is None`. |
+| **RGM.3 — sweep leaves the regime set** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | conviction_integrator **v2.2**; `INTEGRATED_REGIMES` 6→5, tie-break head SWEEP→BREAKOUT_VOLATILE, RegimeParams row removed. Scorer UNTOUCHED (SWP.1 depends on it). `tests/test_sweep_not_a_regime.py` 6 pass, deliberate-failure verified. Sandbox 250 passed / 1 skipped. |
+| **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
@@ -2525,6 +2527,68 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   It changes what gets traded (the label drives dispatch AND the regime_flip
   exit), so it is the operator's call under the standing division of labour.
 
+- `[SCHEDULE]` **ONE-WEEK SLIP — DECIDED 2026-08-07.** Operator: *"I have
+  decided to slip everything to the right by one week, to account for the major
+  engine changes this week for intraday regime flips and blocked strategies that
+  had to be un-gated."*
+  **FREEZE 2026-08-21 → 2026-08-28 · GO-LIVE (tiny size) 2026-08-31 →
+  TUESDAY 2026-09-08 · FULL SIZE 2026-09-14 → 2026-09-21.** Every epoch boundary
+  moves with them.
+  **WHY TUESDAY AND NOT MONDAY:** a straight one-week slip lands go-live on
+  Mon 2026-09-07, which is **Labor Day — US markets closed**. The choice was
+  Tue 09-08 (first open after the slipped date) or Mon 09-14 (holds the
+  Monday-rollout convention but costs a second week and collides with the old
+  full-size date). Operator chose Tuesday; the Monday convention is deliberately
+  broken this once.
+  **WHY THE SLIP IS RIGHT:** the freeze exists to bank a STATIONARY window, and
+  the engine stopped being stationary on 08-06. This week landed
+  conviction_integrator v2.1 (F7), SWP.1, CNT.1, CNT.2 and now RGM.3. Freezing
+  on 08-21 would have banked ~2 sessions of post-change behaviour; 08-28 banks
+  ~7.
+  **⚠️ EVM READING:** every dated item shifts, so PV recomputes and SPI will
+  JUMP on the first run after these dates land. **That jump is a RE-BASELINE,
+  not recovered schedule** — brief it as such. And pass `--asof` explicitly:
+  control runs UTC, the operator is Central, so after ~19:00 Central an
+  unqualified run briefs tomorrow's PV.
+
+- `[DESK]` **RGM.3 — 🟡 SHIPPED-NOT-BAKED. SWEEP_REVERSAL LEAVES THE REGIME
+  SET.** Operator, twice: *"why is sweep reversal a regime when it's a strategy?
+  Like, where did that even come from?"*
+  **THE DOCUMENTATION ALREADY AGREED.** `docs/MECHANICS.md:304` heads its own
+  section **`SWEEP_REVERSAL (event overlay — hard-veto triple × age-decay)`** —
+  the only one of the six the docs do not call a regime. It was modelled as an
+  EVENT, correctly, and filed in the `Regime` enum anyway, next to `UNKNOWN`
+  which was later eliminated. The enum is a grab bag, not a taxonomy.
+  **AND IT COULD NEVER HAVE WON.** It is the only scorer carrying an AGE-DECAY
+  soft-necessary — `0.5 ** (sweep_age_bars / SWEEP_HALFLIFE_BARS)`, half-life
+  **3 bars** — so its score HALVES every three minutes by construction. A
+  decaying score entered into an argmax against persistent states that peg at
+  1.0 loses structurally, not by tuning. Measured on the 08-07 replay (11,231
+  ticks, 29 symbol-sessions): SWEEP non-zero on **22%** of ticks yet
+  **p50 0.0, p90 0.0, max 0.265, dominant 1%** against TRENDING_BULL's max 1.0 /
+  dominant 31%.
+  **WHAT CHANGED — conviction_integrator v2.2:** `INTEGRATED_REGIMES` 6 → 5,
+  `_TIEBREAK_ORDER` loses SWEEP, its `RegimeParams` row is removed.
+  **THE SCORER IS UNTOUCHED** — `regime_confluence._sweep` still runs every tick
+  and its score still reaches `ctx["l1"].scores`, because **SWP.1's dispatch
+  gate now DEPENDS on it**. This changes what can be EMITTED, nothing about what
+  is measured. A test pins the scorer's continued existence for exactly that
+  reason: deleting `_sweep` as "no longer a regime" would take the sweep trade
+  dark again and raise nothing.
+  **⚠️ THE TIE-BREAK HEAD MOVES, and this is the quiet win.** SWEEP was FIRST,
+  so on an all-zero tick the emitted label WAS SWEEP_REVERSAL — the
+  least-supported regime won precisely the 4.2% of ticks where the engine knew
+  nothing. The head is now BREAKOUT_VOLATILE, at least a state the tape can
+  actually be in.
+  **⚠️ SIDE BENEFIT:** `stale` clears only when EVERY integrated dimension is
+  non-None. With sweep out, a None sweep score can no longer pin the book
+  stale — the same failure class that made L2 unreachable for weeks. Pinned by a
+  test.
+  **⚠️ EVERY POOLED PER-REGIME STATISTIC IS NOW ON A DIFFERENT BASIS** and is
+  NOT comparable to the 12-session history banked before this. Say so in the
+  first post-bake rollup rather than letting a shifted distribution read as a
+  behaviour change.
+
 - `[DESK]` **CNT.2 — 🟡 SHIPPED-NOT-BAKED. THE INSURANCE GATE FOR CONTINUATION.**
   Operator's call 2026-08-07: *"BOS being unable to save a trade that went bad
   out of the gate — that is correct. So we need a smart insurance policy for
@@ -4331,6 +4395,18 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.95 — 2026-08-07 — RGM.3: sweep stops being a regime, and the schedule
+  slips a week.** `docs/MECHANICS.md` already called SWEEP_REVERSAL an "event
+  overlay"; it was in the `Regime` enum anyway, and being the only scorer with a
+  3-bar age-decay half-life it could never win an argmax against states that peg
+  at 1.0 — 22% non-zero on 08-07 yet max 0.265 and dominant on 1%.
+  conviction_integrator v2.2 drops it from `INTEGRATED_REGIMES` and
+  `_TIEBREAK_ORDER`; the scorer stays because SWP.1's gate reads it. Two side
+  effects worth the change on their own: the tie-break head moves off the
+  least-supported regime, and a None sweep score can no longer pin the book
+  stale. Schedule slipped one week — freeze 08-28, go-live Tue 09-08 (09-07 is
+  Labor Day), full size 09-21. **SHIPPED, NOT BAKED; per-regime history is now
+  on a different basis.**
 - **v3.94 — 2026-08-07 — CNT.2: the insurance gate, covering BOS's blind
   window.** BOS is already continuation's ungated thesis invalidator, but its
   tracker has no protected level until the trade first goes favourable — so it
