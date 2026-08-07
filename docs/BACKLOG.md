@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.97
+# docs/BACKLOG.md — v3.98
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -18,13 +18,24 @@ unblock on the calendar. Earned value: `python3 tests/evm_status.py`.
 |---|---|---|
 | Epoch 1 start | **Wed Jul 29** | Epoch 1 began (label was "Today" — stale by 07-30) |
 | Deploy Monday 1 | **Mon Aug 3** | Hard gates (E, F) + friction unification (T.2) + N.2/N.3 captures go live on the fleet, RTH |
-| Deploy Monday 2 | **Mon Aug 10** | THE calibration deploy (level hierarchy, L2.4 priors, L1.6 flat cut, L1.11 ramps) — **L2.6 freeze-candidate window opens** |
-| Freeze declared | **Fri Aug 21 EOD** | L2.6 frozen baseline, if the window ran clean |
-| Deploy Monday 3 | **Mon Aug 24** | L3.3 gate matrix (flagged, paper) + evidence-confirmed sweep changes + N.5 latency telemetry |
-| **GO LIVE** | **Mon Aug 31, RTH** | Tiny size, subset of symbols — live through **Sep 1–4, the first week of September** ✅ |
+| Deploy Monday 2 | **Mon Aug 17** | THE calibration deploy (level hierarchy, L2.4 priors, L1.6 flat cut, L1.11 ramps) — **L2.6 freeze-candidate window opens** |
+| Freeze declared | **Fri Aug 28 EOD** | L2.6 frozen baseline, if the window ran clean |
+| Deploy Monday 3 | **Mon Aug 31** | L3.3 gate matrix (flagged, paper) + evidence-confirmed sweep changes + N.5 latency telemetry |
+| **GO LIVE** | **Tue Sep 8, RTH** | Tiny size, subset of symbols — live through **Sep 9–11**. TUESDAY, not Monday: the one-week slip lands on Labor Day |
 | Labor Day | Mon Sep 7 | Markets closed — analysis day |
-| Descent notch | Tue Sep 8 | Half size if week 1 was clean |
-| **FULL SIZE** | **Mon Sep 14, RTH** | Mid-September ✅ (contingent on two clean live weeks; raise-back trigger stays armed) |
+| Descent notch | Tue Sep 15 | Half size if week 1 was clean |
+| **FULL SIZE** | **Mon Sep 21, RTH** | Late September (contingent on two clean live weeks; raise-back trigger stays armed) |
+
+**⚠️ SLIPPED ONE WEEK, 2026-08-07.** Every anchor from Deploy Monday 2 onward
+moved right by seven days; Epoch 1's past dates did NOT move, so anything already
+overdue stays overdue and the DESK-overdue count keeps its sting. Labor Day is a
+fixed holiday and did not slip — which is why **GO LIVE is TUESDAY Sep 8**, not
+the Monday the arithmetic produced.
+**READ THE NEXT EVM RUN AS A RE-BASELINE, NOT AS RECOVERED SCHEDULE.** PV
+recomputes against these dates, so SPI will jump on the first run after this
+edit. That jump is the plan moving, not work getting done. Pass `--asof`
+explicitly: control is UTC, the desk is Central, so after ~19:00 Central an
+unqualified run briefs tomorrow's PV.
 
 **Honesty note on compression.** ROADMAP L3.4 specifies a 3–6 week bar-placement
 campaign; this calendar does not contain one before go-live. The schedule resolves
@@ -57,10 +68,10 @@ BAKED is changing nothing about today's data.
 
 | item | built | pushed | baked | evidence |
 |---|---|---|---|---|
-| **N.7 — entry snapshot capture** | ✅ 08-04 | ✅ 08-04 `0f78329` | ⬜ **Mon Aug 10** | control suite **146 passed / 1 skipped, rc=0** (read 08-04); ALL CANARIES GREEN; PARITY == origin; tree clean |
-| **N.5 — exit ladder latency** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | control suite **158 passed / 1 skipped, rc=0**; ALL CANARIES GREEN |
-| **N.8 — no regime-flip exit on a stale book** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | control suite green, ALL CANARIES GREEN |
-| **W.2a — today's own swallows made audible + the alarm made specific** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 10** | silent count back to the 08-03 baseline of **87**; `--since` proven on three cases |
+| **N.7 — entry snapshot capture** | ✅ 08-04 | ✅ 08-04 `0f78329` | ⬜ **Mon Aug 17** | control suite **146 passed / 1 skipped, rc=0** (read 08-04); ALL CANARIES GREEN; PARITY == origin; tree clean |
+| **N.5 — exit ladder latency** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 17** | control suite **158 passed / 1 skipped, rc=0**; ALL CANARIES GREEN |
+| **N.8 — no regime-flip exit on a stale book** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 17** | control suite green, ALL CANARIES GREEN |
+| **W.2a — today's own swallows made audible + the alarm made specific** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 17** | silent count back to the 08-03 baseline of **87**; `--since` proven on three cases |
 | **D.1 — bull/bear were the same token in THREE renderers** | ✅ 08-04 | ✅ 08-04 | n/a (report-only) | 16 rows re-rendered on control; ALL CANARIES GREEN |
 | **AV.1 — the pooled gap read, with a legitimacy guard** | ✅ 08-04 | ✅ 08-04 | n/a (offline) | ALL CANARIES GREEN on control |
 | **TC.4b-pre — does the impulse floor hold?** | ✅ v1.3 08-04 | ✅ 08-04 | n/a (offline) | **CONTROL RUN: impulse − control TERMINAL = −0.3% ±2.3%. Dead null.** See below |
@@ -72,7 +83,7 @@ BAKED is changing nothing about today's data.
 | **BF.3 — THE REAL CAUSE: `--once` hung on the v3.9 RTH gate** | ✅ 08-04 | ✅ 08-04 | ✅ baked | **CONFIRMED WORKING on the box** |
 | **BF.4 — session guard reconfigured: one predicate, guard back ON** | ✅ 08-04 | ⬜ | ⬜ **next bake** | suite 229 passed; 8/8 pull states |
 | **AI.1 — condor approach telemetry on every plan death** | ✅ 08-04 | ✅ 08-04 | ⬜ **next bake** | 10 tests; item AI becomes answerable |
-| **N.9 — contract telemetry (premium decomposition)** | ✅ 08-04 | ⬜ | ⬜ **Mon Aug 10** | suite **247 passed / 1 skipped**; 8 tests; log-only |
+| **N.9 — contract telemetry (premium decomposition)** | ✅ 08-04 | ⬜ | ⬜ **Mon Aug 17** | suite **247 passed / 1 skipped**; 8 tests; log-only |
 | **RGM.1 probe — RANGING fallback run lengths** | ✅ 08-06 | ⬜ | n/a (offline, read-only) | `tests/rng_probe.py` v1.0; proven on a planted corpus with known run lengths (5/5 runs, histogram, warm-up/mid split, gap classification, implied crossings) before issue. **NOT YET RUN on the real corpus — that run is the deliverable, not this file.** |
 | **RGM.1 — emission-law attribution + counterfactual** | ✅ 08-06 | ⬜ | n/a (offline, read-only) | `tests/emission_law_sweep.py` v1.0; harness **99.9%** faithful against the REAL integrator on a planted one-change world, where the current law gives **141.5 switches/symbol-day** and protect-below-hold gives **1.0** — a cliff, not the delta sweep's slope. **NOT YET RUN on the real corpus.** |
 | **RGM.1 F7 — the emission fix + live A/B** | ✅ 08-06 | ⬜ | ⬜ **needs a bake** | conviction_integrator **v2.1**, main **v5.5**, `tests/test_emission_protection.py` (7 pass, incl. a v2.0 control that MUST flip), `tests/label_agreement.py` v1.0. Sandbox suite **224 passed / 1 skipped**; 8 collection failures are the missing `tastytrade` SDK and are IDENTICAL at origin HEAD. **Authoritative suite run happens on control as part of the deploy — not yet read.** |
@@ -120,7 +131,7 @@ actually observed rather than asserting a category.** Log-only, one string.
    headers and changelog prose in the same log — output that renders like a
    failure while meaning nothing of the kind. `rc=` is the load-bearing token;
    anchor future greps to the summary line, not to bare words.
-2. **Bake Mon Aug 10** with the calibration deploy (devtools 25 bake-only or 23),
+2. **Bake Mon Aug 17** with the calibration deploy (devtools 25 bake-only or 23),
    verifying commit parity BEFORE restart.
 3. **Verify capture on the first baked session** with the option-14 count — read
    the PER-BOX line, not the tally. Directional captured with `legs_captured=0`
@@ -1233,7 +1244,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   path it writes.
 - `[DESK→DEPLOY]` **M.3a — Dedicated Telegram bot for options-trader notifications.** Promoted from
   nice-to-have to **go-live requirement**: live trading needs its own paging channel
-  before Aug 31. Build today, live-test Thu Aug 27.
+  before Aug 31. Build today, live-test Thu Sep 3.
   **HOW:** new bot token; fleet-wide .env rotation via the existing
   `rotate_env_remote.sh` v1.3 machinery (adds missing vars); notify path reads the
   dedicated token with fallback to the shared one so a mis-rotation can never
@@ -1262,7 +1273,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
 
 **⬜ Tue Aug 4**
 - `[DESK→DEPLOY]` **N.9 — ✅ 2026-08-04. CONTRACT TELEMETRY: the repo could say
-  WHAT the premium did and never WHY. Log-only, bakes Mon Aug 10.**
+  WHAT the premium did and never WHY. Log-only, bakes Mon Aug 17.**
   **THE GAP.** MFE, MAE, giveback, capture ratio and the floor sweep are all
   correctly denominated in PREMIUM — that part was right and an earlier read of
   mine calling them underlying-denominated was WRONG. What none of them carries
@@ -1989,7 +2000,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   a trade). Triaging them is W.2 proper and stays scheduled where it is — this
   item only covers the ones this thread created and the alarm that reports them.
 - `[DESK→DEPLOY]` **N.8 — ✅ BUILT 2026-08-04. NO REGIME-FLIP EXIT ON A STALE
-  BOOK. Operator directive; bakes Mon Aug 10.** *"Do not execute a regime flip
+  BOOK. Operator directive; bakes Mon Aug 17.** *"Do not execute a regime flip
   exit on stale... wait for the next non-stale tick to decide if it's going to
   make a trade decision."*
   **WHAT v5.1 LEFT OPEN.** It blocked ENTRIES on stale and held the committed
@@ -2020,7 +2031,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   regime_flip hold-times are the direct before/after, the same instrument the
   08-03 postmortem used.
 - `[DESK→DEPLOY]` **N.7 — ◐ BUILT AND PUSHED 2026-08-04 (origin `0f78329`);
-  ⬜ NOT YET BAKED — Mon Aug 10. THE TC.2 EXIT BAKE-OFF HAD NO CAPTURE, AND ITS
+  ⬜ NOT YET BAKED — Mon Aug 17. THE TC.2 EXIT BAKE-OFF HAD NO CAPTURE, AND ITS
   DATA WINDOW WAS ALREADY OPEN.**
   **LANDED, WITH THE LIMIT OF THAT WORD STATED:** the deploy line's supersession
   gate passed every content check, `check_versions` v4.9 reported ALL CANARIES
@@ -2524,7 +2535,7 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   contract defect whose output CORRUPTS THE SAMPLE — every `regime_flip
   (RANGING)` row banked at ~0% excursion will later be counted as evidence
   about ranging regimes and it is not — which is Bucket 1 under the two-bucket
-  frame, fix-on-sight. The natural slot is therefore the **Mon Aug 10
+  frame, fix-on-sight. The natural slot is therefore the **Mon Aug 17
   calibration deploy, BEFORE the L2.6 freeze window opens**, not post-freeze.
   It changes what gets traded (the label drives dispatch AND the regime_flip
   exit), so it is the operator's call under the standing division of labour.
@@ -3100,18 +3111,18 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
 
 ---
 
-### EPOCH 2 — CALIBRATE & FREEZE — Mon Aug 10 → Sun Aug 23
+### EPOCH 2 — CALIBRATE & FREEZE — Mon Aug 17 → Sun Aug 30
 
 *Goal: one consolidated calibration deploy Monday, then hands off L1/L2/entry
 logic for two weeks. Everything else this epoch is offline or log-only — which the
 roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing).*
 
-**⬜ Mon Aug 10 — DEPLOY MONDAY 2 (the calibration deploy) — FREEZE WINDOW OPENS**
+**⬜ Mon Aug 17 — DEPLOY MONDAY 2 (the calibration deploy) — FREEZE WINDOW OPENS**
 - Deploy in one pass: **level hierarchy + ON H/L** (mapper) · **L2.4 calibrated
   priors** · **L1.6 frozen flat-angle cut** · **L1.11 ramp fits**. Verify canaries,
   restart, watch the emitted distribution and label churn live.
 - Declare the **L2.6 freeze-candidate window: Aug 10 → Aug 21.** No L1 truth, L2
-  prior, or entry-logic deploy until Fri Aug 21 EOD. Anything discovered goes in
+  prior, or entry-logic deploy until Fri Aug 28 EOD. Anything discovered goes in
   this file with a post-freeze date.
   **VALIDATE (the watch):** nightly, from harvested artifacts only — regime_log
   churn vs the L2.4 offline prediction (N.1) · emitted-distribution shift vs the
@@ -3119,7 +3130,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   in conditional_tables. Four numbers, all already landing on control; the freeze
   verdict on Aug 21 is written from them, not from impressions.
 
-**⬜ Tue Aug 11**
+**⬜ Tue Aug 18**
 - `[FLEET]` **L3.1 close-out.** Confirm `signal_journal` jsonl captures full fleet sessions;
   the harvest pull landed 07-27 (v0.5.0) — verify the conductor phase reports it
   and the manifest counts match boxes-run. Log-only; freeze-safe.
@@ -3128,7 +3139,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   (join journal → trades.db by symbol+timestamp, orphan count = 0). Existing data
   end-to-end.
 
-**⬜ Wed Aug 12**
+**⬜ Wed Aug 19**
 - `[DESK→DEPLOY]` **P3 phase 1 — index-context broadcast, log-only.** Control-side writer pushes
   SPX/QQQ regime+conviction via the existing `brief_flags.json` pattern; one
   journaled field on every `scored` event. `conditional_tables.py` grows the
@@ -3143,10 +3154,10 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   a cell that earns it). Day-one check: field non-null on every journaled event
   of a session.
 
-**⬜ Thu Aug 13**
+**⬜ Thu Aug 20**
 
 - `[DESK·DATA]` **AV — GAP CLASS x TIME OF DAY IS A CONDITIONING VARIABLE AND NOTHING
-  **⏱ RE-DATED 2026-08-04 from Sat Aug 1 to Thu Aug 13, and RE-TAGGED `[DESK·DATA]`.** It was dated due 08-01 while its own text records it OPENED 08-02 — due before it existed. And it waits on ~40 trades per cell to read a 0.20 R effect, a DC&A dependency rather than effort: it was counted against execution for sessions that had not happened yet.
+  **⏱ RE-DATED 2026-08-04 from Sat Aug 1 to Thu Aug 20, and RE-TAGGED `[DESK·DATA]`.** It was dated due 08-01 while its own text records it OPENED 08-02 — due before it existed. And it waits on ~40 trades per cell to read a 0.20 R effect, a DC&A dependency rather than effort: it was counted against execution for sessions that had not happened yet.
   IN THE FLEET KEYS ON IT. `tests/gap_outcome_join.py` v1.0.** Opened 2026-08-02
   out of AQ's clean-corpus result. **This is what survived; read it with the list
   of what did not.**
@@ -3247,7 +3258,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   is sensitive to the boundary); coverage proven by reconciling ledger n against
   raw journal reject counts. All inputs already harvested nightly.
 
-**⬜ Fri Aug 14**
+**⬜ Fri Aug 21**
 - `[DESK·DATA]` **AJ.2 — THE DECISION: retire continuation's standalone path, or
   keep it?** Opened 2026-07-31 with a deliberate two-week wait. Baseline that day:
   handoff 50 trades / 56% / +$1,333.50 against standalone 49 / 46% / -$2,024.00.
@@ -3297,7 +3308,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   measured number *before* go-live, and the Sep live fill-quality audit inherits
   the same comparison schema so paper-vs-live divergence is one diff.
 
-**⬜ Sat Aug 15 – Sun Aug 16**
+**⬜ Sat Aug 22 – Sun Aug 23**
 - `[DESK·DATA]` **L3.2b — finish.** Class (b) coverage-gap scan (per strategy: was a live setup
   present during its target condition with no signal formed?); both classes
   populating across a fleet session. Pre-freeze rows tagged gap-finder grade;
@@ -3310,7 +3321,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   (fell through every entry; documented in TC.4's origin); the scanner must find
   it unprompted. Finding the known gap = the scanner works; then fleet-wide.
 
-**⬜ Mon Aug 17** *(no deploy — freeze holds)*
+**⬜ Mon Aug 24** *(no deploy — freeze holds)*
 - `[DESK·DATA]` **K — re-arm decision, on paper.** Decide between the current deliberate
   hand-off-to-sweep and the unified rule ("re-arm on any invalidation before
   11:00; the origin gate decides whether a break is real" — the v3.5 origin gate
@@ -3331,7 +3342,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   |leg entry gap| distribution; the 07-17 defect signature was gap = 0 min at
   identical underlying_entry. Existing data (and now date-clean).
 
-**⬜ Tue Aug 18 — sweep evidence day (the decision the whole sweep track waits on)**
+**⬜ Tue Aug 25 — sweep evidence day (the decision the whole sweep track waits on)**
 - `[DESK·DATA]` **E + F gate verdict — the single run.** `python3
   tests/gate_ledger.py` on control (day_trader_pro). Read-only; analyses journal
   + trades already harvested, gathers nothing, changes nothing. Both gates ship
@@ -3389,10 +3400,10 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   Aug 24 deploy. Anything unconfirmed stays OBSERVING — do not fix what the data
   hasn't convicted.
 
-**⬜ Wed Aug 19**
+**⬜ Wed Aug 26**
 - `[DESK→DEPLOY]` **Build the confirmed sweep changes on the TESTER** (level_strength floor and/or
   reclaim tightening and/or stop tightening — only what Aug 18 convicted). Mapper/
-  strategy logic → tester-first, deploy Mon Aug 24.
+  strategy logic → tester-first, deploy Mon Aug 31.
   **HOW:** each convicted change behind its own env knob (`OT_SWEEP_LS_FLOOR`,
   `OT_SWEEP_MAX_CLOSES_BEYOND`, …) so rollback is a config flip.
   **VALIDATE:** tester replay over the banked sweep set — the change must block
@@ -3401,11 +3412,11 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   carry forward outcomes on everything newly blocked — the standing live
   validator for every gate this file ships.
 
-**⬜ Thu Aug 20**
+**⬜ Thu Aug 27**
 - `[DESK]` **L3.3 — gate matrix behind a flag, built + tester.** `fires iff regime ∈
   permissive AND C ≥ bar(trade_type)` in dispatch; provisional bars ORB/sweep
   ~0.40, condor ~0.65, butterfly ~0.70; flag-off byte-identical to today. Deploys
-  Mon Aug 24, paper.
+  Mon Aug 31, paper.
   **HOW:** the permissive×bar table in dispatch behind `OT_GATE_MATRIX`; flag-off
   path proven byte-identical by replaying a banked session through both and
   diffing decisions.
@@ -3414,8 +3425,8 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   flag-on paper week → blocked set enumerated in the L3.2 ledger with forward
   outcomes; bars judged on L3.4's marginal-expectancy curve (conditional_tables,
   holdout enforced Aug 22) on BOTH precision and recall axes.
-- `[DESK→DEPLOY]` **N.5 — ✅ BUILT 2026-08-04, ⏱ PULLED FORWARD from Thu Aug 20
-  build / Mon Aug 24 deploy to the **Mon Aug 10** bake. ⬜ NOT YET PUSHED.**
+- `[DESK→DEPLOY]` **N.5 — ✅ BUILT 2026-08-04, ⏱ PULLED FORWARD from Thu Aug 27
+  build / Mon Aug 31 deploy to the **Mon Aug 17** bake. ⬜ NOT YET PUSHED.**
   **WHY IT MOVED, and it is N.7's argument exactly:** this dataset only accrues
   in sessions recorded AFTER it deploys. Deploying Aug 24 leaves ~5 paper
   sessions before live capital; Aug 10 leaves ~15. It is log-only and touches no
@@ -3443,7 +3454,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   fast final leg of every slow close: not a missing column but a silently biased
   answer, inside the exact population the trigger decision reads. That is the
   absence canary in `check_versions` v4.10.
-  **⬜ REMAINING:** push → bake Mon Aug 10 → confirm paper rows populate with
+  **⬜ REMAINING:** push → bake Mon Aug 17 → confirm paper rows populate with
   `exit_latency_ms` ≈ the ladder cadence and `exit_mark_at_trigger` ==
   `exit_premium` (the paper identity); the REAL distribution only exists in the
   Sep 1-4 live week, which is what TC.2 reads.
@@ -3464,7 +3475,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   construction); live week = the real dataset. TC.2's trigger decision then reads
   latency-cost per exit (mark at trigger vs realized fill) from collected rows.
 
-**⬜ Fri Aug 21 — FREEZE DECLARED (EOD)**
+**⬜ Fri Aug 28 — FREEZE DECLARED (EOD)**
 - **L2.6 ✅ if the window ran clean** (no L1/L2/entry deploys since Aug 10, churn
   nominal). This is the real gate for everything downstream — pitchfork, P1/P2/P4
   conviction dimensions, ChainReplay, TC.4 firing engine all key off this date.
@@ -3476,7 +3487,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
 - Epoch-2 exit review; `conditional_tables.py` begins pooling post-freeze rows
   (the only rows that are decision-grade).
 
-**⬜ Sat Aug 22 – Sun Aug 23**
+**⬜ Sat Aug 29 – Sun Aug 30**
 
 - `[DESK]` **AO — 🔴 `find_swing_highs/lows` USES FLOAT EQUALITY, so equal highs
   emit EVERY tied bar as a pivot.** Found 2026-08-01 during PF.1.
@@ -3522,9 +3533,9 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
 
 ---
 
-### EPOCH 3 — GATES ON & GO LIVE — Mon Aug 24 → Fri Sep 4
+### EPOCH 3 — GATES ON & GO LIVE — Mon Aug 31 → Fri Sep 11
 
-**⬜ Mon Aug 24 — DEPLOY MONDAY 3 (fresh RTH rollout)**
+**⬜ Mon Aug 31 — DEPLOY MONDAY 3 (fresh RTH rollout)**
 - Deploy: **L3.3 gate matrix** (flag on, paper, bars provisional/wide) + the
   **Aug-18-confirmed sweep changes** + **N.5 latency telemetry** + any K/I code
   decided Aug 17. Fire-rate watch all week. **L3.4 campaign formally starts** on
@@ -3532,7 +3543,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   **VALIDATE:** same four nightly watch numbers + the L3.2 ledger now populating
   gate-matrix blocks with forward outcomes.
 
-**⬜ Tue Aug 25**
+**⬜ Tue Sep 1**
 - `[FLEET]` **Mode-isolation live-switch rehearsal on ONE box.** Switch paper→live→paper;
   verify defect-Q end-to-end: archives created, mode-scoped queries return zero
   cross-mode rows, no paper row visible to the live loop, breaker reads only live
@@ -3543,7 +3554,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   the negative case is actually exercised); breaker state re-derives clean.
   Existing machinery under test; the seeded-row check is the addition.
 
-**⬜ Wed Aug 26**
+**⬜ Wed Sep 2**
 - `[DESK]` **Entry/exit path shakedown vs the resolved audit (N/O/P).** Re-run
   `test_entry_fill_confirmation`, `test_roll_is_real`, `test_mode_isolation` at
   HEAD; walk the order_confirm deadlines, cancel-and-walk-away, partial booking,
@@ -3553,7 +3564,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   execute); N.5 columns populate during the drill — proving the latency capture
   before it matters.
 
-**⬜ Thu Aug 27**
+**⬜ Thu Sep 3**
 - `[FLEET]` **M.3b — Telegram bot live test** (built Aug 2): pages route to the dedicated
   options-trader channel; half-complete-roll and phantom-P&L pages verified.
   **VALIDATE:** the Aug 2 drill plan executed — induced half-complete roll page,
@@ -3565,7 +3576,7 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   **HOW/VALIDATE:** one clean-Windows extraction attempt decides trivial-vs-not;
   either way the deploy README carries the outcome. Self-contained.
 
-**⬜ Fri Aug 28 — GO/NO-GO REVIEW**
+**⬜ Fri Sep 4 — GO/NO-GO REVIEW**
 - Gate checklist, every box or no-go: suite green at HEAD · canaries pass fleet-
   wide · freeze intact since Aug 10 · gate matrix behaving across 4 paper
   sessions · mode-isolation rehearsal clean · fill-confirmation shakedown clean ·
@@ -3574,24 +3585,24 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   **VALIDATE:** every checklist line points at an artifact produced above — this
   review reads evidence, it does not generate it.
 
-**⬜ Sat Aug 29 – Sun Aug 30**
+**⬜ Sat Sep 5 – Sun Sep 6**
 - Live-day runbook written (who watches what, the raise-back trigger, the
   kill-switch: `OT_REGIME_ENGINE=v13` rollback path re-verified, configure.sh
   back-to-paper path re-verified). Final rehearsal.
   **VALIDATE:** both rollback paths *executed* on the rehearsal box, not read.
 
-**⬜ Mon Aug 31 — GO LIVE, RTH (tiny size)** 🎯
+**⬜ Mon Sep 7 — GO LIVE, RTH (tiny size)** 🎯
 - `[FLEET]` **L3.6 descent, step 0:** live, minimum size, SPX + QQQ, bars one bucket above
   the paper crossing. This is the tiny-account live shakedown that has gated the
   fill-confirmation work since 07-15 — now with the whole scrub list behind it.
 
-**⬜ Tue Sep 1 – Fri Sep 4 — LIVE, first week of September** ✅
+**⬜ Tue Sep 8 – Fri Sep 11 — LIVE, first week of September** ✅
 - Daily: fill-quality audit (live fill vs mark, per the 07-15 divergence-audit
   template — now sharing N.4's comparison schema so paper-vs-live divergence is
   one diff) · phantom-P&L reconcile check at each close · ladder fill-latency
   read from the **N.5 columns** (this is the TC.2 stop-trigger dataset — the −40%
   trigger vs 35%/25% question gets answered by these numbers, not by guessing).
-- `[DESK·DATA]` **Fri Sep 4:** week-1 live review — divergence report, latency distribution,
+- `[DESK·DATA]` **Fri Sep 11:** week-1 live review — divergence report, latency distribution,
   descent decision drafted.
   **VALIDATE:** all three daily checks read collected rows (trades.db + N.5 +
   broker_reconcile records + chain archive); nothing in the review depends on a
@@ -3599,12 +3610,12 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
 
 ---
 
-### RAMP — Mon Sep 7 → Fri Sep 18
+### RAMP — Mon Sep 14 → Fri Sep 25
 
-**⬜ Mon Sep 7 — Labor Day, markets closed.** Analysis day: first live-week
+**⬜ Mon Sep 14 — Labor Day, markets closed.** Analysis day: first live-week
 
 - `[DESK]` **A2.3 — THE LOG-ODDS REFORMULATION. The correct endpoint. HOLD UNTIL
-  **⏱ RE-DATED 2026-08-04 from Sun Aug 2 to Mon Sep 7 (post-go-live analysis day).** This item's own first line says HOLD UNTIL AFTER GO-LIVE (Aug 31), and it was nonetheless dated 08-02 and counted overdue against execution. The schedule now matches the item.
+  **⏱ RE-DATED 2026-08-04 from Sun Aug 2 to Mon Sep 14 (post-go-live analysis day).** This item's own first line says HOLD UNTIL AFTER GO-LIVE (Aug 31), and it was nonetheless dated 08-02 and counted overdue against execution. The schedule now matches the item.
   AFTER GO-LIVE (Aug 31).** Operator's instinct, and it is right: treat
   trend-vs-range as ONE latent axis in log-odds rather than two independent
   scores. Each factor contributes a log-likelihood ratio, evidence ADDS in
@@ -3621,20 +3632,20 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
 conditional tables; confirm the newly-admitted buckets' realized expectancy;
 revisit the ON-tier rank with whatever n exists; finalize the descent decision.
 
-**⬜ Tue Sep 8 — descend one notch.** Half size and/or widen the symbol set —
+**⬜ Tue Sep 15 — descend one notch.** Half size and/or widen the symbol set —
 only if week 1 was clean. Raise-back trigger stays armed: first negative read on
 a newly-admitted bucket → back up a notch, no debate.
   **VALIDATE:** "clean" is defined by the Sep 4 review's three artifacts; the
   raise-back trigger reads held-out conditional-table cells (L3.5), never the
   fit set.
 
-**⬜ Wed Sep 9 – Fri Sep 11 — hold the notch.** Watch, don't touch.
+**⬜ Wed Sep 16 – Fri Sep 18 — hold the notch.** Watch, don't touch.
 
-**⬜ Mon Sep 14 — FULL POSITION SIZES, RTH** 🎯 — mid-September, contingent on two
+**⬜ Mon Sep 21 — FULL POSITION SIZES, RTH** 🎯 — mid-September, contingent on two
 clean live weeks. The L3.4 campaign keeps placing final bars underneath; a bar
 that the marginal-expectancy data moves, moves.
 
-**⬜ Tue Sep 15 – Fri Sep 18 — full-size steady state** + close-out review of this
+**⬜ Tue Sep 22 – Fri Sep 25 — full-size steady state** + close-out review of this
 file: everything above either ✅ or explicitly re-dated below.
 
 ---
@@ -4471,6 +4482,16 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.98 — 2026-08-07 — THE SLIP IS NOW IN THE SCHEDULE, not just in the
+  changelog.** v3.95 recorded the DECISION; the dated plan still read the old
+  one, so `evm_status.py` would have briefed the wrong PV and every overdue count
+  would have been wrong — the number that is supposed to sting. 70 date tokens
+  shifted seven days from Deploy Monday 2 onward. **Epoch 1's past dates were
+  deliberately NOT moved**: already-overdue items stay overdue, because slipping
+  them would erase the accountability signal rather than reschedule it.
+  Labor Day is a fixed holiday and did not slip, which is why GO LIVE is
+  **Tue Sep 8**. Freeze **Fri Aug 28**, Deploy Monday 3 **Mon Aug 31**, descent
+  notch Tue Sep 15, FULL SIZE **Mon Sep 21**.
 - **v3.97 — 2026-08-07 — SWP.2 + CNT.3: the first tuning changes carried by
   data, both filed as PRIORS rather than fits.** Sweep shorts get their own
   0.20 floor (longs stay 0.05) on three agreeing measures plus the PLTR
@@ -4838,7 +4859,7 @@ opening the file showed history before it showed anything still to do.*
   asserts a category from one dimension.
 - **v3.57 — 2026-08-04 — N.5 BUILT AND PULLED FORWARD TO THE AUG 10 BAKE; N.7's
   SUITE STEP CLOSED; THE CONDUCTOR TELEGRAM STATUS CORRECTED.** N.5 moves from
-  Thu Aug 20 build / Mon Aug 24 deploy to built-now / bakes Aug 10 on the same
+  Thu Aug 27 build / Mon Aug 31 deploy to built-now / bakes Aug 10 on the same
   argument N.7 won: the dataset only accrues in sessions recorded after it
   deploys, and Aug 24 leaves ~5 paper sessions before live capital where Aug 10
   leaves ~15. Log-only, freeze-permitted. Adds a sixth field beyond the four this
@@ -4864,17 +4885,17 @@ opening the file showed history before it showed anything still to do.*
   open Bucket-1 defect from the 08-03 postmortem — the alarm on tape coverage
   that is use-it-or-lose-it.
 - **v3.55 — 2026-08-04 — N.7 FILED AND BUILT: the entry-snapshot capture.**
-  New item on Tue Aug 4, ✅ built same day, bakes Mon Aug 10. It closes a hole
+  New item on Tue Aug 4, ✅ built same day, bakes Mon Aug 17. It closes a hole
   that was invisible because it was in the ROADMAP rather than here: TC.2's
   counterfactual names an observability precursor and the precursor had no date,
   no owner and no code. Filed as scope DISCOVERED, not slippage — it adds to BAC
   and EV together. Also corrects a claim made earlier in the same session that
   BoS levels needed capturing: they do not, and reading HEAD is what settled it.
 - **v3.54 — 2026-08-04 — TWO DATES CORRECTED TO MATCH WHAT THE ITEMS SAY ABOUT
-  THEMSELVES.** **AV** moved Sat Aug 1 → Thu Aug 13 and re-tagged `[DESK·DATA]`:
+  THEMSELVES.** **AV** moved Sat Aug 1 → Thu Aug 20 and re-tagged `[DESK·DATA]`:
   dated due 08-01 while its own text records it OPENED 08-02 — due before it
   existed — and it waits on ~40 trades per cell for a 0.20 R read, a DC&A
-  dependency rather than effort. **A2.3** moved Sun Aug 2 → Mon Sep 7: its own
+  dependency rather than effort. **A2.3** moved Sun Aug 2 → Mon Sep 14: its own
   first line reads HOLD UNTIL AFTER GO-LIVE (Aug 31) while it was counted overdue
   against execution. Neither is slippage recovered; both are schedule errors that
   were inflating the accountability number.
