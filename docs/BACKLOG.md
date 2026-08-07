@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.00
+# docs/BACKLOG.md — v4.01
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -99,6 +99,7 @@ BAKED is changing nothing about today's data.
 | **SWP.2 + CNT.3 — the two Tier-1 priors** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.5**, sweep_reversal_strategy **v3.4**, continuation branch. `tests/test_tier1_priors.py` 6 pass, deliberate-failure verified. Sandbox 256 passed / 1 skipped. Both are PRIORS carried by mechanism, not fits. |
 | **MEM.2 — in-process tracemalloc** | ✅ 08-07 | ⬜ | ⬜ **SPX only, needs a bake** | `utils/mem_trace.py` v1.0 + main **v5.8**; env-gated `OT_MEM_TRACE`, one bool test per tick when off. mem_tracer v1.1 gets the symbol banner + empty-fetch abort. Sandbox 256 passed / 1 skipped. |
 | **GATE.1 — label_agreement v1.1** | ✅ 08-07 | ⬜ | n/a (offline) | each tag scored over ITS OWN timeframe: TREND whole-session, PIN last hour, BREAKOUT/SWEEP **NOT SCORED** (single-event tags, no breach timestamp). v1.0's PIN 8.9% / BREAKOUT 2.8% / SWEEP 0.0% are RETRACTED. |
+| **L3.2a — rejection ledger** | ✅ 08-07 build | ⬜ | n/a (offline) | `analysis/rejection_ledger.py` v1.0 + 3 tests, deliberate-failure verified. Planted proof: vwap blocking longs into a falling tape → 100% DODGED; rrr blocking shorts → 100% MISSED. **NOT YET RUN on the real journals.** |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
 
@@ -4484,6 +4485,29 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.01 — 2026-08-07 — L3.2a: the rejection ledger, the first look at what the
+  system DECLINED.** Every measurement so far — never-favourable, the floor
+  sweep, trigger drift, excursions — reads only trades that FIRED, so none can
+  say what a gate COSTS. The ledger consolidates `scored` rejects, `disposition`
+  rejects, N.2 `gate_block:*` and `retest_check` near-misses into one row and
+  labels each **DODGED** (tape went against the intended direction) or **MISSED**
+  (it went the intended way). A gate that is mostly MISSED is too tight and is
+  costing money invisibly.
+  **TWO HONEST FINDINGS FROM BUILDING IT, both worth more than the tool.**
+  (1) **The item's own prescribed validation does not prove what it claims.** It
+  says shift the decision timestamp +1 bar and confirm outcomes change. They do —
+  but they change whether the window starts at `idx` or `idx+1`, because shifting
+  the index moves the reference price either way. **It passed on a deliberately
+  leaking build.** The property is structural and is now pinned structurally, by
+  a hand-built series where including the decision bar gives a different known
+  answer; `--verify` is kept only as a degenerate-join sanity check.
+  (2) **The version-hash requirement CANNOT be met retrospectively.** The journal
+  does not stamp the ruleset that made the decision — the same gap noted 07-29
+  about engine identity. Rows carry `analysis_hash` and an explicit
+  `decision_hash: null`, and the tool SAYS SO in its own output. 2026-08-07 alone
+  changed the emission law, the regime set, two dispatch gates, an exit gate and
+  two floors, so cross-date pooling spans engines. **The fix is upstream: stamp
+  the ruleset onto the journal event.** Filed, not built.
 - **v4.00 — 2026-08-07 — GATE.1: the acceptance gate stops asking the wrong
   question of three of its four tags.** v1.0 scored every tag against the
   SESSION-MODAL label, but only TREND is a whole-session characterisation. PIN
