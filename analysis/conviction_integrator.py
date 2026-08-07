@@ -2,6 +2,57 @@
 options_trader_v3/analysis/conviction_integrator.py — Layer 2: persistence
 (conviction-integrator) regime engine.
 
+v2.1 — 2026-08-06 — THE UNPROTECTED BRANCH IS CLOSED (RGM.1 / F7).
+
+        THE DEFECT. v2.0's emission law protected the incumbent only while its
+        conviction sat at or above theta_hold. Below it, `_emit` executed
+        `self.incumbent = top_r` UNCONDITIONALLY, every tick — no commit bar,
+        no displacement margin, no dwell. A challenger at conviction 0.05 took
+        the label and could lose it again on the next tick. That contradicts
+        this module's OWN design contract, four lines below: "Fast to
+        recognize, slow to abandon… A single-tick flicker can never move the
+        emitted label off a held regime." Below theta_hold it demonstrably
+        could.
+
+        MEASURED over 19 sessions / 523 symbol-days / 186,582 ticks
+        (tests/emission_law_sweep.py v1.0): 8,083 of 8,345 label switches —
+        **96.9%** — came from the unprotected branch. The commit threshold and
+        the displacement margin governed 3.1%. Median incumbent conviction at
+        the moment of a switch was **0.08**: the typical label change handed
+        off between two near-zero beliefs. The incumbent sat below theta_hold
+        on 50.3% of ticks, so this was not an edge case — it was half the
+        session.
+
+        IT ALSO EXPLAINS WHY A SWITCHING COST DID NOT WORK. `delta_displace`
+        lives only in the protected branch, so the delta sweep was tuning a
+        knob outside the path where the churn happened — right knob, wrong
+        branch. That is the gradual-decay-no-cliff signature it produced.
+
+        THE FIX. `protect_below_hold` (default True, env
+        OT_L2_PROTECT_BELOW_HOLD=0 to restore v2.0) applies commit+margin in
+        BOTH branches and HOLDS the incumbent when no challenger qualifies. A
+        fading belief is still the best available belief; declining to switch
+        is not the same as asserting the old label is strong, and conviction —
+        which Layer 3 gates on — reports the weakness honestly either way.
+
+        COLD START IS CARVED OUT. Protection ARMS only once some regime has
+        reached theta_commit at least once (`self.armed`). Before that the book
+        holds near-zero convictions and the argmax is the deterministic
+        tiebreak head, SWEEP_REVERSAL — which is above zero on 4% of ticks.
+        Protecting from tick 1 would pin the session to it. Plain argmax until
+        armed; protection thereafter. (main.py independently gates on
+        `not st.stale`, so the open is doubly covered.)
+
+        SHADOW A/B, no behavioural cost. The state now also carries
+        `shadow_regime` — what the OTHER law would have emitted from the same
+        conviction vector — plus `switches` and `shadow_switches`. Both laws
+        run on every tick, so a live session measures the divergence directly
+        instead of inferring it from a counterfactual. Costs one dict lookup.
+
+        NOT CHANGED: the integration law, the tau constants, staleness, the
+        snapshot format, or theta_commit / theta_hold / delta_displace values.
+        Only WHICH branch the displacement test runs in.
+
 v2.0 — 2026-07-12 — PHASE 0 PORT to v3 (ROADMAP 0.1). Three changes:
         1. EMISSION LAW: always argmax. The UNKNOWN fallback is DELETED from
            emission — there is always an emitted best-fit label with graded
@@ -107,6 +158,13 @@ class IntegratorParams:
     delta_displace: float = 0.12 # margin a challenger needs over the incumbent
     dt_max:       float = 90.0   # gap > dt_max seconds ⇒ do not integrate; mark stale
     tau_stale:    float = 600.0  # decay constant while evidence is UNOBSERVABLE (None)
+    # v2.1 — apply commit+margin in BOTH branches instead of only above
+    # theta_hold. OT_L2_PROTECT_BELOW_HOLD=0 restores the v2.0 law exactly,
+    # which is the kill switch and the A/B control.
+    protect_below_hold: bool = field(
+        default_factory=lambda: os.environ.get(
+            "OT_L2_PROTECT_BELOW_HOLD", "1").strip().lower()
+        not in ("0", "false", "no", "off"))
 
     per_regime: Dict[str, RegimeParams] = field(default_factory=lambda: {
         # Directional regimes: fast to commit (3 integrating ticks / ~60 s wall ⇒
@@ -138,6 +196,13 @@ class IntegratorState:
     convictions: Dict[str, float] = field(default_factory=dict)  # full vector
     trigger:     str = ""                 # why the emission changed this tick ("" if unchanged)
     stale:       bool = False             # True after a gap/restart until warmed
+    # v2.1 — live A/B. `shadow_regime` is what the OTHER emission law would
+    # have emitted from this same conviction vector; the counters are
+    # cumulative per process. Observational only — nothing reads them to trade.
+    shadow_regime:   str = ""
+    switches:        int = 0
+    shadow_switches: int = 0
+    armed:           bool = False         # has any regime ever reached theta_commit?
 
 
 # ─── The integrator ───────────────────────────────────────────────────────────
@@ -163,10 +228,12 @@ class ConvictionIntegrator:
       1. If an incumbent is held and C_inc ≥ θ_hold: keep it — UNLESS some
          challenger has C ≥ θ_commit AND C ≥ C_inc + δ, in which case switch
          to the challenger (belief yields to better belief, not to noise).
-      2. Otherwise the incumbent has no privilege: emission follows plain
-         argmax with its graded conviction. There is NO UNKNOWN — indecision
-         is a low conviction number on the best-fit label, and Layer 3's
-         per-trade bars are what refuse to trade it.
+      2. v2.1 — the SAME test applies below theta_hold once the book is
+         armed: no qualified challenger means the incumbent is HELD. There is
+         still NO UNKNOWN — indecision is a low conviction number on the
+         held label, and Layer 3's per-trade bars are what refuse to trade it.
+         Unarmed (cold book) or OT_L2_PROTECT_BELOW_HOLD=0 restores the v2.0
+         behaviour: below theta_hold, emission follows plain argmax.
 
     θ_hold < θ_commit is the hysteresis band: harder to displace than to
     keep, so the emitted label cannot chatter across a single threshold
@@ -180,6 +247,12 @@ class ConvictionIntegrator:
         self.incumbent: Optional[str] = None
         self.last_ts: Optional[float] = None
         self.stale: bool = True   # unwarmed until first update/replay
+        # v2.1 — protection arms on the first genuinely committed read; see the
+        # cold-start note in the header.
+        self.armed: bool = False
+        self.switches: int = 0
+        self.shadow: Optional[str] = None      # incumbent under the OTHER law
+        self.shadow_switches: int = 0
 
     # ── core update ──────────────────────────────────────────────────────────
 
@@ -249,21 +322,35 @@ class ConvictionIntegrator:
         )
         top_r, top_c = ranked[0]
 
-        if self.incumbent is not None and self.C[self.incumbent] >= p.theta_hold:
+        # v2.1 — protection ARMS on the first committed-grade read anywhere in
+        # the book. Before that the convictions are near zero and the argmax is
+        # just the tiebreak head; holding it would pin the whole session to a
+        # regime nothing has evidenced.
+        if top_c >= p.theta_commit:
+            self.armed = True
+
+        prev_inc = self.incumbent
+        protect = p.protect_below_hold and self.armed
+
+        if self.incumbent is not None and (self.C[self.incumbent] >= p.theta_hold
+                                           or protect):
             inc_c = self.C[self.incumbent]
-            # displacement: a challenger must be COMMITTED and clearly better
+            # displacement: a challenger must be COMMITTED and clearly better.
+            # v2.1 — this test now also runs BELOW theta_hold. When nothing
+            # qualifies the incumbent is HELD: a fading belief is still the
+            # best available belief, and its conviction reports the weakness
+            # honestly to Layer 3, which is what gates the trade.
             if (top_r != self.incumbent
                     and top_c >= p.theta_commit
                     and top_c >= inc_c + p.delta_displace):
                 trigger = f"displaced {self.incumbent}({inc_c:.2f}) → {top_r}({top_c:.2f})"
                 self.incumbent = top_r
+            elif inc_c < p.theta_hold and not trigger:
+                trigger = ""      # held below hold — the v2.1 behaviour change
         else:
-            # v2.0 always-argmax: below θ_hold the incumbent loses privilege
-            # and emission follows the best fit — which is usually still the
-            # fading incumbent, so label continuity is preserved without a
-            # drop to UNKNOWN. On a cold/unwarmed book (all-zero conviction)
-            # the label is the deterministic tiebreak head and `stale`/near-
-            # zero conviction tell the caller not to trust it yet.
+            # v2.0 law, retained for the unarmed cold book and for
+            # OT_L2_PROTECT_BELOW_HOLD=0: below theta_hold the incumbent loses
+            # privilege and emission follows the best fit.
             if self.incumbent is not None and top_r != self.incumbent:
                 trigger = (f"{self.incumbent} fell below hold "
                            f"({self.C[self.incumbent]:.2f} < {p.theta_hold}); "
@@ -272,11 +359,40 @@ class ConvictionIntegrator:
                 trigger = f"argmax {top_r}({top_c:.2f})"
             self.incumbent = top_r
 
+        if prev_inc is not None and self.incumbent != prev_inc:
+            self.switches += 1
+
+        # ── v2.1 shadow: the OTHER law, same conviction vector, no side effects
+        prev_shadow = self.shadow
+        if self.shadow is None:
+            self.shadow = top_r
+        elif p.protect_below_hold:
+            # shadow = the OLD (v2.0) law
+            s_c = self.C[self.shadow]
+            if s_c >= p.theta_hold:
+                if (top_r != self.shadow and top_c >= p.theta_commit
+                        and top_c >= s_c + p.delta_displace):
+                    self.shadow = top_r
+            else:
+                self.shadow = top_r
+        else:
+            # shadow = the NEW (v2.1) law, so the A/B reads the same either way
+            s_c = self.C[self.shadow]
+            if (top_r != self.shadow and top_c >= p.theta_commit
+                    and top_c >= s_c + p.delta_displace):
+                self.shadow = top_r
+        if prev_shadow is not None and self.shadow != prev_shadow:
+            self.shadow_switches += 1
+
         regime, conviction = self.incumbent, self.C[self.incumbent]
 
         return IntegratorState(
             regime=regime,
             conviction=conviction,
+            shadow_regime=self.shadow or "",
+            switches=self.switches,
+            shadow_switches=self.shadow_switches,
+            armed=self.armed,
             convictions=dict(self.C),
             trigger=trigger,
             stale=self.stale,

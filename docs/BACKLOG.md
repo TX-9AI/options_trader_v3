@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.86
+# docs/BACKLOG.md — v3.87
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -75,6 +75,7 @@ BAKED is changing nothing about today's data.
 | **N.9 — contract telemetry (premium decomposition)** | ✅ 08-04 | ⬜ | ⬜ **Mon Aug 10** | suite **247 passed / 1 skipped**; 8 tests; log-only |
 | **RGM.1 probe — RANGING fallback run lengths** | ✅ 08-06 | ⬜ | n/a (offline, read-only) | `tests/rng_probe.py` v1.0; proven on a planted corpus with known run lengths (5/5 runs, histogram, warm-up/mid split, gap classification, implied crossings) before issue. **NOT YET RUN on the real corpus — that run is the deliverable, not this file.** |
 | **RGM.1 — emission-law attribution + counterfactual** | ✅ 08-06 | ⬜ | n/a (offline, read-only) | `tests/emission_law_sweep.py` v1.0; harness **99.9%** faithful against the REAL integrator on a planted one-change world, where the current law gives **141.5 switches/symbol-day** and protect-below-hold gives **1.0** — a cliff, not the delta sweep's slope. **NOT YET RUN on the real corpus.** |
+| **RGM.1 F7 — the emission fix + live A/B** | ✅ 08-06 | ⬜ | ⬜ **needs a bake** | conviction_integrator **v2.1**, main **v5.5**, `tests/test_emission_protection.py` (7 pass, incl. a v2.0 control that MUST flip), `tests/label_agreement.py` v1.0. Sandbox suite **224 passed / 1 skipped**; 8 collection failures are the missing `tastytrade` SDK and are IDENTICAL at origin HEAD. **Authoritative suite run happens on control as part of the deploy — not yet read.** |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -2379,6 +2380,43 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   delta sweep never produced. Dwell 12 over-damps to 0.0 and misses the real
   change, so the tool can detect over-correction as well as churn.
 
+  **⬜ THE FIX, BUILT 08-06 — `conviction_integrator` v2.1.**
+  `protect_below_hold` (default ON; **`OT_L2_PROTECT_BELOW_HOLD=0` restores the
+  v2.0 law exactly** and is both the kill switch and the A/B control) applies
+  commit+margin in BOTH branches and **HOLDS the incumbent when no challenger
+  qualifies**. A fading belief is still the best available belief, and its
+  conviction — which Layer 3 gates on — reports the weakness honestly either
+  way. Declining to switch is not asserting the old label is strong.
+
+  **COLD START IS CARVED OUT.** Protection ARMS only once some regime has
+  reached theta_commit at least once. Before that the convictions are near zero
+  and the argmax is the deterministic tiebreak head, SWEEP_REVERSAL — above
+  zero on 4% of ticks — so protecting from tick 1 would pin the session to it.
+  Verified on the planted world: 13 of 20 symbol-days open TRENDING_BULL and
+  only 2 on SWEEP. `main.py` independently gates on `not st.stale`, and the
+  ORB owns the open and is regime-immune at BOTH dispatch and exit (bare
+  `regime_flip` exists only in `_evaluate_continuation`) — three layers of
+  cover on the same edge.
+
+  **THE LIVE A/B COSTS NOTHING AND ANSWERS TOMORROW.** v2.1 runs BOTH laws off
+  the same conviction vector every tick and reports the other one's label as
+  `shadow_regime`, with cumulative `switches` / `shadow_switches`. main v5.5
+  logs the pair whenever the divergence CHANGES — never per tick, per
+  WORKING_AGREEMENT §17. Nothing reads the shadow to trade. The A/B reads the
+  same in either direction, so the control is one env var.
+
+  **⬜ THE GATE — `tests/label_agreement.py` v1.0, BUILT 08-06, NOT YET RUN.**
+  Scores both laws against `session_labels.jsonl`, which `auto_label.py`
+  derives from PRICE ACTION ONLY (body fraction, close position, prior-session
+  extremes) and which has never seen a score, a conviction or a label — so it
+  cannot agree with the engine by construction. **PRE-REGISTERED, stated before
+  any number was read: H1 — on TREND-tagged symbol-days the protected law
+  spends a HIGHER share of ticks in the trending family and its modal label
+  agrees with the tag more often. H0 — agreement is unchanged or FALLS, which
+  would mean stability was bought by locking in whichever label happened to be
+  held. A FALL KILLS THE DEPLOY.** Untagged symbol-days are excluded rather
+  than scored as RANGING; absence of a tag is not evidence of a range.
+
   **⚠️ WHAT A STEADIER LABEL DOES NOT PROVE.** A law emitting one regime all
   day scores zero switches and is worthless. Stability is necessary, not
   sufficient; whether the steadier label is the CORRECT label is the
@@ -3917,6 +3955,19 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.87 — 2026-08-06 — RGM.1 F7: the unprotected branch is closed, behind a
+  live A/B.** `conviction_integrator` v2.1 applies commit+margin in both
+  branches and holds the incumbent when nothing qualifies, restoring the
+  contract the module's own header has always claimed. Protection arms on the
+  first committed read so a cold book is not pinned to the tiebreak head. Both
+  laws now run every tick and each reports the other's label, so tomorrow's
+  session measures the divergence on live tape instead of inferring it — and
+  `OT_L2_PROTECT_BELOW_HOLD=0` runs the control. main v5.5 logs the pair on
+  CHANGE only. `tests/label_agreement.py` v1.0 is the acceptance gate, with its
+  hypothesis pre-registered before any number was read: if agreement against
+  the price-action ground truth FALLS, the deploy dies. Built and proven on the
+  desk; **not baked, and the authoritative suite run on control is not yet
+  read.**
 - **v3.86 — 2026-08-06 — RGM.1 F7: the emission law stops protecting the label
   below theta_hold.** Above 0.45 conviction a challenger must clear commit AND
   a margin; below 0.45 the incumbent is replaced by bare argmax every tick, with

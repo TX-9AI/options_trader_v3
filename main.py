@@ -1,5 +1,16 @@
 """
-main.py — options_trader v5.4
+main.py — options_trader v5.5
+v5.5 — 2026-08-06 — LIVE A/B ON THE EMISSION LAW (RGM.1 F7). conviction_
+        integrator v2.1 closes the unprotected branch: below theta_hold the
+        incumbent was replaced by bare argmax every tick, which accounted for
+        96.9% of 8,345 label switches across 19 sessions at a median incumbent
+        conviction of 0.08. v2.1 now runs BOTH laws on every tick and reports
+        the other one's label as `shadow_regime`; this file logs the pair
+        whenever the divergence CHANGES (never per tick). Nothing reads the
+        shadow to trade. Kill switch: OT_L2_PROTECT_BELOW_HOLD=0 restores the
+        v2.0 law exactly, and the shadow then models v2.1 — so the A/B reads
+        the same in either direction and one env var runs the control.
+
 v5.4 — 2026-08-04 — ORB WAS BEING GATED BY THE STALE-BOOK ENTRY BLOCK, AND THAT
         WAS NEVER INTENDED. v5.0 put the block ABOVE the dispatch, so it
         returned before `orb_regime_bypass` ran and
@@ -468,6 +479,8 @@ logger.info("REGIME ENGINE: %s (L2 import %s) — OT_REGIME_ENGINE=%s",
             os.environ.get("OT_REGIME_ENGINE", "(unset, default L2)"))
 _l1_scorer   = RegimeConfluenceScorer() if _L2_OK else None
 _l2_integ    = ConvictionIntegrator() if _L2_OK else None
+# v5.5 — last (live, shadow) emission pair, so the A/B logs on CHANGE only.
+_l2_ab: dict = {}
 # v5.0 — the last label L2 actually committed, held across stale ticks so the bot
 # never swaps the smoother for the raw classifier mid-position. `since` is set on
 # the first stale tick of a stretch and cleared on recovery, purely so a long
@@ -672,6 +685,24 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
                     logger.info("L2.5 COMMITTING again (%s c=%.2f) — was: %s",
                                 st.regime, st.conviction, _l2_mute["why"])
                     _l2_mute.clear()
+                # v5.5 — LIVE A/B (RGM.1 F7). conviction_integrator v2.1 runs
+                # BOTH emission laws off the same conviction vector and reports
+                # what the other one would have emitted. Log only on a CHANGE of
+                # the divergence pair, never per tick — a per-tick line is spam,
+                # not observability (WORKING_AGREEMENT §17). Observational: the
+                # shadow gates nothing and is never read to trade.
+                _ab = (st.regime, st.shadow_regime)
+                if st.shadow_regime and _ab != _l2_ab.get("pair"):
+                    _l2_ab["pair"] = _ab
+                    if st.regime != st.shadow_regime:
+                        logger.info("L2 A/B DIVERGE live=%s shadow=%s "
+                                    "(switches live=%d shadow=%d, armed=%s)",
+                                    st.regime, st.shadow_regime,
+                                    st.switches, st.shadow_switches, st.armed)
+                    else:
+                        logger.info("L2 A/B agree=%s (switches live=%d "
+                                    "shadow=%d)", st.regime, st.switches,
+                                    st.shadow_switches)
             elif st.stale and _l2_held["regime"]:
                 # v5.0 — HOLD THE LAST COMMITTED LABEL. This branch is the whole
                 # fix. Falling through to v1.3 here swapped the SMOOTHER out for
