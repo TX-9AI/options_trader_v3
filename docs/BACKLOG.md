@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.95
+# docs/BACKLOG.md — v3.96
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -84,6 +84,7 @@ BAKED is changing nothing about today's data.
 | **CNT.1 — continuation under BREAKOUT** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.3** (`CONT_BREAKOUT_DIRECTION`, `CONT_BREAKOUT_MIN_ADX` 25), main **v5.7**, continuation_strategy direction branch, `tests/test_continuation_breakout.py` 6 pass, deliberate-failure test passed. Tagged `trend_continuation_breakout` so it scores separately. Sandbox 237 passed / 1 skipped. |
 | **CNT.2 — insurance gate (BOS blind window)** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.4** (`CONT_INSURANCE_STOP`), exit_engine **v4.14** (gate 2c), `tests/test_insurance_stop.py` 7 pass, deliberate-failure test passed. Sandbox 244 passed / 1 skipped. Arms the already-stamped `underlying_stop` ONLY while `BOSTracker.protected_level is None`. |
 | **RGM.3 — sweep leaves the regime set** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | conviction_integrator **v2.2**; `INTEGRATED_REGIMES` 6→5, tie-break head SWEEP→BREAKOUT_VOLATILE, RegimeParams row removed. Scorer UNTOUCHED (SWP.1 depends on it). `tests/test_sweep_not_a_regime.py` 6 pass, deliberate-failure verified. Sandbox 250 passed / 1 skipped. |
+| **DRF.1 — trigger-conditioned drift + ORB positive control** | ✅ 08-07 | ⬜ | n/a (offline) | `tests/trigger_drift.py` v1.0; planted proof separated a +0.02%/bar window (ORB Long median +0.200%, 100% positive) from noise (−0.010%) against a null arm at 0.000%, 40/40 triggers matched through the UTC→ET conversion. **NOT YET RUN on the real corpus.** |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
 
@@ -2527,6 +2528,49 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   It changes what gets traded (the label drives dispatch AND the regime_flip
   exit), so it is the operator's call under the standing division of labour.
 
+- `[DESK]` **DRF.1 — 🔴 OPEN. THE DRIFT MEASUREMENT NEEDS A POSITIVE CONTROL
+  BEFORE ANYTHING IS CONCLUDED FROM IT.**
+  `a2_cooccurrence` (option 47) measures forward drift from LABEL STATES and
+  finds nothing anywhere — every bucket, every horizon, inside ±0.03%. That was
+  about to be read as *"the regime label carries no directional edge"*, which
+  would have been a large architectural conclusion. **But that tool has only a
+  NULL control (RANGE_ONLY). No bucket in it is one we KNOW carries edge, so it
+  has never been shown capable of DETECTING edge.**
+  **ORB nets +$10,156 over 12 sessions.** Drift after an ORB break must be
+  visible. If the instrument cannot see the one strategy we know works, the
+  instrument is wrong — horizon, signing, or sampling — and nothing drawn from
+  label-state drift stands.
+  **HOW — `tests/trigger_drift.py` v1.0, BUILT 08-07, NOT YET RUN on the real
+  corpus.** Every CLOSED TRADE is a trigger that actually fired. For each, it
+  takes the entry timestamp, finds that symbol-day's price series in the replay
+  corpus, and measures signed forward change at 10/20/30 bars — **SIGNED BY THE
+  TRADE'S OWN DIRECTION**, so a profitable short reads positive — bucketed by
+  `setup_type`. ORB Short/Long are the control arms; handoff, standalone and
+  Sweep Long are the comparisons.
+  **⚠️ THE HORIZON IS NOT THE HOLD.** It deliberately ignores the exit: "what
+  did the underlying do in the next N minutes", not "what did we make". A
+  trigger can drift well and still lose money to a bad stop — **that separation
+  is the whole point, and MFE/MAE cannot provide it** because they are
+  premium-based and bounded by the exit.
+  **⚠️ THE RANDOM ARM IS THE NULL.** Drift is also measured from random ticks on
+  the same symbol-days, seeded for reproducibility. Without it "ORB drifts
+  +0.05%" is unreadable — the question is whether it drifts MORE than an
+  arbitrary moment on the same tape.
+  **⚠️ TIMEZONE — the trap that already inverted one verdict in this repo.**
+  `entry_time` is UTC by deliberate design; the replay corpus stamps `ts` as ET
+  wall-clock. Converted with `zoneinfo`, never a fixed offset (a fixed −4/−5 is
+  wrong on one side of every DST boundary), and if `zoneinfo` is unavailable the
+  tool REFUSES to guess rather than silently mis-matching. Unmatched triggers are
+  DROPPED AND COUNTED, never snapped to a neighbouring minute.
+  **PROVEN ON PLANTED DATA:** a +0.02%/bar window with ORB Long triggers inside
+  it and "noise" triggers outside → ORB Long median **+0.200%, 100% positive**,
+  noise **−0.010%**, null arm **0.000%**, 40/40 triggers matched through the
+  conversion.
+  **WHAT EACH OUTCOME MEANS.** ORB well above the null → the instrument works,
+  and the label-state nulls become a real finding about labels. ORB at the null
+  → the instrument is blind and `a2_cooccurrence`'s result must be withdrawn,
+  not acted on.
+
 - `[SCHEDULE]` **ONE-WEEK SLIP — DECIDED 2026-08-07.** Operator: *"I have
   decided to slip everything to the right by one week, to account for the major
   engine changes this week for intraday regime flips and blocked strategies that
@@ -4395,6 +4439,16 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.96 — 2026-08-07 — DRF.1: the drift measurement gets a positive control.**
+  Option 47 finds no forward drift in any label state, but it only ever had a
+  null control — nothing in it is known to carry edge, so it has never been shown
+  able to detect any. `tests/trigger_drift.py` v1.0 conditions drift on the ENTRY
+  TRIGGER instead, signed by trade direction, with ORB (+$10,156 over 12
+  sessions) as the positive control and a seeded random arm as the null. It
+  ignores the exit on purpose, which is what separates a bad entry from a bad
+  stop — something MFE/MAE cannot do. UTC→ET via zoneinfo with a refusal rather
+  than a guessed offset. Planted proof separated a drift window from noise
+  cleanly. **BUILT, NOT YET RUN.**
 - **v3.95 — 2026-08-07 — RGM.3: sweep stops being a regime, and the schedule
   slips a week.** `docs/MECHANICS.md` already called SWEEP_REVERSAL an "event
   overlay"; it was in the `Regime` enum anyway, and being the only scorer with a
