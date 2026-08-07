@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.02
+# docs/BACKLOG.md — v4.03
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -151,6 +151,40 @@ audit, VWAP ledger, EVM, readiness — all arrived in Telegram at 16:59. Item AX
 worked. Two corrections to my own account of it: it was **fixed in source on
 08-03**, not open, and `grep -c` on the `.env` could not have told a present
 variable from an empty one — the LENGTHS did.
+
+---
+
+## PART 0.6 — 2026-08-07 SHIPMENTS: DATED CHECK-INS (added v4.03)
+
+Nineteen deliveries landed on 2026-08-07 and **every one of them is
+SHIPPED-NOT-VERIFIED**. Code that is pushed has changed nothing until its effect
+is read back, and an unverified change is indistinguishable from a broken one
+until someone looks. Each row below names the DATE and the SPECIFIC QUESTION —
+not "review", which is how a check-in becomes a formality.
+
+| ⬜ | Check date | Item | The question, and what would falsify it |
+|---|---|---|---|
+| ⬜ | **Mon Aug 10** | MEM.2 | Does `grep MEM_TRACE ~/options-trader/bot.log` on SPX name a growing allocation site? **If RSS climbs while traced growth stays flat, the leak is NOT in Python objects** and tracemalloc is the wrong tool — the tool says so itself. |
+| ⬜ | **Mon Aug 10** | SWP.1 + SWP.2 | Did sweep fire at all under the score gate, and did SHORTS stop? A 0.20 floor against a ~0.265 ceiling is a NEAR-DISABLE. Zero longs would mean the 0.05 floor is also too high. |
+| ⬜ | **Mon Aug 10** | CNT.2 | Do `insurance_stop` rows appear? Zero in a full session means `underlying_stop` is never breached before BOS arms, and the gate is inert rather than protective. |
+| ⬜ | **Mon Aug 10** | CNT.3 | `COMPRESSION / Continuation` trade count must be **ZERO**. Anything above zero means the block is not reached. |
+| ⬜ | **Mon Aug 10** | RGM.3 | Confirm no `SWEEP_REVERSAL` label is emitted, and that the tie-break head is BREAKOUT_VOLATILE on dead ticks. **Per-regime stats are now on a different basis — do not compare to the 12-session history.** |
+| ⬜ | **Tue Aug 11** | EVM re-baseline | First `evm_status.py --asof` run after the slip. **SPI will JUMP; that is the plan moving, not work done.** Brief it as a re-baseline or the number lies. |
+| ⬜ | **Fri Aug 14** | CNT.1 | One week of `trend_continuation_breakout`. Compare its drift and never-favourable rate to `_standalone`. **This is the only live test of whether direction from the trend VOTE beats direction from the LABEL** — and the vote-derived buckets showed the same nothing, so do not assume it wins. |
+| ⬜ | **Fri Aug 14** | DRF.1 | Re-run `trigger_drift` with the post-bake sessions. **ORB Short must still clear the null arm** — if the positive control stops passing, every conclusion drawn from it is withdrawn, not adjusted. |
+| ⬜ | **Fri Aug 14** | N.7 | Are rows carrying `ruleset`? Then re-run L3.2a and confirm cross-date pooling can finally be split by engine. |
+| ⬜ | **Fri Aug 14** | L3.2a v1.1 | Add the seeded NULL ARM and make the MFE/MAE **ratio** the headline. Until then the MISSED column must not be quoted — MFE ≥ 0.10% over 20 bars is a bar ordinary range clears. |
+| ⬜ | **Fri Aug 14** | GATE.1 follow-on | Add a BREACH TIMESTAMP to `auto_label` so BREAKOUT (141) and SWEEP (63) symbol-days become gradeable. 204 symbol-days of ground truth currently unscoreable. |
+| ⬜ | **Fri Aug 21** | AJ.2 | The continuation decision, with a week of CNT.1 behind it. Standing evidence: standalone drifts **−0.106% at 30 bars, 37% positive over 136 trades** — negative edge, not absent edge. |
+| ⬜ | **Fri Aug 28** | Floor re-test | Only if new evidence appears. **DECIDED 08-07: the 25%/40% floor STAYS.** 308 winners, still exactly 5 ever recovered from −25%, zero from −40%. Do not reopen on a whim. |
+
+**⚠️ TWO CAVEATS THAT OUTLIVE THIS TABLE.**
+**(1)** 2026-08-03 and 2026-08-04 carry ~3,650 ticks each against ~11,280
+elsewhere — the session guard blocked collection on 14 boxes two days running and
+the tape is NOT recoverable. Mark both PARTIAL wherever they are pooled; every
+statistic computed on the 12-session corpus inherits it.
+**(2)** Rows banked before N.7 carry no `ruleset`, so the whole 12-session
+history is un-attributable to an engine. It only applies forward.
 
 ---
 
@@ -4486,6 +4520,18 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.03 — 2026-08-07 — every one of tonight's nineteen deliveries now has a
+  DATED check-in with a falsifiable question.** PART 0.6. Code that is pushed has
+  changed nothing until its effect is read back, and today produced a lot of
+  pushed code: the emission fix, sweep ungated then removed from the regime set,
+  continuation opened to breakout tape, the insurance gate, two tuning priors,
+  the drift instrument, the rejection ledger, the ruleset stamp, the memory
+  tracer and the slip itself. Each row names what would FALSIFY the change, not
+  just when to look — "review" is how a check-in becomes a formality.
+  Carries the two caveats that outlive the table: 08-03/08-04 are permanently
+  thin (session guard, 14 boxes, tape unrecoverable) and must be marked PARTIAL
+  wherever pooled; and N.7's ruleset stamp applies only FORWARD, so the
+  12-session history stays un-attributable.
 - **v4.02 — 2026-08-07 — N.7: journal rows now say which engine made the
   decision.** Every cross-date analysis of these rows has been pooling decisions
   from different rulesets with no way to declare it — L3.2a could only emit
