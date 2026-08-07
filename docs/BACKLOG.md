@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.88
+# docs/BACKLOG.md — v3.89
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -77,6 +77,8 @@ BAKED is changing nothing about today's data.
 | **RGM.1 — emission-law attribution + counterfactual** | ✅ 08-06 | ⬜ | n/a (offline, read-only) | `tests/emission_law_sweep.py` v1.0; harness **99.9%** faithful against the REAL integrator on a planted one-change world, where the current law gives **141.5 switches/symbol-day** and protect-below-hold gives **1.0** — a cliff, not the delta sweep's slope. **NOT YET RUN on the real corpus.** |
 | **RGM.1 F7 — the emission fix + live A/B** | ✅ 08-06 | ⬜ | ⬜ **needs a bake** | conviction_integrator **v2.1**, main **v5.5**, `tests/test_emission_protection.py` (7 pass, incl. a v2.0 control that MUST flip), `tests/label_agreement.py` v1.0. Sandbox suite **224 passed / 1 skipped**; 8 collection failures are the missing `tastytrade` SDK and are IDENTICAL at origin HEAD. **Authoritative suite run happens on control as part of the deploy — not yet read.** |
 | **RGM.2 — Layer-1 discrimination census** | ✅ 08-07 | ⬜ | n/a (offline, read-only) | `tests/discrimination_census.py` v1.0; every planted count recovered exactly (101 dead / 50 one-live / 30 tight-gap / 20 wide-gap). **NOT YET RUN on the corpus.** |
+| **RGM.1 F7 — MEASURED END TO END** | ✅ 08-07 | ✅ 08-07 | ⬜ **needs a bake** | real-tape A/B on 08-06: **20.8 → 4.2 switches/symbol-day**, `L1 IDENTICAL`, re-emitted baseline 661 on BOTH files (conviction dynamics unchanged). Agreement gate over 19 sessions: TREND modal **63.4→69.1%**, in-family **47.5→57.8%**. Suite 287/rc=0. Evidence archived to `~/evidence_rgm1_20260806/` |
+| **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
 1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
@@ -2418,10 +2420,96 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   held. A FALL KILLS THE DEPLOY.** Untagged symbol-days are excluded rather
   than scored as RANGING; absence of a tag is not evidence of a range.
 
+  **✅ RESULT 2026-08-07 — F7 IS MEASURED, NOT ARGUED. Five independent checks,
+  every one of which could have killed it.**
+
+  **1. MECHANISM.** `emission_law_sweep` over 19 sessions / 523 symbol-days /
+  186,582 ticks: **8,083 of 8,345 label switches — 96.9% — came from the
+  unprotected branch.** Commit threshold and displacement margin governed 3.1%.
+  Median incumbent conviction at the moment of a switch: **0.08**. The typical
+  label change handed off between two near-zero beliefs. The incumbent sat
+  below `theta_hold` on 50.3% of ticks, so this was half the session, not an
+  edge case. Harness validated first at **98.4%** label reproduction.
+
+  **2. STABILITY, REAL ENGINE, REAL TAPE.** The 08-06 session replayed twice
+  through the actual integrator, one variable (`OT_L2_PROTECT_BELOW_HOLD`):
+  **v2.0 = 604 switches (20.8/symbol-day) → v2.1 = 121 (4.2/symbol-day).**
+  Roughly 5x. The offline counterfactual had predicted 3.3 against a 17.6
+  baseline; 08-06 ran churnier than average (20.8), and 3.3 × (20.8/17.6) = 3.9
+  plus the arming carve-out — so the model predicted the end-to-end result
+  within noise, which validates the modelling chain independently.
+  **Stated honestly: 4.2 is slightly ABOVE the operator's "three or four at the
+  most", and it is ONE session.**
+
+  **3. CORRECTNESS — the gate, pre-registered before any number was read.**
+  `label_agreement` over 19 sessions, 361 tagged symbol-days, scored against
+  `auto_label`'s price-action-only ground truth which has never seen a score, a
+  conviction or a label: **TREND modal agreement 63.4% → 69.1%, in-family
+  47.5% → 57.8%.** The protected law is not merely steadier, it is **more
+  right**. H1 confirmed on its registered terms.
+
+  **4. SCOPE.** `L1 IDENTICAL` — the A1–A5 acceptance blocks diff clean across
+  the A/B, so the change stayed inside Layer 2. And a free stronger proof: the
+  sweep's re-emitted baseline is **661 on BOTH files, byte-identical**. That
+  figure derives from each run's recorded conviction vectors, so identical
+  baselines prove the **conviction dynamics are unchanged** — v2.1 altered only
+  which label is chosen, never how belief accumulates.
+
+  **5. SUITE.** 287 passed / 1 skipped / rc=0 on control, with all 7 emission
+  tests confirmed **by name** — including `test_v2_0_control_does_hand_it_over`,
+  which must FAIL to flip if the protection assertion is passing for an
+  unrelated reason.
+
+  **⚠️ THE ONE DEBIT, NAMED NOT BURIED.** SWEEP in-family FELL 3.5% → 1.3%. The
+  registered H1 was TREND-specific while the tool header said "a fall kills the
+  deploy" — that ambiguity is mine and is not resolved silently in favour of the
+  wanted result. Read straight: SWEEP was ALREADY a dead regime (0.4% of live
+  wins, 96% zero), so 3.5% was noise and 1.3% is less noise. It does not
+  overturn the gate; it is still a debit.
+
+  **⚠️ WHAT THIS DOES **NOT** FIX, so nobody reads it as more than it is.**
+  Layer 1 is untouched — RGM.2 below. Even on TREND-tagged days the protected
+  label spends only **57.8%** of ticks in the trending family. The label is
+  steadier and more right; it is not right. And **the failure mode CHANGES
+  shape**: strategy dispatch gates on the label, so a HELD label runs its
+  strategy for ~50 ticks instead of ~8. Thrashing between strategies becomes
+  commitment to possibly the wrong one. The agreement lift is the evidence that
+  trade is worth taking; it is not proof it always is.
+
   **⚠️ WHAT A STEADIER LABEL DOES NOT PROVE.** A law emitting one regime all
   day scores zero switches and is worthless. Stability is necessary, not
   sufficient; whether the steadier label is the CORRECT label is the
   `session_labels.jsonl` agreement question and neither tool touches it.
+
+  **⬜ REMAINING UNRESOLVED, carried forward — none of these is closed:**
+  1. **The live bake.** BUILT and PUSHED; **NOT BAKED.** Until the fleet runs
+     it, today's data is still being generated by the old law.
+  2. **Offline ≠ live.** The replay steps bar-to-bar on 1m tape; the fleet ticks
+     every 15s. Tomorrow's `L2 A/B DIVERGE` log is the first live evidence.
+  3. **The 355-vs-13,860 contradiction (F6/probe).** The RANGING fallback can
+     explain at most ~2.6% of the branch changes `veto_attribution` counted.
+     Either that row is a THIRD bug in that file's lineage or a fourth RANGING
+     breakdown shape exists. Unresolved; needs a direct key-set census.
+  4. **`regime_flip` bucketing.** 54 RANGING entries reported closed by an exit
+     that exists only in `_evaluate_continuation`, which cannot enter on
+     RANGING. Either the report buckets all three variants under one name or the
+     entry-regime field means something else. **This changes which strategy the
+     churn was actually killing.**
+  5. **Cold start unverified.** Protection arms on first commit and `main.py`
+     gates on `not st.stale`, and ORB owns the open regime-immune at both
+     dispatch and exit — three layers of cover, none of them measured. Wanted:
+     first committed label per symbol-day and how long it lasts.
+  6. **SWEEP_REVERSAL is a dead regime.** 0.4% of live wins, 96% zero, 0.0%
+     modal agreement. A whole regime carrying no weight. Own workstream.
+  7. **Two under-sampled dates.** 08-03 and 08-04 carry ~3,650 ticks against
+     ~11,280 elsewhere — about 9 symbols instead of 29. They are underweight in
+     EVERY pooled statistic on this corpus, including the 96.9% attribution.
+     Cause unknown; check the harvest.
+  8. **`label_agreement` v1.1.** PIN/BREAKOUT/SWEEP rows are a granularity
+     mismatch and are NOT evidence about the engine — window each tag to its own
+     timeframe before quoting them.
+  9. **`discrimination_census` v1.1.** Separation must be conditioned on ≥2 live
+     regimes; the 0.347 median is inflated by uncontested ticks.
 
   **⚠️ SCOPE + TIMING.** Everything above is read-only analysis. But F7 is a
   contract defect whose output CORRUPTS THE SAMPLE — every `regime_flip
@@ -4008,6 +4096,19 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.89 — 2026-08-07 — RGM.1 F7 CLOSED AS MEASURED; the churn has a cause, a
+  fix, and five independent checks.** 96.9% of label switches came from an
+  emission branch with no commit bar, no margin and no dwell, at a median
+  incumbent conviction of 0.08. Real-tape A/B: **20.8 → 4.2 switches per
+  symbol-day**. Pre-registered agreement gate: TREND modal 63.4 → 69.1%,
+  in-family 47.5 → 57.8% — steadier AND more right. Scope held (`L1 IDENTICAL`,
+  and identical re-emitted baselines prove conviction dynamics unchanged). Suite
+  287/rc=0, emission tests confirmed by name. Recorded against it: SWEEP
+  in-family fell, 4.2 is above the stated 2–4, the switch count is one session,
+  and **it is not BAKED**. Nine unresolved items carried forward, including the
+  355-vs-13,860 contradiction and the `regime_flip` bucketing question that
+  changes which strategy the churn was killing. Layer 1 remains untouched
+  (RGM.2): 41.9% of ticks still carry one live regime or none.
 - **v3.88 — 2026-08-07 — RGM.2 opened: the Layer-1 discrimination problem gets
   a tool before it gets an opinion.** F7 fixed WHICH label is emitted; RGM.2 is
   about whether the score vector carries enough information to choose one at
