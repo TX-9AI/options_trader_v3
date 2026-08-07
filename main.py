@@ -1,5 +1,16 @@
 """
-main.py — options_trader v5.5
+main.py — options_trader v5.6
+v5.6 — 2026-08-07 — SWP.1: SWEEP UNGATED FROM THE REGIME LABEL. Operator's
+        ruling — sweep is an EVENT, not a market state. The dispatch required
+        `regime.primary_regime == Regime.SWEEP_REVERSAL`; that label wins 0.4%
+        of live ticks, is exactly zero on 96%, and F7's commit threshold made it
+        rarer still. Dispatch now gates on the L1 `_sweep` SETUP SCORE
+        (>= SWEEP_SETUP_FLOOR), captured from the confluence result this loop
+        already computes. The score's three hard vetoes ARE the stated spec:
+        named level, rejected back through, not accepted beyond. The PLTR
+        trend-opposition guard is a soft-necessary INSIDE that score, so it
+        survives the change — it never lived in this gate.
+
 v5.5 — 2026-08-06 — LIVE A/B ON THE EMISSION LAW (RGM.1 F7). conviction_
         integrator v2.1 closes the unprotected branch: below theta_hold the
         incumbent was replaced by bare argmax every tick, which accounted for
@@ -514,6 +525,7 @@ if TYPE_CHECKING:                     # v4.9 — resolves the quoted annotation 
                                       # run at ZERO tolerance instead of one.
 from strategy.orb_strategy import ORBStrategy
 from strategy.sweep_reversal_strategy import SweepReversalStrategy
+from config import SWEEP_SETUP_FLOOR
 from strategy.butterfly_strategy import ButterflyStrategy
 from strategy.iron_condor_strategy import IronCondorStrategy
 from strategy.continuation_strategy import ContinuationStrategy
@@ -660,9 +672,16 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
             if df1m is not None and len(df1m) >= RANGE_WINDOW_BARS:
                 closes = df1m["close"].tolist()[-RANGE_WINDOW_BARS:]
             atr = getattr(ctx["vol"], "atr_current", None)
-            evidence = _l1_scorer.evidence(ctx["vol"], ctx["trend"],
-                                           ctx["structure"], ctx["liq_map"],
-                                           closes=closes, atr=atr)
+            # v5.6 (SWP.1) — capture the FULL result, not just the vector.
+            # `evidence()` already called `score()` internally, so taking the
+            # result object costs nothing and gives dispatch the per-regime
+            # SETUP SCORES. The sweep gate reads SWEEP_REVERSAL from here
+            # instead of requiring that label to win the L2 argmax.
+            _l1_res  = _l1_scorer.score(ctx["vol"], ctx["trend"],
+                                        ctx["structure"], ctx["liq_map"],
+                                        closes=closes, atr=atr)
+            ctx["l1"] = _l1_res
+            evidence = _l1_res.evidence()
             st = _l2_integ.update(now_utc().timestamp(), evidence)
             # persist the book so a mid-session restart doesn't reset conviction
             try:
@@ -1322,9 +1341,27 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     # and is gated to NAMED levels only — a runaway that then sweeps a real pool
     # and rejects is a legitimate reversal; a runaway that pokes an equal-H/L is
     # not. Non-runaway sweeps are unchanged (fire as before on the SWEEP label).
-    if signal is None and regime.primary_regime == Regime.SWEEP_REVERSAL:
+    # v5.6 (SWP.1) — SWEEP IS AN EVENT, NOT A REGIME. This required the
+    # committed label to be SWEEP_REVERSAL; that label wins 0.4% of live ticks
+    # and is exactly zero on 96%, so the trade was effectively off, and F7's
+    # commit threshold narrowed it further. It now gates on the L1 _sweep SETUP
+    # SCORE, whose three HARD VETOES are precisely the operator's stated
+    # condition — a NAMED level (veto_loc), REJECTED back through (veto_reclaim),
+    # not accepted beyond (veto_accept). A non-zero score already means all
+    # three passed.
+    # THE PLTR PROTECTION TRAVELS WITH THE SCORE: `trend_opp` is a
+    # soft-necessary inside _sweep, so a reversal into a strong ACCELERATING
+    # opposing trend still scores 0 and still cannot fire. That guard lived in
+    # the scorer, never in this gate — which is why gating on the score keeps it
+    # and gating on anything else would have lost it.
+    _sweep_setup = 0.0
+    _l1r = ctx.get("l1")
+    if _l1r is not None:
+        _sweep_setup = (getattr(_l1r, "scores", {}) or {}).get("SWEEP_REVERSAL") or 0.0
+    if signal is None and _sweep_setup >= SWEEP_SETUP_FLOOR:
         sweep_sig = _safe_strategy("SweepReversal", lambda: _sweep_strategy.generate_signal(
             regime        = regime,
+            setup_score   = _sweep_setup,
             vol_state     = ctx["vol"],
             structure     = ctx["structure"],
             liq_map       = ctx["liq_map"],

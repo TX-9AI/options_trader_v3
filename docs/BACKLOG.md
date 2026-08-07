@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v3.91
+# docs/BACKLOG.md — v3.92
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -80,6 +80,7 @@ BAKED is changing nothing about today's data.
 | **RGM.1 F7 — MEASURED END TO END** | ✅ 08-07 | ✅ 08-07 | ⬜ **needs a bake** | real-tape A/B on 08-06: **20.8 → 4.2 switches/symbol-day**, `L1 IDENTICAL`, re-emitted baseline 661 on BOTH files (conviction dynamics unchanged). Agreement gate over 19 sessions: TREND modal **63.4→69.1%**, in-family **47.5→57.8%**. Suite 287/rc=0. Evidence archived to `~/evidence_rgm1_20260806/` |
 | **MEM.1 — SPX leak: confirmed and traced** | ✅ 08-07 | ⬜ | ⬜ **needs an RTH run** | two-sample fleet RSS: 14 boxes flat (MU −1.9 MB, NVDA −4.5 MB), **SPX +93.5 MB in 16.4 min = 5.7 MB/min**; QQQ control **+8 KB**. `tests/mem_tracer.py` v1.0 built; diff machinery proven on a planted 10 MB leak. |
 | **SWP.1 — ungate sweep from regime** | ✅ 08-07 tool | ⬜ | ⬜ **needs the floor + a bake** | operator ruling: sweep is an EVENT, not a regime. Fleet log grep confirmed **zero sweep activity 08-07** — every `Sweep strike:` line was CONTINUATION readiness (`target=0.45` = `TR_CONT_TARGET_DELTA`). `tests/sweep_score_dist.py` v1.0 sets the gate floor from the corpus; proven on planted data. |
+| **SWP.1 — THE UNGATING, BUILT** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | config **v4.2** (`SWEEP_SETUP_FLOOR` 0.05, `OT_SWEEP_SETUP_FLOOR`), main **v5.6**, sweep_reversal_strategy **v3.3**, `tests/test_sweep_ungated.py` 6 pass incl. a PLTR-guard canary. Deliberate-failure test passed. Sandbox suite 231 passed / 1 skipped (7 failures = missing tastytrade SDK, identical at origin HEAD). **Authoritative suite run on control NOT yet read.** |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
 
 **⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
@@ -2560,7 +2561,58 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   `_sweep_target_delta` (today it reads `regime.conviction`, which after
   ungating would be the AMBIENT regime's conviction — a nonsense input to sweep
   strike selection), and the label gate disappears.
-  **⚠️ THE FLOOR MUST COME FROM DATA.** The old gate was effectively "wins the
+  **✅ BUILT 2026-08-07 — the floor came from the corpus, not from a guess.**
+  19 sessions / 523 symbol-days: SWEEP is non-zero on **4.0%** of ticks
+  (7,555 of 186,582 — 96% annihilated), and of those p25=0.004, p50=0.016,
+  p75=0.068, p90=0.154, p99=0.489, max=0.717. Floor table (ticks / sym-days /
+  ticks-per-symday): 0.05 → 2193/78/28.1 · 0.10 → 1294/68/19.0 · 0.20 →
+  544/50/10.9 · 0.30 → 265/29/9.1 · 0.50 → 70/10/7.0.
+  **SHIPPED `SWEEP_SETUP_FLOOR = 0.05`** (env `OT_SWEEP_SETUP_FLOOR`), chosen
+  MAX-PERMISSIVE for the collection phase per the operator, to be tightened on
+  live fires.
+  **THE STRUCTURAL ARGUMENT FOR A LOW FLOOR, which is the real justification:**
+  `_sweep`'s three hard vetoes are `veto_loc` (a NAMED level), `veto_reclaim`
+  (rejected back through) and `veto_accept` (not accepted beyond). All three
+  must pass for the score to be non-zero at all — so **every non-zero tick
+  already satisfies the operator's stated spec verbatim.** Magnitude above zero
+  is quality grading, not qualification. 0.05 is a thin noise guard over
+  `score > 0`, not a quality bar.
+  **PERMISSIVENESS CANNOT PRE-EMPT OTHER SETUPS:** sweep remains Priority 2.5
+  behind `if signal is None`, so ORB and Continuation always take first refusal.
+  A loose floor risks bad sweep trades in the GAPS, never stolen ones. Pinned by
+  a test.
+  **THE OPERATOR'S EXHAUSTION ASYMMETRY WAS ALREADY IN THE CODE** and needed no
+  change — only unblocking. Two terms, both keyed on
+  `trend_state.primary_momentum`: `opp_mom = {ACCEL 1.0, FLAT 0.6, DECEL 0.25,
+  "" 0.8}` feeding `trend_opp`, and the corroborator `exh_val = {DECEL 1.0,
+  FLAT 0.5, ACCEL 0.0, "" 0.0}`. As the opposing move decelerates, suppression
+  falls AND corroboration rises — sweep conviction climbs exactly as
+  continuation's thesis dies, which is what the operator described.
+  **⚠️ BUT THE `""` CASE DOUBLE-PENALISES, AND IT IS THE NEXT THING TO MEASURE.**
+  With no 5m momentum vote: `opp_mom = 0.8` (near-full suppression) AND
+  `exh_val = 0.0` (zero corroboration) — and `exh_val` is one of only TWO
+  corroborators, so a missing vote both crushes the multiplier and removes half
+  the evidence. Missing data reads as "accelerating against you". This is a
+  prime suspect for the 96% zeros and is the same family as the known
+  "trend vote STARVED" / align_frac 0.67 ceiling. **MEASURE: the distribution of
+  `breakdown.SWEEP_REVERSAL.momentum` on ticks where all three hard vetoes
+  passed. If `""` dominates, the ungating alone will not revive the trade.**
+  **WHAT SHIPPED:** config v4.2 (the knob) · main v5.6 (captures the full
+  `ConfluenceResult` into `ctx["l1"]` — `evidence()` already called `score()`
+  internally so it costs nothing — and gates on
+  `_sweep_setup >= SWEEP_SETUP_FLOOR`) · sweep_reversal_strategy v3.3 (in-strategy
+  label gate removed; new `setup_score` kwarg becomes the strategy's conviction,
+  threaded through both `_long_reversal` and `_short_reversal`) ·
+  `tests/test_sweep_ungated.py` (6 tests, including a canary asserting
+  `trend_opp` is still soft-necessary, because losing it re-opens PLTR silently).
+  **TWO ERRORS CAUGHT IN-BUILD AND WORTH KEEPING:** (1) the first patch defined
+  `conv` in `generate_signal` and used it inside the builder methods where it
+  was out of scope — the same NameError class as defect W and the `mid` incident;
+  (2) the first absence-check test failed against CORRECT code because main
+  v5.6's changelog *quotes the very line it removed* — a canary that fires on
+  documentation is worse than none, so the tests now strip the module docstring
+  via `ast` before scanning.
+  **⚠️ THE FLOOR SHOULD STILL COME FROM DATA WHEN IT IS TIGHTENED.** The old gate was effectively "wins the
   argmax". Post-excavation pooled sweeps were WEAK (old max 0.125), so a
   0.55-style floor blocks everything and 0.05 fires on noise.
   `tests/sweep_score_dist.py` v1.0 prints the nonzero-score distribution and
@@ -4198,6 +4250,20 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v3.92 — 2026-08-07 — SWP.1 BUILT: sweep no longer gates on the regime
+  label.** Dispatch qualifies on the L1 `_sweep` setup score, whose three hard
+  vetoes are the operator's spec verbatim — named level, rejected back through,
+  not accepted beyond — so every non-zero tick already qualifies and the floor
+  is a noise guard rather than a quality bar. `SWEEP_SETUP_FLOOR = 0.05` set
+  from the corpus (non-zero on 4.0% of ticks; p50 0.016, p90 0.154), deliberately
+  max-permissive for collection and knob-tunable without a deploy. The PLTR
+  trend-opposition guard survives because it lives as a soft-necessary INSIDE
+  the score, and a test now asserts that. The operator's "conviction should rise
+  as continuation falls" turned out to be already encoded in `opp_mom` and
+  `exh_val` — it needed unblocking, not building. Filed against it: the empty-
+  momentum case double-penalises sweep and is the next measurement. config v4.2,
+  main v5.6, strategy v3.3, 6 new tests, deliberate-failure test passed.
+  **BUILT AND PUSHED; NOT BAKED — the fleet still runs the old gate.**
 - **v3.91 — 2026-08-07 — SWP.1 opened: sweep stops being a regime.** Operator
   ruling that sweep is an event, not a market state — confirmed by three
   independent lines already in the record. A fleet log grep proved ZERO sweep

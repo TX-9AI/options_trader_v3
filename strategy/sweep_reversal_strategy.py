@@ -1,5 +1,24 @@
 """
 strategy/sweep_reversal_strategy.py — Post-liquidity-sweep reversal for options.
+v3.3 — 2026-08-07 — SWP.1: THE REGIME GATE IS GONE. Operator's ruling — sweep is
+        an EVENT, not a market state. `generate_signal` refused unless the
+        committed label was SWEEP_REVERSAL; that label wins 0.4% of live ticks,
+        is exactly zero on 96%, and F7's commit threshold narrowed it further,
+        so the trade was effectively off. Dispatch (main v5.6) now qualifies the
+        setup on the L1 `_sweep` SCORE, whose three hard vetoes ARE the spec: a
+        NAMED level, REJECTED back through, not accepted beyond.
+        NEW `setup_score` kwarg carries that score and becomes the strategy's
+        CONVICTION — it drives `_sweep_target_delta`, the confluence note, and
+        `signal.conviction`. Previously all three read `regime.conviction`,
+        which after ungating would be the AMBIENT regime's conviction (e.g.
+        TRENDING_BULL at 0.80) — a nonsense input to sweep strike selection and
+        a silent one. Defaults to `regime.conviction` only so an un-migrated
+        caller degrades visibly rather than crashing.
+        WHAT DID NOT CHANGE: the ORB-ownership gate below, the confirmed/fresh
+        sweep preconditions, and the PLTR trend-opposition guard — the last of
+        which lives as a soft-necessary INSIDE the score, never in the removed
+        gate, so it travels with the new qualification.
+
 v3.2 — 2026-07-21 — ORB-OWNERSHIP GATE (hardcoded). A sweep may fire ONLY after
         the ORB has released its claim on price. While the ORB owns price —
         inside the range awaiting a break (WAITING_FOR_BREAK), broken out and
@@ -52,7 +71,9 @@ import logging
 from typing import Optional
 
 from strategy.base_strategy import BaseOptionsStrategy, OptionsSignal
-from analysis.regime_classifier import RegimeState, Regime
+from analysis.regime_classifier import RegimeState   # v3.3: `Regime` no longer
+# imported — the enum was used ONLY by the removed label gate. Leaving a dead
+# import would let a future edit silently re-introduce the gate it belongs to.
 from analysis.volatility_engine import VolatilityState
 from analysis.structure_analyzer import StructureMap
 from analysis.liquidity_mapper import LiquidityMap, LiquiditySweep
@@ -101,12 +122,18 @@ class SweepReversalStrategy(BaseOptionsStrategy):
                          chain: OptionsChain,
                          macro: MacroSnapshot,
                          df_1m: Optional[pd.DataFrame],
-                         current_price: float) -> Optional[OptionsSignal]:
+                         current_price: float,
+                         setup_score: Optional[float] = None) -> Optional[OptionsSignal]:
         """
         Generate a sweep reversal options signal.
 
         Args:
-            regime:         Current regime (must be SWEEP_REVERSAL)
+            regime:         Ambient regime state (NO LONGER required to be
+                            SWEEP_REVERSAL — v3.3/SWP.1)
+            setup_score:    L1 `_sweep` setup score for this tick. Drives strike
+                            selection. None => fall back to regime.conviction,
+                            which is only correct for a caller that still gates
+                            on the label.
             vol_state:      Volatility state
             structure:      Market structure (support/resistance)
             liq_map:        Liquidity map with recent sweep
@@ -118,8 +145,13 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         Returns:
             OptionsSignal or None
         """
-        if regime.primary_regime != Regime.SWEEP_REVERSAL:
-            return None
+        # v3.3 (SWP.1) — the label gate is GONE. Sweep is an event, not a
+        # regime; dispatch now qualifies the setup on the L1 _sweep score, whose
+        # hard vetoes are the named level + the rejection. Re-checking the label
+        # here would silently re-impose the very gate that was removed upstream.
+        # The preconditions below (a confirmed, fresh sweep) remain the
+        # strategy's own authority and are unchanged.
+        conv = regime.conviction if setup_score is None else float(setup_score)
 
         sweep = liq_map.recent_sweep
         if not sweep or not sweep.confirmed:
@@ -146,12 +178,12 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         if sweep.kind == "low_sweep":
             return self._long_reversal(
                 sweep, regime, vol_state, structure, liq_map,
-                chain, macro, df_1m, current_price
+                chain, macro, df_1m, current_price, conv
             )
         elif sweep.kind == "high_sweep":
             return self._short_reversal(
                 sweep, regime, vol_state, structure, liq_map,
-                chain, macro, df_1m, current_price
+                chain, macro, df_1m, current_price, conv
             )
         return None
 
@@ -163,7 +195,8 @@ class SweepReversalStrategy(BaseOptionsStrategy):
                         chain: OptionsChain,
                         macro: MacroSnapshot,
                         df_1m: Optional[pd.DataFrame],
-                        current_price: float) -> Optional[OptionsSignal]:
+                        current_price: float,
+                        conv: float) -> Optional[OptionsSignal]:
         """Low swept → buy OTM call."""
 
         # Price must have recovered above the swept level
@@ -239,19 +272,19 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         if structure.nearest_support and abs(current_price - structure.nearest_support) / current_price < 0.005:
             self._add_confluence(signal, "At structure support")
 
-        if regime.conviction >= 0.65:
-            self._add_confluence(signal, f"High conviction ({regime.conviction:.0%})")
+        if conv >= 0.65:
+            self._add_confluence(signal, f"High setup score ({conv:.0%})")
 
         if len(signal.confluence_factors) < 2:
             logger.debug("Sweep long: insufficient confluence")
             return None
 
-        signal.conviction = regime.conviction
+        signal.conviction = conv
         signal.adx_at_signal = regime.adx
         signal.flat_angle_deg = getattr(regime, 'flat_angle_deg', 0.0) or 0.0
 
         # ── Strike selection: 0.20 delta OTM call ────────────────────────────
-        target_delta = _sweep_target_delta(regime.conviction)
+        target_delta = _sweep_target_delta(conv)
         contract = get_chain_fetcher().select_sweep_strike(chain, "long", target_delta)
         if contract is None:
             logger.warning("Sweep long: no suitable OTM call found")
@@ -280,7 +313,8 @@ class SweepReversalStrategy(BaseOptionsStrategy):
                          chain: OptionsChain,
                          macro: MacroSnapshot,
                          df_1m: Optional[pd.DataFrame],
-                         current_price: float) -> Optional[OptionsSignal]:
+                         current_price: float,
+                         conv: float) -> Optional[OptionsSignal]:
         """High swept → buy OTM put."""
 
         if current_price >= sweep.pool_price:
@@ -340,19 +374,19 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         if structure.nearest_resistance and abs(current_price - structure.nearest_resistance) / current_price < 0.005:
             self._add_confluence(signal, "At structure resistance")
 
-        if regime.conviction >= 0.65:
-            self._add_confluence(signal, f"High conviction ({regime.conviction:.0%})")
+        if conv >= 0.65:
+            self._add_confluence(signal, f"High setup score ({conv:.0%})")
 
         if len(signal.confluence_factors) < 2:
             logger.debug("Sweep short: insufficient confluence")
             return None
 
-        signal.conviction = regime.conviction
+        signal.conviction = conv
         signal.adx_at_signal = regime.adx
         signal.flat_angle_deg = getattr(regime, 'flat_angle_deg', 0.0) or 0.0
 
         # ── Strike selection: 0.20 delta OTM put ─────────────────────────────
-        target_delta = _sweep_target_delta(regime.conviction)
+        target_delta = _sweep_target_delta(conv)
         contract = get_chain_fetcher().select_sweep_strike(chain, "short", target_delta)
         if contract is None:
             logger.warning("Sweep short: no suitable OTM put found")

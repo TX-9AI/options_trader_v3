@@ -1,5 +1,11 @@
 """
-config.py — options_trader v4.1
+config.py — options_trader v4.2
+v4.2 — 2026-08-07 — SWP.1: SWEEP_SETUP_FLOOR (OT_SWEEP_SETUP_FLOOR, default
+        0.05). Sweep stops gating on the regime label and gates on the L1
+        _sweep SETUP SCORE. The label wins 0.4% of live ticks and is exactly
+        zero on 96%, so the trade was effectively off. A PRIOR for the
+        collection phase, to be tightened on live fires.
+
 v4.1 — 2026-08-01 — 15m FETCH DEPTH 50 -> 150, waking a vote that has never
         fired. trend_engine._analyze_single bails to NEUTRAL below EMA_SLOW+5=55
         bars, and 15m fetched 50 — so the 0.30 direction weight v3.1 moved ONTO
@@ -345,6 +351,30 @@ ORB_STRIKE_DELTA_BIAS       = "lower"
 SWEEP_DELTA_STRONG          = 0.12   # conviction -> 1.0 : leveraged but REACHABLE
 SWEEP_DELTA_WEAK            = 0.30   # conviction -> 0.0 : near-ATM, participation
 SWEEP_DELTA_TOLERANCE       = 0.04   # acceptable band around the target delta
+
+# ── SWP.1 — sweep is an EVENT, not a regime (2026-08-07, operator's ruling) ──
+# The trade required the committed L2 label to be SWEEP_REVERSAL, a label that
+# wins 0.4% of live ticks and is exactly 0 on 96% of them, so the trade was
+# effectively off. It now gates on the L1 _sweep SETUP SCORE instead.
+#
+# WHY A LOW FLOOR IS THE CORRECT READING OF THE SPEC, not laziness: _sweep's
+# THREE HARD VETOES are veto_loc (a NAMED level), veto_reclaim (rejected back
+# through it) and veto_accept (not accepted beyond). All three must pass for the
+# score to be non-zero at all — which is precisely "a move into a named
+# liquidity pool accompanied by a rejection". Every non-zero tick therefore
+# ALREADY qualifies; magnitude above zero is quality grading, not qualification.
+#
+# Corpus, 19 sessions / 523 symbol-days: non-zero on 4.0% of ticks; of those
+# p50=0.016, p90=0.154, max=0.717. This floor admits the top ~29% of non-zero
+# ticks (78 symbol-days, ~28 ticks/symbol-day before the strategy's own cooldown
+# and position checks collapse them into far fewer entries).
+#
+# A PRIOR, NOT A FIT — deliberately permissive for the collection phase and
+# meant to be TIGHTENED once live fires exist. The corpus can say how OFTEN a
+# floor admits; it cannot say whether those are good trades.
+# Permissiveness cannot steal from other setups: sweep is Priority 2.5 behind
+# `if signal is None`, so ORB and Continuation always get first refusal.
+SWEEP_SETUP_FLOOR = float(os.environ.get("OT_SWEEP_SETUP_FLOOR", "0.05"))
 SWEEP_MIN_REJECTION_PCT     = 0.003
 SWEEP_MAX_AGE_BARS          = 8
 # Entry-window tuning (separate pass from detection). The recovery window is now
