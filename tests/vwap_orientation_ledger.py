@@ -1,10 +1,45 @@
 #!/usr/bin/env python3
 """
-tests/vwap_orientation_ledger.py — v1.3 — 2026-08-08
+tests/vwap_orientation_ledger.py — v1.4 — 2026-08-08
 
-v1.3 — 2026-08-08 — THE EVENT FILTER, the fourth and last layer. v1.2 resolved
-       all five fields correctly and the run STILL returned 419 undecidable and
-       ZERO decidable. Cause: the event whitelist accepted only
+v1.4 — 2026-08-08 — THE JOIN LAYER, the fifth and final one — and this time the
+       WHOLE remaining path was traced before anything was patched. v1.3's run
+       (39,344 records) surfaced three stacked defects, none of them the filter:
+       (1) DIRECTION EXISTS ON ONLY ONE TRACK. `readiness.factors.dir` is
+           journaled ONLY by `_trend_credit_spread` (trade_readiness.py:569).
+           Continuation (:331), sweep (:352), condor (:393 — has `side`, not
+           `dir`) and butterfly (:414) journal NO direction field. So five of
+           six strategies fell to `aligned() -> None` and 30,565 records were
+           dumped into "undecidable" under a label that blamed the index/NONE
+           case. The only strategy in the output table — TREND_CREDIT_SPREAD,
+           7,201 signals — is the only track that carries `dir`. `discover()`
+           compounded it: one TCS record made `readiness.factors.dir` print as
+           found, masking that it is dead for the five strategies item E is
+           actually about.
+       (2) THE TRADE JOIN COULD NEVER MATCH. Journal groups key on track slugs
+           (CONTINUATION, SWEEP, CONDOR_CALL...) while trade rows carry class
+           names (ContinuationStrategy, SweepReversal, IronCondorStrategy...).
+           Uppercasing both sides never makes SWEEPREVERSAL equal SWEEP, so
+           `pnl_by` matched nothing — 304 trade rows, zero joined.
+       (3) AND THE ONE DECIDABLE STRATEGY CANNOT HAVE TRADES. TCS's firing
+           engine (vertical_spread_strategy.py) does not exist yet (v1.3 header,
+           TC.4), so its 0-trade INSUFFICIENT verdict was arithmetically forced.
+       FIXES: per-strategy DIRECTION RESOLVER (TCS from factors.dir;
+       continuation from factors.label exactly as the emitter's own staged-pick
+       path derives it, trade_readiness.py:763; condor_call -> SHORT and
+       condor_put -> LONG on mechanism — a credit side's exposure is against
+       the move toward it, NOT the call=long/put=short option-buyer reading;
+       sweep from `staged.direction` on readiness_staged_pick rows, paired with
+       the last market snapshot seen on that symbol within SNAP_MAX_AGE_S;
+       butterfly undecidable BY DESIGN). Family-normalised trade join with
+       condor legs attributed per side via setup_type. Undecidable is now
+       REPORTED BY CAUSE so the counter can never lie about what it holds
+       again, and unmatched trades are printed with their reason (ORB has no
+       readiness track by design; ADOPTED rows have no signal ancestry).
+
+v1.3 — 2026-08-08 — THE EVENT FILTER, the fourth layer. v1.2 resolved all five
+       fields correctly and the run STILL returned 419 undecidable and ZERO
+       decidable. Cause: the event whitelist accepted only
        ("scored","fired","entry","entered") — names predating trade_readiness
        v1.5 — while the records carrying `readiness.market` are named
        `readiness`, `readiness_would_fire` and `readiness_staged_pick`. On
@@ -87,10 +122,14 @@ import json
 import os
 import sys
 from collections import defaultdict
+from datetime import datetime
 
 JOURNAL_ROOT = os.path.expanduser("~/day_trader_pro/signal_journal")
 REPORTS_ROOT = os.path.expanduser("~/day_trader_pro/reports")
 MIN_CELL = 12          # below this a cell gets no verdict, only a count
+SNAP_MAX_AGE_S = 120   # a staged_pick may borrow the symbol's last market
+                       # snapshot if it is at most this stale (ticks are 15s;
+                       # 120s matches the integrator's dt_max gap convention)
 
 # Field-name candidates, most specific first. The journal and trade schemas have
 # both drifted over the project's life, so this discovers rather than assumes —
@@ -121,10 +160,41 @@ CAND = {
                   "underlying_price", "spot", "last"),
     "strategy":  ("readiness.strategy", "strategy", "setup", "strategy_name",
                   "setup_type"),
+    # v1.4 — `readiness.factors.dir` is kept as a DISCOVERY candidate but is no
+    # longer trusted as THE direction field: it exists on exactly one track
+    # (trend_credit_spread). Direction is resolved per strategy by
+    # `resolve_direction()` below; this candidate list only feeds the schema
+    # printout.
     "direction": ("readiness.factors.dir", "direction", "side", "bias", "dir"),
     "symbol":    ("symbol", "sym", "ticker", "instrument"),
     "event":     ("event", "kind", "type"),
+    "ts":        ("ts_et", "ts", "timestamp"),
     "pnl":       ("pnl", "pnl_usd", "realized_pnl", "profit", "pl", "net_pnl"),
+}
+
+# ── v1.4: the two vocabularies, mapped instead of hoped equal ────────────────
+# Journal side: `readiness.strategy` holds the TradeReadinessEngine track slug
+# (STRATEGIES tuple, trade_readiness.py:287). Trade side: the `strategy` column
+# holds each class's name() string (strategy/*.py). They have never been the
+# same words, so v1.3's (symbol, strategy, direction) join matched nothing.
+JOURNAL_FAMILY = {
+    "CONTINUATION":        "CONTINUATION",
+    "SWEEP":               "SWEEP",
+    "CONDOR_CALL":         "CONDOR",
+    "CONDOR_PUT":          "CONDOR",
+    "BUTTERFLY":           "BUTTERFLY",
+    "TREND_CREDIT_SPREAD": "TREND_CREDIT_SPREAD",
+}
+TRADE_FAMILY = {
+    "SWEEPREVERSAL":        "SWEEP",
+    "CONTINUATIONSTRATEGY": "CONTINUATION",
+    "IRONCONDORSTRATEGY":   "CONDOR",
+    "BUTTERFLYSTRATEGY":    "BUTTERFLY",
+    # ORB is EXEMPT from the readiness engine by design (v1.0 header), so its
+    # trades have no signal population to join. Counted and printed, not lost.
+    "ORBSTRATEGY":          None,
+    # broker_reconcile adoptions have no signal ancestry at all.
+    "ADOPTED":              None,
 }
 
 
@@ -208,16 +278,81 @@ def load_trades(dates):
     return out
 
 
+def _parse_ts(v):
+    try:
+        return datetime.fromisoformat(str(v)).timestamp()
+    except Exception:                      # noqa: BLE001
+        return None
+
+
+def _norm_dir(v):
+    d = str(v or "").upper()
+    if d.startswith("L"):
+        return "LONG"
+    if d.startswith("S") and not d.startswith("SIDE"):
+        return "SHORT"
+    return None
+
+
+def resolve_direction(track, rec):
+    """(direction, undecidable_cause) for one readiness record.
+
+    v1.4 — direction is a PER-TRACK property, not a field. Only
+    trend_credit_spread journals `factors.dir`; the rest are resolved the same
+    way the emitter itself resolves them in `_staged_pick`:
+      continuation  — from `factors.label` (TRENDING_BULL -> LONG,
+                      TRENDING_BEAR -> SHORT; trade_readiness.py:763). Outside
+                      a trending label the track is hard-vetoed to r=0 and has
+                      no intended side this tick — undecidable is the truth.
+      condor sides  — ON MECHANISM: a call CREDIT is sold ABOVE and profits if
+                      price stays below it (short exposure); a put credit is
+                      the mirror (long). NOTE this is the OPPOSITE of the
+                      option-buyer call=long/put=short reading — passing the
+                      raw `side` through aligned() would have silently
+                      inverted every condor row.
+      butterfly     — neutral BY DESIGN; never decidable, counted as such.
+      sweep         — direction is NOT journaled on readiness rows (it lives in
+                      ctx.liq_map, trade_readiness.py:754). It IS journaled on
+                      `readiness_staged_pick` rows as `staged.direction`; those
+                      are handled by the caller via snapshot pairing.
+    """
+    t = str(track or "").upper()
+    if t == "TREND_CREDIT_SPREAD":
+        d = _norm_dir(dig(rec, "readiness.factors.dir"))
+        return (d, None) if d else (None, "tcs: factors.dir unparseable")
+    if t == "CONTINUATION":
+        label = str(dig(rec, "readiness.factors.label") or "").upper()
+        if label.endswith("TRENDING_BULL"):
+            return "LONG", None
+        if label.endswith("TRENDING_BEAR"):
+            return "SHORT", None
+        return None, "continuation: non-trending label, no intended side"
+    if t == "CONDOR_CALL":
+        return "SHORT", None
+    if t == "CONDOR_PUT":
+        return "LONG", None
+    if t == "BUTTERFLY":
+        return None, "butterfly: neutral by design"
+    if t == "SWEEP":
+        return None, "sweep: dir not on readiness rows (staged picks only)"
+    return None, "unknown track: no direction rule"
+
+
 def aligned(rel, direction, vwap, price):
     """True when the E gate would PERMIT this entry.
 
     Gate as specified: long requires price >= VWAP, short requires price <= VWAP.
     Returns None when undecidable — notably price_vs_vwap == "NONE", the cash-index
     case from the 2026-07-17 zero-volume fix, where the gate is specified inert.
+    v1.4 — direction arrives pre-resolved as LONG/SHORT from
+    `resolve_direction()`. The CALL/PUT branch is retained for raw trade-row
+    input only; NEVER feed a credit-spread side through it — a call credit is
+    SHORT exposure, the inverse of what this buyer's-eye reading assumes.
     """
     d = (direction or "").upper()
     is_long = d.startswith("L") or "BULL" in d or d == "CALL"
-    is_short = d.startswith("S") or "BEAR" in d or d == "PUT"
+    is_short = (d.startswith("S") and not d.startswith("SIDE")) \
+        or "BEAR" in d or d == "PUT"
     if not (is_long or is_short):
         return None
     if rel:
@@ -237,6 +372,32 @@ def aligned(rel, direction, vwap, price):
         return None
 
 
+def _trade_group(t, tmap):
+    """(symbol, family, direction) for one trade row, or (None, reason)."""
+    sym = str(dig(t, tmap.get("symbol")) or "").upper()
+    raw_strat = str(dig(t, tmap.get("strategy")) or "").upper()
+    fam = TRADE_FAMILY.get(raw_strat, "UNMAPPED")
+    if fam is None:
+        return None, ("orb: no readiness track by design"
+                      if raw_strat == "ORBSTRATEGY" else
+                      "adopted: no signal ancestry")
+    if fam == "UNMAPPED":
+        return None, f"unmapped trade strategy: {raw_strat or '(empty)'}"
+    direc = _norm_dir(dig(t, tmap.get("direction")))
+    if direc is None and fam == "CONDOR":
+        # Condor trade rows say direction="neutral"; the leg is recoverable
+        # from setup_type ("... Call Credit" / "... Put Credit") and maps to
+        # the side's exposure exactly as resolve_direction does.
+        st = str(t.get("setup_type") or "").upper()
+        if "CALL" in st:
+            direc = "SHORT"
+        elif "PUT" in st:
+            direc = "LONG"
+    if direc is None:
+        return None, f"{fam.lower()}: direction unresolvable"
+    return (sym, fam, direc), None
+
+
 def main(argv):
     args = [a for a in argv[1:] if not a.startswith("--")]
     schema_only = "--schema" in argv
@@ -254,11 +415,12 @@ def main(argv):
         return 1
 
     jmap = discover(jrecs, ("vwap", "rel", "price", "strategy",
-                            "direction", "symbol", "event"))
+                            "direction", "symbol", "event", "ts"))
     tmap = discover(trades, ("strategy", "direction", "symbol", "pnl")) if trades else {}
     print("\n--- discovered journal fields ---")
     for k in ("event", "symbol", "strategy", "direction", "vwap", "rel", "price"):
         print(f"    {k:<10} -> {jmap.get(k) or '(NOT FOUND)'}")
+    print("    (direction is resolved PER STRATEGY — see DIRECTION COVERAGE)")
     if trades:
         print("--- discovered trade fields ---")
         for k in ("symbol", "strategy", "direction", "pnl"):
@@ -266,19 +428,21 @@ def main(argv):
     if schema_only:
         return 0
 
-    missing = [k for k in ("rel", "direction") if k not in jmap]
+    missing = [k for k in ("rel",) if k not in jmap]
     if missing and "vwap" not in jmap:
         print(f"\nCannot proceed: no VWAP-side field found ({missing}). "
               "Add the real key name to CAND at the top of this file.")
         return 1
 
-    # ── outcomes keyed by (symbol, strategy, direction) ─────────────────────
+    # ── outcomes keyed by (symbol, FAMILY, direction) ───────────────────────
     pnl_by = defaultdict(list)
+    trades_dropped = defaultdict(int)
     if trades and tmap.get("pnl"):
         for t in trades:
-            key = (str(dig(t, tmap.get("symbol")) or "").upper(),
-                   str(dig(t, tmap.get("strategy")) or "").upper(),
-                   str(dig(t, tmap.get("direction")) or "").upper())
+            key, why = _trade_group(t, tmap)
+            if key is None:
+                trades_dropped[why] += 1
+                continue
             try:
                 pnl_by[key].append(float(dig(t, tmap["pnl"]) or 0.0))
             except Exception:              # noqa: BLE001
@@ -288,20 +452,19 @@ def main(argv):
     # v1.0 note: an early cut summed every matching trade into every matching
     # signal, inflating P&L by the signal count. Each trade is now counted once.
     # Journal rows carry no trade id, so a trade inherits the MAJORITY alignment
-    # of its (symbol, strategy, direction) group — an approximation, and labelled
+    # of its (symbol, family, direction) group — an approximation, and labelled
     # as one. It is sound for a per-strategy orientation read and NOT sound for
     # anything that needs per-trade precision.
     sig = defaultdict(lambda: {"aligned": 0, "misaligned": 0})
-    undecidable = 0
+    undecidable = defaultdict(int)
+    coverage = defaultdict(lambda: {"decided": 0, "undecided": 0})
+    last_snap = {}   # _sym -> (epoch, rel, vwap, dist_pct): staged-pick pairing
     for r in jrecs:
         # v1.3 — THE EVENT FILTER WAS THE LAST LAYER, and it silently discarded
         # everything that matters. It accepted only ("scored","fired","entry",
         # "entered") — names from before `trade_readiness` v1.5 existed. The
         # journal's readiness events are `readiness`, `readiness_would_fire` and
-        # `readiness_staged_pick`, and ONLY THOSE carry `readiness.market`. So
-        # 11,584 records on 2026-08-06 were skipped before their VWAP side was
-        # ever read, and the 419 that survived were `scored` rows, which have no
-        # market section at all — hence "419 undecidable, zero decidable".
+        # `readiness_staged_pick`, and ONLY THOSE carry `readiness.market`.
         # Prefix-matched rather than enumerated: `readiness_*` is a growing
         # family and an exact list is what put this tool three versions behind
         # its own emitter.
@@ -309,35 +472,91 @@ def main(argv):
         if _ev and not (_ev.startswith("readiness")
                         or _ev in ("scored", "fired", "entry", "entered")):
             continue
-        strat = str(dig(r, jmap.get("strategy")) or "UNKNOWN").upper()
-        direc = str(dig(r, jmap.get("direction")) or "").upper()
-        ok = aligned(dig(r, jmap.get("rel")), direc,
+        sym = str(r.get("_sym", "")).upper()
+        ts = _parse_ts(dig(r, jmap.get("ts")))
+
+        # v1.4 — remember each symbol's latest market snapshot so staged picks
+        # (which carry direction but NO market section) can borrow it. File
+        # order is append order per symbol, so "last seen" is time order.
+        rel_here = dig(r, jmap.get("rel"))
+        if rel_here is not None:
+            last_snap[sym] = (ts, rel_here, dig(r, jmap.get("vwap")),
+                              dig(r, jmap.get("price")))
+
+        if _ev == "readiness_staged_pick":
+            # SWEEP's only direction carrier (continuation picks also land
+            # here, harmlessly — their readiness rows already decide).
+            track = str(dig(r, "staged.strategy") or "").upper()
+            if track != "SWEEP":
+                continue
+            direc = _norm_dir(dig(r, "staged.direction"))
+            if direc is None:
+                undecidable["staged_pick: direction unparseable"] += 1
+                coverage[track]["undecided"] += 1
+                continue
+            snap = last_snap.get(sym)
+            fresh = (snap is not None
+                     and (ts is None or snap[0] is None
+                          or abs(ts - snap[0]) <= SNAP_MAX_AGE_S))
+            if not fresh:
+                undecidable["sweep staged_pick: no fresh market snapshot"] += 1
+                coverage[track]["undecided"] += 1
+                continue
+            ok = aligned(snap[1], direc, snap[2], snap[3])
+            if ok is None:
+                undecidable["NONE side (index, gate inert by spec)"] += 1
+                coverage[track]["undecided"] += 1
+                continue
+            coverage[track]["decided"] += 1
+            sig[(sym, "SWEEP", direc)]["aligned" if ok else "misaligned"] += 1
+            continue
+
+        track = str(dig(r, jmap.get("strategy")) or "UNKNOWN").upper()
+        fam = JOURNAL_FAMILY.get(track, track)
+        direc, cause = resolve_direction(track, r)
+        if direc is None:
+            undecidable[cause] += 1
+            coverage[track]["undecided"] += 1
+            continue
+        ok = aligned(rel_here, direc,
                      dig(r, jmap.get("vwap")), dig(r, jmap.get("price")))
         if ok is None:
-            undecidable += 1
+            undecidable["NONE side (index, gate inert by spec)"] += 1
+            coverage[track]["undecided"] += 1
             continue
-        sig[(r.get("_sym", "").upper(), strat, direc)][
-            "aligned" if ok else "misaligned"] += 1
+        coverage[track]["decided"] += 1
+        sig[(sym, fam, direc)]["aligned" if ok else "misaligned"] += 1
 
     cells = defaultdict(lambda: {"n": 0, "trades": 0, "wins": 0, "pnl": 0.0})
     for key, counts in sig.items():
-        _, strat, direc = key
+        _, fam, direc = key
         al = "ALIGNED" if counts["aligned"] >= counts["misaligned"] else "MISALIGNED"
-        c = cells[(strat, direc, al)]
+        c = cells[(fam, direc, al)]
         c["n"] += counts["aligned"] + counts["misaligned"]
         for v in pnl_by.get(key, []):        # each trade consumed exactly once
             c["trades"] += 1
             c["pnl"] += v
             c["wins"] += 1 if v > 0 else 0
 
-    print(f"\nundecidable (index/NONE side, gate inert by spec): {undecidable}")
+    print("\n--- DIRECTION COVERAGE (per track: decided / undecided) ---")
+    for track in sorted(coverage):
+        cv = coverage[track]
+        print(f"    {track:<22} {cv['decided']:>7} / {cv['undecided']}")
+    print("--- undecidable, BY CAUSE ---")
+    for cause in sorted(undecidable):
+        print(f"    {undecidable[cause]:>7}  {cause}")
+    if trades_dropped:
+        print("--- trade rows not joinable, BY CAUSE ---")
+        for why in sorted(trades_dropped):
+            print(f"    {trades_dropped[why]:>7}  {why}")
+
     print("\n" + "=" * 74)
     print("  WOULD THE E GATE HAVE BLOCKED WINNERS OR LOSERS?  (per strategy)")
     print("=" * 74)
     print(f"  {'STRATEGY':<20}{'DIR':<6}{'ALIGNMENT':<12}"
           f"{'SIGNALS':>8}{'TRADES':>7}{'WINS':>6}{'P&L':>11}")
-    for (strat, direc, al), c in sorted(cells.items()):
-        print(f"  {strat:<20}{direc:<6}{al:<12}{c['n']:>8}{c['trades']:>7}"
+    for (fam, direc, al), c in sorted(cells.items()):
+        print(f"  {fam:<20}{direc:<6}{al:<12}{c['n']:>8}{c['trades']:>7}"
               f"{c['wins']:>6}{c['pnl']:>11.2f}")
     print("  (trades inherit their group's majority alignment — approximate, "
           "sound for orientation, not for per-trade precision)")
@@ -356,6 +575,10 @@ def main(argv):
         mpnl = sum(c["pnl"] for (s, _, al), c in cells.items()
                    if s == strat and al == "MISALIGNED")
         tr = sum(c["trades"] for (s2, _, _), c in cells.items() if s2 == strat)
+        if strat == "TREND_CREDIT_SPREAD" and tr == 0:
+            print(f"  {strat:<22} {a + m} signals, 0 trades — EXPECTED: its "
+                  "firing engine (vertical_spread_strategy.py, TC.4) does not "
+                  "exist yet. Signal-side orientation only.")
         if a + m < MIN_CELL or tr < 3:
             print(f"  {strat:<22} INSUFFICIENT ({a + m} signals, {tr} trades) "
                   f"— no verdict")
