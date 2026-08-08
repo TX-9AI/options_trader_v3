@@ -1,8 +1,33 @@
 #!/usr/bin/env python3
 """
-analysis/regime_axes.py — v1.0 — 2026-08-07
+analysis/regime_axes.py — v1.1 — 2026-08-07
 
-THE CONJUNCTION, CODIFIED. Log-only. Gates nothing.
+THE AXIS DECOMPOSITION. Log-only. Gates nothing.
+
+⚠️⚠️ THE CONJUNCTION `pair_conf` IS DEAD. MEASURED, FAILED, KEPT ONLY SO THE
+CROSS-TAB STILL RUNS. DO NOT BUILD ON IT. ⚠️⚠️
+AX.2 over 571 matched trades, median by outcome (never-favourable vs the rest):
+    direction_conf    nf 0.697  ok 0.885   gap +0.188   SEPARATES
+    volatility_conf   nf 0.091  ok 0.156   gap +0.065   SEPARATES
+    pair_conf         nf 0.000  ok 0.001   gap +0.001   DOES NOT SEPARATE
+It was the WORST of the three, not the best — the opposite of the hypothesis.
+WHY, and it is STRUCTURAL rather than tunable: the volatility axis is at or near
+ZERO on most ticks (BREAKOUT scores exactly 0 on 63.8%, COMPRESSION on 79.5%,
+`is_expanding` true on 9.6% of shadow ticks). `min()` over a SPARSE axis
+collapses toward zero and DESTROYS the information the direction axis carried.
+A conjunction needs both components populated and on comparable scales; this
+pair is neither. Any rescue variant must be justified independently — fitting
+one to this failure is exactly the re-litigating this note exists to prevent.
+
+⚠️ WHAT SURVIVED, AND IT IS BIGGER THAN THE CONJUNCTION WOULD HAVE BEEN.
+`direction_conf` — the RAW LAYER-1 direction score — separates favourable trades
+from never-favourable ones at **+0.188 on n=571**. That is roughly double the
+best separation previously found anywhere: `setup_score`'s best cell was 0.80 vs
+0.91, and `regime_conviction` is 0.99 vs 1.00, flat.
+**The RAW score separates where the INTEGRATED conviction does not**, which
+points at Layer-2 integration as a possible destroyer of signal. That is the
+finding worth carrying forward, and it needs OUT-OF-SAMPLE confirmation before
+anything gates on it.
 
 THE IDEA (operator, 2026-08-07). The regime set is not six independent states —
 it is TWO ORTHOGONAL OPPOSITIONS that the argmax fuses and then throws half of
@@ -111,9 +136,13 @@ def decompose(scores: Dict[str, Optional[float]]) -> Dict[str, object]:
         "volatility": volatility,
         "volatility_conf": round(v_lvl, 4),
         "volatility_margin": round(v_mrg, 4),
-        # THE CONJUNCTION. Low whenever EITHER axis is unsure — which is the
-        # whole claim. Bounded above by both, so it can never invent confidence.
+        # ⚠️ DEAD — MEASURED AND FAILED (AX.2, 571 trades: gap +0.001 against
+        # direction_conf's +0.188). Retained ONLY so `tests/axis_crosstab.py`
+        # keeps running and the negative result stays reproducible. Nothing
+        # should consume this. See the module docstring for why the failure is
+        # structural and not a tuning problem.
         "pair_conf": round(min(d_lvl, v_lvl), 4),
+        "pair_conf_status": "DEAD — does not separate; use direction_conf",
         "pair": f"{direction}/{volatility}",
     }
 

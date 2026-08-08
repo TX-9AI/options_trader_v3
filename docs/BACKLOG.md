@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.07
+# docs/BACKLOG.md — v4.08
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -103,6 +103,7 @@ BAKED is changing nothing about today's data.
 | **SHD.1 — shadow observer data OFF the fleet** | ✅ 08-07 | ⬜ | n/a (offline) | **282,350 records / 188 files / 238 MB / 29 boxes**, pulled for the first time ever (`harvest.py` has no shadow class). `tests/shadow_summary.py` v1.0 built + proven on planted data. **NOT YET RUN on the real pull.** |
 | **AX.1 — the conjunction, codified** | ✅ 08-07 | ⬜ | n/a (pure, gates nothing) | `analysis/regime_axes.py` v1.0 — two-axis decomposition + `pair_conf = min(dir, vol)`. 6 tests, deliberate-failure verified (a mean turns it red). **NOT wired to anything yet — by design.** |
 | **AX.2 — the 3x3 cross-tab + separation test** | ✅ 08-07 | ⬜ | n/a (offline) | `tests/axis_crosstab.py` v1.0. Planted proof: `direction_conf` gap **+0.000** (does not separate) while `pair_conf` gap **+0.800** — the conjunction succeeding where a component fails, detected. **NOT YET RUN on the real book.** |
+| **AX.3 — keep what separated, kill what did not** | ✅ 08-07 | ⬜ | ⬜ **emission needs a bake** | regime_axes **v1.1** — `pair_conf` marked DEAD in the payload itself (`pair_conf_status`), `direction_conf` (+0.188, n=571) carried forward. 7 tests. **Emission onto the journal is the next step and is NOT built.** |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
@@ -2658,6 +2659,41 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   → the instrument is blind and `a2_cooccurrence`'s result must be withdrawn,
   not acted on.
 
+- `[DESK]` **AX.3 — 🟡 KEEP `direction_conf`, KILL `pair_conf`, EMIT THE AXES.**
+  **WHAT DIED, and it is recorded so it stays dead.** `pair_conf = min(direction,
+  volatility)` measured at gap **+0.001** against `direction_conf`'s **+0.188**
+  over 571 trades — the WORST of the three, the opposite of the hypothesis. The
+  failure is STRUCTURAL, not tunable: the volatility axis is at or near zero on
+  most ticks (BREAKOUT exactly 0 on 63.8%, COMPRESSION on 79.5%, `is_expanding`
+  true on 9.6% of shadow ticks), so `min()` over a sparse axis collapses toward
+  zero and DESTROYS what the direction axis carried. It is retained in the
+  payload ONLY so `axis_crosstab.py` still runs, and now ships with
+  `pair_conf_status: "DEAD — does not separate; use direction_conf"` so a future
+  caller cannot read a plausible float and build on a measured dead end. A test
+  pins that marker. Any rescue variant needs independent justification — fitting
+  one to this failure is the re-litigating the marker exists to prevent.
+  **WHAT SURVIVED, and it is the bigger result.** `direction_conf` — the RAW
+  Layer-1 direction score — separates favourable from never-favourable at
+  **+0.188 on n=571**, roughly double the best separation found anywhere else
+  (`setup_score`'s best cell 0.80 vs 0.91; `regime_conviction` 0.99 vs 1.00,
+  flat). **The RAW score separates where the INTEGRATED conviction does not**,
+  which points at Layer-2 integration as a possible destroyer of signal.
+  **AND TWO CELLS THE FUSED LABEL WAS BURYING.** As a LABEL, TRENDING_BEAR is the
+  worst regime in the book (95 trades, 35%, **−$6,137**); as an AXIS, BEAR totals
+  149 trades at **+$4,391**, driven by **BEAR/EXPANDING at +$5,059** — the best
+  cell in the table. And RANGING splits cleanly on volatility: RANGE/EXPANDING
+  **+$1,619** vs RANGE/NEUTRAL **−$2,752** (50% never-favourable, the worst rate
+  here). Same underlying scores, opposite verdicts.
+  **PLACEMENT FINDING:** `trend_continuation_standalone` puts **51% of its 136
+  trades in BULL/EXPANDING**, the largest cell and a −$2,334 one. That is a
+  concrete mechanism for its negative drift — not diffusely bad, concentrated in
+  the worst high-count cell.
+  **NEXT — NOT BUILT:** emit `direction`, `direction_conf`, `volatility`,
+  `volatility_conf` onto the signal journal so `direction_conf`'s +0.188 can be
+  confirmed OUT-OF-SAMPLE on forward sessions. Log-only; anything that GATES on
+  it is post-freeze. ⚠️ In-sample separation is a hypothesis, not a threshold —
+  the same discipline the floor sweep refuses to break.
+
 - `[SCHEDULE]` **ONE-WEEK SLIP — DECIDED 2026-08-07.** Operator: *"I have
   decided to slip everything to the right by one week, to account for the major
   engine changes this week for intraday regime flips and blocked strategies that
@@ -4526,6 +4562,15 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.08 — 2026-08-07 — AX.3: keep the part that separated, kill the part that
+  did not, and mark the corpse.** `pair_conf` is dead (+0.001 vs
+  `direction_conf`'s +0.188) and the failure is structural — a conjunction over a
+  sparse axis collapses. It stays in the payload only so the cross-tab runs, now
+  carrying `pair_conf_status: DEAD` so nobody builds on it by accident.
+  `direction_conf` survives as the first score in this system to clearly separate
+  outcomes, at roughly double anything measured before, and it is the RAW L1
+  score rather than the L2 integrated one. Emission onto the journal is the next
+  step and is deliberately not built tonight.
 - **v4.07 — 2026-08-07 — AX.2: the test that can kill AX.1.** `axis_crosstab.py`
   scores every closed trade in the 3x3 of direction x volatility, then reports
   `pair_conf` split by outcome — nf (never favourable) vs ok — **the same

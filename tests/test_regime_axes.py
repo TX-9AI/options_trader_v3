@@ -56,6 +56,18 @@ def test_sweep_is_on_neither_axis():
     assert r["pair"] == "BULL/EXPANDING"
 
 
+def test_the_dead_conjunction_is_labelled_dead():
+    """AX.2 measured `pair_conf` at gap +0.001 against `direction_conf`'s
+    +0.188 — it was the WORST of the three, and the failure is structural (the
+    volatility axis is near-zero on most ticks, so `min()` collapses). It is
+    retained only so the cross-tab keeps running. Without this marker in the
+    payload, a future caller reads a plausible-looking float and builds on a
+    measured dead end."""
+    r = decompose({"TRENDING_BULL": 0.9, "COMPRESSION": 0.7})
+    assert r["pair_conf_status"].startswith("DEAD")
+    assert "direction_conf" in r["pair_conf_status"]
+
+
 def test_it_gates_nothing():
     """The module must stay pure. The moment it imports config or an engine it
     has stopped being a measurement and started being a decision."""
