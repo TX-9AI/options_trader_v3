@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.13
+# docs/BACKLOG.md — v4.14
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -158,6 +158,48 @@ audit, VWAP ledger, EVM, readiness — all arrived in Telegram at 16:59. Item AX
 worked. Two corrections to my own account of it: it was **fixed in source on
 08-03**, not open, and `grep -c` on the `.env` could not have told a present
 variable from an empty one — the LENGTHS did.
+
+---
+
+## PART 0.8 — THREAD HANDOFF, 2026-08-08 (added v4.14)
+
+Thread hit its attachment limit. This is the state of play, written so the next
+thread starts from fact rather than from a summary of a summary.
+
+**WHERE WE ARE RIGHT NOW.** 30 deliveries landed 08-07/08-08, all PUSHED, none
+BAKED — the fleet still runs the pre-RGM.3 code until Monday's restart. Nothing
+is half-shipped; every archive was gate-checked and committed.
+
+**THE ONE THING STILL OPEN AND MID-FLIGHT: `vwap_orientation_ledger` v1.3.**
+Four layers were wrong and each fix was one layer short — field names, then
+depth, then paths, then the event whitelist. v1.3 prefix-matches `readiness*`,
+which admits the 11,584 records/day that were being skipped. **The operator ran
+it and reports a REMAINING PROBLEM that could not be shared before the thread
+limit.** So: v1.3 is correct as far as it goes, the payload is confirmed present
+(08-06: BELOW 5,058 / ABOVE 3,912), and there is a further defect to diagnose
+from output the next thread has not seen. **Do not assume it is the event filter
+again — trace emitter → event → section → field before patching anything.**
+
+**BAKE STATE, and it decides how Monday reads.** On the fleet: F7 emission
+(v2.1) only. On disk and pushed but NOT running: RGM.3 (sweep out of the
+argmax), SWP.1/SWP.2, CNT.1/CNT.2/CNT.3, MEM.2, N.7. `OT_MEM_TRACE=1` IS armed
+in the SPX unit and survives restarts.
+**⇒ EVERY PER-REGIME STATISTIC CHANGES BASIS AT MONDAY'S RESTART. Do not pool
+across it.**
+
+**THE THREE FINDINGS THAT SHOULD GOVERN NEXT WEEK'S WORK.**
+1. The edge is in the TRIGGER, not the LABEL — label states carry no forward
+   drift, trigger events do, and continuation drifts AGAINST itself (standalone
+   37% positive at 30 bars, n=136).
+2. `direction_conf` separates favourable from never-favourable at **+0.188**
+   (n=571) where `setup_score` and `regime_conviction` are flat. It is the RAW
+   L1 score. Needs OUT-OF-SAMPLE confirmation before anything gates on it.
+3. The fused label was burying **BEAR/EXPANDING (+$5,059)** inside
+   TRENDING_BEAR (−$6,137), and RANGING splits +$1,619 expanding vs −$2,752
+   neutral.
+
+**SELECTION IS THE LARGEST NUMBER ON THE BOARD:** 40% of trades never went 2%
+favourable, −$34,411 over 12 sessions. No exit work reaches it.
 
 ---
 
@@ -4627,6 +4669,13 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.14 — 2026-08-08 — PART 0.8: thread handoff.** The working thread hit its
+  attachment limit. Records the bake state (30 deliveries pushed, none baked —
+  the fleet runs F7 only until Monday's restart), the one item still mid-flight
+  (`vwap_orientation_ledger` v1.3, correct as far as it goes, with a further
+  defect the operator observed but could not share before the limit), and the
+  three findings that should govern next week. Written so the next thread starts
+  from fact rather than a summary of a summary.
 - **v4.13 — 2026-08-08 — VW.1c: the event filter, and the fourth wrong
   assumption about one tool.** v1.2 resolved all five fields correctly and the
   run STILL returned 419 undecidable, zero decidable. The event whitelist
