@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.03
+# docs/BACKLOG.md — v4.04
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -100,6 +100,7 @@ BAKED is changing nothing about today's data.
 | **MEM.2 — in-process tracemalloc** | ✅ 08-07 | ⬜ | ⬜ **SPX only, needs a bake** | `utils/mem_trace.py` v1.0 + main **v5.8**; env-gated `OT_MEM_TRACE`, one bool test per tick when off. mem_tracer v1.1 gets the symbol banner + empty-fetch abort. Sandbox 256 passed / 1 skipped. |
 | **GATE.1 — label_agreement v1.1** | ✅ 08-07 | ⬜ | n/a (offline) | each tag scored over ITS OWN timeframe: TREND whole-session, PIN last hour, BREAKOUT/SWEEP **NOT SCORED** (single-event tags, no breach timestamp). v1.0's PIN 8.9% / BREAKOUT 2.8% / SWEEP 0.0% are RETRACTED. |
 | **L3.2a — rejection ledger** | ✅ 08-07 build | ⬜ | n/a (offline) | `analysis/rejection_ledger.py` v1.0 + 3 tests, deliberate-failure verified. Planted proof: vwap blocking longs into a falling tape → 100% DODGED; rrr blocking shorts → 100% MISSED. **NOT YET RUN on the real journals.** |
+| **SHD.1 — shadow observer data OFF the fleet** | ✅ 08-07 | ⬜ | n/a (offline) | **282,350 records / 188 files / 238 MB / 29 boxes**, pulled for the first time ever (`harvest.py` has no shadow class). `tests/shadow_summary.py` v1.0 built + proven on planted data. **NOT YET RUN on the real pull.** |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
@@ -4520,6 +4521,34 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.04 — 2026-08-07 — SHD.1: the shadow observer's data leaves the fleet for
+  the first time, and gets a reader.** It has run fleet-wide since 07-22 and
+  **nothing has ever consumed it** — no analyzer, no report, no devtools option —
+  and `harvest.py` has no shadow class, so every file sat on its own box's EBS.
+  **282,350 records, 188 files, 238 MB across 29 boxes.**
+  `tests/shadow_summary.py` v1.0 leads with FILL RATE, not record count: a
+  primitive null on most ticks is not evidence however many rows carry the key,
+  and the first line of every session has `velocity`/`roc_*`/`intrabar_pos` null
+  BY CONSTRUCTION, so a `head -1` reads as empty when the field may be fine.
+  Streams one file at a time — three earlier tools in this repo died of
+  load-everything-then-filter and 238 MB is exactly that trap.
+  **WHY IT MATTERS NOW:** SWP.1's hard vetoes are "a NAMED level, swept and
+  rejected", and the observer has recorded `nearest_named_above/below` with
+  `dist_pct` and `dist_atr` every 15s for 13 sessions — the distribution
+  underneath the gate that shipped today, collected by something that scores
+  nothing and trades nothing.
+  **⚠️ TWO CAVEATS THE TOOL REPEATS IN ITS OWN OUTPUT.** Coverage is wildly
+  uneven — GS zero sessions, SMCI ELEVEN LINES, and DIA/GLD/IWM/TLT exactly one
+  1,560-line session each, which is one clean RTH day then nothing: **the
+  original 07-22 failure signature, so the enable-at-boot fix did not take on
+  those boxes.** And every `regime` value here came from the PRE-RGM.3
+  six-regime engine, so pooling with post-Monday data repeats the basis error.
+  **PULL METHOD, worth keeping:** `ssh_util.scp_pull` builds `scp` with NO `-r`
+  and is a single-FILE helper (its docstring says `trades.db`). Handed a
+  directory it fails on every box, and its callers discard stderr — so the first
+  attempt returned a bare list of 29 failures with no reason. Third discarded
+  return value to cost a diagnosis this week. The working form tars on the box
+  and streams it back.
 - **v4.03 — 2026-08-07 — every one of tonight's nineteen deliveries now has a
   DATED check-in with a falsifiable question.** PART 0.6. Code that is pushed has
   changed nothing until its effect is read back, and today produced a lot of
