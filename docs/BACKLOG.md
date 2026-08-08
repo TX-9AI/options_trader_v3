@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.04
+# docs/BACKLOG.md — v4.05
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -170,12 +170,15 @@ not "review", which is how a check-in becomes a formality.
 | ⬜ | **Mon Aug 10** | CNT.2 | Do `insurance_stop` rows appear? Zero in a full session means `underlying_stop` is never breached before BOS arms, and the gate is inert rather than protective. |
 | ⬜ | **Mon Aug 10** | CNT.3 | `COMPRESSION / Continuation` trade count must be **ZERO**. Anything above zero means the block is not reached. |
 | ⬜ | **Mon Aug 10** | RGM.3 | Confirm no `SWEEP_REVERSAL` label is emitted, and that the tie-break head is BREAKOUT_VOLATILE on dead ticks. **Per-regime stats are now on a different basis — do not compare to the 12-session history.** |
+| ⬜ | **Mon Aug 10** | SHD.2a — REVIVE THE DEAD OBSERVERS **FIRST** | `systemctl is-enabled shadow-observer` on **GS (0 sessions), SMCI (11 RECORDS), DIA/GLD/IWM/TLT (exactly 1 session each)**. One 1,560-line session then silence is the ORIGINAL 07-22 signature, so the enable-at-boot fix did not take there. **Do this Monday or the Aug 14 pull inherits the same six holes** — every session between now and then is unrecoverable once missed. Disabled vs enabled-but-crashing are different problems; `is-enabled` separates them in one line. |
 | ⬜ | **Tue Aug 11** | EVM re-baseline | First `evm_status.py --asof` run after the slip. **SPI will JUMP; that is the plan moving, not work done.** Brief it as a re-baseline or the number lies. |
 | ⬜ | **Fri Aug 14** | CNT.1 | One week of `trend_continuation_breakout`. Compare its drift and never-favourable rate to `_standalone`. **This is the only live test of whether direction from the trend VOTE beats direction from the LABEL** — and the vote-derived buckets showed the same nothing, so do not assume it wins. |
 | ⬜ | **Fri Aug 14** | DRF.1 | Re-run `trigger_drift` with the post-bake sessions. **ORB Short must still clear the null arm** — if the positive control stops passing, every conclusion drawn from it is withdrawn, not adjusted. |
 | ⬜ | **Fri Aug 14** | N.7 | Are rows carrying `ruleset`? Then re-run L3.2a and confirm cross-date pooling can finally be split by engine. |
 | ⬜ | **Fri Aug 14** | L3.2a v1.1 | Add the seeded NULL ARM and make the MFE/MAE **ratio** the headline. Until then the MISSED column must not be quoted — MFE ≥ 0.10% over 20 bars is a bar ordinary range clears. |
 | ⬜ | **Fri Aug 14** | GATE.1 follow-on | Add a BREACH TIMESTAMP to `auto_label` so BREAKOUT (141) and SWEEP (63) symbol-days become gradeable. 204 symbol-days of ground truth currently unscoreable. |
+| ⬜ | **Fri Aug 14** | **SHD.2 — RE-PULL THE SHADOW DATA AND CALIBRATE OFF IT** | The calibration deploy is **Mon Aug 17** and this is the last working day before it, so this is the pull that can actually SET DIALS rather than describe them after the fact. Expect ~19 sessions (13 banked + Aug 10-14). Three questions it is being run to answer, each already framed by the 08-07 read: **(a)** does `dist_atr` still put the median >2 ATR from a named level and only ~14% within 0.5 ATR — if so the sweep floor stays permissive and "it barely fires" is NOT an argument to tighten it; **(b)** do London High/Low still carry ~61% of nearest-level observations — that decides whether Level.1/2/3 work is really London-levels work; **(c)** is `UNKNOWN` still ~18% of live ticks against the offline harness's 4% — a 4x divergence in the same quantity, and the same class that hid the dead L2 gate. **⚠️ THE PULL WILL SPAN TWO ENGINES**: RGM.3 bakes Monday, so `regime` values before and after must be split at the bake date, never pooled. |
+| ⬜ | **Wed Aug 26** | SHD.3 — confirmation pull, 2 days before FREEZE | Re-run the summariser one last time before **Fri Aug 28**. Not to set dials — those were set on the 17th — but to confirm the distributions the dials were fitted to have not drifted underneath them. **A freeze declares a baseline; declaring one on a distribution that moved after calibration is how a frozen baseline becomes a frozen mistake.** If (a), (b) or (c) has shifted materially, the freeze is the thing to reconsider, not the dial. |
 | ⬜ | **Fri Aug 21** | AJ.2 | The continuation decision, with a week of CNT.1 behind it. Standing evidence: standalone drifts **−0.106% at 30 bars, 37% positive over 136 trades** — negative edge, not absent edge. |
 | ⬜ | **Fri Aug 28** | Floor re-test | Only if new evidence appears. **DECIDED 08-07: the 25%/40% floor STAYS.** 308 winners, still exactly 5 ever recovered from −25%, zero from −40%. Do not reopen on a whim. |
 
@@ -4521,6 +4524,25 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.05 — 2026-08-07 — SHD.2/SHD.3: the shadow data gets a calibration date
+  and a pre-freeze confirmation date.** The first-ever read produced three
+  numbers that should set dials rather than decorate a report — named levels are
+  **61.3% London High/Low**, only **14.0%** of observations sit within 0.5 ATR of
+  a named level (median **2.32 ATR**), and live `UNKNOWN` is **18.1%** against
+  the offline harness's 4%. Re-pull **Fri Aug 14**, the last working day before
+  the **Mon Aug 17** calibration deploy, so the numbers can actually move a knob.
+  Re-pull again **Wed Aug 26**, two days before the **Fri Aug 28** freeze — not
+  to calibrate but to confirm the distributions have not drifted out from under
+  the calibration. **A freeze declares a baseline; declaring one on a
+  distribution that moved after the dials were set is how a frozen baseline
+  becomes a frozen mistake.**
+  **⚠️ SHD.2a FIRST, ON MON AUG 10:** GS has zero sessions, SMCI eleven records,
+  and DIA/GLD/IWM/TLT exactly one each — the 07-22 enable-at-boot signature. Every
+  session missed between now and the 14th is unrecoverable, so reviving those six
+  is worth more than anything done to the data afterwards.
+  **⚠️ THE AUG 14 PULL SPANS TWO ENGINES** — RGM.3 bakes Monday, so `regime`
+  values must be split at the bake date, never pooled. Same basis rule as the
+  per-regime statistics.
 - **v4.04 — 2026-08-07 — SHD.1: the shadow observer's data leaves the fleet for
   the first time, and gets a reader.** It has run fleet-wide since 07-22 and
   **nothing has ever consumed it** — no analyzer, no report, no devtools option —
