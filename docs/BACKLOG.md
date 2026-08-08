@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.05
+# docs/BACKLOG.md — v4.06
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -101,6 +101,7 @@ BAKED is changing nothing about today's data.
 | **GATE.1 — label_agreement v1.1** | ✅ 08-07 | ⬜ | n/a (offline) | each tag scored over ITS OWN timeframe: TREND whole-session, PIN last hour, BREAKOUT/SWEEP **NOT SCORED** (single-event tags, no breach timestamp). v1.0's PIN 8.9% / BREAKOUT 2.8% / SWEEP 0.0% are RETRACTED. |
 | **L3.2a — rejection ledger** | ✅ 08-07 build | ⬜ | n/a (offline) | `analysis/rejection_ledger.py` v1.0 + 3 tests, deliberate-failure verified. Planted proof: vwap blocking longs into a falling tape → 100% DODGED; rrr blocking shorts → 100% MISSED. **NOT YET RUN on the real journals.** |
 | **SHD.1 — shadow observer data OFF the fleet** | ✅ 08-07 | ⬜ | n/a (offline) | **282,350 records / 188 files / 238 MB / 29 boxes**, pulled for the first time ever (`harvest.py` has no shadow class). `tests/shadow_summary.py` v1.0 built + proven on planted data. **NOT YET RUN on the real pull.** |
+| **AX.1 — the conjunction, codified** | ✅ 08-07 | ⬜ | n/a (pure, gates nothing) | `analysis/regime_axes.py` v1.0 — two-axis decomposition + `pair_conf = min(dir, vol)`. 6 tests, deliberate-failure verified (a mean turns it red). **NOT wired to anything yet — by design.** |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
@@ -4524,6 +4525,35 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.06 — 2026-08-07 — AX.1: the conjunction is codified, and gates nothing.**
+  Operator: *"it's the conjunction that I would like to codify somehow."*
+  The six regimes are TWO orthogonal oppositions the argmax fuses and half
+  discards — direction (BULL/BEAR ←→ RANGING) and volatility (BREAKOUT ←→
+  COMPRESSION). `analysis/regime_axes.py` splits any L1 score vector into both,
+  reporting each axis's winner, LEVEL and MARGIN separately, plus
+  **`pair_conf = min(direction_conf, volatility_conf)`**.
+  **WHY `min` AND NOT A MEAN — it is the whole claim.** A mean lets a confident
+  direction paper over an unknown volatility state; `min` is low whenever EITHER
+  axis is unsure and is bounded above by both, so it cannot manufacture
+  confidence its components lack. A deliberate-failure run swapping `min` for a
+  mean turns two tests red.
+  **THE FALSIFIABLE HOPE:** `SETUP.nf ≈ SETUP.ok` and `RGCV.nf ≈ RGCV.ok` say
+  neither existing score separates good trades from bad, so no threshold on
+  either can. **A conjunction can separate where its components do not.** If the
+  3×3 cross-tab shows no separation either, the idea dies cheaply.
+  **THE EVIDENCE THAT PROMPTED IT:** continuation makes money ONLY where it is
+  not supposed to work — RANGING 82 trades **+$578.50** against TRENDING_BULL
+  252 **−$3,221** and TRENDING_BEAR 85 **−$4,952**.
+  **⚠️ MARGIN IS DELIBERATELY NOT FOLDED IN:** 0.90 against 0.89 is a high level
+  and a terrible margin, and collapsing them would hide which is missing — the
+  same error that made the census's p50 separation of 0.347 look healthy.
+  **⚠️ AN EMPTY AXIS RETURNS NEUTRAL, NEVER A TIE-BREAK HEAD** — a tie-break
+  head is how SWEEP_REVERSAL won the 4.2% of ticks where the engine knew
+  nothing. And SWEEP is on NEITHER axis: it is an event overlay, and putting it
+  on one repeats the exact category error RGM.3 just undid.
+  **NEXT, both read-only:** score the 692 trades in the 3×3 (~77/cell), then
+  condition `trigger_drift` on the PAIR instead of the label. Anything that
+  GATES on it is RGM.2 Stage 3, post-go-live.
 - **v4.05 — 2026-08-07 — SHD.2/SHD.3: the shadow data gets a calibration date
   and a pre-freeze confirmation date.** The first-ever read produced three
   numbers that should set dials rather than decorate a report — named levels are
