@@ -1,6 +1,22 @@
 #!/usr/bin/env python3
 """
-tests/vwap_orientation_ledger.py — v1.2 — 2026-08-08
+tests/vwap_orientation_ledger.py — v1.3 — 2026-08-08
+
+v1.3 — 2026-08-08 — THE EVENT FILTER, the fourth and last layer. v1.2 resolved
+       all five fields correctly and the run STILL returned 419 undecidable and
+       ZERO decidable. Cause: the event whitelist accepted only
+       ("scored","fired","entry","entered") — names predating trade_readiness
+       v1.5 — while the records carrying `readiness.market` are named
+       `readiness`, `readiness_would_fire` and `readiness_staged_pick`. On
+       2026-08-06 alone that is 11,584 records skipped before their VWAP side
+       was read; the 419 survivors were `scored` rows with no market section.
+       The data was never missing: BELOW 5,058 / ABOVE 3,912 that same day.
+       Now PREFIX-matched on `readiness*` rather than enumerated — an exact list
+       is precisely what kept this tool three versions behind its own emitter.
+       ⚠️ THE LESSON, and it cost four versions: I patched the layer that had
+       just failed, four times, instead of tracing the whole path once. Field
+       names, then depth, then paths, then the filter. Each fix was correct and
+       each was one layer short.
 
 v1.2 — 2026-08-08 — PATHS VERIFIED AGAINST THE EMITTER. v1.1 made discovery
        path-aware, which was necessary but not sufficient: I then GUESSED the
@@ -278,8 +294,20 @@ def main(argv):
     sig = defaultdict(lambda: {"aligned": 0, "misaligned": 0})
     undecidable = 0
     for r in jrecs:
-        if jmap.get("event") and str(dig(r, jmap["event"]) or "").lower() not in (
-                "scored", "fired", "entry", "entered"):
+        # v1.3 — THE EVENT FILTER WAS THE LAST LAYER, and it silently discarded
+        # everything that matters. It accepted only ("scored","fired","entry",
+        # "entered") — names from before `trade_readiness` v1.5 existed. The
+        # journal's readiness events are `readiness`, `readiness_would_fire` and
+        # `readiness_staged_pick`, and ONLY THOSE carry `readiness.market`. So
+        # 11,584 records on 2026-08-06 were skipped before their VWAP side was
+        # ever read, and the 419 that survived were `scored` rows, which have no
+        # market section at all — hence "419 undecidable, zero decidable".
+        # Prefix-matched rather than enumerated: `readiness_*` is a growing
+        # family and an exact list is what put this tool three versions behind
+        # its own emitter.
+        _ev = str(dig(r, jmap["event"]) or "").lower() if jmap.get("event") else ""
+        if _ev and not (_ev.startswith("readiness")
+                        or _ev in ("scored", "fired", "entry", "entered")):
             continue
         strat = str(dig(r, jmap.get("strategy")) or "UNKNOWN").upper()
         direc = str(dig(r, jmap.get("direction")) or "").upper()

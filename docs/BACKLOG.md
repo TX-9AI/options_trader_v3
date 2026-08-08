@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.11
+# docs/BACKLOG.md — v4.13
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -106,6 +106,7 @@ BAKED is changing nothing about today's data.
 | **AX.3 — keep what separated, kill what did not** | ✅ 08-07 | ⬜ | ⬜ **emission needs a bake** | regime_axes **v1.1** — `pair_conf` marked DEAD in the payload itself (`pair_conf_status`), `direction_conf` (+0.188, n=571) carried forward. 7 tests. **Emission onto the journal is the next step and is NOT built.** |
 | **VW.1 — vwap_orientation reads the journal at last** | ✅ 08-07 | ⬜ | n/a (offline) | **v1.1 path-aware discovery.** The "three renames" diagnosis was WRONG — `_first_key` tested top-level keys only while the journal nests under `readiness.` and `factors.`. Proven on a realistic nested record. |
 | **VW.1b — paths verified against the emitter** | ✅ 08-08 | ⬜ | n/a (offline) | v1.1's path-awareness was necessary but I then GUESSED the paths and found NONE across 39,344 records. Reading `trade_readiness._journal()`: everything is TWO levels deep — `readiness.market.vwap`, `readiness.factors.dir`. |
+| **VW.1c — the event filter, the fourth layer** | ✅ 08-08 | ⬜ | n/a (offline) | v1.3. The whitelist accepted only `scored/fired/entry/entered` — pre-v1.5 names — while the records carrying `readiness.market` are `readiness*`. **11,584 records skipped on 08-06 alone.** Now prefix-matched. |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
@@ -233,6 +234,10 @@ not "review", which is how a check-in becomes a formality.
 | ⬜ | **Mon Aug 10** | CNT.2 | Do `insurance_stop` rows appear? Zero in a full session means `underlying_stop` is never breached before BOS arms, and the gate is inert rather than protective. |
 | ⬜ | **Mon Aug 10** | CNT.3 | `COMPRESSION / Continuation` trade count must be **ZERO**. Anything above zero means the block is not reached. |
 | ⬜ | **Mon Aug 10** | RGM.3 | Confirm no `SWEEP_REVERSAL` label is emitted, and that the tie-break head is BREAKOUT_VOLATILE on dead ticks. **Per-regime stats are now on a different basis — do not compare to the 12-session history.** |
+| ✅ | **CLOSED 08-08** | ~~SHD.2a — revive the dead observers~~ | **NOT A FAULT.** All 29 boxes read `enabled` + `active`; GS simply has zero sessions because it has barely been SELECTED to trade, and the observer only runs on a WOKEN box. The operator's explanation fit without requiring six identical failures; mine required six. Coverage maps onto the trading cohort. **Nothing to revive, nothing being lost.** |
+| ⬜ | **Mon Aug 10** | SHD.2a-remnant — SMCI's truncated session | The ONE box that fits neither story: `SESS=1` with **11 RECORDS** ≈ 2.75 minutes. Never-woken gives 0; woken gives ~1,560. Eleven is a start that died almost immediately. One box, one date — small, but it is a real anomaly rather than a selection artefact. |
+| ✅ | **CLOSED 08-08** | ~~VW.2 — is the VWAP payload populated?~~ | **YES, IT ALWAYS WAS.** 2026-08-06: `price_vs_vwap` BELOW **5,058** / ABOVE **3,912**, only 554 NONE. My "the pipe may be empty" hypothesis was wrong. The tool's EVENT WHITELIST was rejecting every record that carried the data — see VW.1c. |
+| ⬜ | **Mon Aug 10** | **VW.2 — is the VWAP payload actually POPULATED?** | VW.1b fixed the SCHEMA (all five fields resolve) but the first real run returned **419 undecidable, ZERO decidable** — every row "index/NONE side, gate inert by spec". `_market_snapshot` emits `{vwap: None, price_vs_vwap: "NONE"}` whenever `vw <= 0 or px <= 0`. **So the pipe is open and the payload may still be empty.** Check `price_vs_vwap` on NON-index symbols: if it is NONE there too, `volatility_engine.vwap` is not reaching the snapshot and item AI's VWAP-anchored condor midpoint STILL has no data accumulating — which was the whole deadline. A fixed schema over a null payload is not a fixed pipeline. |
 | ⬜ | **Mon Aug 10** | SHD.2a — REVIVE THE DEAD OBSERVERS **FIRST** | `systemctl is-enabled shadow-observer` on **GS (0 sessions), SMCI (11 RECORDS), DIA/GLD/IWM/TLT (exactly 1 session each)**. One 1,560-line session then silence is the ORIGINAL 07-22 signature, so the enable-at-boot fix did not take there. **Do this Monday or the Aug 14 pull inherits the same six holes** — every session between now and then is unrecoverable once missed. Disabled vs enabled-but-crashing are different problems; `is-enabled` separates them in one line. |
 | ⬜ | **Tue Aug 11** | EVM re-baseline | First `evm_status.py --asof` run after the slip. **SPI will JUMP; that is the plan moving, not work done.** Brief it as a re-baseline or the number lies. |
 | ⬜ | **Fri Aug 14** | CNT.1 | One week of `trend_continuation_breakout`. Compare its drift and never-favourable rate to `_standalone`. **This is the only live test of whether direction from the trend VOTE beats direction from the LABEL** — and the vote-derived buckets showed the same nothing, so do not assume it wins. |
@@ -4622,6 +4627,42 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.13 — 2026-08-08 — VW.1c: the event filter, and the fourth wrong
+  assumption about one tool.** v1.2 resolved all five fields correctly and the
+  run STILL returned 419 undecidable, zero decidable. The event whitelist
+  accepted only `("scored","fired","entry","entered")` — names predating
+  `trade_readiness` v1.5 — while the records carrying `readiness.market` are
+  `readiness`, `readiness_would_fire` and `readiness_staged_pick`. **11,584
+  records skipped on 2026-08-06 alone**, and the 419 survivors were `scored`
+  rows with no market section. Now PREFIX-matched on `readiness*`; an exact list
+  is what kept this tool three versions behind its own emitter.
+  **VW.2 IS CLOSED AND MY HYPOTHESIS WAS WRONG.** The payload was never empty:
+  08-06 shows BELOW **5,058** / ABOVE **3,912**, 554 NONE. VWAP data has been
+  banking correctly since the v1.5 bake, and item AI's condor midpoint has its
+  input after all.
+  **⚠️ THE LESSON, and it cost FOUR versions of one file:** I patched the layer
+  that had just failed — field names, then depth, then paths, then the filter —
+  instead of tracing the whole path once. Each fix was correct and each was one
+  layer short. When a tool returns nothing twice, stop fixing and READ THE PATH
+  END TO END: emitter → event name → section → field.
+- **v4.12 — 2026-08-08 — three loose ends from Saturday, closed or dated.**
+  **SHD.2a CLOSED — it was never a fault.** All 29 boxes read `enabled` +
+  `active`; the thin ones have barely been SELECTED to trade, and the observer
+  only runs on a woken box. The operator's explanation required no failures;
+  mine required six identical ones. **SMCI's 11 records is the one genuine
+  remnant** and is dated Monday.
+  **VW.2 OPENED, and it is the important one.** VW.1b fixed the SCHEMA — all
+  five fields now resolve — but the first real run over 39,344 records returned
+  **419 undecidable and ZERO decidable**, every row "index/NONE side". A fixed
+  schema over a null payload is not a fixed pipeline, and if
+  `volatility_engine.vwap` is not reaching `_market_snapshot` then item AI's
+  VWAP-anchored condor midpoint still has nothing accumulating — which was the
+  entire reason this had a deadline.
+  **THE PATTERN WORTH NAMING: today produced THREE tools that resolved their
+  inputs and then found nothing** (rejection ledger's MISSED column with no
+  null arm, the axis conjunction, this). Resolving an input is not the same as
+  having data, and each was caught only because the tool announced what it could
+  not find rather than printing an empty table.
 - **v4.11 — 2026-08-08 — VW.1b: the paths, read off the emitter instead of
   guessed.** v1.1 made discovery path-aware — necessary, and it proved itself by
   resolving `readiness.strategy` — but I then INVENTED the remaining paths
