@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.08
+# docs/BACKLOG.md — v4.09
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -104,6 +104,7 @@ BAKED is changing nothing about today's data.
 | **AX.1 — the conjunction, codified** | ✅ 08-07 | ⬜ | n/a (pure, gates nothing) | `analysis/regime_axes.py` v1.0 — two-axis decomposition + `pair_conf = min(dir, vol)`. 6 tests, deliberate-failure verified (a mean turns it red). **NOT wired to anything yet — by design.** |
 | **AX.2 — the 3x3 cross-tab + separation test** | ✅ 08-07 | ⬜ | n/a (offline) | `tests/axis_crosstab.py` v1.0. Planted proof: `direction_conf` gap **+0.000** (does not separate) while `pair_conf` gap **+0.800** — the conjunction succeeding where a component fails, detected. **NOT YET RUN on the real book.** |
 | **AX.3 — keep what separated, kill what did not** | ✅ 08-07 | ⬜ | ⬜ **emission needs a bake** | regime_axes **v1.1** — `pair_conf` marked DEAD in the payload itself (`pair_conf_status`), `direction_conf` (+0.188, n=571) carried forward. 7 tests. **Emission onto the journal is the next step and is NOT built.** |
+| **VW.1 — vwap_orientation reads the journal at last** | ✅ 08-07 | ⬜ | n/a (offline) | **v1.1 path-aware discovery.** The "three renames" diagnosis was WRONG — `_first_key` tested top-level keys only while the journal nests under `readiness.` and `factors.`. Proven on a realistic nested record. |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
@@ -4562,6 +4563,25 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.09 — 2026-08-07 — VW.1: the VWAP ledger can finally read the journal, and
+  the diagnosis I had been carrying was wrong.** It exited rc=1 for two nights
+  and the standing note said "three field renames". It was not: `_first_key`
+  tested `n in rec` — TOP-LEVEL keys only — while the journal nests these under
+  sections (`readiness.strategy`, `factors.dir`). **No flat rename could ever
+  have reached them.** v1.1 makes CAND entries DOTTED PATHS and routes every
+  accessor through `dig()`, so the next schema section costs one tuple entry
+  rather than another dead tool. Added `pnl_usd`, which is what the trades table
+  actually calls it. Proven on a realistic nested record: discovery resolved
+  `readiness.strategy`, `factors.dir`, `vwap.price_vs_vwap` and `vwap.price`.
+  **⚠️ IT CAN ONLY SEE SESSIONS FROM THE trade_readiness v1.5 BAKE FORWARD.**
+  Before 2026-08-05, VWAP was computed every tick by volatility_engine and NEVER
+  WRITTEN DOWN — so earlier journals have no VWAP at all and their emptiness is
+  not a finding. Item AI's condor fix (a VWAP-anchored midpoint) cannot be
+  evaluated on data that does not exist, which is why this had a deadline: every
+  session from here is history you either have or you do not.
+  **THE GENERAL LESSON, worth more than the fix:** a diagnosis that survives two
+  nights unexamined becomes a fact. "Three renames" was written down once and
+  repeated since; reading the accessor took one grep.
 - **v4.08 — 2026-08-07 — AX.3: keep the part that separated, kill the part that
   did not, and mark the corpse.** `pair_conf` is dead (+0.001 vs
   `direction_conf`'s +0.188) and the failure is structural — a conjunction over a

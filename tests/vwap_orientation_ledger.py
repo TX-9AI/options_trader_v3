@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 """
-tests/vwap_orientation_ledger.py — v1.0 — 2026-07-30
+tests/vwap_orientation_ledger.py — v1.1 — 2026-08-07
+
+v1.1 — 2026-08-07 — PATH-AWARE DISCOVERY. This tool exited rc=1 for two nights
+       against a schema that had never landed, and the diagnosis "three field
+       renames" was wrong. `_first_key` tested `n in rec` — TOP-LEVEL keys only
+       — while the journal nests these under sections: `readiness.strategy` and
+       `factors.dir`. **No flat rename could have reached them.** CAND entries
+       may now be DOTTED PATHS and every accessor goes through `dig()`, so the
+       next schema section costs one tuple entry instead of another dead tool.
+       Also added `pnl_usd`, which is what the trades table actually calls it.
+       ⚠️ trade_readiness v1.5 (2026-08-05) is what began emitting
+       `{vwap, price_vs_vwap, dist_pct}` at all — before it, VWAP was computed
+       every tick by volatility_engine and NEVER WRITTEN DOWN. So this tool can
+       only see sessions from that bake forward; earlier journals have no VWAP
+       to read and their absence is not a finding.
 
 WHAT THIS ANSWERS
     Backlog item E proposes a VWAP_FILTER_ACTIVE HARD GATE across the scored
@@ -50,21 +64,52 @@ MIN_CELL = 12          # below this a cell gets no verdict, only a count
 # Field-name candidates, most specific first. The journal and trade schemas have
 # both drifted over the project's life, so this discovers rather than assumes —
 # and prints what it found so a wrong guess is visible instead of silent.
+# v1.1 — CANDIDATES MAY BE DOTTED PATHS. The real defect was never three wrong
+# names: `_first_key` tested `n in rec`, i.e. TOP-LEVEL keys only, while the
+# journal nests these under sections. `readiness.strategy` and `factors.dir` are
+# where they actually live, and no flat rename could ever have reached them.
+# Fixing the ACCESSOR rather than the names also means the next schema section
+# costs one tuple entry instead of another dead tool.
 CAND = {
-    "vwap":      ("vwap", "vwap_at_entry", "session_vwap"),
-    "rel":       ("price_vs_vwap", "vwap_side", "price_vs_vwap_at_entry"),
-    "price":     ("price", "underlying", "underlying_price", "spot", "last"),
-    "strategy":  ("strategy", "setup", "strategy_name", "setup_type"),
-    "direction": ("direction", "side", "bias", "dir"),
+    "vwap":      ("vwap", "vwap.vwap", "readiness.vwap", "vwap_at_entry",
+                  "session_vwap"),
+    "rel":       ("price_vs_vwap", "vwap.price_vs_vwap",
+                  "readiness.price_vs_vwap", "vwap_side",
+                  "price_vs_vwap_at_entry"),
+    "price":     ("price", "vwap.price", "underlying", "underlying_price",
+                  "spot", "last"),
+    "strategy":  ("strategy", "readiness.strategy", "setup", "strategy_name",
+                  "setup_type"),
+    "direction": ("direction", "factors.dir", "readiness.direction", "side",
+                  "bias", "dir"),
     "symbol":    ("symbol", "sym", "ticker", "instrument"),
     "event":     ("event", "kind", "type"),
-    "pnl":       ("pnl", "realized_pnl", "profit", "pl", "net_pnl"),
+    "pnl":       ("pnl", "pnl_usd", "realized_pnl", "profit", "pl", "net_pnl"),
 }
+
+
+def dig(rec, path):
+    """Read a dotted path out of a nested record. None if any hop is missing.
+
+    `rec.get("readiness.strategy")` returns None on a nested dict — silently,
+    which is exactly how this tool exited rc=1 for two nights against a schema
+    that had never landed flat.
+    """
+    if not path:
+        return None
+    cur = rec
+    for hop in str(path).split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(hop)
+        if cur is None:
+            return None
+    return cur
 
 
 def _first_key(rec, names):
     for n in names:
-        if n in rec and rec[n] is not None:
+        if dig(rec, n) is not None:
             return n
     return None
 
@@ -191,11 +236,11 @@ def main(argv):
     pnl_by = defaultdict(list)
     if trades and tmap.get("pnl"):
         for t in trades:
-            key = (str(t.get(tmap.get("symbol"), "")).upper(),
-                   str(t.get(tmap.get("strategy"), "")).upper(),
-                   str(t.get(tmap.get("direction"), "")).upper())
+            key = (str(dig(t, tmap.get("symbol")) or "").upper(),
+                   str(dig(t, tmap.get("strategy")) or "").upper(),
+                   str(dig(t, tmap.get("direction")) or "").upper())
             try:
-                pnl_by[key].append(float(t.get(tmap["pnl"]) or 0.0))
+                pnl_by[key].append(float(dig(t, tmap["pnl"]) or 0.0))
             except Exception:              # noqa: BLE001
                 pass
 
@@ -209,13 +254,13 @@ def main(argv):
     sig = defaultdict(lambda: {"aligned": 0, "misaligned": 0})
     undecidable = 0
     for r in jrecs:
-        if jmap.get("event") and str(r.get(jmap["event"], "")).lower() not in (
+        if jmap.get("event") and str(dig(r, jmap["event"]) or "").lower() not in (
                 "scored", "fired", "entry", "entered"):
             continue
-        strat = str(r.get(jmap.get("strategy"), "") or "UNKNOWN").upper()
-        direc = str(r.get(jmap.get("direction"), "") or "").upper()
-        ok = aligned(r.get(jmap.get("rel")), direc,
-                     r.get(jmap.get("vwap")), r.get(jmap.get("price")))
+        strat = str(dig(r, jmap.get("strategy")) or "UNKNOWN").upper()
+        direc = str(dig(r, jmap.get("direction")) or "").upper()
+        ok = aligned(dig(r, jmap.get("rel")), direc,
+                     dig(r, jmap.get("vwap")), dig(r, jmap.get("price")))
         if ok is None:
             undecidable += 1
             continue
