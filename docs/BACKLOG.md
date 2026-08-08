@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.09
+# docs/BACKLOG.md — v4.11
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -105,6 +105,7 @@ BAKED is changing nothing about today's data.
 | **AX.2 — the 3x3 cross-tab + separation test** | ✅ 08-07 | ⬜ | n/a (offline) | `tests/axis_crosstab.py` v1.0. Planted proof: `direction_conf` gap **+0.000** (does not separate) while `pair_conf` gap **+0.800** — the conjunction succeeding where a component fails, detected. **NOT YET RUN on the real book.** |
 | **AX.3 — keep what separated, kill what did not** | ✅ 08-07 | ⬜ | ⬜ **emission needs a bake** | regime_axes **v1.1** — `pair_conf` marked DEAD in the payload itself (`pair_conf_status`), `direction_conf` (+0.188, n=571) carried forward. 7 tests. **Emission onto the journal is the next step and is NOT built.** |
 | **VW.1 — vwap_orientation reads the journal at last** | ✅ 08-07 | ⬜ | n/a (offline) | **v1.1 path-aware discovery.** The "three renames" diagnosis was WRONG — `_first_key` tested top-level keys only while the journal nests under `readiness.` and `factors.`. Proven on a realistic nested record. |
+| **VW.1b — paths verified against the emitter** | ✅ 08-08 | ⬜ | n/a (offline) | v1.1's path-awareness was necessary but I then GUESSED the paths and found NONE across 39,344 records. Reading `trade_readiness._journal()`: everything is TWO levels deep — `readiness.market.vwap`, `readiness.factors.dir`. |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
@@ -156,6 +157,64 @@ audit, VWAP ledger, EVM, readiness — all arrived in Telegram at 16:59. Item AX
 worked. Two corrections to my own account of it: it was **fixed in source on
 08-03**, not open, and `grep -c` on the `.env` could not have told a present
 variable from an empty one — the LENGTHS did.
+
+---
+
+## PART 0.7 — SATURDAY 2026-08-08: WHAT LANDED AND WHAT IT COST (added v4.10)
+
+**26 deliveries in one working day.** Recorded here because the delivery ledger
+counts artifacts and this counts CONSEQUENCES — and because the next person to
+open this file (including me) needs the shape of the day, not just its commits.
+
+**THE ENGINE CHANGED FIVE TIMES.** conviction_integrator v2.1 (F7 emission,
+churn 20.8 → 4.2/symbol-day, confirmed live at 7.6x damping) then v2.2 (RGM.3,
+sweep leaves the argmax). main v5.5 → v5.8. Sweep ungated from the label
+(SWP.1) then given a separate short floor (SWP.2). Continuation opened to
+BREAKOUT tape (CNT.1), given an insurance gate for BOS's blind window (CNT.2),
+and blocked from the runaway handoff under COMPRESSION (CNT.3).
+**⇒ EVERY PER-REGIME STATISTIC IS NOW ON A DIFFERENT BASIS than the 12-session
+history. Do not pool across the Monday bake.**
+
+**FOUR INSTRUMENTS BUILT, AND THE POINT OF EACH IS A CONTROL.**
+`trigger_drift` (DRF.1) put a POSITIVE CONTROL under a measurement that had only
+ever had a null one — ORB Short cleared the random arm at every horizon, which
+is what made `a2_cooccurrence`'s "no directional edge in any label state" a
+finding rather than a possible artefact. `rejection_ledger` (L3.2a) looks at
+what was DECLINED for the first time. `axis_crosstab` (AX.2) was built able to
+kill its own hypothesis, and did. `shadow_summary` (SHD.1) read 282,350 records
+that had never been read.
+
+**THE THREE FINDINGS THAT SHOULD OUTLIVE THE DAY.**
+1. **THE EDGE IS IN THE TRIGGER, NOT THE LABEL.** Label states carry no forward
+   directional drift; trigger events do. Continuation drifts AGAINST itself —
+   standalone 37% positive at 30 bars over 136 trades. That is negative edge, not
+   absent edge, and no stop or trail reaches it.
+2. **`direction_conf` SEPARATES AT +0.188** (n=571) where `setup_score` and
+   `regime_conviction` do not. It is the RAW Layer-1 score; the INTEGRATED one is
+   flat. Needs out-of-sample confirmation before anything gates on it.
+3. **THE FUSED LABEL WAS BURYING TWO CELLS.** TRENDING_BEAR is the worst regime
+   in the book (−$6,137) while the BEAR AXIS is +$4,391, driven by
+   BEAR/EXPANDING at +$5,059. RANGING splits into +$1,619 expanding vs −$2,752
+   neutral.
+
+**WHAT WAS KILLED, ON PURPOSE.** `pair_conf` (gap +0.001) — stamped DEAD in its
+own payload with a test pinning the marker. The floor stays at 25%/40%: 308
+winners, still exactly 5 ever recovered from −25%, zero from −40%.
+
+**WHAT I GOT WRONG, kept because the corrections are the useful part.**
+Claimed a sweep fired today off an unscoped aggregate — it had not. Claimed the
+fleet was behind HEAD when it was not. Read six thin shadow boxes as an
+enable-at-boot failure when the operator's plainer explanation (never selected,
+so never woken) fit without requiring six identical faults. Carried "three field
+renames" for the VWAP ledger for two nights when the accessor was reading
+top-level keys only. **The pattern: a diagnosis that survives unexamined becomes
+a fact, and an aggregate quoted without its date range is not evidence.**
+
+**AND THE TOOLS KEPT CATCHING THEMSELVES.** A canary that fired on a CHANGELOG
+quoting the line it removed. A leak test that passed on a deliberately leaking
+build. A separation verdict printed from an EMPTY arm. Each is the same family
+as the laundered green this repo exists to prevent — and each was found by
+running the tool against planted data before real data.
 
 ---
 
@@ -4563,6 +4622,39 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.11 — 2026-08-08 — VW.1b: the paths, read off the emitter instead of
+  guessed.** v1.1 made discovery path-aware — necessary, and it proved itself by
+  resolving `readiness.strategy` — but I then INVENTED the remaining paths
+  (`vwap.vwap`, `factors.dir`) and the tool found NONE of them across 39,344
+  records over three sessions. `trade_readiness._journal()` settles it: it emits
+  ONE section, `readiness=`, holding `market` and `factors`, so everything sits
+  TWO levels deep — `readiness.market.vwap`, `readiness.market.price_vs_vwap`,
+  `readiness.factors.dir`. **The field NAMES in the standing note were right the
+  whole time; the DEPTH was wrong**, which is why two flat renames and one
+  shallow path all missed. There is no price field at all: `_market_snapshot`
+  emits `dist_pct`, which is better here because it is comparable across a $30
+  symbol and a $900 one.
+  **⚠️ THE TOOL EARNED ITS KEEP.** It printed `(NOT FOUND)` per field and
+  REFUSED to run. A silent zero-row ledger would have read as "no
+  misorientation" rather than "wrong key" — the laundered-green failure, avoided
+  because v1.0 was built to name what it could not find.
+  **THE LESSON, third time today:** path-awareness fixed the ACCESSOR; only
+  reading the EMITTER fixed the PATHS. Making a lookup more capable does not tell
+  you what to look up.
+- **v4.10 — 2026-08-08 — SATURDAY IN THE BOOKS. PART 0.7 records the day's
+  consequences, not its commits.** 26 deliveries: the engine changed five times
+  (F7 emission, RGM.3, SWP.1/2, CNT.1/2/3), four measuring instruments were built
+  and each was given a CONTROL before its output was trusted, the schedule
+  slipped a week into the plan itself, and the working agreement gained the rule
+  that every study owes a disposition — kill, keep or codify.
+  Three findings carried forward: the edge is in the TRIGGER not the LABEL;
+  `direction_conf` separates at +0.188 where setup_score and regime_conviction do
+  not; and the fused label was burying BEAR/EXPANDING (+$5,059) inside the
+  worst-reading regime in the book. One hypothesis killed on purpose
+  (`pair_conf`, +0.001, stamped dead in its own payload). Four of my own wrong
+  calls recorded, because the corrections are the transferable part.
+  **⚠️ NOTHING IS BAKED UNTIL MONDAY. Every per-regime statistic is now on a
+  different basis than the 12-session history — do not pool across the bake.**
 - **v4.09 — 2026-08-07 — VW.1: the VWAP ledger can finally read the journal, and
   the diagnosis I had been carrying was wrong.** It exited rc=1 for two nights
   and the standing note said "three field renames". It was not: `_first_key`

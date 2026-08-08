@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 """
-tests/vwap_orientation_ledger.py — v1.1 — 2026-08-07
+tests/vwap_orientation_ledger.py — v1.2 — 2026-08-08
+
+v1.2 — 2026-08-08 — PATHS VERIFIED AGAINST THE EMITTER. v1.1 made discovery
+       path-aware, which was necessary but not sufficient: I then GUESSED the
+       paths (`vwap.vwap`, `factors.dir`) and the tool found neither across
+       39,344 records. Reading `trade_readiness._journal()` settles it — it
+       emits ONE section, `readiness=`, holding `market` and `factors`, so
+       everything is TWO levels deep: `readiness.market.vwap`,
+       `readiness.market.price_vs_vwap`, `readiness.factors.dir`. The field
+       NAMES in the standing note were right; the DEPTH was wrong, which is why
+       two flat renames and one shallow path all missed.
+       There is NO price field — `dist_pct` replaces it and is better, being
+       comparable across symbols.
+       ⚠️ THE TOOL EARNED ITS KEEP HERE: it printed "(NOT FOUND)" per field and
+       REFUSED rather than producing an empty ledger. A silent zero-row report
+       would have read as "no misorientation" instead of "wrong key".
 
 v1.1 — 2026-08-07 — PATH-AWARE DISCOVERY. This tool exited rc=1 for two nights
        against a schema that had never landed, and the diagnosis "three field
@@ -71,17 +86,26 @@ MIN_CELL = 12          # below this a cell gets no verdict, only a count
 # Fixing the ACCESSOR rather than the names also means the next schema section
 # costs one tuple entry instead of another dead tool.
 CAND = {
-    "vwap":      ("vwap", "vwap.vwap", "readiness.vwap", "vwap_at_entry",
+    # v1.2 — VERIFIED AGAINST THE EMITTER, not guessed. `trade_readiness`
+    # v1.5 `_journal()` emits ONE section, `readiness=`, containing
+    # `market` (from `_market_snapshot`) and `factors` (from the scorer). So
+    # everything is TWO levels deep. v1.1 guessed `vwap.vwap` and `factors.dir`
+    # and found neither across 39,344 records — the field NAMES were right all
+    # along, the DEPTH was wrong, which is why two flat renames and one shallow
+    # path all missed.
+    "vwap":      ("readiness.market.vwap", "vwap", "vwap_at_entry",
                   "session_vwap"),
-    "rel":       ("price_vs_vwap", "vwap.price_vs_vwap",
-                  "readiness.price_vs_vwap", "vwap_side",
-                  "price_vs_vwap_at_entry"),
-    "price":     ("price", "vwap.price", "underlying", "underlying_price",
-                  "spot", "last"),
-    "strategy":  ("strategy", "readiness.strategy", "setup", "strategy_name",
+    "rel":       ("readiness.market.price_vs_vwap", "price_vs_vwap",
+                  "vwap_side", "price_vs_vwap_at_entry"),
+    # NOTE: there is NO price field. `_market_snapshot` emits `dist_pct` —
+    # signed % from VWAP — which is BETTER than a raw price here because it is
+    # comparable across a $30 symbol and a $900 one. `aligned()` works from
+    # `rel` alone, so price stays optional.
+    "price":     ("readiness.market.dist_pct", "price", "underlying",
+                  "underlying_price", "spot", "last"),
+    "strategy":  ("readiness.strategy", "strategy", "setup", "strategy_name",
                   "setup_type"),
-    "direction": ("direction", "factors.dir", "readiness.direction", "side",
-                  "bias", "dir"),
+    "direction": ("readiness.factors.dir", "direction", "side", "bias", "dir"),
     "symbol":    ("symbol", "sym", "ticker", "instrument"),
     "event":     ("event", "kind", "type"),
     "pnl":       ("pnl", "pnl_usd", "realized_pnl", "profit", "pl", "net_pnl"),
