@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.06
+# docs/BACKLOG.md — v4.07
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -102,6 +102,7 @@ BAKED is changing nothing about today's data.
 | **L3.2a — rejection ledger** | ✅ 08-07 build | ⬜ | n/a (offline) | `analysis/rejection_ledger.py` v1.0 + 3 tests, deliberate-failure verified. Planted proof: vwap blocking longs into a falling tape → 100% DODGED; rrr blocking shorts → 100% MISSED. **NOT YET RUN on the real journals.** |
 | **SHD.1 — shadow observer data OFF the fleet** | ✅ 08-07 | ⬜ | n/a (offline) | **282,350 records / 188 files / 238 MB / 29 boxes**, pulled for the first time ever (`harvest.py` has no shadow class). `tests/shadow_summary.py` v1.0 built + proven on planted data. **NOT YET RUN on the real pull.** |
 | **AX.1 — the conjunction, codified** | ✅ 08-07 | ⬜ | n/a (pure, gates nothing) | `analysis/regime_axes.py` v1.0 — two-axis decomposition + `pair_conf = min(dir, vol)`. 6 tests, deliberate-failure verified (a mean turns it red). **NOT wired to anything yet — by design.** |
+| **AX.2 — the 3x3 cross-tab + separation test** | ✅ 08-07 | ⬜ | n/a (offline) | `tests/axis_crosstab.py` v1.0. Planted proof: `direction_conf` gap **+0.000** (does not separate) while `pair_conf` gap **+0.800** — the conjunction succeeding where a component fails, detected. **NOT YET RUN on the real book.** |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
@@ -4525,6 +4526,26 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.07 — 2026-08-07 — AX.2: the test that can kill AX.1.** `axis_crosstab.py`
+  scores every closed trade in the 3x3 of direction x volatility, then reports
+  `pair_conf` split by outcome — nf (never favourable) vs ok — **the same
+  comparison the excursion report already runs on setup_score and regime
+  conviction, both of which come back nf ≈ ok.** The claim is that a conjunction
+  separates where its components do not; the third line is read against the first
+  two, and if it adds nothing the idea is recorded as DEAD rather than
+  re-litigated.
+  Never-favourable is a PRICE-PATH label from `max_premium_seen` vs
+  `entry_premium`, independent of stops, sizing and fills — so it cannot be
+  contaminated by exit logic, which is why realized P&L is the wrong target.
+  Score vectors come from the REPLAY CORPUS at the entry tick, since the trade
+  row stores only the fused label. UTC→ET via zoneinfo; unmatched rows dropped
+  and counted.
+  **⚠️ A DEFECT IN MY OWN TOOL, CAUGHT BY THE PLANTED RUN AND WORTH THE ENTRY:**
+  the first version printed **"SEPARATES" with n_nf=0** — `_pct([], 50)` returns
+  0.0, so the verdict logic read a +0.900 gap out of an EMPTY list. A tool that
+  announces a finding from no data is the laundered-green failure this repo
+  keeps catching. It now REFUSES below 15 per arm and says "absent measurement,
+  not a null result".
 - **v4.06 — 2026-08-07 — AX.1: the conjunction is codified, and gates nothing.**
   Operator: *"it's the conjunction that I would like to codify somehow."*
   The six regimes are TWO orthogonal oppositions the argmax fuses and half
