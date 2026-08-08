@@ -1,4 +1,40 @@
-# analysis/trade_readiness.py — options_trader_v3
+# analysis/trade_readiness.py — options_trader_v3 — v1.6
+# v1.6 — 2026-08-08 — `dir` ON EVERY TRACK (log-only, no behaviour change).
+#         Until now exactly ONE track journaled a direction: _trend_credit_spread
+#         emitted `factors.dir` and the other five emitted nothing. That was
+#         invisible until the VWAP orientation ledger ran against it and 30,565
+#         records landed in a single "undecidable" bucket whose LABEL blamed the
+#         cash-index case — five of six strategies were being discarded for a
+#         missing field, under a caption that said something else entirely.
+#         Each track now stamps `dir` from the source that actually knows:
+#         continuation from the trending label (identical to `_staged_pick`'s
+#         derivation, so the two can never disagree); sweep from the LIVE
+#         `liq_map.recent_sweep.kind`, which no offline tool could ever recover;
+#         condor sides from EXPOSURE — a call credit is SHORT, the inverse of
+#         the option-buyer reading, and `side` is kept alongside because the two
+#         answer different questions; butterfly explicitly "neutral".
+#         "" means NO INTENDED SIDE THIS TICK and is an honest absence — the
+#         whole point is that a reader can now tell "sideless by design" from
+#         "field never existed", which is the distinction whose absence cost the
+#         ledger five versions.
+#         ⚠️ FORWARD-ONLY. This changes what gets WRITTEN, so it reaches only
+#         sessions after the bake. Every already-banked session is still read by
+#         `vwap_orientation_ledger` v1.4's derivation, which is why that
+#         derivation is kept rather than replaced.
+# v1.5 — 2026-08-05 — MARKET SNAPSHOT ON EVERY READINESS RECORD (backfilled into
+#         this changelog on 2026-08-08 — it shipped without one, and the title
+#         line carried no version at all while check_versions already pinned
+#         "v1.5". Exactly the drift WORKING_AGREEMENT rule 5 exists to stop, and
+#         it is recorded rather than quietly corrected). `_market_snapshot`
+#         emits {vwap, price_vs_vwap, dist_pct} into `readiness.market` on every
+#         record. volatility_engine had computed vwap and price_vs_vwap all
+#         along and NOTHING PERSISTED THEM: a key scan of 11,138 records found
+#         no VWAP-shaped field anywhere, which is why `vwap_orientation` had
+#         never once run. `dist_pct` is signed and expressed as a percentage of
+#         VWAP so it compares across a $30 symbol and a $900 one;
+#         `price_vs_vwap` is carried rather than derived from its sign, because
+#         the engine reports NONE on zero volume and a computed sign would
+#         invent an orientation there.
 # v1.4 — 2026-07-28 — ARM-ORIGIN EXTENSION (operator spec). The "move" is
 #         defined to START when confluence ARMS: ReadinessState now stamps
 #         (origin_price, origin_em, origin_ts) at every STAGING->ARMED
@@ -328,7 +364,14 @@ class TradeReadinessEngine:
                      corroborators=[(W_CONT_CONV, conv_val),
                                     (W_CONT_PULL, pull_val),
                                     (W_CONT_MOM,  mom_val)])
-        return r, {"label": label, "conv": round(conv, 3), "conv_val": round(conv_val, 3),
+        # v1.6 — `dir` on EVERY track. Derived here exactly as `_staged_pick`
+        # derives it below, so the journal cannot disagree with the picker.
+        # Outside a trending label the track is hard-vetoed to r=0 and has no
+        # intended side, which is "" — an honest absence, not a guess.
+        _dir = ("long" if str(label).upper().endswith("TRENDING_BULL")
+                else ("short" if str(label).upper().endswith("TRENDING_BEAR") else ""))
+        return r, {"label": label, "dir": _dir,
+                   "conv": round(conv, 3), "conv_val": round(conv_val, 3),
                    "dist_atr": (None if not (mid > 0 and atr > 0 and px > 0)
                                 else round(abs(px - mid) / atr, 3)),
                    "pull_val": round(pull_val, 3), "mom": mom, "mom_val": mom_val}
@@ -349,7 +392,17 @@ class TradeReadinessEngine:
                      corroborators=[(W_SWEEP_CONV, conv_val),
                                     (W_SWEEP_FRESH, fresh_val),
                                     (W_SWEEP_EXH, exh_val)])
-        return r, {"label": label, "conv": round(conv, 3), "age_bars": age,
+        # v1.6 — `dir` from the LIVE sweep kind, the same source `_staged_pick`
+        # reads. This is strictly better than anything an offline tool could
+        # derive: the direction was only ever knowable from `ctx.liq_map`, which
+        # is why the ledger had to pair readiness rows against staged picks to
+        # get it. On a readiness row with no recent sweep there is no side, and
+        # "" says so rather than inventing one.
+        _sw = getattr(liq, "recent_sweep", None) if liq else None
+        _kind = getattr(_sw, "kind", "") if _sw else ""
+        _dir = "short" if _kind == "high_sweep" else ("long" if _kind == "low_sweep" else "")
+        return r, {"label": label, "dir": _dir,
+                   "conv": round(conv, 3), "age_bars": age,
                    "fresh_val": round(fresh_val, 3), "mom": mom, "exh_val": exh_val}
 
     def _condor_side(self, ctx, regime, side: str) -> Tuple[float, dict]:
@@ -390,7 +443,14 @@ class TradeReadinessEngine:
                                     (W_CNDR_APPROACH, appr_val),
                                     (W_CNDR_CONV, conv_val),
                                     (W_CNDR_ROOM, room_val)])
-        return r, {"label": label, "conv": round(conv, 3), "side": side,
+        # v1.6 — `dir` is the side's EXPOSURE, not its option type. A call
+        # credit is sold ABOVE and profits while price stays below it, so its
+        # exposure is SHORT; the put side mirrors. This is the inverse of the
+        # option-buyer call=long reading, and getting it backwards would have
+        # silently inverted every condor row in the orientation ledger.
+        # `side` stays alongside — the two answer different questions.
+        return r, {"label": label, "dir": ("short" if side == "call" else "long"),
+                   "conv": round(conv, 3), "side": side,
                    "approach": round(approach, 3), "appr_val": round(appr_val, 3),
                    "room_val": round(room_val, 3),
                    "ext_frac": round(ext_frac, 3), "ext_val": round(ext_val, 3),
@@ -411,7 +471,12 @@ class TradeReadinessEngine:
                      corroborators=[(W_BFLY_CONV, conv_val),
                                     (W_BFLY_SQZ, sqz_val),
                                     (W_BFLY_NARROW, narrow_val)])
-        return r, {"label": label, "conv": round(conv, 3),
+        # v1.6 — butterfly is NEUTRAL by construction. Stamping it explicitly is
+        # the point: an absent field and a deliberately sideless strategy are
+        # indistinguishable to a reader, and that ambiguity is exactly what put
+        # 30,565 records into one mislabeled "undecidable" bucket.
+        return r, {"label": label, "dir": "neutral",
+                   "conv": round(conv, 3),
                    "squeeze_val": sqz_val, "narrow_val": round(narrow_val, 3)}
 
     @staticmethod

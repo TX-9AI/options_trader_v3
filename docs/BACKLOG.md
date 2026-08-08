@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.15
+# docs/BACKLOG.md — v4.16
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -108,6 +108,7 @@ BAKED is changing nothing about today's data.
 | **VW.1b — paths verified against the emitter** | ✅ 08-08 | ⬜ | n/a (offline) | v1.1's path-awareness was necessary but I then GUESSED the paths and found NONE across 39,344 records. Reading `trade_readiness._journal()`: everything is TWO levels deep — `readiness.market.vwap`, `readiness.factors.dir`. |
 | **VW.1c — the event filter, the fourth layer** | ✅ 08-08 | ⬜ | n/a (offline) | v1.3. The whitelist accepted only `scored/fired/entry/entered` — pre-v1.5 names — while the records carrying `readiness.market` are `readiness*`. **11,584 records skipped on 08-06 alone.** Now prefix-matched. |
 | **VW.1d — the join layer, the fifth and final one** | ✅ 08-08 | ⬜ | n/a (offline) | v1.4 — and this time the WHOLE remaining path was traced before patching. v1.3's real run (30,565 undecidable, only TREND_CREDIT_SPREAD in the table, 304 trade rows joined to ZERO) had THREE stacked causes, none of them the filter: (1) `factors.dir` exists on exactly ONE track — TCS (trade_readiness.py:569); the other five journal no direction, so `aligned()` dumped them all into a counter mislabeled "index/NONE side". (2) The trade join compared track slugs (`SWEEP`) to class names (`SweepReversal`) — no key could ever match. (3) TCS, the one decidable strategy, has NO firing engine yet (TC.4), so its 0 trades were arithmetically forced. Fix: per-strategy direction resolver (continuation from label exactly as the emitter's own staged-pick path; condor sides mapped ON MECHANISM — call credit = SHORT exposure, the inverse of the buyer's-eye reading; sweep via `staged.direction` paired to the symbol's last market snapshot ≤120s; butterfly undecidable BY DESIGN), family-normalized trade join with condor legs attributed via setup_type, and undecidable/unjoinable REPORTED BY CAUSE so the counter can never lie again. Reproduced the exact v1.3 symptom on planted data, then proved v1.4 resolves all five families and joins trades. |
+| **VW.1e / RDY.1 — `dir` on every track, at the source** | ✅ 08-08 | ⬜ | ⬜ **needs the Mon 08-10 bake** | **trade_readiness v1.6 — the emitter side of VW.1d, and the reason the ledger needed five versions.** ONE track (`_trend_credit_spread`) journaled a direction and five journaled none; a field with a single writer is indistinguishable from a field nobody needs until a reader depends on it. Each track now stamps `dir` from the source that actually knows: continuation from the trending label (identical to `_staged_pick`'s derivation, so journal and picker cannot drift); **sweep from the LIVE `liq_map.recent_sweep.kind` — the field no offline tool could ever recover**, which is why v1.4 had to pair against staged picks; condor sides from EXPOSURE (**call credit = SHORT**, inverse of the buyer's-eye reading); butterfly explicit `"neutral"`. `""` = no intended side this tick, an honest absence now distinguishable from a missing field. **LOG-ONLY, freeze-safe, no trading-behaviour change.** Ledger **v1.5** PREFERS the emitted field and KEEPS the v1.4 derivation, because no fleet-side change can reach already-banked history. 7 new tests + 4 canaries; deliberate-failure verified (inverting the condor mapping turns the suite red). Suite 339 passed / 1 skipped. **⚠️ FORWARD-ONLY — reaches only sessions after Monday's restart.** |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ⬜ | ⬜ **needs a bake** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
@@ -172,7 +173,7 @@ BAKED — the fleet still runs the pre-RGM.3 code until Monday's restart. Nothin
 is half-shipped; every archive was gate-checked and committed.
 
 **~~THE ONE THING STILL OPEN AND MID-FLIGHT: `vwap_orientation_ledger` v1.3.~~
-✅ RESOLVED 08-08 as v1.4 (VW.1d): the remaining defect was the JOIN layer —
+✅ CLOSED 08-08 — v1.4 (VW.1d) then v1.5 + trade_readiness v1.6 (VW.1e): the remaining defect was the JOIN layer —
 direction journaled on only one track, plus a strategy-vocabulary mismatch that
 made the trade join structurally unable to match. Traced emitter → event →
 section → field end to end before patching, as instructed below.**
@@ -4674,6 +4675,27 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.16 — 2026-08-08 — VW.1e: `dir` on every track, fixed at the SOURCE.**
+  VW.1d taught the ledger to derive direction; this fixes why it had to. Only
+  `_trend_credit_spread` journaled `dir` — five tracks emitted nothing, and
+  nothing caught it because a field with one writer looks optional until a
+  reader needs it. trade_readiness **v1.6** stamps `dir` on every track from
+  the source that knows: sweep's comes from the LIVE `liq_map`, which no
+  offline tool could recover at all. Ledger **v1.5** prefers the emitted field
+  and keeps the derivation for banked history, and now prints the
+  emitted-vs-derived ERA SPLIT with a warning when a run spans both — pooling
+  across Monday's bake is the standing hazard and a caveat nobody reads is not
+  a control. Also BACKFILLED trade_readiness's missing **v1.5** changelog entry
+  and put a version on its title line: it shipped with neither while
+  `check_versions` already pinned "v1.5", which is precisely the drift
+  WORKING_AGREEMENT rule 5 exists to stop. Recorded rather than quietly
+  corrected. 7 tests, 4 canaries, deliberate-failure verified, suite 339/1.
+  **⚠️ TWO PRE-EXISTING CANARY REDS confirmed at clean HEAD and NOT introduced
+  here:** `main.py` pins a v5.4 header string while main is at v5.8, and a
+  canary points at `tests/condor_plan_lifetime.py`, which does not exist. A
+  sweep that is permanently red trains the reader to ignore its own DONE
+  banner — the cried-wolf failure this repo has already paid for once. Left
+  untouched pending the operator's call rather than folded into this delivery.
 - **v4.15 — 2026-08-08 — VW.1d: the join layer, the fifth and final one.** The
   operator's v1.3 run showed the remaining problem: 30,565 "undecidable", only
   TREND_CREDIT_SPREAD in the table, and 304 trade rows joined to ZERO trades.

@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-tests/vwap_orientation_ledger.py — v1.4 — 2026-08-08
+tests/vwap_orientation_ledger.py — v1.5 — 2026-08-08
+
+v1.5 — 2026-08-08 — READ THE FIELD WHEN IT EXISTS. `trade_readiness` v1.6 now
+       stamps `dir` on every track, so post-bake rows are READ rather than
+       inferred — which matters most for SWEEP, whose direction lives in
+       `ctx.liq_map` and could never be recovered offline (v1.4 had to pair
+       readiness rows against staged picks to approximate it). The v1.4
+       derivations are KEPT, not replaced: every session banked before that
+       bake has no `dir` to read, and no fleet-side change can reach history.
+       An emitted `""` (no intended side this tick) is now distinguished from a
+       missing field, and `"neutral"` from both.
 
 v1.4 — 2026-08-08 — THE JOIN LAYER, the fifth and final one — and this time the
        WHOLE remaining path was traced before anything was patched. v1.3's run
@@ -294,6 +304,9 @@ def _norm_dir(v):
     return None
 
 
+_SRC = {"emitted": 0, "derived": 0}   # v1.5 — era provenance, printed below
+
+
 def resolve_direction(track, rec):
     """(direction, undecidable_cause) for one readiness record.
 
@@ -317,6 +330,25 @@ def resolve_direction(track, rec):
                       are handled by the caller via snapshot pairing.
     """
     t = str(track or "").upper()
+    # v1.5 — PREFER THE EMITTED FIELD. trade_readiness v1.6 stamps `dir` on
+    # every track, from sources an offline tool cannot reach (sweep's direction
+    # lives in ctx.liq_map and was never written down before). Post-bake rows
+    # are therefore read, not inferred. The derivations below are KEPT, not
+    # replaced: every session banked before that bake has no `dir` to read, and
+    # a fleet-side change can never reach history. "neutral" is a real answer —
+    # butterfly is sideless by design — and is distinguished here from "".
+    _emitted = dig(rec, "readiness.factors.dir")
+    if _emitted is not None:
+        _SRC["emitted"] += 1
+        if str(_emitted).upper() == "NEUTRAL":
+            return None, f"{t.lower()}: neutral by design (emitted)"
+        d = _norm_dir(_emitted)
+        if d:
+            return d, None
+        # An emitted "" means the track had NO intended side this tick — an
+        # honest absence, and a different fact from the field being missing.
+        return None, f"{t.lower()}: no intended side this tick (emitted empty)"
+    _SRC["derived"] += 1
     if t == "TREND_CREDIT_SPREAD":
         d = _norm_dir(dig(rec, "readiness.factors.dir"))
         return (d, None) if d else (None, "tcs: factors.dir unparseable")
@@ -542,6 +574,20 @@ def main(argv):
     for track in sorted(coverage):
         cv = coverage[track]
         print(f"    {track:<22} {cv['decided']:>7} / {cv['undecided']}")
+    # v1.5 — THE ERA SPLIT, printed because pooling across it is the standing
+    # hazard. Rows from before the trade_readiness v1.6 bake have no `dir` and
+    # are DERIVED; rows after it are READ. The two are not the same measurement
+    # — sweep in particular is only decidable post-bake on ordinary readiness
+    # rows — so a mixed run silently changes basis partway through. Naming the
+    # mix is cheaper than a caveat nobody reads.
+    src_emitted, src_derived = _SRC["emitted"], _SRC["derived"]
+    if src_emitted or src_derived:
+        print(f"    [era] direction READ from the emitter: {src_emitted}  |  "
+              f"DERIVED offline (pre-v1.6 rows): {src_derived}")
+        if src_emitted and src_derived:
+            print("    ⚠ MIXED ERAS in one run — the two are different "
+                  "measurements. Split the dates at the bake before reading "
+                  "any per-strategy count as a trend.")
     print("--- undecidable, BY CAUSE ---")
     for cause in sorted(undecidable):
         print(f"    {undecidable[cause]:>7}  {cause}")

@@ -1,4 +1,13 @@
 #!/bin/bash
+# v4.36 — 2026-08-08 — `dir` on every readiness track (trade_readiness v1.6).
+#         Four canaries, and the load-bearing one is the CONDOR EXPOSURE
+#         mapping: a call credit is SHORT, which is the inverse of the intuitive
+#         call=long reading. Inverting it would flip every condor row in the
+#         orientation ledger while the output still rendered perfectly — the
+#         wrong-answer-that-looks-right class this file exists to catch. Also
+#         pins sweep's dir to the LIVE liq_map source (unrecoverable offline)
+#         and butterfly's explicit "neutral", so sideless-by-design can never
+#         again be mistaken for a field that was never written.
 # v4.35 — 2026-08-05 — VWAP reaches the journal. volatility_engine has computed
 #         vwap/price_vs_vwap all along and nothing persisted them — a key scan of
 #         11,138 records found no VWAP field anywhere, which is why
@@ -448,6 +457,10 @@ check "tests/test_a2_band.py"            "far_above_the_band_still_fails" "v1.0 
 check "tests/readiness_digest.py"        "npeg = len(fits)"             "v1.2 headline counts the same pegged RAMPS the fits list"
 check "analysis/trade_readiness.py"      "def _market_snapshot"         "v1.5 VWAP context helper"
 check "analysis/trade_readiness.py"      '"market": self._mkt'          "v1.5 the journal actually EMITS it (a computed value never written is the bug)"
+check "analysis/trade_readiness.py"      '"dir": ("short" if side == "call" else "long")' "v1.6 condor dir is EXPOSURE not option type (call credit = short; the buyer's-eye reading inverts every condor row and still renders cleanly)"
+check "analysis/trade_readiness.py"      '"dir": "neutral"'             "v1.6 butterfly sideless BY DESIGN, stamped so it cannot be confused with a missing field"
+check "analysis/trade_readiness.py"      '_kind == "high_sweep"'        "v1.6 sweep dir from the LIVE liq_map — the field no offline tool could recover"
+check "tests/test_readiness_direction_stamp.py" "test_every_track_stamps_a_direction" "v1.0 all six tracks carry dir (one writer made it look optional for weeks)"
 check "tests/test_readiness_market_snapshot.py" "READ_from_the_engine_not_derived" "v1.0 side comes from the engine, never a derived sign"
 check "tests/test_readiness_peg_count.py" "counts_ramps_not_raw_values"  "v1.0 one definition of pegged"
 _n_cap=$(grep -c "_capture_entry_contract(ctx, record)" main.py 2>/dev/null || echo 0)
