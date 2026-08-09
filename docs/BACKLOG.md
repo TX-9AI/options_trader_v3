@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.17
+# docs/BACKLOG.md — v4.18
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -3413,6 +3413,17 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
 logic for two weeks. Everything else this epoch is offline or log-only — which the
 roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing).*
 
+**⬜ Fri Aug 14 — AFTER THE CLOSE**
+- `[DESK·DATA]` **NF.1 — examine the trades data for pairs that were NEVER
+  favourable, and make adjustments.** Operator request 2026-08-08. Which trade
+  combinations x market conditions have no salvage in them — they lose more than
+  they win and there is nothing about the ENTRY that can be fixed. **Explicitly
+  NOT** trades that a stop adjustment could have rescued; those are a different
+  problem and must not be swept in. Discriminator: a trade whose MFE never
+  reached the cut was never up, so no stop, trail or exit can reach it —
+  `excursion_report` already labels this per trade. Split the window at the 08-08
+  bake; do not pool.
+
 **⬜ Mon Aug 17 — DEPLOY MONDAY 2 (the calibration deploy) — FREEZE WINDOW OPENS**
 - Deploy in one pass: **level hierarchy + ON H/L** (mapper) · **L2.4 calibrated
   priors** · **L1.6 frozen flat-angle cut** · **L1.11 ramp fits**. Verify canaries,
@@ -4778,6 +4789,11 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.18 — 2026-08-08 — NF.1 scheduled for Friday 2026-08-14 after the close.**
+  Examine the trades data for trade-combination x market-condition pairs that
+  were never favourable — no salvage, entry fundamentally flawed — and make
+  adjustments. Distinct from trades a stop change could have saved, which are
+  excluded. Filed under a new Fri Aug 14 PART 1 header so `evm_status` counts it.
 - **v4.17 — 2026-08-08 EOD — THE BAKE MOVED TO SATURDAY, AND FOUR CORRECTIONS.**
   Written because the record had started to lie in three separate places at
   once. **(1) THE FLEET WAS BAKED AND RESTARTED SAT 08-08 ~16:30 ET**, not
