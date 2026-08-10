@@ -1,4 +1,14 @@
 #!/bin/bash
+# v4.37 — 2026-08-08 — sweep spent-move (regime_confluence v1.4) + L1 evidence
+#         on the fired disposition (main v5.9). The LOAD-BEARING canary is
+#         `soft_necessary=.trend_opp, age_decay.` — if trend_opp ever leaves
+#         that list a high ambient score can rescue a sweep fighting an
+#         accelerating opposing trend, and the 2026-07-27 PLTR loss re-opens.
+#         Also pins the deliberate absence ASYMMETRY: "" must NOT suppress
+#         (opp_mom 0.6) and must NOT corroborate (exh_val 0.0). Making those
+#         symmetric in EITHER direction is a regression, so both are pinned.
+#         NOTE the bracket form is escaped — grep reads [..] as a character
+#         class, which silently matched a single char on the first attempt.
 # v4.36 — 2026-08-08 — `dir` on every readiness track (trade_readiness v1.6).
 #         Four canaries, and the load-bearing one is the CONDOR EXPOSURE
 #         mapping: a call credit is SHORT, which is the inverse of the intuitive
@@ -387,7 +397,7 @@ check "analysis/regime_confluence.py"    "_envf"                        "v1.2 al
 # spell the removed identifiers, so bare-token greps below are safe (the
 # changelog-prose trap has re-tripped absence canaries twice).
 check "analysis/regime_confluence.py"    "v1.3 — 2026-07-27"            "v1.3 confluence excavation header present"
-check "analysis/regime_confluence.py"    "def _sweep(self, liq_map, trend_state=None)"  "v1.3 _sweep receives trend_state (PLTR blindness fix)"
+check "analysis/regime_confluence.py"    "def _sweep(self, liq_map, trend_state=None, ambient=None)"  "v1.3/v1.4 _sweep receives trend_state (PLTR blindness fix) + ambient"
 check "analysis/regime_confluence.py"    "trend_opp = 1.0 - (opp_adx \* opp_mom)"  "v1.3 sweep trend-opposition suppressor live"
 check "analysis/regime_confluence.py"    "W_SWEEP_REJQ, W_SWEEP_EXH = 0.45, 0.55"  "v1.3 sweep weights pinned (rejq 0.45 / exhaustion 0.55)"
 check "analysis/regime_confluence.py"    "W_RANGE_OSC, W_RANGE_BAL = 0.55, 0.45"   "v1.3 ranging weights pinned (osc 0.55 / balance 0.45)"
@@ -407,7 +417,7 @@ check "analysis/trade_readiness.py"      "readiness_would_fire"         "v1.0 wo
 check "analysis/trade_readiness.py"      "TR_DEARM_SLOPE"               "v1.0 slope de-arm knob (falling confluence disarms)"
 check "analysis/trade_readiness.py"      "0.5 \*\* (dt / TR_SLOPE_HALFLIFE_S)" "v1.0 dt-aware slope EMA (wall-clock, no tick counters)"
 check "main.py"                          "_readiness.assess_all(ctx, regime)" "v4.3 readiness hooked in the every-tick block"
-check "main.py"                          "main.py — options_trader v5.4" "v5.4 main header current (ORB exempt from the stale entry gate)"
+check "main.py"                          "main.py — options_trader v5.9" "v5.9 main header current (ORB exempt from the stale entry gate)"
 check "main.py"                          "_orb_exempt"                  "v5.4 confirmed ORB bypasses the stale entry block"
 check "main.py"                          "STALE book, but ORB is CONFIRMED"  "v5.4 the exempt path says why in the log"
 check "tests/orb_stale_block_audit.py"   "ORB confirmed"                "v1.0 the cost of the gate is measurable, not asserted"
@@ -461,6 +471,14 @@ check "analysis/trade_readiness.py"      '"dir": ("short" if side == "call" else
 check "analysis/trade_readiness.py"      '"dir": "neutral"'             "v1.6 butterfly sideless BY DESIGN, stamped so it cannot be confused with a missing field"
 check "analysis/trade_readiness.py"      '_kind == "high_sweep"'        "v1.6 sweep dir from the LIVE liq_map — the field no offline tool could recover"
 check "tests/test_readiness_direction_stamp.py" "test_every_track_stamps_a_direction" "v1.0 all six tracks carry dir (one writer made it look optional for weeks)"
+check "analysis/regime_confluence.py"    "soft_necessary=.trend_opp, age_decay." "v1.4 PLTR GUARD — trend_opp stays multiplicative; ambient must never rescue an opposed sweep"
+check "analysis/regime_confluence.py"    "spent_val"                   "v1.4 the spent-move corroborator — was the thing being faded actually a MOVE"
+check "analysis/regime_confluence.py"    '"DECELERATING": 0.25, "": 0.6' "v1.4 absence must not SUPPRESS harder than FLAT"
+check "analysis/regime_confluence.py"    '"ACCELERATING": 0.0, "": 0.0' "v1.4 absence must not CORROBORATE either — the asymmetry is deliberate"
+check "tests/test_sweep_spent_move.py"   "test_pltr_protection_survives" "v1.0 the guard that matters"
+check "main.py"                          "_L1_BREAKDOWN_FOR"           "v5.9 L1 evidence recorded at the fire, not replayed later"
+check "main.py"                          "main.py — options_trader v5.9" "v5.9 main header current"
+check "tests/test_disposition_l1_capture.py" "test_orb_records_no_breakdown_by_design" "v1.0 ORB is regime-immune — a mapping there would imply a dependency that does not exist"
 check "tests/test_readiness_market_snapshot.py" "READ_from_the_engine_not_derived" "v1.0 side comes from the engine, never a derived sign"
 check "tests/test_readiness_peg_count.py" "counts_ramps_not_raw_values"  "v1.0 one definition of pegged"
 _n_cap=$(grep -c "_capture_entry_contract(ctx, record)" main.py 2>/dev/null || echo 0)

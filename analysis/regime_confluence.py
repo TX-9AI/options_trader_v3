@@ -1,4 +1,42 @@
-# analysis/regime_confluence.py — options_trader_v3
+# analysis/regime_confluence.py — options_trader_v3 — v1.4
+# v1.4 — 2026-08-08 — THE SPENT MOVE. Operator's spec, stated plainly: "a SPENT
+#         move into a named liquidity pool that gets rejected." The pool
+#         (veto_loc) and the rejection (veto_reclaim + rejq_val) were always
+#         scored. "Spent" was only ever inferred from 5m momentum, and NOTHING
+#         ASKED WHAT WAS SPENT — so a rejection at a named level in dead air and
+#         the same rejection at the end of an extended trending leg scored
+#         identically. Only the second is the trade.
+#         (1) NEW CORROBORATOR `spent_val`, ramped off `ambient` = the max of
+#             this tick's TRENDING_BULL / TRENDING_BEAR / BREAKOUT_VOLATILE
+#             scores. Those are computed a few lines earlier in score(), so this
+#             adds NO new input, no new state and no ordering dependency —
+#             the information was already in hand and simply never consulted.
+#             A CORROBORATOR, NOT A SOFT-NECESSARY: multiplicative would mean a
+#             sweep can only fire after a strong trend, which is narrower than
+#             what was asked for. "Permitted and encouraged", not required.
+#         (2) `opp_mom[""]` 0.8 -> 0.6. An absent 5m vote used to suppress
+#             almost as hard as a fully ACCELERATING opposing trend AND, via
+#             exh_val[""] = 0.0, withhold half the corroborating evidence — ONE
+#             missing input penalised TWICE, landing hardest on exactly the
+#             setup this scorer exists for.
+#         ⚠️ THE ASYMMETRY IS DELIBERATE AND MUST NOT BE "TIDIED": absence of
+#             evidence must not count as evidence AGAINST (so "" now matches
+#             FLAT in the suppression term), and must not count as evidence FOR
+#             (so exh_val[""] deliberately STAYS 0.0). Making these symmetric in
+#             either direction is a regression, and both halves are pinned by
+#             tests/test_sweep_spent_move.py.
+#         ⚠️ WHAT DID NOT MOVE, AND MUST NOT: the hard veto triple (veto_loc,
+#             veto_reclaim, veto_accept) is UNCHANGED — the operator's spec IS
+#             those three, so permissiveness never reaches them. And `trend_opp`
+#             stays a SOFT-NECESSARY: a high ambient score must never rescue a
+#             sweep fighting an accelerating opposing trend. That is the
+#             2026-07-27 PLTR loss (-27.8% on a put into a +7.2% uptrend) and
+#             its guard is the load-bearing test in the new file.
+#         CONTEXT: sweep last fired 2026-07-29. It was gated on winning an
+#         argmax it was built to lose — a category error the operator named
+#         repeatedly ("sweep isn't a regime"). SWP.1 and RGM.3 removed that gate
+#         and baked 08-08; this makes the underlying score reflect the setup the
+#         operator actually trades. Knobs: SWEEP_SPENT_CTX_LO/HI, W_SWEEP_SPENT.
 # v1.3.2 — 2026-08-04 — DISPLAY ONLY, inside the __main__ self-test: its score
 #         line truncated regime names at 5 chars, so TRENDING_BULL and
 #         TRENDING_BEAR both printed "TREND". Uses utils/regime_labels. NO
@@ -263,6 +301,15 @@ W_BRK_EXPAND, W_BRK_CLEAR, W_BRK_MOM = 0.40, 0.30, 0.30
 # the larger weight because a reversal's entire thesis is that the prior move is
 # spent; the pre-v1.3 engine weighted it at zero.
 W_SWEEP_REJQ, W_SWEEP_EXH = 0.45, 0.55
+# v1.4 — SPENT-MOVE CONTEXT. The operator's spec is "a SPENT move into a named
+# liquidity pool that gets rejected". The pool and the rejection were always
+# scored; "spent" was only ever inferred from 5m momentum, with no reference to
+# WHAT was spent. These gate a corroborator that asks whether the thing being
+# faded was actually a trending or breakout-volatile move — the setup the
+# operator trades — rather than a rejection occurring in dead air.
+SWEEP_SPENT_CTX_LO   = _envf("SWEEP_SPENT_CTX_LO", 0.35)  # ambient trend/breakout score
+SWEEP_SPENT_CTX_HI   = _envf("SWEEP_SPENT_CTX_HI", 0.75)  #   … to full context here
+W_SWEEP_SPENT        = _envf("W_SWEEP_SPENT", 0.35)       # weight of the spent-context corroborator
 W_SWEEP_REJ_DEPTH, W_SWEEP_REJ_LEVEL = 0.60, 0.40   # internal split of rejection quality
 
 
@@ -628,7 +675,7 @@ class RegimeConfluenceScorer:
                           "adx": round(adx, 2), "is_expanding": is_exp,
                           "price_vs_bb": pbb}
 
-    def _sweep(self, liq_map, trend_state=None) -> Tuple[Optional[float], dict]:
+    def _sweep(self, liq_map, trend_state=None, ambient=None) -> Tuple[Optional[float], dict]:
         """
         v1.3 REBUILD — the scorer that caused the 2026-07-27 PLTR loss.
 
@@ -675,8 +722,19 @@ class RegimeConfluenceScorer:
         opp_adx = ramp(adx, SWEEP_OPP_ADX_LO, SWEEP_OPP_ADX_HI)
         # An opposing trend that is DECELERATING is the exhaustion we are
         # trading, so it barely suppresses. One that is ACCELERATING suppresses
-        # fully. "" (no 5m vote) leans cautious rather than neutral.
-        opp_mom = {"ACCELERATING": 1.0, "FLAT": 0.6, "DECELERATING": 0.25, "": 0.8}.get(mom, 0.8)
+        # fully.
+        # v1.4 — "" NO LONGER SUPPRESSES HARDER THAN FLAT. It was 0.8, close to
+        # full opposition, purely because the 5m vote was absent. Combined with
+        # exh_val's "" -> 0.0 below, ONE missing input both crushed the
+        # multiplier AND removed half the corroborating evidence — a DOUBLE
+        # penalty from a single absence, and it lands hardest on exactly the
+        # setup this scorer exists for.
+        # THE ASYMMETRY IS DELIBERATE AND IS THE WHOLE FIX: absence of evidence
+        # must not COUNT AS evidence against (so "" is treated as FLAT here),
+        # but it must also not COUNT AS evidence for (so exh_val's "" stays
+        # 0.0). Suppression on absence is a bug; corroboration on absence would
+        # be a worse one.
+        opp_mom = {"ACCELERATING": 1.0, "FLAT": 0.6, "DECELERATING": 0.25, "": 0.6}.get(mom, 0.6)
         trend_opp = 1.0 - (opp_adx * opp_mom) if opposed else 1.0
         trend_opp = max(0.0, min(1.0, trend_opp))
 
@@ -704,10 +762,25 @@ class RegimeConfluenceScorer:
         #     that it is.
         exh_val = {"DECELERATING": 1.0, "FLAT": 0.5, "ACCELERATING": 0.0, "": 0.0}.get(mom, 0.0)
 
+        # (3) v1.4 — SPENT-MOVE CONTEXT: was the thing being faded actually a
+        #     MOVE? `exh_val` says the momentum is fading; it never asked what
+        #     was fading. A rejection at a named level in dead air and the same
+        #     rejection at the end of an extended trending or breakout-volatile
+        #     leg scored identically, and only the second is the trade.
+        #     `ambient` is the max of the TRENDING_BULL/BEAR and
+        #     BREAKOUT_VOLATILE scores from THIS SAME TICK — computed a few
+        #     lines above in score(), so this costs nothing and introduces no
+        #     new input, no new state and no ordering dependency.
+        #     A CORROBORATOR, NOT A NECESSARY: making it multiplicative would
+        #     mean a sweep can only fire after a strong trend, which is
+        #     narrower than the operator asked for. "Encouraged", not required.
+        spent_val = ramp(float(ambient or 0.0), SWEEP_SPENT_CTX_LO, SWEEP_SPENT_CTX_HI)
+
         score = _combine(
             hard_vetoes=[veto_loc, veto_reclaim, veto_accept],
             soft_necessary=[trend_opp, age_decay],
-            corroborators=[(W_SWEEP_REJQ, rejq_val), (W_SWEEP_EXH, exh_val)],
+            corroborators=[(W_SWEEP_REJQ, rejq_val), (W_SWEEP_EXH, exh_val),
+                           (W_SWEEP_SPENT, spent_val)],
         )
         bd = {"named": named, "reclaimed": reclaimed, "closes_beyond": beyond,
               "kind": kind, "rev_dir": rev_dir,
@@ -716,12 +789,15 @@ class RegimeConfluenceScorer:
               "level_val": round(level_val, 3), "rejq_val": round(rejq_val, 3),
               "trend_direction": direction, "adx": round(adx, 2),
               "momentum": mom, "opposed": opposed,
+              "ambient": round(float(ambient or 0.0), 3),
+              "spent_val": round(spent_val, 3),
               "opp_adx": round(opp_adx, 3), "opp_mom": opp_mom,
               "trend_opp": round(trend_opp, 3), "exh_val": exh_val,
               "age_bars": age_bars, "age_decay": round(age_decay, 3),
               "veto_loc": veto_loc, "veto_reclaim": veto_reclaim,
               "veto_accept": veto_accept,
-              "w": {"rejq": W_SWEEP_REJQ, "exh": W_SWEEP_EXH},
+              "w": {"rejq": W_SWEEP_REJQ, "exh": W_SWEEP_EXH,
+                    "spent": W_SWEEP_SPENT},
               "score": round(score, 3)}
         return score, bd
 
@@ -749,7 +825,11 @@ class RegimeConfluenceScorer:
         res.scores[COMPRESSION], res.breakdown[COMPRESSION] = \
             self._compression(vol_state, closes, atr)
         res.scores[SWEEP_REVERSAL], res.breakdown[SWEEP_REVERSAL] = \
-            self._sweep(liq_map, trend_state)                    # v1.3: trend_state wired in
+            self._sweep(liq_map, trend_state,                    # v1.3: trend_state wired in
+                        ambient=max(                             # v1.4: spent-move context.
+                            tr_scores.get(TRENDING_BULL, 0.0) or 0.0,   # Already computed
+                            tr_scores.get(TRENDING_BEAR, 0.0) or 0.0,   # above this line —
+                            res.scores[BREAKOUT_VOLATILE] or 0.0))      # no new inputs.
 
         return res
 

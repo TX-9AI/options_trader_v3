@@ -1,5 +1,18 @@
 """
-main.py — options_trader v5.8
+main.py — options_trader v5.9
+v5.9 — 2026-08-08 — L1 EVIDENCE ON THE FIRED DISPOSITION. The sweep collection
+        is meant to characterise what made a good ENTRY good, and the journal
+        was recording only the regime's label and conviction — every
+        contributing term that decided the entry was computed at the fire and
+        then discarded. Reconstructing them later means replaying the tape and
+        hoping the replayed score matches the one that fired, which is an
+        approximation sitting exactly where the analysis lives. Now records the
+        six-score vector on every fire, plus the firing setup's own L1
+        breakdown via `_L1_BREAKDOWN_FOR`.
+        ⚠️ A WRONG MAPPING IS SILENT — it files a well-formed breakdown from the
+        wrong scorer. ORB is deliberately unmapped (regime-immune by design);
+        an unmapped strategy records no breakdown rather than a wrong one.
+        Log-only: no gate, no dispatch and no sizing reads any of this.
 v5.8 — 2026-08-07 — MEM.2: in-process tracemalloc, gated by OT_MEM_TRACE.
         The standalone probe failed FOUR times in an afternoon and never once
         for a reason about memory — wrong box, un-pulled file, `tmux sh -c`
@@ -1578,9 +1591,37 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
                     _orb_ctx = {"retest_depth_px": round(_depth, 4),
                                 "retest_depth_atr": (round(_depth / _atr, 4)
                                                      if _atr > 0 else None)}
+                # v5.9 — L1 EVIDENCE AT THE MOMENT OF THE FIRE.
+                # `regime_ctx` records only label + conviction, so every term
+                # that DECIDED the entry — the sweep's spent_val, ambient,
+                # rejq_val, exh_val, trend_opp, touch_count, depth_val,
+                # opp_adx, momentum — was computed here and then dropped.
+                # Characterising entries afterwards would have meant REPLAYING
+                # the tape and hoping the replayed score matched the one that
+                # actually fired. The values exist at this line; recording them
+                # costs one payload and no computation.
+                # Always: the six-score VECTOR — cheap, and it is the ambient
+                # context for ANY entry, not only sweeps.
+                # Additionally: the firing setup's OWN breakdown, keyed by
+                # strategy, so a fire does not carry five unused breakdowns.
+                _l1_ctx = None
+                try:
+                    _l1r = ctx.get("l1")
+                    if _l1r is not None:
+                        _l1_ctx = {"scores": {str(k): _rnd4(v)
+                                              for k, v in (_l1r.scores or {}).items()}}
+                        _bdkey = _L1_BREAKDOWN_FOR.get(signal.strategy_name)
+                        if _bdkey:
+                            _bd = (_l1r.breakdown or {}).get(_bdkey)
+                            if _bd:
+                                _l1_ctx["breakdown"] = _bd
+                                _l1_ctx["breakdown_of"] = str(_bdkey)
+                except Exception:
+                    _l1_ctx = None
                 _sigj.journal("disposition", outcome="fired",
                               signal=_sigj.signal_ctx(signal),
                               regime=_sigj.regime_ctx(regime),
+                              l1=_l1_ctx,
                               score={"grade": score.grade,
                                      "total": score.score},
                               fill={"contracts": sizing.contracts,
@@ -1588,6 +1629,30 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
                               orb=_orb_ctx)
             except Exception:
                 pass
+
+
+
+def _rnd4(v):
+    try:
+        return round(float(v), 4)
+    except (TypeError, ValueError):
+        return None
+
+
+# v5.9 — which L1 breakdown belongs to a firing strategy. A WRONG entry here
+# does not raise: it files a well-formed breakdown from the wrong scorer under a
+# correct-looking key, and a week of collection would be characterised against
+# features that decided nothing. ORB and Butterfly are deliberately ABSENT —
+# ORB is regime-immune at both dispatch and exit, so attaching a regime
+# breakdown to it would imply a dependency the engine does not have. An unmapped
+# strategy records the score vector and NO breakdown, never a wrong one.
+_L1_BREAKDOWN_FOR = {
+    "SweepReversal":          "SWEEP_REVERSAL",
+    "ContinuationStrategy":   "TRENDING",   # score() files BOTH trend scorers'
+                                            # shared breakdown under this key,
+                                            # not under the BULL/BEAR labels
+    "IronCondorStrategy":     "RANGING",
+}
 
 
 def handle_session_reset(state: BotState):
