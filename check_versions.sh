@@ -1,4 +1,9 @@
 #!/bin/bash
+# v4.38 — 2026-08-10 — continuation 1-bar confirmation (v1.5). Pins the gate,
+#         the knob, and — the one that matters — the REFUSAL on an undecidable
+#         confirmation. Falling through on thin tape would restore the
+#         unconfirmed entry invisibly and only sometimes, which is the worst
+#         shape a regression can take here.
 # v4.37 — 2026-08-08 — sweep spent-move (regime_confluence v1.4) + L1 evidence
 #         on the fired disposition (main v5.9). The LOAD-BEARING canary is
 #         `soft_necessary=.trend_opp, age_decay.` — if trend_opp ever leaves
@@ -471,6 +476,11 @@ check "analysis/trade_readiness.py"      '"dir": ("short" if side == "call" else
 check "analysis/trade_readiness.py"      '"dir": "neutral"'             "v1.6 butterfly sideless BY DESIGN, stamped so it cannot be confused with a missing field"
 check "analysis/trade_readiness.py"      '_kind == "high_sweep"'        "v1.6 sweep dir from the LIVE liq_map — the field no offline tool could recover"
 check "tests/test_readiness_direction_stamp.py" "test_every_track_stamps_a_direction" "v1.0 all six tracks carry dir (one writer made it look optional for weeks)"
+check "strategy/continuation_strategy.py" "CONTINUATION_REQUIRE_CONFIRM" "v1.5 the tag is the SETUP, the next bar is the TRIGGER"
+check "strategy/continuation_strategy.py" "confirmation UNDECIDABLE"    "v1.5 thin tape REFUSES — an absent confirmation is not a passed one"
+check "strategy/continuation_strategy.py" "continuation_strategy.py — Trend-continuation on pullback. — v1.5" "v1.5 header current"
+check "config.py"                        "OT_CONT_REQUIRE_CONFIRM"     "v1.5 kill switch AND A/B control"
+check "tests/test_continuation_confirmation.py" "test_undecidable_refuses_rather_than_passes" "v1.0 the guard that matters"
 check "analysis/regime_confluence.py"    "soft_necessary=.trend_opp, age_decay." "v1.4 PLTR GUARD — trend_opp stays multiplicative; ambient must never rescue an opposed sweep"
 check "analysis/regime_confluence.py"    "spent_val"                   "v1.4 the spent-move corroborator — was the thing being faded actually a MOVE"
 check "analysis/regime_confluence.py"    '"DECELERATING": 0.25, "": 0.6' "v1.4 absence must not SUPPRESS harder than FLAT"

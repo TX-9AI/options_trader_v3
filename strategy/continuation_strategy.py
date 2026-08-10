@@ -1,5 +1,32 @@
 """
-strategy/continuation_strategy.py — Trend-continuation on pullback.
+strategy/continuation_strategy.py — Trend-continuation on pullback. — v1.5
+v1.5 — 2026-08-10 — 1-BAR CONFIRMATION. The FVG tag alone commits while price is
+        still moving AGAINST the trend: the trade is a bet on a resumption that
+        has not happened yet. Leading suspect for the 40% never-favourable
+        population and for the micro-scratch cluster the operator named — 0.3
+        min holds on ~$1K positions exiting at +/-$49, i.e. one or two 15s
+        ticks, before the thesis could be true or false.
+        Now the bar AFTER the tag must CLOSE BEYOND the tagging bar's extreme in
+        the trend direction. A miniature break of structure, and deliberately
+        the WEAKEST test that still requires price to have DONE something — not
+        "closed green" (noise inside a pullback), not "reclaimed the gap edge"
+        (takes several bars, loses the 1-bar property).
+        ⚠️ FEWER TRADES BY DESIGN. Setups that never confirm are never taken;
+        those are the entries that were being paid for in order to find out.
+        ⚠️ WORSE ENTRY PRICE by roughly one bar, in exchange for the resumption
+        having started. Side effect worth knowing: it pushes BOS's seeded
+        protected level further from entry, since that level is taken from the
+        first bar closing above entry — so the hair-trigger seeding shrinks
+        without BOS being touched at all.
+        ⚠️ EXPECT A LOWER WIN RATE AND A BETTER LOSS PROFILE. If the tagging bar
+        was the low, the confirmation bar captures the first thrust and we buy
+        the top of it. Read win rate and loss distribution TOGETHER — win rate
+        alone will look like a regression.
+        ⚠️ SHIPPED WITHOUT THE OFFLINE COUNTERFACTUAL. The replay that would
+        have priced this against the 12-session corpus was not run; the operator
+        chose to ship and measure live. The first week of post-deploy data IS
+        the evidence, and OT_CONT_REQUIRE_CONFIRM=0 is both kill switch and A/B
+        control.
 v1.3 — 2026-07-28 — PULLBACK TRIGGER REWIRED: BB-midline -> 1-min wick TAGGING
         the nearest unfilled 5-min FVG (edge-tag, >= 1 cent penetration,
         CONTINUATION_FVG_TAG_MIN). The midline trigger was too conservative — a
@@ -162,6 +189,7 @@ CONTINUATION_FVG_TAG_MIN     = 0.01   # cents the 1m wick must penetrate the FVG
 from config import CONTINUATION_STOP_LOSS_PCT   # 0.25 default
 from config import CONT_BREAKOUT_DIRECTION, CONT_BREAKOUT_MIN_ADX  # CNT.1
 from config import CONT_HANDOFF_BLOCK_COMPRESSION                  # CNT.3
+from config import CONTINUATION_REQUIRE_CONFIRM                    # v1.5
 CONTINUATION_TP_PCT          = 1.0    # nominal; runner is exhaustion-trailed, not TP-capped
 CONTINUATION_HANDOFF_CONV_RELAX = 0.10  # handoff path lowers the conviction floor by this
 
@@ -408,6 +436,40 @@ class ContinuationStrategy(BaseOptionsStrategy):
             tagged = last_low <= (gap.top - CONTINUATION_FVG_TAG_MIN)
         else:
             tagged = last_high >= (gap.bottom + CONTINUATION_FVG_TAG_MIN)
+
+        # ── v1.5 — 1-BAR CONFIRMATION ────────────────────────────────────────
+        # The tagging bar is the SETUP. It is not the trigger. Require the NEXT
+        # bar to close BEYOND that bar's extreme in the trend direction:
+        #   long : tag bar wicks into the gap, next bar CLOSES ABOVE its HIGH
+        #   short: mirrors on the low
+        # Bars are the last two CLOSED ones (-3 tag, -2 confirm); the forming
+        # bar decides nothing, because it can still change.
+        if tagged and CONTINUATION_REQUIRE_CONFIRM:
+            try:
+                tag_bar = df_1m.iloc[-3]
+                cfm_bar = df_1m.iloc[-2]
+                if direction == "long":
+                    _tag_ok   = float(tag_bar["low"]) <= (gap.top - CONTINUATION_FVG_TAG_MIN)
+                    confirmed = _tag_ok and float(cfm_bar["close"]) > float(tag_bar["high"])
+                    _need, _got = float(tag_bar["high"]), float(cfm_bar["close"])
+                else:
+                    _tag_ok   = float(tag_bar["high"]) >= (gap.bottom + CONTINUATION_FVG_TAG_MIN)
+                    confirmed = _tag_ok and float(cfm_bar["close"]) < float(tag_bar["low"])
+                    _need, _got = float(tag_bar["low"]), float(cfm_bar["close"])
+            except (IndexError, KeyError, TypeError, ValueError):
+                # REFUSE. Falling through here would restore the unconfirmed
+                # entry invisibly, and only on thin tape — an absent
+                # confirmation is not a passed one.
+                logger.info("[continuation] confirmation UNDECIDABLE "
+                            "(insufficient 1m bars) — no entry")
+                return None
+            if not confirmed:
+                logger.info(
+                    f"[continuation] tagged but NOT CONFIRMED: need close "
+                    f"{'>' if direction == 'long' else '<'} {_need:.2f}, "
+                    f"got {_got:.2f} — waiting for the resumption bar")
+                return None
+
         if not tagged:
             _edge = gap.top if direction == "long" else gap.bottom
             _wick = last_low if direction == "long" else last_high

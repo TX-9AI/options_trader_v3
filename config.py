@@ -814,3 +814,13 @@ CONTINUATION_STOP_LOSS_PCT      = float(os.environ.get("OT_CONT_STOP_PCT", "0.25
 CONTINUATION_EXHAUST_EXT_ATR    = float(os.environ.get("OT_CONT_EXT_ATR", "2.0"))   # ATRs from midline = "stretched"
 CONTINUATION_EXHAUST_MIN_GAIN   = float(os.environ.get("OT_CONT_MIN_GAIN", "0.15")) # only manage exhaustion past +15%
 CONTINUATION_EXHAUST_TRAIL_LOCK = float(os.environ.get("OT_CONT_TRAIL_LOCK", "0.85"))# extension tightens trail to 85% of premium
+
+# ── CONTINUATION 1-BAR CONFIRMATION (v1.5, 2026-08-10) ───────────────────────
+# The FVG tag alone commits while price is still moving AGAINST the trend —
+# a bet on a resumption that has not happened. With this ON, the bar AFTER the
+# tag must close BEYOND the tagging bar's extreme in the trend direction before
+# an entry is taken. Fewer trades, later entries, and the ones that never
+# confirm are simply never taken.
+# OT_CONT_REQUIRE_CONFIRM=0 restores the pre-v1.5 behaviour exactly, which
+# makes this knob its own A/B control rather than a one-way door.
+CONTINUATION_REQUIRE_CONFIRM = os.getenv("OT_CONT_REQUIRE_CONFIRM", "1") == "1"
