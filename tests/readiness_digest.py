@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-# tests/readiness_digest.py — options_trader_v3
+# tests/readiness_digest.py — options_trader_v3 — v1.4
+# v1.4 — 2026-08-10 — THE ANTICIPATION BLOCK WAS PAIRING EVERY FIRE WITH THE
+#         WRONG ARM. It read `armed_since[(sym, key)]`, the LIVE arm tracker:
+#         by the time dispositions are processed it holds only the arms still
+#         OPEN at end of day, one value per key. Every fire for a symbol got the
+#         same, final arm time. On 2026-08-10 that printed nineteen GLD rows all
+#         reading "armed 14:36 -> fired 10:07" — armed FOUR AND A HALF HOURS
+#         AFTER the trade it claimed to anticipate.
+#         ⚠️ IT SURVIVED BECAUSE IT LOOKED FINE: no error, no empty list, just a
+#         plausible column of timestamps. The tell was the arithmetic, and only
+#         when two columns were read against each other.
+#         Now searches the CLOSED arm spans for the episode CONTAINING the fire,
+#         else the most recent ending before it, and reports LEAD TIME. A fire
+#         with no prior arm is COUNTED AND NAMED, not dropped — "fired without
+#         ever arming" is a finding. The output states that a negative lead is
+#         impossible, so the next instance announces itself.
 # v1.2 — 2026-08-05 — THE HEADLINE COUNTED A DIFFERENT THING FROM THE LIST IT
 #         POINTS AT. `npeg` measured peg rates on the RAW `_val` series while
 #         FIT SUGGESTIONS measure the RAMPED output, so the number people read
@@ -45,6 +60,7 @@
 
 from __future__ import annotations
 import argparse, json, os, sys, glob
+from datetime import datetime
 from collections import defaultdict
 
 
@@ -119,16 +135,56 @@ def digest(day_dir, date):
             p["arm_spans"].append((sym, armed_since.pop(ak), ts))
 
     # anticipation: disposition fires vs prior ARMED state of that strategy
+    # ── v1.4 — ANTICIPATION PAIRED TO THE RIGHT ARM EPISODE ─────────────────
+    # v1.3 read `armed_since[(sym, key)]`, which is the LIVE tracker: by the time
+    # dispositions are processed it holds only the arms still OPEN at end of day,
+    # and each key holds ONE value. So every fire for a symbol was stamped with
+    # the same, final arm time — and on 2026-08-10 that printed 19 GLD rows all
+    # reading "armed 14:36 -> fired 10:07", i.e. armed FOUR AND A HALF HOURS
+    # AFTER the trade it supposedly anticipated. It rendered perfectly and meant
+    # nothing, which is why it survived: no error, no empty output, just a
+    # plausible-looking list.
+    # Now: search the CLOSED arm spans for the episode that contains the fire,
+    # or failing that the most recent one that ENDED before it, and report the
+    # LEAD TIME. A fire with no prior arm is reported as such rather than
+    # silently dropped — "the strategy fired without ever arming" is a finding,
+    # not an absence.
+    def _anticipation(sym, key, fire_ts):
+        best, best_kind = None, None
+        for s_sym, a_start, a_end in per[key]["arm_spans"]:
+            if s_sym != sym:
+                continue
+            if a_start <= fire_ts <= a_end:
+                return a_start, "armed-at-fire"      # exact: fired while ARMED
+            if a_end < fire_ts and (best is None or a_end > best[1]):
+                best, best_kind = (a_start, a_end), "armed-before"
+        # an arm still open at EOD legitimately covers a late fire
+        still = armed_since.get((sym, key))
+        if still is not None and still <= fire_ts:
+            if best is None or still > best[1]:
+                return still, "armed-at-fire"
+        return (best[0] if best else None), best_kind
+
+    def _lead_min(a, b):
+        try:
+            return (datetime.fromisoformat(b) - datetime.fromisoformat(a)).total_seconds() / 60.0
+        except Exception:                                     # noqa: BLE001
+            return None
+
     anticipations = []
     for dp in disps:
         strat = str(dp.get("strategy") or dp.get("setup_type") or
                     (dp.get("signal") or {}).get("strategy") or "").lower()
         sym = dp.get("_sym", "?"); ts = dp.get("ts_et", "")
         for key in per:
-            if key.split("_")[0] in strat and (sym, key) in armed_since:
-                anticipations.append({"sym": sym, "strategy": key,
-                                      "armed_since": armed_since[(sym, key)],
-                                      "fired_at": ts})
+            if key.split("_")[0] not in strat:
+                continue
+            armed_at, kind = _anticipation(sym, key, ts)
+            lead = _lead_min(armed_at, ts) if armed_at else None
+            anticipations.append({"sym": sym, "strategy": key,
+                                  "armed_since": armed_at, "fired_at": ts,
+                                  "kind": kind or "no-prior-arm",
+                                  "lead_min": (round(lead, 1) if lead is not None else None)})
 
     pick_stats = defaultdict(lambda: {"n": 0, "deltas": [], "spreads": [], "convs": []})
     for r in picks:
@@ -212,9 +268,24 @@ def digest(day_dir, date):
 
     if anticipations:
         lines.append("")
-        lines.append("ANTICIPATION (strategy was ARMED before its trade fired):")
-        for a in anticipations:
-            lines.append(f"    {a['sym']} {a['strategy']}: armed {a['armed_since']} -> fired {a['fired_at']}")
+        _lead = [a["lead_min"] for a in anticipations if a["lead_min"] is not None]
+        _none = sum(1 for a in anticipations if a["kind"] == "no-prior-arm")
+        lines.append("ANTICIPATION (did readiness ARM before the trade fired?)")
+        lines.append(f"    fires {len(anticipations)}  with a prior arm "
+                     f"{len(_lead)}  NO PRIOR ARM {_none}")
+        if _lead:
+            _s = sorted(_lead)
+            lines.append(f"    lead time min: p50={_s[len(_s)//2]:.1f}  "
+                         f"p90={_s[min(len(_s)-1, int(.9*len(_s)))]:.1f}  "
+                         f"max={_s[-1]:.1f}")
+        lines.append("    a NEGATIVE lead is impossible and means the pairing is "
+                     "broken — it was, until v1.4")
+        for a in anticipations[:40]:
+            _l = "     n/a" if a["lead_min"] is None else f"{a['lead_min']:8.1f}m"
+            lines.append(f"    {a['sym']:<6} {a['strategy']:<22} lead {_l}  "
+                         f"[{a['kind']}] armed {a['armed_since']} -> fired {a['fired_at']}")
+        if len(anticipations) > 40:
+            lines.append(f"    … {len(anticipations) - 40} more (full list in the JSON)")
     out_json["anticipations"] = anticipations
     # v1.3 — COUNT THE SAME THING THE FIT SUGGESTIONS DO. This counted peg rates
     # on the RAW `_val` series while the fits (above) measure the RAMPED output,
