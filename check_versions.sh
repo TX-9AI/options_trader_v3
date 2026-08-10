@@ -1,4 +1,9 @@
 #!/bin/bash
+# v4.39 — 2026-08-10 — BOS minimum distance (exit_engine v4.15). Two canaries
+#         carry the weight: the RATCHET (max/min), because low-min_dist is not
+#         monotone and losing it slackens the stop as volatility widens; and the
+#         min_dist==0 branch, because if that stops being byte-identical the
+#         kill switch silently stops being one.
 # v4.38 — 2026-08-10 — continuation 1-bar confirmation (v1.5). Pins the gate,
 #         the knob, and — the one that matters — the REFUSAL on an undecidable
 #         confirmation. Falling through on thin tape would restore the
@@ -476,6 +481,10 @@ check "analysis/trade_readiness.py"      '"dir": ("short" if side == "call" else
 check "analysis/trade_readiness.py"      '"dir": "neutral"'             "v1.6 butterfly sideless BY DESIGN, stamped so it cannot be confused with a missing field"
 check "analysis/trade_readiness.py"      '_kind == "high_sweep"'        "v1.6 sweep dir from the LIVE liq_map — the field no offline tool could recover"
 check "tests/test_readiness_direction_stamp.py" "test_every_track_stamps_a_direction" "v1.0 all six tracks carry dir (one writer made it look optional for weeks)"
+check "execution/exit_engine.py"          "self.min_dist"               "v4.15 BOS level floored out of the noise band"
+check "execution/exit_engine.py"          "else max(self.protected_level, _cand)" "v4.15 RATCHET — low-min_dist is not monotone; losing this slackens the stop as ATR widens"
+check "config.py"                        "OT_BOS_MIN_DIST_ATR"         "v4.15 kill switch AND A/B control"
+check "tests/test_bos_min_distance.py"   "test_min_dist_zero_is_byte_identical_to_the_old_behaviour" "v1.0 the kill switch must actually kill"
 check "strategy/continuation_strategy.py" "CONTINUATION_REQUIRE_CONFIRM" "v1.5 the tag is the SETUP, the next bar is the TRIGGER"
 check "strategy/continuation_strategy.py" "confirmation UNDECIDABLE"    "v1.5 thin tape REFUSES — an absent confirmation is not a passed one"
 check "strategy/continuation_strategy.py" "continuation_strategy.py — Trend-continuation on pullback. — v1.5" "v1.5 header current"

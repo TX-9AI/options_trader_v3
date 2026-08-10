@@ -1,5 +1,34 @@
 """
 execution/exit_engine.py — Strategy-aware exit logic for all options positions.
+v4.15 — 2026-08-10 — BOS PROTECTED LEVEL GETS A MINIMUM DISTANCE. The level is
+        seeded from the LOW of the first bar closing above entry. On a pullback
+        entry that bar is the smallest, earliest part of the resumption, so its
+        low sits a hair under entry — the level lands INSIDE the symbol's own
+        noise band and the next ordinary wiggle fires it.
+        OBSERVED LIVE, not inferred: JPM in $1.26 12:49 -> out **$0.00** 12:50
+        -> back in $1.26 the same minute. A null round trip — the exit condition
+        was already true at entry. QQQ the same session fragmented ONE move into
+        four scratches (+$30/+$45.50/+$35/+$7), same strike, three minutes, each
+        exit immediately followed by re-entry because the setup was still valid.
+        The re-entry loop is a SYMPTOM: it cannot happen unless the position
+        closes, so a cooldown would suppress the symptom and leave the premature
+        exit intact.
+        Fix: floor the level at BOS_MIN_DIST_ATR * ATR from entry, ATR-scaled so
+        it widens on NVDA and tightens on GLD automatically. Applied ONLY on the
+        continuation path, which seeds with `underlying_entry`.
+        ⚠️ min_dist=0 IS BYTE-IDENTICAL to pre-v4.15, ratchet included — a test
+        pins that, because otherwise the kill switch is not a kill switch and
+        there is no A/B control.
+        ⚠️ `low - min_dist` IS NOT MONOTONE: a widening ATR can produce a new
+        candidate BELOW the old level, silently slackening the stop exactly when
+        volatility rises. Longs max(), shorts min().
+        ⚠️ PRE-EXISTING DEFECT FOUND AND DELIBERATELY NOT PATCHED HERE: the
+        generic/ORB caller (~966) seeds the tracker with `entry_prem` — the
+        OPTION premium — while BOSTracker compares against df_1m UNDERLYING
+        closes. A ~$1.26 premium against ~$352 closes means the first bar always
+        beats peak_close, so that path seeds a level on bar one regardless of
+        structure. Recorded rather than silently fixed; an ATR distance in
+        premium units would be meaningless anyway.
 v4.14 — 2026-08-07 — CNT.2 INSURANCE GATE (2c), continuation only. BOS (2b) is
         the thesis invalidator and is deliberately ungated on P&L, but
         `BOSTracker.protected_level` is None until the trade makes a new closing
@@ -284,6 +313,7 @@ import config as _cfg   # live fill knobs read at CALL time (test/env tunable)
 from database.trade_logger import TradeRecord, get_trade_logger
 from data.tasty_client import get_session, get_account, TastyClientError
 from config import (
+    BOS_MIN_DIST_ATR,                          # v4.15
     PAPER_TRADING, CONTRACT_MULTIPLIER,
     BUTTERFLY_MAX_HOLD_MIN, TRAIL_LOCK_PCT, TRAIL_ACTIVATION_PCT, FVG_MIN_SIZE_PCT,
     THETA_LOOKAHEAD_MIN, RTH_MINUTES, FVG_TRAIL_ARM_PCT, FVG_TRAIL_LOCK_PCT,
@@ -435,11 +465,25 @@ class BOSTracker:
     Short: tracks lowest closing low \u2192 protected LH = high of that candle
            BOS = 1m close above protected LH
     """
-    def __init__(self, direction: str, entry_price: float):
+    def __init__(self, direction: str, entry_price: float,
+                 min_dist: float = 0.0):
         self.direction       = direction
         self.entry_price     = entry_price
         self.peak_close      = entry_price
         self.protected_level = None   # HL for longs, LH for shorts
+        # v4.15 — MINIMUM DISTANCE. The protected level is seeded from the LOW
+        # of the first bar that closes above entry, and on a pullback entry that
+        # bar is the smallest, earliest part of the resumption — its low sits a
+        # hair under entry. The level therefore lands INSIDE the symbol's own
+        # noise band, and the next ordinary wiggle fires BOS.
+        # Observed live 2026-08-10: JPM in at $1.26 12:49, out at EXACTLY $0.00
+        # 12:50, back in at $1.26 the same minute. A null round trip — the exit
+        # condition was already true at entry. QQQ the same session fragmented
+        # ONE move into four scratches (+$30/+$45.50/+$35/+$7) by the same
+        # mechanism: exit, setup still valid, re-enter, repeat.
+        # `min_dist` is passed in ATR terms by the caller so it scales with the
+        # symbol; a raw price gap never could.
+        self.min_dist        = max(0.0, float(min_dist or 0.0))
 
     def update(self, df_1m: pd.DataFrame) -> bool:
         """
@@ -457,7 +501,22 @@ class BOSTracker:
         if self.direction == "long":
             if close > self.peak_close:
                 self.peak_close      = close
-                self.protected_level = low
+                # v4.15 — never seed INSIDE the noise band, and never LOOSEN.
+                # `low - min_dist` is not monotone: if the caller's ATR widens,
+                # a new candidate can come out BELOW the old level, which would
+                # silently slacken the stop exactly when volatility is rising.
+                # max() makes the level ratchet in one direction only.
+                if self.min_dist > 0:
+                    _cand = min(low, self.entry_price - self.min_dist)
+                    self.protected_level = (
+                        _cand if self.protected_level is None
+                        else max(self.protected_level, _cand))
+                else:
+                    # min_dist == 0 must be BYTE-IDENTICAL to pre-v4.15,
+                    # ratchet included — otherwise the kill switch is not a
+                    # kill switch and there is no A/B control. Caught by
+                    # test_min_dist_zero_is_byte_identical_to_the_old_behaviour.
+                    self.protected_level = low
                 logger.debug(
                     f"BOS long: new HH close={close:.2f} "
                     f"protected_HL={self.protected_level:.2f}"
@@ -472,7 +531,13 @@ class BOSTracker:
         else:  # short
             if close < self.peak_close:
                 self.peak_close      = close
-                self.protected_level = high
+                if self.min_dist > 0:
+                    _cand = max(high, self.entry_price + self.min_dist)
+                    self.protected_level = (
+                        _cand if self.protected_level is None
+                        else min(self.protected_level, _cand))
+                else:
+                    self.protected_level = high
                 logger.debug(
                     f"BOS short: new LL close={close:.2f} "
                     f"protected_LH={self.protected_level:.2f}"
@@ -1260,9 +1325,24 @@ class ExitEngine:
 
     def _get_bos_tracker(self, trade_id: str,
                           direction: str,
-                          entry_price: float) -> BOSTracker:
+                          entry_price: float,
+                          min_dist: float = 0.0) -> BOSTracker:
+        """v4.15 — `min_dist` defaults to 0.0 so every existing caller is
+        byte-identical in behaviour. It is supplied ONLY by the continuation
+        path, which seeds with `underlying_entry` and can therefore express a
+        distance in ATR (underlying) units.
+
+        ⚠️ DO NOT PASS min_dist FROM THE GENERIC/ORB CALLER AT ~966 WITHOUT
+        FIXING IT FIRST: that site seeds with `entry_prem` — the OPTION premium
+        — and BOSTracker compares against df_1m UNDERLYING closes. A ~$1.26
+        premium against ~$352 closes means the very first bar always beats
+        `peak_close`, so that path seeds a protected level immediately on bar
+        one regardless of structure. Pre-existing, out of scope here, and
+        recorded rather than silently patched — an ATR distance in premium
+        units would be meaningless anyway."""
         if trade_id not in self._bos_trackers:
-            self._bos_trackers[trade_id] = BOSTracker(direction, entry_price)
+            self._bos_trackers[trade_id] = BOSTracker(direction, entry_price,
+                                                      min_dist=min_dist)
         return self._bos_trackers[trade_id]
 
     def _update_trail(self, trade_id: str,
@@ -1386,8 +1466,13 @@ class ExitEngine:
         # `protected_level`. Previously it was constructed inside the df_1m
         # guard; leaving it there would make 2c reference an unbound name on a
         # tick with no 1m frame — the same NameError class as defect W.
+        # v4.15 — floor the protected level at BOS_MIN_DIST_ATR * ATR from
+        # entry, so it can never be seeded inside the symbol's own noise band.
+        _bm, _batr = self._midline_atr(vol_state, df_5m)
+        _bos_min = (BOS_MIN_DIST_ATR * float(_batr)) if (_batr and _batr > 0) else 0.0
         _bos = self._get_bos_tracker(trade_id, str(record.get("direction", "")).lower(),
-                                     float(record.get("underlying_entry", 0.0) or 0.0))
+                                     float(record.get("underlying_entry", 0.0) or 0.0),
+                                     min_dist=_bos_min)
         if df_1m is not None:
             if _bos.update(df_1m):
                 decision.should_exit = True

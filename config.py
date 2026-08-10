@@ -824,3 +824,14 @@ CONTINUATION_EXHAUST_TRAIL_LOCK = float(os.environ.get("OT_CONT_TRAIL_LOCK", "0.
 # OT_CONT_REQUIRE_CONFIRM=0 restores the pre-v1.5 behaviour exactly, which
 # makes this knob its own A/B control rather than a one-way door.
 CONTINUATION_REQUIRE_CONFIRM = os.getenv("OT_CONT_REQUIRE_CONFIRM", "1") == "1"
+
+# ── BOS MINIMUM DISTANCE (exit_engine v4.15, 2026-08-10) ─────────────────────
+# BOS seeds its protected level from the LOW of the first bar closing above
+# entry. On a pullback entry that bar is the smallest, earliest part of the
+# resumption, so the level lands inside the symbol's own noise band and the next
+# ordinary wiggle fires it. Observed live 2026-08-10: JPM in $1.26 12:49, out
+# $0.00 12:50, back in $1.26 the same minute — the exit condition was already
+# true at entry. QQQ fragmented one move into four scratches the same session.
+# Expressed in ATR so it scales with the symbol; a raw price gap could not.
+# 0.0 restores the pre-v4.15 behaviour exactly (kill switch and A/B control).
+BOS_MIN_DIST_ATR = float(os.getenv("OT_BOS_MIN_DIST_ATR", "0.35"))
