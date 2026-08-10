@@ -1,4 +1,10 @@
 #!/bin/bash
+# v4.43 — 2026-08-10 — CV.1 CLOSED. The orphaned condor_plan_lifetime canary is
+#         removed with its reasoning inline, and this file reports ALL GREEN on
+#         a clean checkout for the first time in weeks. That matters more than
+#         the one check: a permanently-red sweep trains the reader to skip its
+#         own DONE banner, at which point every OTHER canary here stops working
+#         too. Also adds the VW.1f pins.
 # v4.42 — 2026-08-10 — RGM.4 per-regime commit bar. Two canaries: the override
 #         map itself, and the ARMING site using the challenger's own bar. If
 #         either reverts to the global theta_commit, RANGING goes quiet again
@@ -458,7 +464,18 @@ check "tests/pitchfork_filter_audit.py"  "ACCEL/held bar"               "v1.5 ex
 check "pull_today_ohlc.sh"               'BOT=$(systemctl is-active optionsbot' "v1.3 guard reads optionsbot, not just the clock"
 
 
-check "tests/condor_plan_lifetime.py"    "WOULD A PAUSE HAVE HELPED"    "v1.0 measures the fix's premise, not just the deaths"
+# CV.1 (2026-08-10) — CANARY REMOVED, NOT SILENTLY DROPPED. It pinned
+# `tests/condor_plan_lifetime.py`, which does not exist at any HEAD in this
+# repo, so the sweep ended `DONE — CANARY FAILURE(S)` on a PERFECTLY CLEAN
+# checkout. A permanently-red gate is worse than no gate: it trains the reader
+# to skip its own DONE banner, which is the cried-wolf failure this file exists
+# to prevent (WORKING_AGREEMENT §17).
+# `tests/condor_approach.py` covers adjacent ground (it discusses plan
+# lifetimes) but carries no "WOULD A PAUSE HAVE HELPED" marker, so it is NOT a
+# rename and the canary was not re-pointed at it on a guess.
+# ⚠️ IF condor_plan_lifetime.py EXISTS SOMEWHERE OFF-REPO, RESTORE THE FILE AND
+# THIS LINE rather than leaving the check deleted — the intent (measure the
+# fix's PREMISE, not just the deaths) is sound and worth keeping.
 check "main.py"                          "DIRECTIONAL_ONLY is EMPTY fleet-wide"  "stale single-names comment corrected"
 
 # ── candle_feed v3.10 (2026-08-04) — the gate that ate the backfill ───────
@@ -506,6 +523,9 @@ check "execution/exit_engine.py"          "self.min_dist"               "v4.15 B
 check "execution/exit_engine.py"          "else max(self.protected_level, _cand)" "v4.15 RATCHET — low-min_dist is not monotone; losing this slackens the stop as ATR widens"
 check "config.py"                        "OT_BOS_MIN_DIST_ATR"         "v4.15 kill switch AND A/B control"
 check "tests/test_bos_min_distance.py"   "test_min_dist_zero_is_byte_identical_to_the_old_behaviour" "v1.0 the kill switch must actually kill"
+check "tests/vwap_orientation_ledger.py" "MIN_ARM_TRADES"              "v1.6 VW.1f-c — a verdict rests on the SMALLER arm; a floor on the total does not constrain it"
+check "tests/vwap_orientation_ledger.py" "MAPPED BUT UNMATCHED"        "v1.6 VW.1f-a — trades that map but never match were vanishing with no line anywhere"
+check "tests/vwap_orientation_ledger.py" "_SRC_BY_TRACK"               "v1.6 VW.1f-b — the era warning must key on ONE TRACK holding both, not on the totals"
 check "analysis/conviction_integrator.py" "regime engine. — v2.3"      "v2.3 header current"
 check "analysis/conviction_integrator.py" "theta_commit_by_regime"     "v2.3 RGM.4 per-regime commit bar — a revert to the global silently re-darkens RANGING"
 check "analysis/conviction_integrator.py" "p.commit_bar(top_r)"        "v2.3 the ARMING site uses the challenger's own bar, not the global"

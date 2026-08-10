@@ -1,6 +1,29 @@
 #!/usr/bin/env python3
 """
-tests/vwap_orientation_ledger.py — v1.5 — 2026-08-08
+tests/vwap_orientation_ledger.py — v1.6 — 2026-08-10
+
+v1.6 — 2026-08-10 — VW.1f: THREE DEFECTS THE TOOL'S OWN FIRST REAL OUTPUT
+       EXPOSED. All three rendered cleanly and none raised.
+       (a) ~29 TRADES VANISHED. 304 rows minus 40 reported unjoinable leaves 264
+           mappable, but only 235 joined. A trade that resolves to a family yet
+           whose (symbol, family, direction) key matches no signal group was
+           dropped with NO line anywhere — the exact gap "by cause" reporting
+           was built to close. Now counted and listed as MAPPED BUT UNMATCHED.
+       (b) THE MIXED-ERAS WARNING CRIED WOLF ON ITS FIRST OUTING. It fired on
+           three ALL-PRE-BAKE dates because the totals held both kinds — and the
+           9,596 "emitted" was exactly TCS's own total, TCS being the one track
+           that always carried `dir`. The split was BY TRACK, not by date, and
+           the warning told the operator to split dates at a bake not in range.
+           Now warns only when a SINGLE TRACK holds both, which is what a real
+           era mix looks like; otherwise it says explicitly that no action is
+           needed.
+       (c) THE VERDICT FLOOR TESTED THE WRONG THING. `tr < 3` on TOTAL trades
+           let CONTINUATION print "orientation looks right" off a MISALIGNED arm
+           of FIVE against an aligned arm of 228. A verdict rests on the SMALLER
+           arm; a total floor does not constrain it. Now MIN_ARM_TRADES=8 on
+           EACH arm. Compounding it and stated in the output: the per-group
+           MAJORITY-ALIGNMENT collapse systematically SHRINKS the minority arm,
+           so the method minimises the very population the verdict depends on.
 
 v1.5 — 2026-08-08 — READ THE FIELD WHEN IT EXISTS. `trade_readiness` v1.6 now
        stamps `dir` on every track, so post-bake rows are READ rather than
@@ -137,6 +160,9 @@ from datetime import datetime
 JOURNAL_ROOT = os.path.expanduser("~/day_trader_pro/signal_journal")
 REPORTS_ROOT = os.path.expanduser("~/day_trader_pro/reports")
 MIN_CELL = 12          # below this a cell gets no verdict, only a count
+MIN_ARM_TRADES = 8     # v1.6 — required on EACH arm, not on the total. A
+                       # verdict about whether the gate blocks winners or losers
+                       # rests entirely on the SMALLER arm.
 SNAP_MAX_AGE_S = 120   # a staged_pick may borrow the symbol's last market
                        # snapshot if it is at most this stale (ticks are 15s;
                        # 120s matches the integrator's dt_max gap convention)
@@ -305,6 +331,15 @@ def _norm_dir(v):
 
 
 _SRC = {"emitted": 0, "derived": 0}   # v1.5 — era provenance, printed below
+# v1.6 (VW.1f-b) — PER-TRACK provenance. v1.5 warned "MIXED ERAS" whenever the
+# TOTALS held both, and on its first real run that fired against three
+# all-pre-bake dates: the 9,596 "emitted" was EXACTLY TCS's own total, because
+# TCS is the one track that always carried `dir`. The split was BY TRACK, not by
+# date, and the warning told the operator to "split the dates at the bake" when
+# no bake was in range. An alarm that cries wolf on its first outing is the
+# thing this project keeps paying for. A genuine era mix shows up as a SINGLE
+# TRACK holding both.
+_SRC_BY_TRACK = defaultdict(lambda: {"emitted": 0, "derived": 0})
 
 
 def resolve_direction(track, rec):
@@ -340,6 +375,7 @@ def resolve_direction(track, rec):
     _emitted = dig(rec, "readiness.factors.dir")
     if _emitted is not None:
         _SRC["emitted"] += 1
+        _SRC_BY_TRACK[str(track or "?").upper()]["emitted"] += 1
         if str(_emitted).upper() == "NEUTRAL":
             return None, f"{t.lower()}: neutral by design (emitted)"
         d = _norm_dir(_emitted)
@@ -349,6 +385,7 @@ def resolve_direction(track, rec):
         # honest absence, and a different fact from the field being missing.
         return None, f"{t.lower()}: no intended side this tick (emitted empty)"
     _SRC["derived"] += 1
+    _SRC_BY_TRACK[t]["derived"] += 1
     if t == "TREND_CREDIT_SPREAD":
         d = _norm_dir(dig(rec, "readiness.factors.dir"))
         return (d, None) if d else (None, "tcs: factors.dir unparseable")
@@ -559,12 +596,22 @@ def main(argv):
         coverage[track]["decided"] += 1
         sig[(sym, fam, direc)]["aligned" if ok else "misaligned"] += 1
 
+    # v1.6 (VW.1f-a) — TRADES THAT MAP BUT NEVER MATCH WERE VANISHING. The
+    # first real run joined 235 of 264 mappable rows and the other ~29 left NO
+    # LINE ANYWHERE: they resolved to a family fine, so `_trade_group` accepted
+    # them, but their (symbol, family, direction) key had no signal group to
+    # land in. "not joinable BY CAUSE" therefore reported 40 and stayed silent
+    # about the rest — the exact gap by-cause reporting was built to close.
+    _matched_keys = set()
+
     cells = defaultdict(lambda: {"n": 0, "trades": 0, "wins": 0, "pnl": 0.0})
     for key, counts in sig.items():
         _, fam, direc = key
         al = "ALIGNED" if counts["aligned"] >= counts["misaligned"] else "MISALIGNED"
         c = cells[(fam, direc, al)]
         c["n"] += counts["aligned"] + counts["misaligned"]
+        if key in pnl_by:
+            _matched_keys.add(key)
         for v in pnl_by.get(key, []):        # each trade consumed exactly once
             c["trades"] += 1
             c["pnl"] += v
@@ -584,10 +631,16 @@ def main(argv):
     if src_emitted or src_derived:
         print(f"    [era] direction READ from the emitter: {src_emitted}  |  "
               f"DERIVED offline (pre-v1.6 rows): {src_derived}")
-        if src_emitted and src_derived:
-            print("    ⚠ MIXED ERAS in one run — the two are different "
-                  "measurements. Split the dates at the bake before reading "
-                  "any per-strategy count as a trend.")
+        _mixed = sorted(k for k, v in _SRC_BY_TRACK.items()
+                        if v["emitted"] and v["derived"])
+        if _mixed:
+            print(f"    ⚠ MIXED ERAS — these tracks hold BOTH: {', '.join(_mixed)}")
+            print("      A single track reading two ways IS a date mix. Split the")
+            print("      dates at the bake before reading its counts as a trend.")
+        elif src_emitted and src_derived:
+            print("    (no track holds both — the emitted/derived split is BY TRACK,")
+            print("     not by date. TCS always carried `dir`; the rest did not until")
+            print("     the v1.6 bake. Not an era mix, no action.)")
     print("--- undecidable, BY CAUSE ---")
     for cause in sorted(undecidable):
         print(f"    {undecidable[cause]:>7}  {cause}")
@@ -595,6 +648,15 @@ def main(argv):
         print("--- trade rows not joinable, BY CAUSE ---")
         for why in sorted(trades_dropped):
             print(f"    {trades_dropped[why]:>7}  {why}")
+    _orphan = {k: v for k, v in pnl_by.items() if k not in _matched_keys}
+    if _orphan:
+        _n = sum(len(v) for v in _orphan.values())
+        print(f"--- trade rows MAPPED BUT UNMATCHED: {_n} ---")
+        print("    these resolved to a family but their (symbol, family, direction)")
+        print("    key had NO signal group — so they are neither joined nor reported")
+        print("    as unjoinable. v1.5 dropped them silently.")
+        for k in sorted(_orphan, key=lambda x: -len(_orphan[x]))[:8]:
+            print(f"    {len(_orphan[k]):>7}  {k[0]} {k[1]} {k[2]}")
 
     print("\n" + "=" * 74)
     print("  WOULD THE E GATE HAVE BLOCKED WINNERS OR LOSERS?  (per strategy)")
@@ -625,9 +687,23 @@ def main(argv):
             print(f"  {strat:<22} {a + m} signals, 0 trades — EXPECTED: its "
                   "firing engine (vertical_spread_strategy.py, TC.4) does not "
                   "exist yet. Signal-side orientation only.")
-        if a + m < MIN_CELL or tr < 3:
-            print(f"  {strat:<22} INSUFFICIENT ({a + m} signals, {tr} trades) "
-                  f"— no verdict")
+        # v1.6 (VW.1f-c) — THE FLOOR MUST HOLD ON BOTH ARMS. v1.5 tested
+        # TOTAL trades >= 3, so the first real run printed
+        # "orientation looks right" for CONTINUATION off a MISALIGNED arm of
+        # FIVE trades against an aligned arm of 228. A verdict rests on the
+        # SMALLER arm; a floor on the total does not constrain it at all.
+        # Compounding it, the per-group MAJORITY-ALIGNMENT collapse
+        # systematically SHRINKS the minority arm — so the method minimises the
+        # very population the verdict depends on, and that is stated below
+        # rather than left for the reader to infer.
+        _tr_a = sum(c["trades"] for (s2, _, al), c in cells.items()
+                    if s2 == strat and al == "ALIGNED")
+        _tr_m = sum(c["trades"] for (s2, _, al), c in cells.items()
+                    if s2 == strat and al == "MISALIGNED")
+        if a + m < MIN_CELL or min(_tr_a, _tr_m) < MIN_ARM_TRADES:
+            print(f"  {strat:<22} INSUFFICIENT (signals {a + m}; trades "
+                  f"aligned {_tr_a} / misaligned {_tr_m}, need "
+                  f"{MIN_ARM_TRADES} on EACH) — no verdict")
             continue
         if mpnl > 0 and mpnl >= apnl:
             print(f"  {strat:<22} GATE WOULD HAVE BLOCKED NET WINNERS "

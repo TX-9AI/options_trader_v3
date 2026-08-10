@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.20
+# docs/BACKLOG.md — v4.21
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -109,6 +109,7 @@ BAKED is changing nothing about today's data.
 | **VW.1c — the event filter, the fourth layer** | ✅ 08-08 | ⬜ | n/a (offline) | v1.3. The whitelist accepted only `scored/fired/entry/entered` — pre-v1.5 names — while the records carrying `readiness.market` are `readiness*`. **11,584 records skipped on 08-06 alone.** Now prefix-matched. |
 | **VW.1d — the join layer, the fifth and final one** | ✅ 08-08 | ⬜ | n/a (offline) | v1.4 — and this time the WHOLE remaining path was traced before patching. v1.3's real run (30,565 undecidable, only TREND_CREDIT_SPREAD in the table, 304 trade rows joined to ZERO) had THREE stacked causes, none of them the filter: (1) `factors.dir` exists on exactly ONE track — TCS (trade_readiness.py:569); the other five journal no direction, so `aligned()` dumped them all into a counter mislabeled "index/NONE side". (2) The trade join compared track slugs (`SWEEP`) to class names (`SweepReversal`) — no key could ever match. (3) TCS, the one decidable strategy, has NO firing engine yet (TC.4), so its 0 trades were arithmetically forced. Fix: per-strategy direction resolver (continuation from label exactly as the emitter's own staged-pick path; condor sides mapped ON MECHANISM — call credit = SHORT exposure, the inverse of the buyer's-eye reading; sweep via `staged.direction` paired to the symbol's last market snapshot ≤120s; butterfly undecidable BY DESIGN), family-normalized trade join with condor legs attributed via setup_type, and undecidable/unjoinable REPORTED BY CAUSE so the counter can never lie again. Reproduced the exact v1.3 symptom on planted data, then proved v1.4 resolves all five families and joins trades. |
 | **VW.1e / RDY.1 — `dir` on every track, at the source** | ✅ 08-08 | ✅ | ✅ **BAKED 08-08** — earlier than planned | **trade_readiness v1.6 — the emitter side of VW.1d, and the reason the ledger needed five versions.** ONE track (`_trend_credit_spread`) journaled a direction and five journaled none; a field with a single writer is indistinguishable from a field nobody needs until a reader depends on it. Each track now stamps `dir` from the source that actually knows: continuation from the trending label (identical to `_staged_pick`'s derivation, so journal and picker cannot drift); **sweep from the LIVE `liq_map.recent_sweep.kind` — the field no offline tool could ever recover**, which is why v1.4 had to pair against staged picks; condor sides from EXPOSURE (**call credit = SHORT**, inverse of the buyer's-eye reading); butterfly explicit `"neutral"`. `""` = no intended side this tick, an honest absence now distinguishable from a missing field. **LOG-ONLY, freeze-safe, no trading-behaviour change.** Ledger **v1.5** PREFERS the emitted field and KEEPS the v1.4 derivation, because no fleet-side change can reach already-banked history. 7 new tests + 4 canaries; deliberate-failure verified (inverting the condor mapping turns the suite red). Suite 339 passed / 1 skipped. **⚠️ FORWARD-ONLY — reaches only sessions after Monday's restart.** |
+| **RGM.5 — the v13 classifier still emits SWEEP_REVERSAL** | ⬜ **OPEN** | ⬜ | n/a | RGM.3 took SWEEP out of the **L2 integrator's** argmax and stopped there. `regime_classifier.py:171` still assigns `SWEEP_REVERSAL` at HIGHEST priority, and `main` falls back to the v13 classifier whenever L2 is not committing — so on fallback ticks the label reappears and the readiness sweep track scores off it (R p50 0.525 on 65 of 11,136 ticks, 2026-08-10). Found while resolving a contradiction between `COMMITTED_SWEEP=0` fleet-wide and a readiness digest showing the track alive: **both were true.** The category error RGM.3 was meant to end survives in a second place. Behavioural for the label, not for dispatch (SWP.1 gates on the setup score). Decide whether the classifier should emit it at all, or whether the fallback path should be narrowed. |
 | **VW.1f — three defects in the ledger, found by reading its own first output** | ⬜ **OPEN** | ⬜ | n/a (offline) | **NEW SCOPE, discovered 08-08 from the first real run — filed rather than fixed on the spot, because the fleet does not depend on it.** (1) **~29 TRADES VANISH SILENTLY:** 304 rows − 40 reported unjoinable (37 ORB, 3 butterfly) = 264 mappable, but only **235 joined** (233 continuation + 2 condor). A trade that maps to a family fine but whose `(symbol, family, direction)` key never matches a signal group is dropped with NO line in "not joinable BY CAUSE" — the exact gap by-cause reporting was built to close. Fix: a MAPPED-BUT-UNMATCHED count. (2) **THE MIXED-ERAS WARNING CRIED WOLF ON ITS FIRST OUTING:** all three dates were pre-bake, and `[era] emitted 9,596` is EXACTLY TCS's own total (7,201 + 2,395) — the split was BY TRACK, not by date, so it told the operator to "split the dates at the bake" when no bake was in range. Fix: warn only when a SINGLE track shows both emitted and derived rows. (3) **THE VERDICT FLOOR TESTS THE WRONG THING:** `tr < 3` on TOTAL trades let a verdict print off a 5-trade arm. Fix: a floor on BOTH arms. Compounding it, the per-group MAJORITY-ALIGNMENT collapse systematically SHRINKS the minority arm — the method minimises the very population the verdict rests on, which belongs in the printed caveat. |
 | **CV.1 — two canary reds at clean HEAD** | ⬜ **OPEN** | ⬜ | n/a (offline) | **Confirmed present on a PRISTINE clone, NOT introduced by any 08-08 delivery.** `check_versions.sh` pins `v5.4 main header current` while `main.py` is at **v5.8**, and one canary expects `tests/condor_plan_lifetime.py`, which **does not exist in the repo**. Consequence is the reason this is an item and not a footnote: the sweep now ends `DONE — 2 CANARY/PARITY FAILURE(S)` on a perfectly clean checkout, so **its own DONE banner has stopped being usable as a gate** — the cried-wolf failure this repo has already paid for once (WORKING_AGREEMENT §17: an alarm that spams is an alarm that gets filtered). Either update the pin to v5.8 and re-point or delete the orphaned canary; both are one-line edits. Left for the operator's call rather than folded silently into another delivery. |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
@@ -4789,6 +4790,76 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.21 — 2026-08-10 EOD — CATCH-UP: three shipped changes had NO backlog
+  entry, plus CV.1, VW.1f and a correction to RGM.3.**
+  **⚠️ THE PROCESS FAILURE FIRST, because it is mine and it is the operator's
+  own standing rule: CNT.4, CNT.5 and SWP.3 were built, pushed AND BAKED with
+  no BACKLOG entry.** The rule is explicit — `docs/BACKLOG.md` ships in every
+  archive, because EV only moves when the backlog records it and this thread is
+  the sole place that record is produced. I complied on r41 and r50/r53 and
+  dropped it on r44/r45/r46 as the deliveries got faster. Same shape as the
+  `rm -f` lapse the same day: the last clause is the first thing lost when a
+  command grows. Backfilled below.
+  - **CNT.4 — 1-BAR CONFIRMATION ON CONTINUATION ENTRIES** (continuation_strategy
+    v1.5, `OT_CONT_REQUIRE_CONFIRM`). The FVG tag alone commits while price is
+    still moving AGAINST the trend — a bet on a resumption that has not
+    happened. Now the bar AFTER the tag must CLOSE BEYOND that bar's extreme in
+    the trend direction: a miniature break of structure, deliberately the
+    weakest test that still requires price to have DONE something. Fewer trades
+    by design; setups that never confirm are never taken. Expect a LOWER win
+    rate with a BETTER loss profile — read them together. **Shipped without the
+    offline counterfactual at the operator's direction; the first week of
+    post-deploy data IS the evidence.**
+  - **CNT.5 — BOS PROTECTED LEVEL FLOORED AT `BOS_MIN_DIST_ATR * ATR`**
+    (exit_engine v4.15). The level was seeded from the LOW of the first bar
+    closing above entry, which on a pullback entry sits a hair under entry — so
+    it landed INSIDE the symbol's noise band and any wiggle fired it. Observed
+    live: **JPM in $1.26 12:49 → out $0.00 12:50 → back in $1.26 the same
+    minute**, and QQQ fragmenting ONE move into four scratches
+    (+$30/+$45.50/+$35/+$7). The re-entry loop is a SYMPTOM — it cannot happen
+    unless the position closes. Corroborated the same session by `bos_exit`
+    changing character: MFE +9% / giveback 8% against its historic +2%, i.e.
+    cutting LIVE moves rather than stopping dead ones. `min_dist=0` is
+    byte-identical to the old behaviour, ratchet included, and a test pins that.
+  - **SWP.3 — SWEEP READINESS APPROACH FACTOR** (trade_readiness v1.7).
+    Conviction now rises as price nears a named pool, scaled by how well that
+    level has HELD; distance is price delta normalised by ATR (operator's spec).
+    Bounds FITTED from the shadow observer — 14.0% of observations within 0.5
+    ATR, median 2.32 — after my first draft of 0.15/1.20 would have scored the
+    MEDIAN TICK AT ZERO and left the factor dead across ~3/4 of the session.
+    London gets a modest 1.15 bonus (61.3% of nearest-level observations) and
+    deliberately NOT a multiplier: that is a frequency of PROXIMITY, not of
+    profitability. `appr_name` now lands on every readiness record so "which
+    levels get swept" becomes a data question.
+  - **⚠️ RGM.3 IS INCOMPLETE — CORRECTION TO SWP.3's STATED PREMISE.** I said the
+    `is_sweep` label hard-veto had made the readiness track a PERMANENT ZERO
+    after RGM.3, and used that to justify removing it. **Not true as stated.**
+    `regime_classifier.py:171` still assigns `SWEEP_REVERSAL` at HIGHEST
+    priority — RGM.3 removed it from the **L2 integrator only** — and `main`
+    falls back to the v13 classifier whenever L2 is not committing. So both
+    readings were right: `COMMITTED_SWEEP=0` fleet-wide AND readiness scored
+    R p50 0.525 on 65 of 11,136 ticks via the fallback path. The veto removal
+    still stands (0.6% of ticks is not a functioning arming track) but **the
+    category error RGM.3 was meant to end survives in a second place, and that
+    is now an open item.**
+  - **CV.1 CLOSED — check_versions is ALL GREEN for the first time in weeks.**
+    The canary pinned `tests/condor_plan_lifetime.py`, which exists at no HEAD
+    in this repo, so a PERFECTLY CLEAN checkout ended `DONE — CANARY
+    FAILURE(S)`. A permanently-red gate trains the reader to skip its own DONE
+    banner (WORKING_AGREEMENT §17). Removed with the reasoning inline, NOT
+    silently: `condor_approach.py` covers adjacent ground but carries no "WOULD
+    A PAUSE HAVE HELPED" marker, so it is not a rename and the canary was not
+    re-pointed on a guess. **If the file exists off-repo, restore the FILE and
+    the line rather than leaving the check deleted.**
+  - **VW.1f CLOSED — the three defects the ledger's own first output exposed**
+    (v1.6). (a) ~29 trades that MAPPED but never MATCHED were dropped with no
+    line anywhere; now counted and listed. (b) The mixed-eras warning fired on
+    three ALL-PRE-BAKE dates because the split was BY TRACK not by date — the
+    9,596 "emitted" was exactly TCS's own total; now warns only when a SINGLE
+    TRACK holds both. (c) The verdict floor tested TOTAL trades, so CONTINUATION
+    printed "orientation looks right" off a MISALIGNED arm of FIVE against 228
+    aligned; now MIN_ARM_TRADES=8 on EACH arm, with the majority-alignment
+    collapse's shrinking of the minority arm stated in the output.
 - **v4.20 — 2026-08-10 — RGM.4: the bot recognised range all along; it could
   not COMMIT it.** Operator: "if my bot doesn't recognize ranging when it's
   clearly ranging, then it's broken." The classifier was not the broken part.
