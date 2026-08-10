@@ -1,4 +1,9 @@
 #!/bin/bash
+# v4.42 — 2026-08-10 — RGM.4 per-regime commit bar. Two canaries: the override
+#         map itself, and the ARMING site using the challenger's own bar. If
+#         either reverts to the global theta_commit, RANGING goes quiet again
+#         with no error — it reads as "no ranges today", which is exactly how it
+#         hid for weeks.
 # v4.41 — 2026-08-10 — CNT.6 continuation blocked in the premium regimes. The
 #         canary pins the NEGATED form (`not _cont_blocked`) because restoring
 #         the bare `_is_runaway or ...` bypass raises NOTHING — butterfly and
@@ -501,6 +506,10 @@ check "execution/exit_engine.py"          "self.min_dist"               "v4.15 B
 check "execution/exit_engine.py"          "else max(self.protected_level, _cand)" "v4.15 RATCHET — low-min_dist is not monotone; losing this slackens the stop as ATR widens"
 check "config.py"                        "OT_BOS_MIN_DIST_ATR"         "v4.15 kill switch AND A/B control"
 check "tests/test_bos_min_distance.py"   "test_min_dist_zero_is_byte_identical_to_the_old_behaviour" "v1.0 the kill switch must actually kill"
+check "analysis/conviction_integrator.py" "regime engine. — v2.3"      "v2.3 header current"
+check "analysis/conviction_integrator.py" "theta_commit_by_regime"     "v2.3 RGM.4 per-regime commit bar — a revert to the global silently re-darkens RANGING"
+check "analysis/conviction_integrator.py" "p.commit_bar(top_r)"        "v2.3 the ARMING site uses the challenger's own bar, not the global"
+check "tests/test_ranging_commit_bar.py" "test_the_bar_stays_out_of_the_impostor_window" "v1.0 the bar may move; it may not move into the 12-15 bar false-flat zone"
 check "main.py"                          "not _cont_blocked"           "v6.0 CNT.6 — the runaway bypass must NOT reopen the premium regimes; its return is silent"
 check "main.py"                          "main.py — options_trader v6.0" "v6.0 header current"
 check "config.py"                        "OT_CONT_BLOCK_PREMIUM"       "v6.0 kill switch AND A/B control"

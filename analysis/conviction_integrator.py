@@ -1,6 +1,39 @@
 """
 options_trader_v3/analysis/conviction_integrator.py — Layer 2: persistence
-(conviction-integrator) regime engine.
+(conviction-integrator) regime engine. — v2.3
+
+v2.3 — 2026-08-10 — RGM.4: PER-REGIME COMMIT BAR. `theta_commit` was ONE number
+        applied to scores living on DIFFERENT SCALES, and RANGING went dark
+        because of it. Measured over 209,061 ticks: L1 sees a range on 24.2% of
+        ticks — the same share as TRENDING_BULL's 23.5% — while L2 EMITS ranging
+        on 2%. The bot was not failing to RECOGNISE range; it was failing to
+        COMMIT it.
+        83.2% of failed RANGING runs failed on the CEILING: peak EVIDENCE never
+        reached 0.65 either, and conviction asymptotes to the evidence feeding
+        it, so a faster tau_up could not have helped. RANGING evidence p50 0.322
+        / p90 0.779 / max 0.982 — it NEVER pegs. TRENDING p90 1.000.
+        ⚠️ TWO CORRECT DECISIONS PRODUCED IT. `room_s = ramp(bb_width_pct, 0.17,
+        1.00)` is a SOFT-NECESSARY so it multiplies the whole score, and
+        bb_width_pct p50 0.44 puts it at ~0.33 — exactly the observed peak
+        evidence 0.322. Those bounds were widened (0.20 -> 1.00) to stop RANGING
+        over-firing and it WORKED (dominance 44% -> 27%). F7 later made
+        theta_commit mandatory for every challenger. Neither was wrong; nobody
+        re-derived one against the other.
+        ⚠️ THE INPUT IS NOT THE PROBLEM. bb_width_pct separates RANGING from
+        COMPRESSION at 0.040 overlap — near-perfect. A travel/efficiency
+        replacement was proposed, measured and REJECTED at 0.766: travel cannot
+        even tell a range from a trend (p50 1.24 vs 1.19). Recorded so it is not
+        re-proposed.
+        0.60 IS DERIVED, NOT PREFERRED. tau_up 780 was fitted so commits land at
+        ~17-19 bars — past the 12-15 bar window where TRENDS hold a false flat,
+        inside the 24-29 where true ranges do. At RANGING's p90 evidence: 0.65
+        -> 23.4 bars (LATE, outside the design), 0.60 -> 19.1 (in it), 0.50 ->
+        13.3 (INSIDE the impostor window, rejected). This RESTORES the timing
+        tau_up was fitted to produce. tau_up is UNTOUCHED.
+        ⚠️ EXPECT A MODEST GAIN: 2.1% -> ~3.3% of RANGING runs committing. The
+        residual is genuine — evidence p50 0.322 means most ranging argmax ticks
+        are weak and SHOULD not commit.
+        Kill switch: OT_L2_THETA_COMMIT_RANGING=0.65.
 
 v2.2 — 2026-08-07 — SWEEP_REVERSAL LEAVES THE INTEGRATION SET (RGM.3).
         Operator: "sweep isn't a regime, it's a strategy — where did that even
@@ -124,6 +157,15 @@ import math
 import os
 import tempfile
 from dataclasses import dataclass, field, asdict
+
+
+def _envf(name: str, default: float) -> float:
+    """OT_-prefixed float knob. Local to this module — the integrator does not
+    import config, deliberately, so that a replay can drive it standalone."""
+    try:
+        return float(os.getenv(f"OT_{name}", default))
+    except (TypeError, ValueError):
+        return default
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -195,6 +237,54 @@ class RegimeParams:
 @dataclass
 class IntegratorParams:
     theta_commit: float = 0.65   # conviction needed to EMIT a regime (enter)
+    # ── RGM.4 (2026-08-10) — PER-REGIME COMMIT BAR ───────────────────────────
+    # theta_commit was ONE global number applied to scores living on DIFFERENT
+    # SCALES, and that is why RANGING went dark. Measured over 209,061 ticks:
+    #   L1 sees a range on 24.2% of ticks — essentially the same share as
+    #   TRENDING_BULL's 23.5% — but L2 EMITS ranging on 2%.
+    #   Of the RANGING argmax runs that failed to commit, 83.2% failed on the
+    #   CEILING: peak EVIDENCE never reached 0.65 either, and conviction
+    #   asymptotes to the evidence feeding it, so no tau change could help.
+    #   RANGING peak evidence p50 0.322 / p90 0.779 / max 0.982 — it NEVER
+    #   pegs. TRENDING_BULL p90 1.000. Same bar, different scales.
+    # THE CAUSE IS AN INTERACTION, NOT A BAD CONSTANT. `room_s =
+    # ramp(bb_width_pct, 0.17, 1.00)` is a SOFT-NECESSARY, so it multiplies the
+    # whole score; bb_width_pct runs p50 0.44, putting room_s ~0.33 — and the
+    # observed peak RANGING evidence is 0.322. That IS room_s. Those bounds were
+    # widened deliberately (0.20 -> 1.00) to stop RANGING over-firing, and it
+    # worked (dominance 44% -> 27%). Then F7 made theta_commit mandatory for
+    # every challenger. Both changes were right; nobody re-derived one against
+    # the other.
+    # ⚠️ AND bb_width_pct IS NOT THE PROBLEM — it separates RANGING from
+    # COMPRESSION at 0.040 overlap, near-perfect. A travel/efficiency
+    # replacement was measured and REJECTED at 0.766 overlap: travel cannot even
+    # tell a range from a trend (p50 1.24 vs 1.19). The input is right; the BAR
+    # was wrong.
+    # 0.60 IS DERIVED, NOT PREFERRED. tau_up 780 was fitted so sustained flat
+    # evidence commits at ~17-19 bars — past the 12-15 bar window where TRENDS
+    # hold a false-flat angle, inside the 24-29 bar window where true ranges do.
+    # At RANGING's p90 evidence 0.779:  theta 0.65 -> 23.4 bars (LATE, past the
+    # design), theta 0.60 -> 19.1 bars (the designed window), 0.57 -> 17.1,
+    # 0.50 -> 13.3 bars (INSIDE the impostor window — rejected).
+    # So 0.60 RESTORES THE TIMING THE tau WAS FITTED TO PRODUCE. It is not a
+    # loosening; the effective bar had drifted late when the evidence scale
+    # changed underneath it.
+    # ⚠️ EXPECT A MODEST GAIN, NOT A TRANSFORMATION: the counterfactual on real
+    # conviction values puts RANGING commits at 3.3% of runs against 2.1% today.
+    # The residual is genuine — RANGING's evidence p50 is 0.322 and most argmax
+    # ticks are weak, which SHOULD not commit. This fixes the scale mismatch and
+    # nothing else.
+    # ⚠️ tau_up IS UNTOUCHED, so the impostor protection is intact. Only the bar
+    # moves. Empty dict = every regime uses the global value (kill switch).
+    theta_commit_by_regime: Dict[str, float] = field(default_factory=lambda: {
+        RANGING: _envf("L2_THETA_COMMIT_RANGING", 0.60),
+    })
+
+    def commit_bar(self, regime: Optional[str]) -> float:
+        """The commit threshold for THIS regime. Falls back to the global."""
+        if not regime:
+            return self.theta_commit
+        return self.theta_commit_by_regime.get(regime, self.theta_commit)
     theta_hold:   float = 0.45   # conviction needed to KEEP a held regime (hysteresis)
     delta_displace: float = 0.12 # margin a challenger needs over the incumbent
     dt_max:       float = 90.0   # gap > dt_max seconds ⇒ do not integrate; mark stale
@@ -368,7 +458,10 @@ class ConvictionIntegrator:
         # the book. Before that the convictions are near zero and the argmax is
         # just the tiebreak head; holding it would pin the whole session to a
         # regime nothing has evidenced.
-        if top_c >= p.theta_commit:
+        # RGM.4 — arm on the CHALLENGER'S OWN bar, not the global one. Using
+        # the global here would keep the book unarmed through exactly the
+        # ranging sessions this change exists to let commit.
+        if top_c >= p.commit_bar(top_r):
             self.armed = True
 
         prev_inc = self.incumbent
@@ -383,7 +476,7 @@ class ConvictionIntegrator:
             # best available belief, and its conviction reports the weakness
             # honestly to Layer 3, which is what gates the trade.
             if (top_r != self.incumbent
-                    and top_c >= p.theta_commit
+                    and top_c >= p.commit_bar(top_r)     # RGM.4 — per-regime
                     and top_c >= inc_c + p.delta_displace):
                 trigger = f"displaced {self.incumbent}({inc_c:.2f}) → {top_r}({top_c:.2f})"
                 self.incumbent = top_r

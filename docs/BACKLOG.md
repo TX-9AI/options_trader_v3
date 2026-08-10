@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.19
+# docs/BACKLOG.md — v4.20
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -4789,6 +4789,45 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.20 — 2026-08-10 — RGM.4: the bot recognised range all along; it could
+  not COMMIT it.** Operator: "if my bot doesn't recognize ranging when it's
+  clearly ranging, then it's broken." The classifier was not the broken part.
+  **L1 wins the argmax for RANGING on 24.2% of ticks — essentially TRENDING
+  BULL's 23.5% — while L2 emits RANGING on 2%** (209,061 ticks, 21 replay
+  files). `ranging_commit_probe` split the two candidate causes: **83.2% of
+  failed runs were CEILING** — peak EVIDENCE never reached the 0.65 bar either,
+  and conviction asymptotes to its evidence, so no `tau_up` change could reach
+  it. RANGING evidence p50 0.322 / p90 0.779 / **max 0.982 — it never pegs**;
+  TRENDING p90 **1.000**. One global `theta_commit` was being applied to scores
+  living on different scales.
+  **THE CAUSE IS AN INTERACTION OF TWO CORRECT DECISIONS.** `room_s =
+  ramp(bb_width_pct, 0.17, 1.00)` is a SOFT-NECESSARY, so it multiplies the
+  whole score; bb_width_pct p50 0.44 puts it at ~0.33 — **which is exactly the
+  observed peak evidence 0.322**. Those bounds were widened 0.20 → 1.00 to stop
+  RANGING over-firing and it worked (dominance 44% → 27%). F7 then made
+  `theta_commit` mandatory for every challenger. Neither change was wrong;
+  nobody re-derived one against the other. Category-3 at the INTERACTION level
+  rather than in a single constant — one for SPEC.1.
+  **A REJECTED ALTERNATIVE, recorded so it is not re-proposed.** The operator
+  proposed replacing the width proxy with directionless travel ("amount of
+  up/down movement over a period"), with COMPRESSION as the narrowing end of
+  the same axis. Measured: **travel overlaps RANGING/COMPRESSION at 0.766 and
+  cannot even separate a range from a TREND** (p50 1.24 vs 1.19), while
+  `bb_width_pct` overlaps at **0.040** — near-perfect. The efficiency half of
+  the model WAS confirmed (trends 0.20 vs range 0.139 / compression 0.127). The
+  input is right; the BAR was wrong. `tests/travel_efficiency_probe.py` shipped
+  read-only.
+  **THE FIX (conviction_integrator v2.3): a per-regime commit bar, RANGING at
+  0.60, DERIVED not preferred.** `tau_up` 780 was fitted so commits land at
+  ~17-19 bars — past the 12-15 bar window where TRENDS hold a false flat,
+  inside the 24-29 where true ranges do. At RANGING's p90 evidence: 0.65 → 23.4
+  bars (LATE, outside the design), **0.60 → 19.1 (in it)**, 0.50 → 13.3 (inside
+  the impostor window, rejected). So this RESTORES the timing `tau_up` was
+  fitted to produce — it is not a loosening, and `tau_up` is untouched.
+  **⚠️ EXPECT 2.1% → ~3.3% of RANGING runs committing. Modest, not a
+  transformation** — evidence p50 0.322 means most ranging argmax ticks are
+  genuinely weak and SHOULD not commit. 7 tests, 3 canaries, suite 384 passed.
+  Kill switch `OT_L2_THETA_COMMIT_RANGING=0.65`.
 - **v4.19 — 2026-08-10 — CNT.6: continuation was trading RANGING and
   COMPRESSION, and squeezing out the strategies those regimes exist for.**
   Operator: "trend continuation dominating the afternoons would suggest every
