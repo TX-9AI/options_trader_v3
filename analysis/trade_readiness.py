@@ -1,4 +1,35 @@
-# analysis/trade_readiness.py — options_trader_v3 — v1.6
+# analysis/trade_readiness.py — options_trader_v3 — v1.7
+# v1.7 — 2026-08-10 — SWEEP APPROACH, and the removal of a veto that had gone
+#         DEAD UNDER OUR OWN FIX. `_sweep` carried `hard_vetoes=[is_sweep]`,
+#         requiring the committed label to BE SWEEP_REVERSAL. RGM.3 (baked
+#         2026-08-08) took SWEEP out of the argmax, so that label is never
+#         emitted and this track has scored a PERMANENT ZERO since — the same
+#         category error as the dispatch gate, one layer down, created two days
+#         earlier by the fix that was meant to free sweep. Readiness ARMS a
+#         track BEFORE its event; gating it on the event's own label made arming
+#         impossible by construction, and any new factor would have multiplied
+#         into a hard zero and changed nothing.
+#         NEW `appr_val` — conviction rises as price nears a named pool, scaled
+#         by how well that level has held. Operator's spec: distance as PRICE
+#         DELTA NORMALISED BY ATR, so 0.20 is imminent on GLD and noise on NVDA.
+#         Proximity and level quality MULTIPLY: close to an untested level is
+#         not the setup, and neither is a well-tested level far away.
+#         ⚠️ BOUNDS ARE FITTED, NOT GUESSED. Shadow observer (BACKLOG v4.05):
+#         only 14.0% of observations sit within 0.5 ATR of a named level, MEDIAN
+#         2.32 ATR. My first draft used 0.15/1.20, which put the MEDIAN TICK at
+#         zero proximity and would have left the factor dead across roughly
+#         three-quarters of the session. I had the direction of that error
+#         backwards until I read a distribution that was already on file.
+#         ⚠️ LONDON IS A BONUS (1.15), NOT A MULTIPLIER. Named levels are 61.3%
+#         London High/Low, and there is a mechanism — London runs to 16:00 UTC,
+#         so it is the only named level still FORMING during RTH, which is also
+#         why it accrues few touches and would be UNDER-scored by touch_count
+#         alone. But 61.3% is a frequency of PROXIMITY, not of profitability: a
+#         level you are always near because it brackets the range is not a
+#         magnetic one. Weighted modestly so Friday's SHD.2 re-pull can back it
+#         out with a knob rather than a redesign.
+#         `appr_name` now lands on every readiness record, so "which levels get
+#         swept" becomes answerable from data instead of from recollection.
 # v1.6 — 2026-08-08 — `dir` ON EVERY TRACK (log-only, no behaviour change).
 #         Until now exactly ONE track journaled a direction: _trend_credit_spread
 #         emitted `factors.dir` and the other five emitted nothing. That was
@@ -286,7 +317,32 @@ DORMANT, STAGING, ARMED = "DORMANT", "STAGING", "ARMED"
 # convention as regime_confluence v1.3: each block states the minimum evidence
 # that should just barely stage, and a lone factor stays under TR_ARM_BAR.
 W_CONT_CONV, W_CONT_PULL, W_CONT_MOM = 0.40, 0.35, 0.25
-W_SWEEP_CONV, W_SWEEP_FRESH, W_SWEEP_EXH = 0.40, 0.25, 0.35
+W_SWEEP_CONV, W_SWEEP_FRESH, W_SWEEP_EXH = 0.30, 0.20, 0.25
+# v1.7 — APPROACH TO A NAMED LEVEL. Conviction must RISE as price nears a pool,
+# and a level that has HELD against repeated tests outranks a virgin one.
+# Distance is price delta normalised by ATR (operator, 2026-08-10) so 0.20 away
+# is imminent on GLD and noise on NVDA without per-symbol tuning.
+W_SWEEP_APPR        = _envf("SWEEP_APPR_W", 0.25)
+# BOUNDS FITTED FROM THE SHADOW OBSERVER, not guessed (BACKLOG v4.05, first
+# read 2026-08-07): only **14.0%** of observations sit within 0.5 ATR of a named
+# level, MEDIAN **2.32 ATR**. My first draft used 0.15/1.20 — which would have
+# put the MEDIAN TICK at zero proximity and left this term dead on roughly
+# three-quarters of the session. I had the direction of the error backwards
+# before reading the distribution, and the numbers were already on file.
+TR_SWEEP_PROX_NEAR  = _envf("SWEEP_PROX_NEAR", 0.50)  # <= this ATR: full (~p14)
+TR_SWEEP_PROX_FAR   = _envf("SWEEP_PROX_FAR", 2.32)   # >= this ATR: none (median)
+TR_SWEEP_TOUCH_FULL = _envf("SWEEP_TOUCH_FULL", 4.0)  # touches for full quality
+TR_SWEEP_TOUCH_MIN  = _envf("SWEEP_TOUCH_MIN", 1.0)
+# PROVENANCE. Named levels are **61.3% London High/Low** in the shadow data, and
+# there is a mechanism: London runs to 16:00 UTC = 12:00 ET, so it is the only
+# named level still FORMING while RTH trades — extending rather than settled.
+# ⚠️ DELIBERATELY A MODEST BONUS, NOT A MULTIPLIER. 61.3% is a frequency of
+# PROXIMITY, not of profitability: a level you are always near because it
+# brackets the range all day is not the same as a magnetic one. Weighting it
+# heavily would encode "where price IS" as "where the edge is". If Friday's
+# SHD.2 re-pull shows London's share does not predict sweeps, backing this out
+# is a knob, not a redesign. Set to 1.0 to disable the distinction entirely.
+TR_SWEEP_LONDON_MULT = _envf("SWEEP_LONDON_MULT", 1.15)
 W_CNDR_APPROACH, W_CNDR_CONV, W_CNDR_ROOM = 0.45, 0.35, 0.20
 W_BFLY_CONV, W_BFLY_SQZ, W_BFLY_NARROW = 0.40, 0.30, 0.30
 
@@ -388,10 +444,56 @@ class TradeReadinessEngine:
         exh_val = {"DECELERATING": TR_SWEEP_MOM_DEC, "FLAT": TR_SWEEP_MOM_FLAT,
                    "ACCELERATING": TR_SWEEP_MOM_ACC, "": 0.0}.get(mom, 0.0)
         conv_val = ramp(conv, TR_CONV_LO, TR_CONV_HI)
-        r = _combine(hard_vetoes=[is_sweep], soft_necessary=[],
+
+        # ── v1.7 — APPROACH: proximity to a named pool x how well it has held ─
+        # ⚠️ AND THE HARD VETO ON THE LABEL IS GONE. `is_sweep` required the
+        # committed label to BE SWEEP_REVERSAL. RGM.3 (baked 2026-08-08) removed
+        # SWEEP from the argmax, so that label is never emitted and this whole
+        # track scored a permanent ZERO — the same category error as the
+        # dispatch gate, one layer down, created by our own fix. A proximity
+        # term multiplied into a hard zero would have changed nothing, which is
+        # exactly the trap the L1 version of this would have fallen into.
+        # Readiness ARMS a track before its event; gating it on the event's own
+        # label made arming impossible by construction.
+        #
+        # PROXIMITY is measured as PRICE DELTA NORMALISED BY ATR (operator's
+        # spec): |price - pool| / atr, ramped so that near = 1 and far = 0. A
+        # raw price gap could never be compared across a $30 and a $900 symbol.
+        # LEVEL QUALITY scales it by touch_count — "a level that's held against
+        # multiple tests should be higher scoring than a virgin one". The two
+        # MULTIPLY rather than sum: being close to a level nobody has tested is
+        # not the setup, and neither is a well-tested level far away. Only the
+        # conjunction is.
+        px  = float(ctx.get("price") or 0.0)
+        vol = ctx.get("vol")
+        atr = float(getattr(vol, "atr_current", 0.0) or 0.0) if vol else 0.0
+        appr_val, _best = 0.0, None
+        if px > 0 and atr > 0 and liq is not None:
+            for _p in (getattr(liq, "pools", None) or []):
+                _pp = float(getattr(_p, "price", 0.0) or 0.0)
+                if _pp <= 0:
+                    continue
+                _d = abs(px - _pp) / atr
+                _prox = 1.0 - ramp(_d, TR_SWEEP_PROX_NEAR, TR_SWEEP_PROX_FAR)
+                _tc = float(getattr(_p, "touch_count", 0) or 0)
+                _qual = ramp(_tc, TR_SWEEP_TOUCH_MIN, TR_SWEEP_TOUCH_FULL)
+                _nm = str(getattr(_p, "name", "") or "")
+                # ⚠️ A LONDON LEVEL IS STILL FORMING DURING RTH, so it accrues
+                # FEW TOUCHES while being the most-approached level on the
+                # board. touch_count alone would systematically UNDER-score
+                # exactly the family the data says dominates — the bonus is
+                # what stops the quality term penalising a live level for
+                # being live.
+                _lon = TR_SWEEP_LONDON_MULT if "LONDON" in _nm.upper() else 1.0
+                _v = min(1.0, _prox * _qual * _lon)
+                if _v > appr_val:
+                    appr_val, _best = _v, (_pp, _d, _tc, _nm)
+
+        r = _combine(hard_vetoes=[], soft_necessary=[],
                      corroborators=[(W_SWEEP_CONV, conv_val),
                                     (W_SWEEP_FRESH, fresh_val),
-                                    (W_SWEEP_EXH, exh_val)])
+                                    (W_SWEEP_EXH, exh_val),
+                                    (W_SWEEP_APPR, appr_val)])
         # v1.6 — `dir` from the LIVE sweep kind, the same source `_staged_pick`
         # reads. This is strictly better than anything an offline tool could
         # derive: the direction was only ever knowable from `ctx.liq_map`, which
@@ -401,9 +503,16 @@ class TradeReadinessEngine:
         _sw = getattr(liq, "recent_sweep", None) if liq else None
         _kind = getattr(_sw, "kind", "") if _sw else ""
         _dir = "short" if _kind == "high_sweep" else ("long" if _kind == "low_sweep" else "")
-        return r, {"label": label, "dir": _dir,
+        return r, {"label": label, "dir": _dir, "is_sweep": is_sweep,
                    "conv": round(conv, 3), "age_bars": age,
-                   "fresh_val": round(fresh_val, 3), "mom": mom, "exh_val": exh_val}
+                   "fresh_val": round(fresh_val, 3), "mom": mom, "exh_val": exh_val,
+                   "appr_val": round(appr_val, 3),
+                   "appr_pool": (None if _best is None else round(_best[0], 2)),
+                   "appr_dist_atr": (None if _best is None else round(_best[1], 3)),
+                   "appr_touches": (None if _best is None else _best[2]),
+                   # the level's NAME on every record — so "which levels get
+                   # swept" becomes answerable from data instead of recollection
+                   "appr_name": (None if _best is None else _best[3])}
 
     def _condor_side(self, ctx, regime, side: str) -> Tuple[float, dict]:
         """

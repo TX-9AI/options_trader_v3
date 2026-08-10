@@ -1,4 +1,11 @@
 #!/bin/bash
+# v4.40 — 2026-08-10 — sweep readiness approach (trade_readiness v1.7). The
+#         load-bearing canary is the ABSENCE of a label hard-veto: `is_sweep`
+#         back in hard_vetoes returns the whole track to a permanent zero and
+#         NOTHING ELSE BREAKS — no error, no log, exactly how it sat dead for
+#         two days. Also pins the shadow-FITTED ramp bounds, because 0.15/1.20
+#         put the median tick at zero and the factor was dead on 3/4 of the
+#         session.
 # v4.39 — 2026-08-10 — BOS minimum distance (exit_engine v4.15). Two canaries
 #         carry the weight: the RATCHET (max/min), because low-min_dist is not
 #         monotone and losing it slackens the stop as volatility widens; and the
@@ -481,6 +488,10 @@ check "analysis/trade_readiness.py"      '"dir": ("short" if side == "call" else
 check "analysis/trade_readiness.py"      '"dir": "neutral"'             "v1.6 butterfly sideless BY DESIGN, stamped so it cannot be confused with a missing field"
 check "analysis/trade_readiness.py"      '_kind == "high_sweep"'        "v1.6 sweep dir from the LIVE liq_map — the field no offline tool could recover"
 check "tests/test_readiness_direction_stamp.py" "test_every_track_stamps_a_direction" "v1.0 all six tracks carry dir (one writer made it look optional for weeks)"
+check "analysis/trade_readiness.py"      "W_SWEEP_APPR, appr_val"       "v1.7 approach factor present; a label hard-veto would return this track to a silent permanent zero — restoring one is a silent permanent zero"
+check "analysis/trade_readiness.py"      "SWEEP_PROX_FAR., 2.32"       "v1.7 FAR = shadow-observed MEDIAN 2.32 ATR, not a guess"
+check "analysis/trade_readiness.py"      "appr_name"                   "v1.7 the level's NAME reaches the journal"
+check "tests/test_readiness_sweep_approach.py" "test_track_scores_without_the_sweep_label" "v1.0 the guard on the veto we already shipped once"
 check "execution/exit_engine.py"          "self.min_dist"               "v4.15 BOS level floored out of the noise band"
 check "execution/exit_engine.py"          "else max(self.protected_level, _cand)" "v4.15 RATCHET — low-min_dist is not monotone; losing this slackens the stop as ATR widens"
 check "config.py"                        "OT_BOS_MIN_DIST_ATR"         "v4.15 kill switch AND A/B control"
