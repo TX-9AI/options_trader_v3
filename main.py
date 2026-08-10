@@ -1,5 +1,31 @@
 """
-main.py — options_trader v5.9
+main.py — options_trader v6.0
+v6.0 — 2026-08-10 — CNT.6: CONTINUATION IS BLOCKED IN RANGING AND COMPRESSION.
+        A trend continuation is a trend RESUMING after a pullback. RANGING and
+        COMPRESSION are the assertion that there is no trend to continue, so the
+        entry contradicts its own premise — this is a correctness defect, not a
+        permissiveness setting.
+        ⚠️ THE MECHANISM WAS THE `_is_runaway` BYPASS. The gate read
+        `_is_runaway OR regime in (TRENDING_BULL, TRENDING_BEAR, BREAKOUT)`, so a
+        runaway ORB flag skipped the label check entirely and continuation fired
+        on ANY tape at Priority 2 — ahead of Butterfly (P3, RANGING/COMPRESSION)
+        and Condor (P4, RANGING), both behind `if signal is None` and therefore
+        never evaluated. The operator saw it as condors and butterflies going
+        extinct; the cause was a dispatch bypass, not an absence of setups.
+        MEASURED, 13 sessions: RANGING → Continuation 94 vs IronCondor 27 ·
+        COMPRESSION → Continuation 39 vs Butterfly 6. Continuation took 3.5x the
+        condor's opportunities and 6.5x the butterfly's, inside the regimes those
+        strategies exist for.
+        ⚠️ WHY IT IS IN DISPATCH AND NOT IN THE STRATEGY: CNT.3 already blocked
+        the COMPRESSION handoff INSIDE continuation_strategy and the squeeze
+        continued, because a strategy-level veto still CONSUMES THE SLOT on its
+        way to returning None. Only a gate above the call frees P3/P4.
+        ⚠️ EXPECT FEWER CONTINUATION TRADES AND THE RETURN OF BUTTERFLY/CONDOR.
+        Do not read the drop in continuation volume as a regression — it is the
+        change working. Kill switch: OT_CONT_BLOCK_PREMIUM=0.
+        SEPARATE AND NOT ADDRESSED HERE: RANGING is emitted on only ~2% of L2
+        ticks, so the condor is ALSO starved by the label itself. Freeing the
+        slot is necessary but not sufficient for condor volume.
 v5.9 — 2026-08-08 — L1 EVIDENCE ON THE FIRED DISPOSITION. The sweep collection
         is meant to characterise what made a good ENTRY good, and the journal
         was recording only the regime's label and conviction — every
@@ -427,6 +453,7 @@ from zoneinfo import ZoneInfo
 from config import (
     POLL_INTERVAL_SECONDS, LOG_LEVEL, LOG_FILE, LOG_ROTATION_MB,
     PAPER_TRADING, RISK_PER_TRADE_USD, DAILY_LOSS_LIMIT_USD,
+    CONT_BLOCK_PREMIUM_REGIMES,                 # CNT.6
     REGIME_REASSESS_MINUTES, INSTRUMENT, SessionConfig, DIRECTIONAL_ONLY,
     ORB_NO_ENTRY_AFTER_ET, BROKER_RECONCILE_ENABLED, ORB_FIRES_REGARDLESS_OF_REGIME,
     BROKER_RECONCILE_INTERVAL_MIN
@@ -1369,7 +1396,29 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     # CONT_BREAKOUT_MIN_ADX. Widening this tuple alone would NOT open the trade —
     # the direction branch inside the strategy is what does, and it self-vetoes
     # on a directionless tape.
-    if signal is None and (
+    # ── CNT.6 (2026-08-10) — A CONTINUATION CANNOT CONTINUE A TREND THAT THE
+    # LABEL SAYS IS NOT THERE. RANGING and COMPRESSION assert the absence of a
+    # trend, so continuation in them is a contradiction, not a permissive edge.
+    # ⚠️ THE BYPASS IS THE BUG: `_is_runaway` is OR'd with the regime tuple, so a
+    # runaway ORB flag let continuation fire on ANY tape — at Priority 2, ahead
+    # of Butterfly (P3, RANGING/COMPRESSION) and Condor (P4, RANGING), which sit
+    # behind `if signal is None` and were never even evaluated. That is the
+    # squeeze: 13 sessions show RANGING → Continuation 94 vs IronCondor 27, and
+    # COMPRESSION → Continuation 39 vs Butterfly 6.
+    # The block goes HERE rather than in the strategy because a strategy-level
+    # veto still consumes the dispatch slot on its way to returning None — CNT.3
+    # blocked the COMPRESSION handoff inside continuation_strategy and the
+    # squeeze continued regardless.
+    _cont_blocked = (CONT_BLOCK_PREMIUM_REGIMES
+                     and regime.primary_regime in (Regime.RANGING, Regime.COMPRESSION))
+    if _cont_blocked and (_is_runaway
+                          or regime.primary_regime in (Regime.TRENDING_BULL,
+                                                       Regime.TRENDING_BEAR,
+                                                       Regime.BREAKOUT_VOLATILE)):
+        logger.info(f"[continuation] BLOCKED — regime {regime.primary_regime} is a "
+                    f"premium regime; a continuation needs a trend to continue "
+                    f"(runaway={_is_runaway}). Butterfly/Condor now get the slot.")
+    if signal is None and not _cont_blocked and (
             _is_runaway
             or regime.primary_regime in (Regime.TRENDING_BULL, Regime.TRENDING_BEAR,
                                          Regime.BREAKOUT_VOLATILE)):

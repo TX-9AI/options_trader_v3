@@ -1,4 +1,9 @@
 #!/bin/bash
+# v4.41 — 2026-08-10 — CNT.6 continuation blocked in the premium regimes. The
+#         canary pins the NEGATED form (`not _cont_blocked`) because restoring
+#         the bare `_is_runaway or ...` bypass raises NOTHING — butterfly and
+#         condor simply go quiet again, which reads as "no setups today" rather
+#         than as a regression. That is the failure this file exists for.
 # v4.40 — 2026-08-10 — sweep readiness approach (trade_readiness v1.7). The
 #         load-bearing canary is the ABSENCE of a label hard-veto: `is_sweep`
 #         back in hard_vetoes returns the whole track to a permanent zero and
@@ -434,7 +439,7 @@ check "analysis/trade_readiness.py"      "readiness_would_fire"         "v1.0 wo
 check "analysis/trade_readiness.py"      "TR_DEARM_SLOPE"               "v1.0 slope de-arm knob (falling confluence disarms)"
 check "analysis/trade_readiness.py"      "0.5 \*\* (dt / TR_SLOPE_HALFLIFE_S)" "v1.0 dt-aware slope EMA (wall-clock, no tick counters)"
 check "main.py"                          "_readiness.assess_all(ctx, regime)" "v4.3 readiness hooked in the every-tick block"
-check "main.py"                          "main.py — options_trader v5.9" "v5.9 main header current (ORB exempt from the stale entry gate)"
+check "main.py"                          "main.py — options_trader v6.0" "v6.0 main header current (ORB exempt from the stale entry gate)"
 check "main.py"                          "_orb_exempt"                  "v5.4 confirmed ORB bypasses the stale entry block"
 check "main.py"                          "STALE book, but ORB is CONFIRMED"  "v5.4 the exempt path says why in the log"
 check "tests/orb_stale_block_audit.py"   "ORB confirmed"                "v1.0 the cost of the gate is measurable, not asserted"
@@ -496,6 +501,10 @@ check "execution/exit_engine.py"          "self.min_dist"               "v4.15 B
 check "execution/exit_engine.py"          "else max(self.protected_level, _cand)" "v4.15 RATCHET — low-min_dist is not monotone; losing this slackens the stop as ATR widens"
 check "config.py"                        "OT_BOS_MIN_DIST_ATR"         "v4.15 kill switch AND A/B control"
 check "tests/test_bos_min_distance.py"   "test_min_dist_zero_is_byte_identical_to_the_old_behaviour" "v1.0 the kill switch must actually kill"
+check "main.py"                          "not _cont_blocked"           "v6.0 CNT.6 — the runaway bypass must NOT reopen the premium regimes; its return is silent"
+check "main.py"                          "main.py — options_trader v6.0" "v6.0 header current"
+check "config.py"                        "OT_CONT_BLOCK_PREMIUM"       "v6.0 kill switch AND A/B control"
+check "tests/test_continuation_premium_block.py" "test_runaway_cannot_bypass_a_premium_regime" "v1.0 the guard that matters"
 check "strategy/continuation_strategy.py" "CONTINUATION_REQUIRE_CONFIRM" "v1.5 the tag is the SETUP, the next bar is the TRIGGER"
 check "strategy/continuation_strategy.py" "confirmation UNDECIDABLE"    "v1.5 thin tape REFUSES — an absent confirmation is not a passed one"
 check "strategy/continuation_strategy.py" "continuation_strategy.py — Trend-continuation on pullback. — v1.5" "v1.5 header current"
@@ -507,7 +516,7 @@ check "analysis/regime_confluence.py"    '"DECELERATING": 0.25, "": 0.6' "v1.4 a
 check "analysis/regime_confluence.py"    '"ACCELERATING": 0.0, "": 0.0' "v1.4 absence must not CORROBORATE either — the asymmetry is deliberate"
 check "tests/test_sweep_spent_move.py"   "test_pltr_protection_survives" "v1.0 the guard that matters"
 check "main.py"                          "_L1_BREAKDOWN_FOR"           "v5.9 L1 evidence recorded at the fire, not replayed later"
-check "main.py"                          "main.py — options_trader v5.9" "v5.9 main header current"
+check "main.py"                          "main.py — options_trader v6.0" "v6.0 main header current"
 check "tests/test_disposition_l1_capture.py" "test_orb_records_no_breakdown_by_design" "v1.0 ORB is regime-immune — a mapping there would imply a dependency that does not exist"
 check "tests/test_readiness_market_snapshot.py" "READ_from_the_engine_not_derived" "v1.0 side comes from the engine, never a derived sign"
 check "tests/test_readiness_peg_count.py" "counts_ramps_not_raw_values"  "v1.0 one definition of pegged"

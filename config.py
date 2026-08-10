@@ -835,3 +835,23 @@ CONTINUATION_REQUIRE_CONFIRM = os.getenv("OT_CONT_REQUIRE_CONFIRM", "1") == "1"
 # Expressed in ATR so it scales with the symbol; a raw price gap could not.
 # 0.0 restores the pre-v4.15 behaviour exactly (kill switch and A/B control).
 BOS_MIN_DIST_ATR = float(os.getenv("OT_BOS_MIN_DIST_ATR", "0.35"))
+
+# ── CONTINUATION: THE PREMIUM REGIMES ARE NOT ITS TAPE (CNT.6, 2026-08-10) ────
+# A trend continuation is, definitionally, a trend resuming after a pullback.
+# RANGING and COMPRESSION are the assertion that there is NO trend to continue,
+# so a continuation entry there is not a marginal call — it is a contradiction.
+# It happened anyway because the dispatch gate reads
+#     `_is_runaway OR regime in (TRENDING_BULL, TRENDING_BEAR, BREAKOUT_VOLATILE)`
+# and `_is_runaway` BYPASSES THE LABEL ENTIRELY. So an ORB runaway flag let
+# continuation fire on any tape at Priority 2 — ahead of Butterfly (P3, needs
+# RANGING/COMPRESSION) and Condor (P4, needs RANGING), both of which sit behind
+# `if signal is None` and were therefore never evaluated.
+# MEASURED over 13 sessions: RANGING → Continuation 94 trades vs IronCondor 27;
+# COMPRESSION → Continuation 39 vs Butterfly 6. Continuation took 3.5x the
+# condor's opportunities and 6.5x the butterfly's, inside the regimes those
+# strategies exist for.
+# CNT.3 already blocked the handoff in COMPRESSION, but only INSIDE the strategy
+# and only for the handoff path — RANGING was never covered, and a strategy-level
+# check cannot stop the slot being consumed before P3/P4 are reached.
+# Set to 0 to restore the pre-CNT.6 behaviour exactly (kill switch and A/B).
+CONT_BLOCK_PREMIUM_REGIMES = os.getenv("OT_CONT_BLOCK_PREMIUM", "1") == "1"

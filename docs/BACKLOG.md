@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.18
+# docs/BACKLOG.md — v4.19
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -4789,6 +4789,34 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.19 — 2026-08-10 — CNT.6: continuation was trading RANGING and
+  COMPRESSION, and squeezing out the strategies those regimes exist for.**
+  Operator: "trend continuation dominating the afternoons would suggest every
+  single ticker is trending hard all afternoon — that's not even remotely
+  likely… if they can't fire, then by definition they are broken & if trend
+  continuation is blocking all other setups, it is broken." Both halves were
+  right. **The mechanism is the `_is_runaway` bypass**: the dispatch gate read
+  `_is_runaway OR regime in (TRENDING_BULL, TRENDING_BEAR, BREAKOUT_VOLATILE)`,
+  so an ORB runaway flag skipped the label check entirely and continuation fired
+  on ANY tape at Priority 2 — ahead of Butterfly (P3) and Condor (P4), both
+  behind `if signal is None` and therefore never evaluated. **Measured over 13
+  sessions: RANGING → Continuation 94 vs IronCondor 27; COMPRESSION →
+  Continuation 39 vs Butterfly 6** — 3.5x and 6.5x the opportunities, inside the
+  regimes those strategies are for. And a continuation in a range contradicts
+  its own premise: RANGING asserts there is no trend to continue. **Fixed at
+  DISPATCH, not in the strategy** — CNT.3 already blocked the COMPRESSION
+  handoff inside `continuation_strategy` and the squeeze continued, because a
+  strategy-level veto still consumes the slot on its way to returning None.
+  main v6.0, `OT_CONT_BLOCK_PREMIUM=0` restores the old behaviour exactly.
+  6 tests, 4 canaries, suite 377 passed. **Expect continuation volume to fall
+  and butterfly/condor to reappear — that is the change working, not a
+  regression.**
+  **⚠️ NOT FIXED HERE, AND CONDOR NEEDS IT: RANGING is emitted on only ~2% of
+  L2 ticks** (08-10 replay: BULL 44% BEAR 21% COMP 20% BREA 13% RANG 2%). Freeing
+  the dispatch slot is necessary but NOT SUFFICIENT for condor volume — the
+  condor is also starved by the label itself, which is an L1 question and its own
+  investigation. Butterfly is better placed: COMPRESSION is 20% of ticks, so the
+  slot was its binding constraint.
 - **v4.18 — 2026-08-08 — NF.1 scheduled for Friday 2026-08-14 after the close.**
   Examine the trades data for trade-combination x market-condition pairs that
   were never favourable — no salvage, entry fundamentally flawed — and make
