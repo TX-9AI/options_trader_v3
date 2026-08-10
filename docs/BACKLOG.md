@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.21
+# docs/BACKLOG.md — v4.22
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -3414,6 +3414,37 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
 logic for two weeks. Everything else this epoch is offline or log-only — which the
 roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing).*
 
+**⬜ Tue Aug 11 — FIRST SESSION ON FIVE BEHAVIOURAL CHANGES**
+- `[DESK·DATA]` **READ TODAY BEFORE CHANGING ANYTHING ELSE.** CNT.4 (1-bar
+  confirmation), CNT.5 (BOS distance floor), CNT.6 (continuation blocked in the
+  premium regimes), SWP.3 (sweep approach factor) and RGM.4 (per-regime
+  theta_commit) ALL went live on the 08-10 bake (`539d04c20f`). Expect:
+  continuation volume DOWN, butterfly/condor REAPPEARING, RANGING committing
+  more often (2.1% → ~3.3% of runs), and a LOWER continuation win rate with a
+  BETTER loss profile. **None of those is a regression** — read win rate and
+  loss distribution together, and do not pool per-regime stats across 08-10.
+- `[DESK]` **RGM.5 — the v13 classifier still emits SWEEP_REVERSAL.** Deferred
+  from 08-10 by the operator, deliberately, so today's five changes can be read
+  against a label set that did not also move. `regime_classifier.py:171` assigns
+  it at PRIORITY 1 of five; RGM.3 removed it from the **L2 integrator only**, so
+  the label reappears on every tick where `main` falls back to v13.
+  **⚠️ MEASURE THE FALL-THROUGH BEFORE CUTTING.** `_is_sweep_reversal` is
+  evaluated FIRST, so the ticks it absorbs have NEVER been scored by the four
+  rungs below (BREAKOUT → COMPRESSION → TRENDING → RANGING-default). Run the
+  classifier over the replay corpus with that branch disabled and COUNT what
+  those ticks become. The likely answer is BREAKOUT_VOLATILE — the one label
+  whose only dispatch effect is SUBTRACTIVE — which would MOVE the dead zone
+  rather than remove it.
+  **⚠️ DO NOT NARROW THE FALLBACK PATH INSTEAD.** That was considered and
+  rejected: `L2.5 STALE — HOLDING` is 0 on every box while v13 transitions run
+  162-229 per box per session, so the fallback is LOAD-BEARING. The hard gate
+  blocks every trade on an UNDEFINED regime (only ORB has a bypass), so
+  narrowing it would silence continuation, butterfly and condor across the whole
+  cold-start and stale window — to fix 0.6% of ticks. Wrong tool.
+  **THE COST OF LEAVING IT, for scale:** a ~0.6% dispatch dead zone where the
+  label matches no strategy gate, so only ORB can fire. Small, and true for
+  weeks already.
+
 **⬜ Fri Aug 14 — AFTER THE CLOSE**
 - `[DESK·DATA]` **NF.1 — examine the trades data for pairs that were NEVER
   favourable, and make adjustments.** Operator request 2026-08-08. Which trade
@@ -4790,6 +4821,16 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.22 — 2026-08-10 EOD — RGM.5 scheduled for Tue Aug 11, with the option
+  comparison recorded.** Deferred one day by the operator so today's five
+  behavioural changes can be read against a label set that did not also move —
+  the right call: changing labels underneath the first session of CNT.4/5/6,
+  SWP.3 and RGM.4 would confound all of them. Filed as a dated PART 1 item so
+  `evm_status` counts it, with the rejected alternative (narrowing the v13
+  fallback path) recorded alongside the reason: the fallback is load-bearing and
+  narrowing it would silence three strategies across the cold-start window to
+  fix 0.6% of ticks. Also records the measurement that must precede the cut —
+  what those ticks classify as once the sweep branch is disabled.
 - **v4.21 — 2026-08-10 EOD — CATCH-UP: three shipped changes had NO backlog
   entry, plus CV.1, VW.1f and a correction to RGM.3.**
   **⚠️ THE PROCESS FAILURE FIRST, because it is mine and it is the operator's
