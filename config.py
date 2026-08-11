@@ -883,3 +883,31 @@ CONT_BLOCK_PREMIUM_REGIMES = os.getenv("OT_CONT_BLOCK_PREMIUM", "1") == "1"
 # exists rather than treating 0.40 as settled.
 # 0.0 restores the strict v1.5 comparison exactly (kill switch and A/B control).
 CONT_CONFIRM_TOL_ATR = float(os.getenv("OT_CONT_CONFIRM_TOL_ATR", "0.40"))
+
+# ── SWP.4 (2026-08-11) — RECOVERY MEASURED FROM THE SWEPT LEVEL ──────────────
+# The entry-distance gate measured recovery from `sweep.sweep_price` (the wick
+# extreme of the raid), so a DEEPER rejection made the entry look FARTHER away
+# and the gate refused the best setups. On a fabricated textbook PDL raid a
+# 2.36% rejection produced a 2.4% "recovery" against the 2.0% cap and was
+# rejected outright. Measured from the POOL (the level reclaimed — the thesis
+# actually being traded) the same setup reads 0.11%.
+# Wick depth is rejection QUALITY and `rejq_val` already scores it; it has no
+# business inflating a distance-from-entry measure.
+# 0 restores the pre-SWP.4 anchor exactly (kill switch and A/B control).
+SWEEP_RECOVERY_FROM_POOL = os.environ.get("OT_SWEEP_RECOVERY_FROM_POOL", "1") == "1"
+
+# ── SWP.5 (2026-08-11) — LIVENESS REPLACES THE CLOCK ────────────────────────
+# `SWEEP_MAX_AGE_BARS = 8` was standing in for an invalidation test the code did
+# not have. MEASURED over 90 real symbol-days: of the stale sweeps it refused,
+# **32.9% still had a LIVE thesis** — price had never accepted back through the
+# raided level and was still on the correct side. ~9.5 valid setups discarded
+# per symbol-day, on a clock.
+# The right test already exists in spirit: `veto_accept` asks whether price
+# accepted beyond the level — it is just a BIRTH-TIME snapshot. LIQ.3 makes it
+# a running check, and this gate reads it.
+# ⚠️ THE BACKSTOP IS DELIBERATE. A level that still holds at 5 hours is a
+# different trade from a fresh raid, and this is a collection phase. 48 bars
+# (5m-equivalent) = 4 hours: generous enough to keep the 32.9%, bounded enough
+# that "still holding" cannot mean "all week".
+SWEEP_LIVENESS_GATE   = os.environ.get("OT_SWEEP_LIVENESS_GATE", "1") == "1"
+SWEEP_STALE_HARD_BARS = int(os.environ.get("OT_SWEEP_STALE_HARD_BARS", "48"))

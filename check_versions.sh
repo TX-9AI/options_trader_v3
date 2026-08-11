@@ -1,4 +1,18 @@
 #!/bin/bash
+# v4.46 — 2026-08-11 — LIQ.1 + SWP.4. Three canaries, all guarding SILENT
+#         failures: the dedupe tiebreak (losing it empties swept_named_level
+#         and the SWEEP score becomes exactly 0.000, with no error anywhere),
+#         the session-pool gate (London overlaps RTH by 2.5h, so its level is
+#         set by the price being traded), and the recovery anchor (from the
+#         wick, a deeper rejection reads as a farther entry).
+# v4.47 — 2026-08-11 — LIQ.1 + LIQ.3 + SWP.4 + SWP.5. Six canaries, every one
+#         guarding a SILENT failure: the dedupe tiebreak (losing it empties
+#         swept_named_level and the SWEEP score is exactly 0.000, no error), the
+#         session-pool gate (London overlaps RTH by 2.5h so its level is set by
+#         the price being traded), the recovery anchor (from the wick, a deeper
+#         rejection reads as a farther entry), and the running liveness check
+#         plus its bounded backstop (without them the gate reverts to a clock
+#         that discarded 32.9% of still-live theses).
 # v4.45 — 2026-08-11 — CNT.7 confirmation tolerance. The canary pins the ATR
 #         form, because the failure mode is a SILENT NO-OP: a tolerance too
 #         small to admit any real tie leaves the gate exactly as strict while

@@ -1,5 +1,48 @@
 """
-analysis/liquidity_mapper.py — v3.1 — 2026-07-14 — AS-OF named levels.
+analysis/liquidity_mapper.py — v3.3 — 2026-08-11 — LIQ.1 + LIQ.3.
+        Two changes, both found by running the REAL code over real tape and a
+        fabricated tape rather than by reading it.
+
+        LIQ.1(a) LONDON/ASIA ARE NO LONGER SWEEPABLE POOLS. Operator: "the
+        London session in particular was creating a moving target and that has
+        to go." The window is 07:00-16:00 UTC against RTH 13:30-20:00 — A 2.5
+        HOUR OVERLAP — so from 09:30 to 12:00 ET "London High" is set by the
+        price being traded right now. Sweeping it sweeps a level RTH made
+        seconds ago. ⚠️ THIS RETROACTIVELY UNDERMINES THE SHADOW OBSERVER'S
+        61.3% LONDON SHARE: London was NEAREST because it TRACKS PRICE, so
+        SWP.3's London bonus was fitted to an artefact. The lmap FIELDS stay
+        populated (shadow/primitives.py reads them); only the POOL goes.
+        OT_LIQ_SESSION_POOLS=1 restores.
+
+        LIQ.1(b) THE DEDUPE DELETED THE NAMED SWEEP. A PDH/PDL almost always
+        ALSO sits on an equal-high/low cluster — that coincidence is WHY it is
+        liquidity — so one raid makes TWO sweeps with identical kind, pool_price
+        and bars_ago. They collide on the dedupe key; `mins < cmins` is FALSE on
+        equality, so the FIRST-inserted survived and unnamed pools are found
+        first. `swept_named_level` came back EMPTY, L1's `veto_loc` hard-vetoed,
+        and THE SWEEP SCORE WAS EXACTLY 0.000 on a perfect raid. Measured on a
+        fabricated PDL raid: 0.000 before, 1.000 after. It also made v3.1's
+        "named takes precedence" filter DEAD CODE — that filter reads the
+        ALREADY-DEDUPED list.
+        ⚠️ LIVE INCIDENCE UNKNOWN: the 08-11 corpus shows veto_loc PASSING on
+        99.6% of ticks, so this is real but may be rare.
+
+        LIQ.3 RUNNING INVALIDATION — `sweep_invalidated`, recomputed EVERY TICK.
+        Operator: "if the market makers are driving the price to either extreme
+        what difference does it make if it takes an hour or if it takes all
+        day?" None — what ends the thesis is the LEVEL FAILING. `closes_beyond`
+        already asks exactly that question but is a BIRTH-TIME snapshot, counted
+        over the 2-3 bars after the raid and NEVER UPDATED, so nothing ever
+        re-checked whether the level still held. MEASURED over 90 real
+        symbol-days: of the stale sweeps the 8-bar gate refused, **32.9% still
+        had a LIVE thesis** (854 of 2,593) — ~9.5 valid setups discarded per
+        symbol-day on a clock rather than on invalidation.
+        ⚠️ REJECTED ALTERNATIVE, recorded so it is not re-proposed: scoping
+        named-precedence to FRESH sweeps (LIQ.2, built and measured 2026-08-11)
+        moved refusals 98.6% -> 98.4% and evicts exactly the stale-but-live
+        setups this change exists to keep. Dropped.
+
+v3.1 — 2026-07-14 — AS-OF named levels.
         _find_named_levels derived 'today' from the wall clock, so (a) every
         tape replay saw ZERO named pools (measured: 0 of 1,367 evals across
         3 symbols × 26 sessions — the sweep chain's first link, severed), and
@@ -42,6 +85,7 @@ v1.1 additions:
 """
 
 import logging
+import os as _os
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 from datetime import datetime, timezone, timedelta
@@ -88,6 +132,12 @@ class LiquiditySweep:
     # v1.3 — rejection vs acceptance (the truth that makes it a sweep, not a breakout)
     reclaimed:      bool    = False     # price closed back INSIDE the level and held
     closes_beyond:  int     = 0         # # of closes that ACCEPTED through the level
+    # ⚠️ LIQ.3 (2026-08-11) — `closes_beyond` above is a BIRTH-TIME snapshot,
+    # counted over the 2-3 bars right after the raid and NEVER UPDATED. It
+    # answers "did price accept beyond immediately?", not "is the level still
+    # holding?". The fields below carry what a RUNNING invalidation test needs.
+    invalidated:    bool    = False     # LIQ.3: price has since ACCEPTED beyond
+    closes_beyond_live: int = 0         # LIQ.3: closes beyond SINCE the sweep
 
 
 @dataclass
@@ -97,6 +147,7 @@ class LiquidityMap:
     sweeps:         List[LiquiditySweep] = field(default_factory=list)
     recent_sweep:   Optional[LiquiditySweep] = None
     sweep_age_bars: int                  = 999
+    sweep_invalidated: bool              = False   # LIQ.3 — running liveness
 
     # Named key levels
     prev_day_high:      Optional[float] = None
@@ -115,6 +166,10 @@ class LiquidityMap:
     near_pool_above:     Optional[float] = None
     near_pool_below:     Optional[float] = None
     near_pool_pct:       float           = 0.05
+
+
+_ACCEPT_CLOSES = 2      # LIQ.3 — mirrors SWEEP_ACCEPT_CLOSES
+NAMED_POOLS_INCLUDE_SESSIONS = _os.environ.get("OT_LIQ_SESSION_POOLS", "0") == "1"
 
 
 class LiquidityMapper:
@@ -187,6 +242,21 @@ class LiquidityMapper:
             minutes_ago = recent.bars_ago * self._tf_minutes(recent.timeframe)
             lmap.recent_sweep   = recent
             lmap.sweep_age_bars = max(0, round(minutes_ago / 5.0))   # 5m-equivalent bars
+            # ── LIQ.3 — RUNNING INVALIDATION, recomputed every tick ──────────
+            # Operator: "if the market makers are driving the price to either
+            # extreme what difference does it make if it takes an hour or if it
+            # takes all day?" None — what matters is whether the LEVEL STILL
+            # HOLDS. MEASURED over 90 real symbol-days: of the stale sweeps the
+            # 8-bar gate refuses, **32.9% still had a live thesis** (854 of
+            # 2,593) — price had never accepted back through the raided level
+            # and was still on the correct side. ~9.5 valid setups discarded
+            # per symbol-day, on a clock rather than on invalidation.
+            # This counts closes beyond the level SINCE the sweep, on the
+            # primary frame, so the strategy can ask liveness instead of age.
+            try:
+                self._mark_liveness(lmap, primary, current_price)
+            except Exception as exc:                              # noqa: BLE001
+                logger.debug(f"liveness check failed: {exc}")
 
         named_levels = [p.name for p in lmap.pools if p.is_named]
         logger.debug(
@@ -196,6 +266,32 @@ class LiquidityMapper:
             f"age={lmap.sweep_age_bars}bars"
         )
         return lmap
+
+    def _mark_liveness(self, lmap, df, current_price: float):
+        """LIQ.3 — is the swept level STILL holding, as of this tick?
+
+        DEAD when price has ACCEPTED back through the level: >= SWEEP_ACCEPT
+        _CLOSES closes beyond it since the raid, or price simply sitting on the
+        wrong side now. Otherwise LIVE, however old the raid is.
+        ⚠️ THIS IS DELIBERATELY THE SAME TEST `veto_accept` ALREADY MAKES — the
+        only change is that it is asked EVERY TICK instead of once at birth.
+        """
+        sw = lmap.recent_sweep
+        if sw is None or df is None or df.empty:
+            return
+        tfm = self._tf_minutes(sw.timeframe)
+        bars_back = max(1, int(round(sw.bars_ago * tfm / self._tf_minutes("5m"))))
+        since = df["close"].tail(bars_back + 1)
+        pool = float(sw.pool_price)
+        if sw.kind == "low_sweep":
+            beyond = int((since < pool).sum())
+            wrong_side = current_price < pool
+        else:
+            beyond = int((since > pool).sum())
+            wrong_side = current_price > pool
+        sw.closes_beyond_live = beyond
+        sw.invalidated = bool(beyond >= _ACCEPT_CLOSES or wrong_side)
+        lmap.sweep_invalidated = sw.invalidated
 
     @staticmethod
     def _tf_minutes(tf: str) -> int:
@@ -212,7 +308,13 @@ class LiquidityMapper:
             key = (s.kind, round(s.pool_price, 2))
             mins = s.bars_ago * LiquidityMapper._tf_minutes(s.timeframe)
             cur = best.get(key)
-            if cur is None or mins < (cur.bars_ago * LiquidityMapper._tf_minutes(cur.timeframe)):
+            if cur is None:
+                best[key] = s
+                continue
+            cmins = cur.bars_ago * LiquidityMapper._tf_minutes(cur.timeframe)
+            if mins < cmins or (mins == cmins
+                                and s.swept_named_level
+                                and not cur.swept_named_level):
                 best[key] = s
         return list(best.values())
 
@@ -281,8 +383,9 @@ class LiquidityMapper:
                 asl = float(asia_data["low"].min())
                 lmap.asia_session_high = ash
                 lmap.asia_session_low  = asl
-                self._add_named_pool(lmap, ash, "high", "Asia High")
-                self._add_named_pool(lmap, asl, "low",  "Asia Low")
+                if NAMED_POOLS_INCLUDE_SESSIONS:
+                    self._add_named_pool(lmap, ash, "high", "Asia High")
+                    self._add_named_pool(lmap, asl, "low",  "Asia Low")
 
             # London session (07:00-16:00 UTC)
             london_mask = today_mask & (idx.hour >= self.LONDON_START) & (idx.hour < self.LONDON_END)
@@ -292,8 +395,9 @@ class LiquidityMapper:
                 lsl = float(london_data["low"].min())
                 lmap.london_session_high = lsh
                 lmap.london_session_low  = lsl
-                self._add_named_pool(lmap, lsh, "high", "London High")
-                self._add_named_pool(lmap, lsl, "low",  "London Low")
+                if NAMED_POOLS_INCLUDE_SESSIONS:
+                    self._add_named_pool(lmap, lsh, "high", "London High")
+                    self._add_named_pool(lmap, lsl, "low",  "London Low")
 
             # NY session (13:00-22:00 UTC)
             ny_mask = today_mask & (idx.hour >= self.NY_START) & (idx.hour < self.NY_END)

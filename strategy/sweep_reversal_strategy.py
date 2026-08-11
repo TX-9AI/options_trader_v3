@@ -1,5 +1,57 @@
 """
 strategy/sweep_reversal_strategy.py — Post-liquidity-sweep reversal for options.
+v3.5 — 2026-08-11 — SWP.4: THE RECOVERY WINDOW PENALISED GOOD REJECTIONS.
+        `recovery_pct` was measured from `sweep.sweep_price` — the WICK EXTREME
+        of the raid — so the DEEPER the rejection, the FARTHER the entry
+        appeared, and the gate refused exactly the setups it should want.
+        Reproduced on a fabricated textbook PDL raid: a 2.36% rejection produced
+        recovery_pct 2.4% against the 2.0% cap and was refused with "Sweep long:
+        too far from sweep", on the single best setup the scorer can produce.
+        Now anchored to `sweep.pool_price` — the level that was RECLAIMED, which
+        is the thesis being traded. The same setup then reads 0.11%.
+        Wick depth is a measure of rejection QUALITY and `rejq_val` already
+        scores it; it has no business inflating a distance-from-entry measure.
+        Both sides changed. OT_SWEEP_RECOVERY_FROM_POOL=0 restores the old
+        anchor exactly.
+        ⚠️ VERIFIED END TO END on three fabricated scenarios: an excellent PDL
+        raid now passes EVERY logic gate (L1 1.000), a weak one is still
+        refused as too old (L1 0.000), and the same excellent raid into an
+        ACCELERATING opposing trend scores 0.150 — a tenth of A, still above
+        the long floor. The discrimination survives the unshackling.
+        ⚠️ NOT CHANGED, and worth knowing: the 1m BOS lookback references recent
+        swing highs, so a raid that is really a COLLAPSE (5% in two minutes)
+        cannot satisfy it by construction. A realistic approach-and-raid does.
+        That was a fixture defect on my side, not a code defect.
+
+v3.6 — 2026-08-11 — SWP.4 + SWP.5.
+
+        SWP.4 THE RECOVERY WINDOW PENALISED GOOD REJECTIONS. `recovery_pct` was
+        measured from `sweep.sweep_price` — the WICK EXTREME — so the DEEPER the
+        rejection, the FARTHER the entry appeared. On a fabricated textbook PDL
+        raid a 2.36% rejection produced 2.4% against the 2.0% cap and was
+        refused, on the best setup the scorer can produce. Now anchored to
+        `sweep.pool_price` — the level RECLAIMED, which is the thesis traded —
+        where the same setup reads 0.11%. Wick depth is rejection QUALITY and
+        `rejq_val` already scores it. Both sides changed.
+        OT_SWEEP_RECOVERY_FROM_POOL=0 restores the old anchor.
+
+        SWP.5 LIVENESS REPLACES THE CLOCK. `SWEEP_MAX_AGE_BARS = 8` was standing
+        in for an invalidation test the code did not have. MEASURED over 90 real
+        symbol-days: of the stale sweeps it refused, **32.9% still had a LIVE
+        thesis** — price had never accepted back through the raided level and
+        was still on the correct side. The gate now asks LIQ.3's running
+        `sweep_invalidated` instead.
+        RESULT on the same 90 symbol-days: refusals went from **98.4% "too old"**
+        to **77.2% INVALIDATED** (the level actually failed) + 13.9% backstop,
+        and setups reaching STRIKE SELECTION went **5 -> 40**.
+        ⚠️ AGE SURVIVES AS A BACKSTOP, NOT AS THE TEST: SWEEP_STALE_HARD_BARS
+        (48 = 4h) still refuses a live-but-ancient raid, because an
+        all-session-old level is a different trade. That 48 is a PRIOR — nothing
+        in the data picked it. 414 setups hit it.
+        ⚠️ ALL THESE COUNTS ARE NVDA/SPX/SMCI WITH STUBBED REGIME AND VOL STATE.
+        The gate ORDERING is real; the absolute numbers are not the fleet.
+        OT_SWEEP_LIVENESS_GATE=0 restores the pure-clock behaviour exactly.
+
 v3.4 — 2026-08-07 — SWP.2: SHORT SWEEPS GET THEIR OWN FLOOR
         (`SWEEP_SETUP_FLOOR_SHORT`, default 0.20; longs stay at 0.05). Three
         measures agree that long and short are not the same trade — win rate
@@ -96,6 +148,8 @@ from config import (
     SWEEP_DELTA_STRONG, SWEEP_DELTA_WEAK, SWEEP_MAX_AGE_BARS,
     ORB_NO_ENTRY_AFTER_ET,
     SWEEP_MAX_RECOVERY_PCT, SWEEP_RECOVERY_ATR_MULT, SWEEP_BOS_LOOKBACK,
+    SWEEP_RECOVERY_FROM_POOL,                      # SWP.4
+    SWEEP_LIVENESS_GATE, SWEEP_STALE_HARD_BARS,    # SWP.5
     MAX_LOSS_PCT,
 )
 
@@ -167,8 +221,37 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         if not sweep or not sweep.confirmed:
             return None
 
-        if liq_map.sweep_age_bars > SWEEP_MAX_AGE_BARS:
-            logger.debug(f"Sweep too old: {liq_map.sweep_age_bars} bars")
+        # ── SWP.5 (2026-08-11) — LIVENESS BEFORE AGE ────────────────────────
+        # Operator: "if the market makers are driving the price to either
+        # extreme what difference does it make if it takes an hour or if it
+        # takes all day?" None. What ends a sweep thesis is the level FAILING,
+        # not the clock. MEASURED over 90 real symbol-days: of the stale sweeps
+        # this gate refused, **32.9% still had a live thesis** (854 of 2,593) —
+        # price had never accepted back through the raided level and was still
+        # on the correct side. ~9.5 valid setups discarded per symbol-day.
+        # The age gate was standing in for an invalidation test that the code
+        # did not have: `veto_accept` asks exactly the right question but is a
+        # BIRTH-TIME snapshot (counted over the 2-3 bars after the raid and
+        # never updated). LIQ.3 now recomputes it every tick.
+        # ⚠️ AGE SURVIVES AS A BACKSTOP, NOT AS THE TEST. A live level still
+        # ages out at SWEEP_STALE_HARD_BARS — an all-session-old raid is a
+        # different trade from a fresh one and this is a collection phase, not
+        # a licence to hold forever. OT_SWEEP_LIVENESS_GATE=0 restores the
+        # pure-clock behaviour exactly.
+        _invalid = bool(getattr(liq_map, "sweep_invalidated", False))
+        if SWEEP_LIVENESS_GATE:
+            if _invalid:
+                logger.info(f"Sweep INVALIDATED: price accepted back through "
+                            f"{sweep.swept_named_level or 'the level'} "
+                            f"({liq_map.sweep_age_bars} bars) — thesis dead")
+                return None
+            if liq_map.sweep_age_bars > SWEEP_STALE_HARD_BARS:
+                logger.info(f"Sweep past the hard backstop: "
+                            f"{liq_map.sweep_age_bars} > {SWEEP_STALE_HARD_BARS} "
+                            f"bars (level still holding, but too old to trade)")
+                return None
+        elif liq_map.sweep_age_bars > SWEEP_MAX_AGE_BARS:
+            logger.info(f"Sweep too old: {liq_map.sweep_age_bars} bars")
             return None
 
         # ── ORB-ownership gate ───────────────────────────────────────────────
@@ -233,7 +316,22 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         # Don't enter too far from the sweep. Window is ATR-aware: the LARGER
         # of a floor % or a multiple of ATR%, so a fast reversal that already
         # moved on a volatile name isn't rejected as "missed".
-        recovery_pct = (current_price - sweep.sweep_price) / max(sweep.sweep_price, 1)
+        # ⚠️ SWP.4 (2026-08-11) — MEASURE THE RECOVERY FROM THE SWEPT LEVEL, NOT
+        # FROM THE WICK EXTREME. The old line used `sweep.sweep_price` — the
+        # low of the raid — so the DEEPER the rejection, the FARTHER the entry
+        # appeared, and the gate penalised exactly the quality it should reward.
+        # Reproduced on a fabricated textbook PDL raid: a 2.36% rejection
+        # produced recovery_pct 2.4% against a 2.0% cap and was REFUSED, with
+        # "Sweep long: too far from sweep" — on the best setup the scorer can
+        # produce. Wick depth is a measure of rejection QUALITY and `rejq_val`
+        # already scores it; entry distance is properly measured from the LEVEL
+        # that was reclaimed, which is the thesis being traded.
+        # From the pool the same setup reads 0.11%, comfortably inside the cap.
+        # OT_SWEEP_RECOVERY_FROM_POOL=0 restores the pre-SWP.4 behaviour.
+        _anchor = (sweep.pool_price if (SWEEP_RECOVERY_FROM_POOL
+                                        and getattr(sweep, "pool_price", 0) > 0)
+                   else sweep.sweep_price)
+        recovery_pct = (current_price - _anchor) / max(_anchor, 1)
         max_recovery = max(SWEEP_MAX_RECOVERY_PCT,
                            SWEEP_RECOVERY_ATR_MULT * vol_state.atr_normalized)
         if recovery_pct > max_recovery:
@@ -347,7 +445,10 @@ class SweepReversalStrategy(BaseOptionsStrategy):
             logger.debug("Sweep short: price not rejected below swept level")
             return None
 
-        recovery_pct = (sweep.sweep_price - current_price) / max(sweep.sweep_price, 1)
+        _anchor = (sweep.pool_price if (SWEEP_RECOVERY_FROM_POOL
+                                        and getattr(sweep, "pool_price", 0) > 0)
+                   else sweep.sweep_price)
+        recovery_pct = (_anchor - current_price) / max(_anchor, 1)
         max_recovery = max(SWEEP_MAX_RECOVERY_PCT,
                            SWEEP_RECOVERY_ATR_MULT * vol_state.atr_normalized)
         if recovery_pct > max_recovery:

@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.24
+# docs/BACKLOG.md — v4.25
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -4821,6 +4821,98 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.25 — 2026-08-11 — LIQ.1 + SWP.4: THREE DEFECTS THAT ZEROED THE SWEEP
+  SCORE ON TEXTBOOK RAIDS.** Operator: "we have to unshackle it." Found by
+  running the REAL code over a FABRICATED tape carrying an engineered PDL sweep
+  — none was visible in production, because every relevant refusal logs at
+  DEBUG against a fleet on INFO.
+  - **LONDON WAS A SELF-REFERENTIAL MOVING TARGET.** Operator diagnosed it:
+    "the London session in particular was creating a moving target and that has
+    to go." The window is 07:00-16:00 UTC against RTH 13:30-20:00 — **a 2.5
+    HOUR OVERLAP** — so from 09:30 to 12:00 ET "London High" is set by the price
+    being traded. Sweeping it sweeps a level RTH made seconds ago. **⚠️ THIS
+    RETROACTIVELY UNDERMINES THE SHADOW OBSERVER'S 61.3% LONDON FIGURE** —
+    London was nearest BECAUSE it tracked price, so SWP.3's London bonus was
+    fitted to an artefact and should be revisited. Asia removed with it. The
+    lmap FIELDS stay populated so shadow/primitives keeps its census; only the
+    sweepable POOL goes. `OT_LIQ_SESSION_POOLS=1` restores.
+  - **THE DEDUPE DELETED THE NAMED SWEEP.** A PDH/PDL almost always ALSO sits on
+    an equal-high/low cluster — that coincidence is WHY it is liquidity — so one
+    raid makes TWO sweeps with identical kind, pool_price and bars_ago. They
+    collide on the dedupe key; the tiebreak `mins < cmins` is FALSE on equality,
+    so the FIRST-inserted survived and unnamed pools are found first.
+    `swept_named_level` came back EMPTY, `veto_loc` hard-vetoed, **and the SWEEP
+    SCORE WAS EXACTLY 0.000 on a perfect raid.** Measured on the fabricated
+    tape: **0.000 before the fix, 1.000 after.** It also made v3.1's "named
+    takes precedence" filter DEAD CODE — that filter reads the ALREADY-DEDUPED
+    list. **⚠️ LIVE INCIDENCE UNKNOWN: the 08-11 corpus shows veto_loc PASSING
+    on 99.6% of ticks, so this is real but may be rare. Not the whole story.**
+  - **THE RECOVERY WINDOW PENALISED GOOD REJECTIONS.** `recovery_pct` measured
+    from the WICK EXTREME, so a DEEPER rejection made the entry look FARTHER
+    away. On the fabricated raid a 2.36% rejection produced 2.4% against a 2.0%
+    cap and was refused — on the best setup the scorer can produce. Anchored to
+    the reclaimed LEVEL it reads **0.11%**. Wick depth is rejection QUALITY and
+    `rejq_val` already scores it. Both sides changed.
+  **VERIFIED END TO END on three fabricated scenarios:** excellent PDL raid now
+  passes EVERY logic gate (L1 **1.000**); a weak one is still refused as too old
+  (L1 **0.000**); the same excellent raid into an ACCELERATING opposing trend
+  scores **0.150** — a tenth of A, still above the long floor. **The
+  discrimination survives the unshackling.** 6 tests, 4 canaries, suite 403.
+  **⚠️ STILL OPEN — THE AGE INTERACTION, and it is the volume driver.** A
+  separate harness over 90 real symbol-days found **98.3% of setups reaching the
+  strategy refused as "Sweep too old", median age 45 bars against a cutoff of
+  8.** Cause: `recent_sweep` holds the NAMED sweep by precedence with no expiry,
+  so one early raid occupies the slot all session and fresher sweeps never enter
+  it. Removing London/Asia shrinks the named set and should reduce this, but the
+  precedence-without-expiry shape is untouched and needs its own decision.
+  **⚠️ AND THE DEBUG LOGGING: 9 of 11 refusal paths in the strategy are
+  `logger.debug` against `LOG_LEVEL="INFO"`.** Every investigation this evening
+  was elimination-by-reading because those lines do not exist. Promoting them is
+  one file, log-only, and would make the next drought one grep.
+- **v4.25 — 2026-08-11 — UNSHACKLING THE SWEEP: FOUR DEFECTS, ALL FOUND BY
+  RUNNING THE REAL CODE RATHER THAN READING IT.** Operator: "that trade has been
+  good to us. We need to get it firing again." None of these was visible in
+  production, because 9 of 11 refusal paths in the strategy log at DEBUG against
+  a fleet on `LOG_LEVEL="INFO"`.
+  - **LIQ.1(a) LONDON WAS A SELF-REFERENTIAL MOVING TARGET.** Operator
+    diagnosed it. London runs 07:00-16:00 UTC against RTH 13:30-20:00 — **a 2.5
+    HOUR OVERLAP** — so from 09:30 to 12:00 ET "London High" is set by the price
+    being traded. **⚠️ THIS RETROACTIVELY UNDERMINES THE SHADOW OBSERVER'S 61.3%
+    LONDON SHARE** — London was nearest BECAUSE it tracked price, so SWP.3's
+    London bonus was fitted to an artefact and needs revisiting. Asia removed
+    with it. Fields stay for telemetry; only the sweepable POOL goes.
+  - **LIQ.1(b) THE DEDUPE DELETED THE NAMED SWEEP.** A PDH/PDL almost always
+    also sits on an equal-high/low cluster, so one raid makes two sweeps with
+    identical kind/price/age. The tiebreak `mins < cmins` is FALSE on equality,
+    so the first-inserted won — and unnamed pools are found first.
+    `swept_named_level` came back EMPTY, `veto_loc` hard-vetoed, **the SWEEP
+    SCORE WAS EXACTLY 0.000 on a perfect raid.** Fabricated PDL raid: **0.000
+    before, 1.000 after.** ⚠️ Live incidence unknown — the 08-11 corpus shows
+    veto_loc passing 99.6%, so real but possibly rare.
+  - **SWP.4 THE RECOVERY WINDOW PENALISED GOOD REJECTIONS.** Measured from the
+    WICK EXTREME, so a deeper rejection made the entry look farther away. A
+    2.36% rejection produced 2.4% against a 2.0% cap and was refused. Anchored
+    to the reclaimed LEVEL it reads **0.11%**.
+  - **SWP.5 + LIQ.3 LIVENESS REPLACES THE CLOCK — the operator's insight.**
+    "If the market makers are driving the price to either extreme what
+    difference does it make if it takes an hour or if it takes all day?" None.
+    `SWEEP_MAX_AGE_BARS = 8` was standing in for an invalidation test the code
+    did not have: `closes_beyond` asks exactly the right question but is a
+    **BIRTH-TIME snapshot**, counted over the 2-3 bars after the raid and never
+    updated. **MEASURED over 90 real symbol-days: of the stale sweeps the gate
+    refused, 32.9% still had a LIVE thesis** (854 of 2,593) — ~9.5 valid setups
+    discarded per symbol-day on a clock. LIQ.3 recomputes invalidation every
+    tick; SWP.5 gates on it.
+  **RESULT on the same 90 symbol-days: refusals went from 98.4% "too old" to
+  77.2% INVALIDATED (the level actually failed) + 13.9% backstop, and setups
+  reaching STRIKE SELECTION went 5 → 40.**
+  **⚠️ THREE THINGS TO HOLD.** (1) `SWEEP_STALE_HARD_BARS = 48` (4h) is a
+  PRIOR — nothing in the data picked it; 414 setups hit it. (2) Every count here
+  is NVDA/SPX/SMCI with stubbed regime and vol state: the gate ORDERING is real,
+  the absolute numbers are not the fleet. (3) **REJECTED AND RECORDED: LIQ.2**,
+  scoping named-precedence to fresh sweeps — built and measured, moved refusals
+  98.6% → 98.4%, and evicts exactly the stale-but-live setups SWP.5 exists to
+  keep. Dropped. 8 tests, 7 canaries, suite 405.
 - **v4.24 — 2026-08-11 — CNT.7: the confirmation gate was rejecting TIES.**
   Operator, on a strong downtrend day that went untraded: "that's about as
   strong a trend as we're gonna get… it's too literal right now." Correct.
