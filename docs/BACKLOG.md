@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.27
+# docs/BACKLOG.md — v4.28
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -3414,7 +3414,95 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
 logic for two weeks. Everything else this epoch is offline or log-only — which the
 roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing).*
 
-**⬜ Tue Aug 11 — FIRST SESSION ON FIVE BEHAVIOURAL CHANGES**
+**✅ Tue Aug 11 — FIRST SESSION ON FIVE BEHAVIOURAL CHANGES — CLOSED**
+
+**THE SESSION READ (the day's first item, done):** 21 trades, **+$1,182.50**,
+48% win, median hold **16.3 min** — against 08-10's 92 trades at −$596 with a
+3.0 min median. **6x fewer trades, 5x longer holds, profitable.** Continuation
+went from worst strategy in the book to best (13 trades, +$2,433);
+`continuation_trail` 9 trades / 78% / +$2,958; `bos_exit` 35 → 1; `regime_flip`
+19 → 2. Zero RANGING and zero COMPRESSION trades — CNT.6 accounts for both.
+**THE LOSS IS ENTIRELY ORB: 7 trades, 29%, −$1,291**, concentrated in
+`orb_structure_stop` (5, 0% win, −$1,700) and BREAKOUT_VOLATILE/ORB (−$1,130).
+Untouched by anything shipped and it is the next cell to look at.
+⚠️ Every bucket is thin; one session. And the exit-behaviour note stands:
+winners held 17.3 min vs losers 15.0 — **exits may still be cutting runners as
+fast as mistakes.**
+
+**✅ SHIPPED AND PUSHED TODAY** (all baked except where noted):
+- `[DESK]` **CNT.7 ✅ SHIPPED 08-11** — ATR-scaled tolerance on the confirmation bar. The strict
+  comparison was rejecting TIES by 3-9 cents (QQQ 0.011%, PLTR 0.023%). 0.40 ATR
+  derived from a clean gap in the logged misses: ties 0.073-0.360, genuine
+  failures 1.133-3.355.
+- `[DESK]` **BFLY.1 ✅ SHIPPED 08-11** — butterfly readiness scores the GEX-PIN thesis, not the
+  COMPRESSION label. It was reporting would_fire=2132 against ONE trade because
+  it graded a different trade entirely.
+- `[DESK]` **LIQ.1 ✅ SHIPPED 08-11** — London/Asia out as sweepable pools (London overlaps RTH by
+  2.5h, so its "level" was set by the price being traded); dedupe now keeps the
+  NAMED twin (it was zeroing the sweep score on textbook raids).
+- `[DESK]` **LIQ.3 ✅ SHIPPED 08-11** — running invalidation replaces the clock. 32.9% of the
+  stale sweeps the 8-bar gate refused still had a LIVE thesis.
+- `[DESK]` **SWP.4 ✅ SHIPPED 08-11** — recovery anchored to the reclaimed LEVEL, not the wick.
+- `[DESK]` **SWP.5 ✅ SHIPPED 08-11** — liveness gate; age survives only as a 4h backstop.
+- `[DESK]` **RGM.6 ✅ SHIPPED 08-11** — the fallback resolves to the L1 argmax, not UNKNOWN.
+- `[DESK]` **DEVTOOLS ✅ SHIPPED 08-11** — v1.28 `ask_scope` tolerates spaces after
+  commas; a space was SILENTLY TRUNCATING the symbol list and running on the
+  wrong boxes.
+- **TOOLS (read-only):** `condor_block_attribution`, `sweep_opportunity_audit`
+  v1.1, `rgm5_fallthrough`, `sweep_score_dist` (existing, re-used).
+- **INFRA:** 1GB swap on all 28 t2.micro boxes (SPX already had 2GB). MEM.2
+  closed — no leak, ~710MB steady state, undersized box.
+
+**⬜ UNRESOLVED — CARRIED OUT OF TODAY**
+- `[DESK]` **SPX INSTANCE UPGRADE TO t3.medium — not yet done.** ~710MB steady
+  state against 1905MB total with 649MB free; it has OOM'd twice. Swapfile is on
+  the EBS root and survives the stop/start. Its root disk is also tight
+  (`disk_avail=647M` vs ~1700M elsewhere) — grow the volume in the same stop.
+- `[DESK]` **SWEEP REFUSALS ARE INVISIBLE: 9 of 11 paths in
+  `sweep_reversal_strategy` are `logger.debug` against `LOG_LEVEL="INFO"`.**
+  Every investigation today was elimination-by-reading because those lines do
+  not exist. Promoting them is one file, log-only, freeze-safe — and it would
+  make the next drought one grep instead of an evening.
+- `[DESK]` **⚠️ SWP.3's LONDON BONUS IS FITTED TO AN ARTEFACT.** It was weighted
+  on the shadow observer's 61.3% London share, and LIQ.1 established London was
+  NEAREST BECAUSE IT TRACKED PRICE. Treat as a CORRECTION, not an option.
+  Label/entry-affecting ⇒ **Mon Aug 17 deploy deadline**.
+- `[DESK·DATA]` **`SWEEP_STALE_HARD_BARS = 48` (4h) IS A PRIOR** — nothing in
+  the data picked it, and 414 setups hit it across 90 symbol-days. First number
+  to re-derive once live data exists.
+- `[DESK·DATA]` **THE LIQ.1 DEDUPE BUG'S LIVE INCIDENCE IS UNKNOWN.** The 08-11
+  corpus shows `veto_loc` PASSING on 99.6% of ticks, so it is real but may be
+  rare. Do not read it as the whole explanation for the drought.
+- `[DESK·DATA]` **TWO TOOLS DISAGREE ON `scores.SWEEP_REVERSAL`** — same field,
+  same date: `sweep_score_dist` reports nonzero p50 0.008 / p90 0.083;
+  `sweep_opportunity_audit` reports p50 0.000 / p90 0.002. One is wrong.
+  **Resolve before anyone moves a sweep floor on either.**
+- `[DESK]` **THE ORB 11:00 CUTOFF — three perfect setups missed on 08-11**
+  between 11:00 and 12:00, all second attempts after an earlier stop. The
+  engine already counts `attempt_number` and already re-arms on a close back
+  inside, so the ONLY thing blocking a second setup is the same 11:00 constant
+  that gates entry. Operator's prior: the second presentation is usually the
+  better one. **Measurable from banked data — ORB trades by `attempt_number`,
+  never-favourable rate — before touching the constant.**
+- `[DESK·DATA]` **VERIFY RGM.6 TOMORROW: does UNKNOWN fall toward its ~2.4%
+  floor?** The engine tag is now FOUR states — `[L2 c=]` / `[L2-hold c=]` /
+  `[L1 c=]` / `[v13]`. `grep -c '[v13]'` has been the fallback-rate measure all
+  week; **a drop in it is a RELABELLING, not a fix.** Count all four.
+- `[DESK·DATA]` **BUTTERFLY: gates 1x5 are the likely blocker, not the regime.**
+  SPX logged `env=PINNING` at 15:29 ET — 90 minutes after the 12:00-14:00 window
+  shut. GEX pinning is structurally late-day; the window is midday. Measure when
+  PINNING appears against the window before moving either.
+- `[DESK·DATA]` **CONDOR: the plan formed and the LEGS never triggered.** AAPL
+  11:11:00, conviction **0.1549**, triggers ±0.8% from spot. The regime gate is
+  not the blocker (224 RANGING ticks fell inside the window). Two open
+  questions: whether a conviction FLOOR belongs on the plan gate (it reads the
+  label only), and whether `CONDOR_TRIGGER_APPROACH = 0.65` is reachable in a
+  range tight enough to be worth trading.
+- `[DESK·DATA]` **THE 21.3% ORB RISK-LEG WIDENING IS STILL UNEXPLAINED** —
+  measured 08-08, cause never identified, and the boundary-alignment change that
+  might have addressed it was correctly REJECTED on backtest.
+
+**⬜ Tue Aug 11 — ORIGINAL PLAN (both items closed)**
 - `[DESK·DATA]` **READ TODAY BEFORE CHANGING ANYTHING ELSE.** CNT.4 (1-bar
   confirmation), CNT.5 (BOS distance floor), CNT.6 (continuation blocked in the
   premium regimes), SWP.3 (sweep approach factor) and RGM.4 (per-regime
@@ -4297,6 +4385,57 @@ file: everything above either ✅ or explicitly re-dated below.
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
 `docs/HISTORY.md` and the audits. Resolution date + fixing versions + the why.*
 
+- **CNT.7 ✅ 2026-08-11 — the confirmation gate was rejecting TIES.** CNT.4
+  required a STRICT close beyond the tagging bar's extreme; the live log shows
+  misses of 3-9 cents (QQQ 720.34 vs 720.26 = 0.011%; PLTR 0.023%). Fixed with an
+  ATR-scaled tolerance, `continuation_strategy` v1.6. **0.40 is DERIVED** from a
+  clean gap in the logged misses — ties 0.073-0.360 ATR, genuine failures
+  1.133-3.355. My first draft used 0.05 and would have rejected every one of
+  them; a test pins that it cannot come back.
+- **BFLY.1 ✅ 2026-08-11 — the butterfly readiness track scored a DIFFERENT
+  TRADE.** The strategy is a GEX-pin play (Gate 5 requires PINNING, the tent is
+  centred on `pin_strike`); the track graded the COMPRESSION label as a hard
+  veto plus a boolean squeeze. **would_fire=2132 against ONE trade**, R p50
+  0.995. `trade_readiness` v1.8 scores pin distance in expected-move units, pin
+  firmness from |net_gex|, and a window that ramps toward noon. Log-only.
+- **LIQ.1 ✅ 2026-08-11 — London/Asia out as sweepable pools, and the dedupe
+  keeps the NAMED twin.** London runs 07:00-16:00 UTC against RTH 13:30-20:00 —
+  a 2.5h overlap — so its "level" was set by the price being traded. And a
+  PDH/PDL almost always also sits on an equal-high/low cluster, so one raid made
+  two sweeps that collided in the dedupe; the unnamed one won on insertion order
+  and `veto_loc` then zeroed the score. Fabricated PDL raid: **0.000 → 1.000**.
+- **LIQ.3 ✅ 2026-08-11 — running invalidation.** `closes_beyond` asks the right
+  question but is a BIRTH-TIME snapshot over the 2-3 bars after the raid, never
+  updated, so nothing ever re-checked whether the level still held.
+- **SWP.4 ✅ 2026-08-11 — recovery anchored to the reclaimed LEVEL.** Measured
+  from the wick extreme, a DEEPER rejection made the entry look FARTHER away —
+  the gate penalised the quality it should reward. 2.4% → 0.11% on the same raid.
+- **SWP.5 ✅ 2026-08-11 — liveness replaces the clock.** Operator: "if the market
+  makers are driving the price to either extreme what difference does it make if
+  it takes an hour or if it takes all day?" **32.9% of the stale sweeps the
+  8-bar gate refused still had a LIVE thesis** (854 of 2,593 over 90 symbol-days).
+  Refusals went from **98.4% "too old" → 77.2% INVALIDATED + 13.9% backstop**,
+  and setups reaching strike selection went **5 → 40**.
+- **RGM.6 ✅ 2026-08-11 — the fallback resolves to a KNOWN label.** L1 is
+  all-zero on only **2.4-3.0%** of ticks (every session since 07-15) while the
+  v13 fallback emitted UNKNOWN on ~18-19% — a known answer existed seven times
+  more often than the engine was blind. Ladder is now committed L2 → held
+  incumbent → **L1 argmax** → v13. `main` v6.1.
+- **CV.1 ✅ 2026-08-11 — check_versions reports ALL GREEN on a clean checkout**
+  for the first time in weeks. The orphaned `condor_plan_lifetime` canary is
+  removed with its reasoning inline; a permanently-red gate trains the reader to
+  skip the DONE banner, at which point every other canary stops working.
+- **VW.1f ✅ 2026-08-11 — the three ledger defects its own first output exposed.**
+  ~29 mapped-but-unmatched trades vanishing silently; the MIXED ERAS warning
+  firing on three all-pre-bake dates (the split was BY TRACK, not by date); and
+  the verdict floor testing TOTAL trades so CONTINUATION printed a verdict off a
+  MISALIGNED arm of five against 228 aligned. `vwap_orientation_ledger` v1.6.
+- **MEM.2 ✅ 2026-08-11 — NO LEAK.** Two independent SPX sessions plateau
+  (689→712MB over 1,120 ticks; 499→698MB then flat). The rise is a SINGLE ~185MB
+  step from a lazily-imported dependency, which is also why `traced_growth` read
+  +0.0MB. The 419M "OOM peak" was never a climbing curve — SPX's steady state is
+  ~710MB on a box that could not hold it. Capacity, not a leak.
+
 - **AX ✅ 2026-08-03 — RESOLVED, and verified the only way this item allowed:
   by a real warning ARRIVING in Telegram, not by the code path running.** The
   control conductor read `DTP_`-prefixed variables that were never set anywhere,
@@ -4857,6 +4996,25 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.28 — 2026-08-11 EOD — THE DAY SCRUBBED: fixes registered, unresolved
+  carried.** Operator: "scrub the backlog, add our fixes and our unresolved for
+  the day."
+  **⚠️ THE LEDGER LESSON RECURRED AND IS WORTH RE-STATING.** Writing today's
+  shipped work as prose under the Tue Aug 11 header moved BAC and NOT EV —
+  because `evm_status` earns value from **PART 3, the RESOLVED REGISTER**, not
+  from ✅ markers in PART 1. Same shape as the 08-08 finding that items filed in
+  PART 0 carry zero EV weight. **Work is not "recorded" until it is in the
+  register.** Ten resolutions registered: CNT.7, BFLY.1, LIQ.1, LIQ.3, SWP.4,
+  SWP.5, RGM.6, CV.1, VW.1f, MEM.2.
+  **MEASURED: EV 41 → 51, BAC 172 → 182, PV 97 → 107, SPI 0.42 → 0.48.** SV
+  stays −56 — registering completed work does not reduce the schedule variance,
+  it corrects an understated EV. The remaining −56 is real.
+  **ELEVEN UNRESOLVED ITEMS CARRIED OUT OF TODAY** under the Tue Aug 11 header,
+  the sharpest being: the SPX t3.medium upgrade (still pending, has OOM'd
+  twice); the 9 sweep refusal paths logging at DEBUG against a fleet on INFO;
+  **SWP.3's London bonus, now fitted to an artefact and therefore a CORRECTION
+  with a Mon Aug 17 deadline**; and two tools disagreeing on
+  `scores.SWEEP_REVERSAL` — resolve that before anyone moves a sweep floor.
 - **v4.27 — 2026-08-11 EOD — RGM.6 SHIPPED: THE FALLBACK RESOLVES TO A KNOWN
   LABEL.** Operator: "unknown should be virtually eliminated by the time we
   freeze layer 1… there should be ways to extrapolate and resolve to a KNOWN
