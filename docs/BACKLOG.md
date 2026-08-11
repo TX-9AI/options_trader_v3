@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.22
+# docs/BACKLOG.md — v4.23
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -4821,6 +4821,55 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.23 — 2026-08-11 — BFLY.1: the butterfly readiness track was scoring a
+  DIFFERENT TRADE from the one the strategy fires.** Operator: "the intent of
+  that trade was if GEX was pinning and we had reason to believe price would
+  migrate to the pin, we'd put on a cheap debit butterfly AT THE PIN… if the
+  trade isn't written that way currently, it needs to be."
+  **THE STRATEGY IS WRITTEN CORRECTLY — I was wrong to imply otherwise.**
+  `butterfly_strategy` Gate 5 hard-refuses unless `gex_environment ==
+  "PINNING"`, the body is `gex.pin_strike` not ATM, and its own header states
+  the thesis: "enter the pin-centered tent while price is still a walk away."
+  My earlier claim that the gate had no GEX came from checking
+  `macro.butterfly_allowed` — which is the **VIX** kill-switch — and reporting
+  that as the whole gate. Both exist.
+  **WHAT WAS DEFECTIVE IS THE READINESS TRACK.** `_butterfly` graded `coil` (the
+  COMPRESSION label) as a HARD VETO plus a boolean squeeze and band width — a
+  compression play. **Not one of the five gates that actually block the strategy
+  was in it**: no pin, no pin distance, no GEX environment, no 12:00-14:00
+  window, no one-per-session. Consequence measured 2026-08-10: **would_fire=2132
+  against ONE trade**, R p50 0.995 / p90 1.000. The thing it measured was ready
+  all day; the thing that has to be true almost never was.
+  **trade_readiness v1.8** replaces it with terms that RISE as the thesis comes
+  true: `pin_val` (distance to the pin in EXPECTED-MOVE units), `firm_val`
+  (|net_gex| — the strategy's PINNING flag is binary and cannot rank a 2.3M pin
+  above a 0.1M one), `win_val` (ramps UP toward noon, ZERO after 14:00), and
+  `gex_val` as a soft-necessary (PINNING 1.0 / NEUTRAL 0.35 / TRENDING 0.10) so
+  a non-pinning tape reads "not yet" rather than "never". Coil survives DEMOTED
+  to a corroborator. Observed: **0.115 → 0.342 → 0.930** as the pin firms and
+  price walks in; **0.093** on a trending tape with identical pin geometry;
+  0.155 warming at 10:45; 0.000 once the window shuts.
+  **⚠️ LOG-ONLY — this changes what the score SAYS, not what fires.** Promotion
+  was already solved by CNT.6: butterfly sits at Priority 3 behind
+  `if signal is None`, so the only thing that ever blocked it was continuation
+  firing above it, and CNT.6 removed continuation from RANGING/COMPRESSION. The
+  operator's two rules — no continuation in a range, no neutral play in a trend
+  — are now both enforced without a dispatch change.
+  **⚠️ THE LIKELY REMAINING BLOCKER IS 1 x 5, NOT THE REGIME.** SPX logged
+  `env=PINNING` at **15:29 ET** — after the 14:00 window shut. GEX pinning is
+  naturally a late-day phenomenon as gamma concentrates into expiry, so gates 1
+  and 5 may be close to mutually exclusive BY CONSTRUCTION. **Measure before
+  moving the window:** per session, the ET timestamps where `env=PINNING`
+  appears, crossed against the committed label. If pinning clusters after 14:00
+  the WINDOW is wrong; if it pins inside the window on a trending label, CNT.6
+  and RGM.4 may have already fixed it. 8 tests, 3 canaries, suite 392 passed.
+  **A NOTE ON THE TESTS, because it is the second time today:** the first
+  deliberate-failure check PASSED with the veto restored, i.e. the test could
+  not fail. `_combine` treats `hard_vetoes` as a ZERO TEST rather than a
+  multiplier, so restoring `coil` changes nothing on a COMPRESSION (1.0) or
+  RANGING (0.5) tick. Only a label with `coil_val == 0.0` discriminates. A test
+  that cannot fail is worth nothing, and both instances today were caught only
+  by actually running the negative case.
 - **v4.22 — 2026-08-10 EOD — RGM.5 scheduled for Tue Aug 11, with the option
   comparison recorded.** Deferred one day by the operator so today's five
   behavioural changes can be read against a label set that did not also move —

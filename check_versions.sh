@@ -1,4 +1,10 @@
 #!/bin/bash
+# v4.44 — 2026-08-11 — BFLY.1 butterfly readiness rewritten around the pin.
+#         The load-bearing canary is the ABSENCE of `coil` from hard_vetoes.
+#         `_combine` treats hard_vetoes as a ZERO TEST, so restoring it there
+#         changes NOTHING on a COMPRESSION or RANGING tick and only bites where
+#         coil_val is exactly 0 — which is why the first version of the test
+#         could not fail. Pin the corroborator form instead.
 # v4.43 — 2026-08-10 — CV.1 CLOSED. The orphaned condor_plan_lifetime canary is
 #         removed with its reasoning inline, and this file reports ALL GREEN on
 #         a clean checkout for the first time in weeks. That matters more than
@@ -515,6 +521,9 @@ check "analysis/trade_readiness.py"      '"dir": ("short" if side == "call" else
 check "analysis/trade_readiness.py"      '"dir": "neutral"'             "v1.6 butterfly sideless BY DESIGN, stamped so it cannot be confused with a missing field"
 check "analysis/trade_readiness.py"      '_kind == "high_sweep"'        "v1.6 sweep dir from the LIVE liq_map — the field no offline tool could recover"
 check "tests/test_readiness_direction_stamp.py" "test_every_track_stamps_a_direction" "v1.0 all six tracks carry dir (one writer made it look optional for weeks)"
+check "analysis/trade_readiness.py"      "W_BFLY_PIN, W_BFLY_FIRM"     "v1.8 the butterfly scores the PIN, not the label"
+check "analysis/trade_readiness.py"      "pin_dist_unit"               "v1.8 em and atr2 are different scales — the unit must be recorded, never pooled"
+check "tests/test_butterfly_pin_readiness.py" "test_the_coil_is_not_in_hard_vetoes" "v1.0 the only test that can see the veto come back"
 check "analysis/trade_readiness.py"      "W_SWEEP_APPR, appr_val"       "v1.7 approach factor present; a label hard-veto would return this track to a silent permanent zero — restoring one is a silent permanent zero"
 check "analysis/trade_readiness.py"      "SWEEP_PROX_FAR., 2.32"       "v1.7 FAR = shadow-observed MEDIAN 2.32 ATR, not a guess"
 check "analysis/trade_readiness.py"      "appr_name"                   "v1.7 the level's NAME reaches the journal"

@@ -1,4 +1,40 @@
-# analysis/trade_readiness.py — options_trader_v3 — v1.7
+# analysis/trade_readiness.py — options_trader_v3 — v1.8
+# v1.8 — 2026-08-11 — BFLY.1: THE BUTTERFLY TRACK WAS SCORING A DIFFERENT TRADE.
+#         The strategy is a GEX-PIN play — Gate 5 hard-refuses unless
+#         `gex_environment == "PINNING"`, the tent is centred on `pin_strike`
+#         (not ATM), and the thesis is to enter CHEAP while price is still a walk
+#         away and let it migrate into the tent. The readiness track graded
+#         `coil` (the COMPRESSION label) as a HARD VETO plus a boolean squeeze
+#         and band width — a COMPRESSION play. **Not one of the five gates that
+#         actually block the strategy was in it**: no pin, no pin distance, no
+#         GEX environment, no entry window, no one-per-session.
+#         MEASURED 2026-08-10: **would_fire=2132 against ONE trade**, R p50 0.995
+#         / p90 1.000. The thing it measured was ready all day; the thing that
+#         has to be true almost never was. A label switch wearing the name of a
+#         pin play — and it renders as a perfectly healthy 1.0.
+#         NOW: `pin_val` (distance to the pin in EXPECTED-MOVE units — the
+#         operator's "still a walk away", made numeric, and the same unit the
+#         strategy's own proximity gate uses), `firm_val` (|net_gex|, so a 2.3M
+#         pin outranks a 0.1M one — the strategy's PINNING flag is binary and
+#         cannot), `win_val` (ramps UP toward the 12:00 window rather than
+#         switching on at it, because readiness exists to ARM AHEAD, and goes to
+#         ZERO after 14:00 when the strategy cannot fire at all), and `gex_val`
+#         as a SOFT-NECESSARY (PINNING 1.0 / NEUTRAL 0.35 / TRENDING 0.10) so a
+#         non-pinning tape scores a fraction rather than nothing — that is the
+#         difference between "not yet" and "never", which a boolean cannot say.
+#         `coil` survives DEMOTED to a corroborator: a coiling tape is supporting
+#         evidence for a pin holding, it was never the trade.
+#         OBSERVED BEHAVIOUR: 0.115 far/NEUTRAL/weak → 0.342 mid/PINNING/weak →
+#         0.930 near/PINNING/firm; 0.093 on a TRENDING tape with identical pin
+#         geometry; 0.155 warming at 10:45; 0.000 once the window shuts.
+#         ⚠️ LOG-ONLY. Nothing gates on readiness — this changes what the score
+#         SAYS, not what fires. Promotion was already solved by CNT.6 removing
+#         continuation from the premium regimes.
+#         ⚠️ PIN DISTANCE FALLS BACK TO ATR when no chain is on ctx, because
+#         expected move needs one and a chainless tick must not silently zero
+#         the term carrying the whole thesis. `pin_dist_unit` records WHICH unit
+#         was used — em and atr2 are different scales and must NEVER be pooled
+#         when fitting the bounds.
 # v1.7 — 2026-08-10 — SWEEP APPROACH, and the removal of a veto that had gone
 #         DEAD UNDER OUR OWN FIX. `_sweep` carried `hard_vetoes=[is_sweep]`,
 #         requiring the committed label to BE SWEEP_REVERSAL. RGM.3 (baked
@@ -178,6 +214,7 @@ import time
 import logging
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
+from utils.time_utils import now_et      # v1.8 — the butterfly entry window
 
 log = logging.getLogger(__name__)
 
@@ -344,7 +381,34 @@ TR_SWEEP_TOUCH_MIN  = _envf("SWEEP_TOUCH_MIN", 1.0)
 # is a knob, not a redesign. Set to 1.0 to disable the distinction entirely.
 TR_SWEEP_LONDON_MULT = _envf("SWEEP_LONDON_MULT", 1.15)
 W_CNDR_APPROACH, W_CNDR_CONV, W_CNDR_ROOM = 0.45, 0.35, 0.20
-W_BFLY_CONV, W_BFLY_SQZ, W_BFLY_NARROW = 0.40, 0.30, 0.30
+# ── BUTTERFLY (v1.8, 2026-08-11) — THE PIN PLAY, SCORED AS ONE ───────────────
+# The strategy is a GEX-PIN trade: enter a cheap debit tent CENTERED ON THE PIN
+# while price is still a walk away, and let price migrate into it. Gate 5 of
+# butterfly_strategy hard-refuses unless `gex_environment == "PINNING"`, and the
+# body is `gex.pin_strike`, not ATM.
+# ⚠️ THE READINESS TRACK WAS SCORING A DIFFERENT TRADE ENTIRELY. It graded
+# `coil` (COMPRESSION label) as a HARD VETO plus a boolean squeeze and band
+# width — a compression play. NOT ONE of the five gates that actually block the
+# strategy was in it: no pin, no pin distance, no GEX environment, no entry
+# window. That is why 2026-08-10 showed **would_fire=2132 against ONE trade**
+# and R p50 0.995 / p90 1.000: the thing it measured genuinely was ready all
+# day, and the thing that has to be true almost never was.
+# The weights below are re-split so the score RISES AS THE THESIS COMES TRUE
+# rather than switching on a label.
+W_BFLY_PIN, W_BFLY_FIRM = 0.40, 0.20   # the thesis: distance to pin, pin strength
+W_BFLY_CONV, W_BFLY_SQZ, W_BFLY_NARROW = 0.15, 0.10, 0.15   # coil, demoted
+# Pin distance in EXPECTED-MOVE units. Inside NEAR the tent is already reachable;
+# beyond FAR the migration is not a walk, it is a different trade.
+TR_BFLY_PIN_NEAR    = _envf("BFLY_PIN_NEAR", 0.25)
+TR_BFLY_PIN_FAR     = _envf("BFLY_PIN_FAR", 1.00)   # = BUTTERFLY_GEX_PIN_PROXIMITY_MULT
+# Pin FIRMNESS from |net_gex|. A 2.3M pin is not a 0.1M pin, and the strategy's
+# binary PINNING flag cannot tell them apart.
+TR_BFLY_GEX_LO      = _envf("BFLY_GEX_LO", 0.3e6)
+TR_BFLY_GEX_HI      = _envf("BFLY_GEX_HI", 2.0e6)
+# Entry window is 12:00-14:00 ET. Readiness ARMS AHEAD of a trade, so this ramps
+# UP toward noon instead of switching on at it — the whole point is to see the
+# setup building through the late morning.
+TR_BFLY_WARM_MIN    = _envf("BFLY_WARM_MIN", 90.0)  # minutes before 12:00 to start warming
 
 
 @dataclass
@@ -571,22 +635,98 @@ class TradeReadinessEngine:
         label = str(getattr(regime, "primary_regime", "") or "")
         conv  = float(getattr(regime, "conviction", 0.0) or 0.0)
         vol   = ctx.get("vol")
-        coil = 1.0 if label.upper().endswith("COMPRESSION") else 0.0
         sqz_val = 1.0 if (getattr(vol, "bb_state", "") == "SQUEEZE" if vol else False) else 0.0
         width = float(getattr(vol, "bb_width_pct", 0.5) or 0.5) if vol else 0.5
         narrow_val = ramp(TR_NARROW_PIVOT - width, 0.0, TR_NARROW_SPAN)
         conv_val = ramp(conv, TR_CONV_LO, TR_CONV_HI)
-        r = _combine(hard_vetoes=[coil], soft_necessary=[],
-                     corroborators=[(W_BFLY_CONV, conv_val),
+
+        # ── v1.8 — THE PIN, THE FIRMNESS, THE CLOCK ─────────────────────────
+        px  = float(ctx.get("price") or 0.0)
+        gex = ctx.get("gex")
+        pin = float(getattr(gex, "pin_strike", 0.0) or 0.0) if gex else 0.0
+        env = str(getattr(gex, "gex_environment", "") or "") if gex else ""
+        netg = abs(float(getattr(gex, "net_gex", 0.0) or 0.0)) if gex else 0.0
+
+        # DISTANCE TO THE PIN, in EXPECTED-MOVE units — the operator's thesis
+        # made numeric: "enter while price is still a walk away". Normalising by
+        # EM rather than price is what makes it comparable across a $30 and a
+        # $900 symbol, and it is the same unit the strategy's own proximity gate
+        # uses. Rises as price migrates toward the pin.
+        # EM is the right unit — it is what the strategy's own proximity gate
+        # uses — but it needs a chain, and a chainless tick must not silently
+        # zero the term that carries the whole thesis. ATR is the fallback unit:
+        # a different scale, so `pin_dist_unit` records WHICH was used and the
+        # two must never be pooled when fitting the bounds.
+        em = self._expected_move_now(ctx, px) or 0.0
+        _atr = float(getattr(vol, "atr_current", 0.0) or 0.0) if vol else 0.0
+        if em > 0:
+            _unit, _u = em, "em"
+        elif _atr > 0:
+            _unit, _u = _atr * 2.0, "atr2"      # ~1 EM on a typical 0DTE tape
+        else:
+            _unit, _u = 0.0, None
+        pin_dist_em = (abs(px - pin) / _unit) if (_unit > 0 and pin > 0 and px > 0) else None
+        pin_val = (1.0 - ramp(pin_dist_em, TR_BFLY_PIN_NEAR, TR_BFLY_PIN_FAR)) \
+            if pin_dist_em is not None else 0.0
+
+        # PIN FIRMNESS. The strategy's gate is BINARY (PINNING or not), so it
+        # cannot rank a 2.3M pin above a 0.1M one — but conviction should.
+        firm_val = ramp(netg, TR_BFLY_GEX_LO, TR_BFLY_GEX_HI) if netg > 0 else 0.0
+
+        # THE ENVIRONMENT, AS A SOFT-NECESSARY RATHER THAN A CLIFF. PINNING is
+        # what the strategy requires, so a non-pinning tape must not reach the
+        # fire bar — but readiness exists to ARM AHEAD, so a NEUTRAL tape scores
+        # a fraction rather than zero. That is the difference between "not yet"
+        # and "never", and the old boolean could not express it.
+        gex_val = {"PINNING": 1.0, "NEUTRAL": 0.35, "TRENDING": 0.10}.get(env, 0.20)
+
+        # THE CLOCK, ramping UP toward the 12:00 window rather than switching on
+        # at it. After 14:00 the window is shut and no score should survive it.
+        try:
+            _n = now_et()
+            _mins = (_n.hour * 60 + _n.minute) - (12 * 60)
+            if _mins > 120:                       # past 14:00 — window closed
+                win_val = 0.0
+            elif _mins >= 0:                      # inside the window
+                win_val = 1.0
+            else:                                 # warming toward noon
+                win_val = ramp(TR_BFLY_WARM_MIN + _mins, 0.0, TR_BFLY_WARM_MIN)
+        except Exception:                         # noqa: BLE001
+            # ⚠️ DEFAULTING TO 1.0 HERE IS A CHOICE, NOT A SHRUG: an unreadable
+            # clock must not SUPPRESS a setup that is otherwise present. But it
+            # is also why `now_et` is imported at module scope — during the
+            # build this was reachable via a missing import, and the score would
+            # have sat at 1.0 all day while looking perfectly healthy.
+            win_val = 1.0
+
+        # COIL stays, DEMOTED from hard veto to corroborator. A coiling tape is
+        # supporting evidence for a pin holding; it was never the trade itself,
+        # and as a veto it made the score a switch on the label.
+        coil_val = 1.0 if label.upper().endswith("COMPRESSION") else (
+            0.5 if label.upper().endswith("RANGING") else 0.0)
+
+        r = _combine(hard_vetoes=[], soft_necessary=[gex_val, win_val],
+                     corroborators=[(W_BFLY_PIN, pin_val),
+                                    (W_BFLY_FIRM, firm_val),
+                                    (W_BFLY_CONV, conv_val),
                                     (W_BFLY_SQZ, sqz_val),
-                                    (W_BFLY_NARROW, narrow_val)])
+                                    (W_BFLY_NARROW, narrow_val * coil_val)])
         # v1.6 — butterfly is NEUTRAL by construction. Stamping it explicitly is
         # the point: an absent field and a deliberately sideless strategy are
         # indistinguishable to a reader, and that ambiguity is exactly what put
         # 30,565 records into one mislabeled "undecidable" bucket.
         return r, {"label": label, "dir": "neutral",
                    "conv": round(conv, 3),
-                   "squeeze_val": sqz_val, "narrow_val": round(narrow_val, 3)}
+                   "squeeze_val": sqz_val, "narrow_val": round(narrow_val, 3),
+                   "coil_val": coil_val,
+                   "gex_env": env or None, "gex_val": gex_val,
+                   "pin": (round(pin, 2) if pin else None),
+                   "pin_dist_em": (None if pin_dist_em is None else round(pin_dist_em, 3)),
+                   "pin_dist_unit": _u,
+                   "pin_val": round(pin_val, 3),
+                   "net_gex": (round(netg / 1e6, 3) if netg else None),
+                   "firm_val": round(firm_val, 3),
+                   "win_val": round(win_val, 3)}
 
     @staticmethod
     def _expected_move_now(ctx, price):
