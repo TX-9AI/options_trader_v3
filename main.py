@@ -1,5 +1,30 @@
 """
-main.py — options_trader v6.0
+main.py — options_trader v6.1
+v6.1 — 2026-08-11 — RGM.6: THE FALLBACK RESOLVES TO A KNOWN LABEL.
+        Operator: "unknown should be virtually eliminated by the time we freeze
+        layer 1… there should be ways to extrapolate and resolve to a KNOWN
+        label." The diary sizes it exactly: **L1 is all-zero on only 2.4-3.0% of
+        ticks on EVERY session since 07-15**, while the v13 fallback emitted
+        UNKNOWN on ~18-19%. A known answer existed roughly SEVEN TIMES more
+        often than we were genuinely blind, and it was discarded.
+        v5.0's hold covered STALE ticks. The other fall-through — the code's own
+        "empty committed label on a WARM book" — went straight to v13, which
+        re-derives from scratch with NO MEMORY and says UNKNOWN when nothing
+        matches its ladder.
+        THE LADDER IS NOW: committed L2 -> held incumbent -> **L1 ARGMAX** ->
+        v13. UNKNOWN is reserved for the ~2.4% that are genuinely all-zero.
+        ⚠️ CONVICTION IS CARRIED, NOT INVENTED. An L1-argmax label carries L1's
+        RAW score, which is below theta_commit by construction — that is the
+        point. Downstream gates that read conviction see a weak label as weak.
+        ⚠️ THE ENGINE TAG IS NOW FOUR STATES: [L2 c=] committed, [L2-hold c=]
+        incumbent, [L1 c=] argmax, [v13] true fallback. `grep -c '[v13]'` has
+        been the fallback-rate measure all week — with the split, a DROP in it
+        must not be read as a fix when it is a relabelling.
+        ⚠️ EXPECT UNKNOWN TO FALL TOWARD ITS ~2.4% FLOOR and the labelled
+        population to grow a low-conviction tail. Per-regime statistics are
+        therefore NOT poolable across this deploy.
+        Kill switch: OT_RGM6_L1_ARGMAX=0 restores the pre-RGM.6 ladder exactly.
+v6.0
 v6.0 — 2026-08-10 — CNT.6: CONTINUATION IS BLOCKED IN RANGING AND COMPRESSION.
         A trend continuation is a trend RESUMING after a pullback. RANGING and
         COMPRESSION are the assertion that there is no trend to continue, so the
@@ -563,6 +588,8 @@ _l2_ab: dict = {}
 # the first stale tick of a stretch and cleared on recovery, purely so a long
 # hold is visible in the log — it gates nothing.
 _l2_held     = {"regime": None, "conviction": 0.0, "since": None}
+# RGM.6 — 0 restores the pre-RGM.6 ladder exactly (v13 straight after the hold).
+RGM6_L1_ARGMAX_FALLBACK = os.environ.get("OT_RGM6_L1_ARGMAX", "1") == "1"
 _L2_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "data", "integrator_state.json")
 
@@ -739,6 +766,8 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
     # ── L2.5 override: committed integrator label drives the gate ──────────────
     l2_label = None
     l2_conv  = None
+    _l1_fallback = False          # RGM.6 — did we resolve via the L1 argmax?
+    _l1_res = None                # RGM.6 — referenced by the fallback rung
     if _REGIME_ENGINE == "l2" and _L2_OK:      # v4.7 — value is .lower()ed
         try:
             closes = None
@@ -797,6 +826,30 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
                         logger.info("L2 A/B agree=%s (switches live=%d "
                                     "shadow=%d)", st.regime, st.switches,
                                     st.shadow_switches)
+            # ── RGM.6 (2026-08-11) — RESOLVE TO A KNOWN LABEL ────────────────
+            # Operator: "unknown should be virtually eliminated by the time we
+            # freeze layer 1… there should be ways to extrapolate and resolve to
+            # a KNOWN label." The data says the answer is almost always already
+            # in hand: **L1 produces an all-zero tick only 2.4-3.0% of the time**
+            # (regime diary, every session since 07-15), while the v13 fallback
+            # emits UNKNOWN on ~18-19%. So we were discarding an available answer
+            # roughly seven times more often than we were genuinely blind.
+            # v5.0's hold covered STALE ticks only. The other fall-through —
+            # "empty committed label on a WARM book" — went to the v13
+            # classifier, which re-derives from scratch with NO MEMORY and
+            # returns UNKNOWN whenever nothing matches its ladder.
+            # THE LADDER NOW IS: committed L2 -> held incumbent -> L1 ARGMAX
+            # (a low-conviction KNOWN label) -> v13. UNKNOWN is reserved for the
+            # ~2.4% that are genuinely all-zero.
+            # ⚠️ CONVICTION IS CARRIED HONESTLY, NOT INVENTED. A held label
+            # keeps its own conviction; an L1-argmax label carries L1's raw
+            # score, which is BELOW theta_commit by construction — that is the
+            # point. Downstream gates that read conviction (continuation's
+            # floor, condor's plan) therefore see a weak label as weak.
+            # ⚠️ THE TAG CHANGES so this is legible in the logs and countable
+            # later: [L2 c=] committed, [L2-hold c=] incumbent, [L1 c=] argmax,
+            # [v13] the true fallback. Anyone counting [v13] to measure the
+            # fallback rate must know these are now four states, not two.
             elif st.stale and _l2_held["regime"]:
                 # v5.0 — HOLD THE LAST COMMITTED LABEL. This branch is the whole
                 # fix. Falling through to v1.3 here swapped the SMOOTHER out for
@@ -825,6 +878,35 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
                 l2_conv  = _l2_held["conviction"]
                 regime.primary_regime = l2_label
                 regime.conviction     = l2_conv
+            elif _l1_res is not None and RGM6_L1_ARGMAX_FALLBACK:
+                # RGM.6 — no committed label and nothing held: take L1's own
+                # argmax rather than re-deriving from scratch in v13. This is
+                # the "extrapolate to a KNOWN label" rung.
+                try:
+                    _sc = {k: v for k, v in (_l1_res.scores or {}).items()
+                           if isinstance(v, (int, float)) and v > 0.0}
+                except Exception:                      # noqa: BLE001
+                    _sc = {}
+                if _sc:
+                    _top = max(_sc, key=lambda k: _sc[k])
+                    l2_label = _top
+                    l2_conv  = float(_sc[_top])
+                    regime.primary_regime = _top
+                    regime.conviction     = l2_conv
+                    _l1_fallback = True
+                    if _l2_mute.get("why") != "l1-argmax":
+                        _l2_mute["why"] = "l1-argmax"
+                        logger.info(
+                            "L2 not committing — resolving to the L1 ARGMAX "
+                            "%s c=%.2f rather than UNKNOWN. L1 is all-zero on "
+                            "only ~2.4%% of ticks, so a known answer is almost "
+                            "always available.", _top, l2_conv)
+                else:
+                    _l1_fallback = False
+                    logger.info("L2 not committing and L1 is ALL-ZERO — this is "
+                                "the genuinely blind case (~2.4%% of ticks); "
+                                "falling back to v13.")
+
             else:
                 # v4.6 — THE SILENT GATE, NOW AUDIBLE. Import can be fine and the
                 # integrator can run without raising, yet L2 still not commit,
@@ -881,7 +963,16 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
             logger.warning("L2.5 integrator step failed (%s) — using v1.3 label", e)
 
     if regime.primary_regime != state.last_regime_name:
-        engine_tag = f" [L2 c={l2_conv:.2f}]" if l2_label else " [v13]"
+        # RGM.6 — four states, not two. Anyone counting [v13] to measure the
+        # fallback rate must know that.
+        if l2_label and _l1_fallback:
+            engine_tag = f" [L1 c={l2_conv:.2f}]"
+        elif l2_label and _l2_held.get("since") is not None:
+            engine_tag = f" [L2-hold c={l2_conv:.2f}]"
+        elif l2_label:
+            engine_tag = f" [L2 c={l2_conv:.2f}]"
+        else:
+            engine_tag = " [v13]"
         logger.info(
             f"REGIME: {state.last_regime_name} → {regime.primary_regime} "
             f"(conviction={regime.conviction:.2f} trigger={trigger}){engine_tag}"

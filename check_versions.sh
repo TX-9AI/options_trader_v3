@@ -5,6 +5,11 @@
 #         the session-pool gate (London overlaps RTH by 2.5h, so its level is
 #         set by the price being traded), and the recovery anchor (from the
 #         wick, a deeper rejection reads as a farther entry).
+# v4.48 — 2026-08-11 — RGM.6. The load-bearing canary is the L1-argmax rung
+#         itself: without it the fallback silently reverts to v13 and UNKNOWN
+#         climbs back to ~18% with nothing erroring. Also pins the four-state
+#         engine tag, because [v13] has been the fallback-rate measure and a
+#         collapse back to two states makes that number mean something else.
 # v4.47 — 2026-08-11 — LIQ.1 + LIQ.3 + SWP.4 + SWP.5. Six canaries, every one
 #         guarding a SILENT failure: the dedupe tiebreak (losing it empties
 #         swept_named_level and the SWEEP score is exactly 0.000, no error), the
@@ -474,7 +479,7 @@ check "analysis/trade_readiness.py"      "readiness_would_fire"         "v1.0 wo
 check "analysis/trade_readiness.py"      "TR_DEARM_SLOPE"               "v1.0 slope de-arm knob (falling confluence disarms)"
 check "analysis/trade_readiness.py"      "0.5 \*\* (dt / TR_SLOPE_HALFLIFE_S)" "v1.0 dt-aware slope EMA (wall-clock, no tick counters)"
 check "main.py"                          "_readiness.assess_all(ctx, regime)" "v4.3 readiness hooked in the every-tick block"
-check "main.py"                          "main.py — options_trader v6.0" "v6.0 main header current (ORB exempt from the stale entry gate)"
+check "main.py"                          "main.py — options_trader v6.1" "v6.1 main header current (ORB exempt from the stale entry gate)"
 check "main.py"                          "_orb_exempt"                  "v5.4 confirmed ORB bypasses the stale entry block"
 check "main.py"                          "STALE book, but ORB is CONFIRMED"  "v5.4 the exempt path says why in the log"
 check "tests/orb_stale_block_audit.py"   "ORB confirmed"                "v1.0 the cost of the gate is measurable, not asserted"
@@ -558,7 +563,7 @@ check "analysis/conviction_integrator.py" "theta_commit_by_regime"     "v2.3 RGM
 check "analysis/conviction_integrator.py" "p.commit_bar(top_r)"        "v2.3 the ARMING site uses the challenger's own bar, not the global"
 check "tests/test_ranging_commit_bar.py" "test_the_bar_stays_out_of_the_impostor_window" "v1.0 the bar may move; it may not move into the 12-15 bar false-flat zone"
 check "main.py"                          "not _cont_blocked"           "v6.0 CNT.6 — the runaway bypass must NOT reopen the premium regimes; its return is silent"
-check "main.py"                          "main.py — options_trader v6.0" "v6.0 header current"
+check "main.py"                          "main.py — options_trader v6.1" "v6.1 header current"
 check "config.py"                        "OT_CONT_BLOCK_PREMIUM"       "v6.0 kill switch AND A/B control"
 check "tests/test_continuation_premium_block.py" "test_runaway_cannot_bypass_a_premium_regime" "v1.0 the guard that matters"
 check "strategy/continuation_strategy.py" "CONT_CONFIRM_TOL_ATR"        "v1.6 CNT.7 — the confirmation tolerance must be ATR-scaled, never raw price"
@@ -575,7 +580,7 @@ check "analysis/regime_confluence.py"    '"DECELERATING": 0.25, "": 0.6' "v1.4 a
 check "analysis/regime_confluence.py"    '"ACCELERATING": 0.0, "": 0.0' "v1.4 absence must not CORROBORATE either — the asymmetry is deliberate"
 check "tests/test_sweep_spent_move.py"   "test_pltr_protection_survives" "v1.0 the guard that matters"
 check "main.py"                          "_L1_BREAKDOWN_FOR"           "v5.9 L1 evidence recorded at the fire, not replayed later"
-check "main.py"                          "main.py — options_trader v6.0" "v6.0 main header current"
+check "main.py"                          "main.py — options_trader v6.1" "v6.1 main header current"
 check "tests/test_disposition_l1_capture.py" "test_orb_records_no_breakdown_by_design" "v1.0 ORB is regime-immune — a mapping there would imply a dependency that does not exist"
 check "tests/test_readiness_market_snapshot.py" "READ_from_the_engine_not_derived" "v1.0 side comes from the engine, never a derived sign"
 check "tests/test_readiness_peg_count.py" "counts_ramps_not_raw_values"  "v1.0 one definition of pegged"

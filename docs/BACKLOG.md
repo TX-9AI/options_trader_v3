@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.25
+# docs/BACKLOG.md — v4.27
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -3446,6 +3446,42 @@ roadmap explicitly permits during the freeze (L3.1/L3.2/P3 phase 1 drive nothing
   weeks already.
 
 **⬜ Fri Aug 14 — AFTER THE CLOSE**
+- `[DESK]` **RGM.5 — CUT THE v13 CLASSIFIER'S SWEEP_REVERSAL BRANCH. MEASURED
+  2026-08-11, DEFERRED TO TODAY BY THE OPERATOR.** Rationale for the deferral,
+  in their words: "we've made a lot of engine changes in the last two days,
+  let's give it till close of business Friday." Correct — CNT.4/5/6/7, SWP.3/4/5,
+  RGM.4, LIQ.1/3 and BFLY.1 all landed inside 48 hours and none has a full week
+  of sessions behind it.
+  **THE MEASUREMENT IS DONE — `tests/rgm5_fallthrough.py` v1.0, 3 tapes / 3,007
+  ticks, using the SHIPPING engines rather than stubs** (stubbing vol/trend/
+  structure would decide the answer by construction). Ask the shipping
+  classifier twice, once with `_is_sweep_reversal` disabled:
+      SWEEP_REVERSAL is **0.7% of v13 ticks** (22 of 3,007)
+      they become: TRENDING_BULL 40.9% · UNKNOWN 36.4% · COMPRESSION 18.2% ·
+                   TRENDING_BEAR 4.5%
+      ⇒ **14 of 22 newly tradeable, 8 still dead. The cut buys ~0.45% of ticks.**
+  **THE BACKLOG'S PREDICTION WAS WRONG AND IS RETRACTED:** it expected mostly
+  BREAKOUT_VOLATILE (subtractive, would have MOVED the dead zone). Only 0.1% of
+  all v13 ticks are BREAKOUT at all. The cut is directionally right; it is just
+  small.
+  **⇒ RECOMMENDATION: cut it, but it is not urgent.** Read the split against
+  what each label enables at dispatch, then remove the branch.
+
+- `[DESK·DATA]` **⚠️ RGM.6 — `UNKNOWN` IS 19.0% OF v13 CLASSIFIER LABELS, AND
+  IT IS 27x THE SWEEP DEAD ZONE.** Found incidentally while measuring RGM.5 and
+  it is the more valuable finding by an order of magnitude. UNKNOWN trips the
+  HARD GATE at the top of dispatch — only ORB carries a bypass — so on roughly
+  **one fallback tick in five, four of the five strategies are structurally
+  excluded.** Corroborated live: the 08-11 fit report shows UNKNOWN at 18.1%
+  against 4% in the offline L1 harness, so this is not a tape artefact.
+  ⚠️ NOTE THE ASYMMETRY WITH L1: acceptance check A5 ("no all-zero ticks,
+  UNKNOWN eliminated") passes at 2% on the same date. So L1 has essentially
+  eliminated UNKNOWN and the **v13 fallback classifier has not** — the two
+  layers disagree about a fifth of the fallback tape. Measure what those ticks
+  ARE before proposing anything: the same `rgm5_fallthrough.py` prints the full
+  v13 distribution and can be pointed at this directly.
+
+
 - `[DESK·DATA]` **NF.1 — examine the trades data for pairs that were NEVER
   favourable, and make adjustments.** Operator request 2026-08-08. Which trade
   combinations x market conditions have no salvage in them — they lose more than
@@ -4821,6 +4857,51 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.27 — 2026-08-11 EOD — RGM.6 SHIPPED: THE FALLBACK RESOLVES TO A KNOWN
+  LABEL.** Operator: "unknown should be virtually eliminated by the time we
+  freeze layer 1… there should be ways to extrapolate and resolve to a KNOWN
+  label" — and, on scheduling, "that one can ship right now, we already have
+  enough on our plate Friday."
+  **THE DIARY SIZES IT EXACTLY.** L1 is all-zero on **2.4-3.0% of ticks on every
+  session since 07-15** (stale flat at 6.5-6.8%), while the v13 fallback emitted
+  UNKNOWN on **~18-19%**. A known answer existed roughly SEVEN TIMES more often
+  than the engine was genuinely blind, and it was discarded every time.
+  **CAUSE:** v5.0's hold covered STALE ticks only. The other fall-through — the
+  code's own "empty committed label on a WARM book" — went straight to the v13
+  classifier, which re-derives from scratch with NO MEMORY.
+  **FIX (main v6.1):** the ladder is now committed L2 → held incumbent → **L1
+  ARGMAX** → v13, and UNKNOWN is reserved for the ~2.4% that are genuinely
+  all-zero. ⚠️ Conviction is CARRIED, not invented: an L1-argmax label carries
+  L1's raw score, below theta_commit by construction, so downstream gates see a
+  weak label as weak. `OT_RGM6_L1_ARGMAX=0` restores the old ladder.
+  **⚠️ THE ENGINE TAG IS NOW FOUR STATES — [L2 c=] / [L2-hold c=] / [L1 c=] /
+  [v13].** `grep -c '[v13]'` has been the fallback-rate measure all week; a DROP
+  in it after this deploy is a RELABELLING, not a fix. Count the four.
+  **⚠️ EXPECT per-regime statistics to be NOT POOLABLE across this deploy** —
+  the labelled population gains a low-conviction tail that did not exist before.
+  6 tests, 4 canaries, suite 411.
+  **AND A DATED FINDING WORTH CARRYING: F7 IS WHAT KILLED RANGING, not the ramp
+  de-saturation.** The diary dates it precisely — 08-06 RANG **28%** at
+  churn-cut 1.49x; 08-07 RANG **3%** at churn-cut **7.59x**. Protecting the
+  incumbent stopped a regime that cannot clear theta_commit from ever taking the
+  label. RGM.4's recovery to 4% on 08-11 is exactly the doubling it predicted,
+  and confirms the diagnosis from the other side.
+- **v4.26 — 2026-08-11 EOD — RGM.5 MEASURED AND DEFERRED TO FRI AUG 14; RGM.6
+  FILED.** Operator: "we've made a lot of engine changes in the last two days,
+  let's give it till close of business Friday." The measurement the 08-11 item
+  required is DONE (`tests/rgm5_fallthrough.py` v1.0, read-only): SWEEP_REVERSAL
+  is **0.7% of v13 classifier ticks**, and cutting the branch makes **14 of 22
+  newly tradeable** — about **0.45% of all ticks**. Directionally right, small.
+  **The backlog's own prediction is RETRACTED** — it expected the ticks to land
+  on BREAKOUT_VOLATILE and MOVE the dead zone; only 0.1% of v13 ticks are
+  BREAKOUT at all. **⚠️ MY FIRST VERDICT IN THAT TOOL WAS ALSO WRONG and is
+  fixed in v1.0: it counted only BREAKOUT as "still dead" and therefore called a
+  63.6% UNKNOWN fall-through a genuine improvement. UNKNOWN is the SAME dead
+  zone wearing a different name** — it hard-gates everything but ORB.
+  **THE BIGGER FINDING, filed as RGM.6: UNKNOWN is 19.0% of v13 labels — 27x the
+  sweep dead zone**, and L1's A5 acceptance check reports UNKNOWN eliminated at
+  2% on the same date. The two layers disagree about a fifth of the fallback
+  tape, and the live fit report's 18.1% says it is not a tape artefact.
 - **v4.25 — 2026-08-11 — LIQ.1 + SWP.4: THREE DEFECTS THAT ZEROED THE SWEEP
   SCORE ON TEXTBOOK RAIDS.** Operator: "we have to unshackle it." Found by
   running the REAL code over a FABRICATED tape carrying an engineered PDL sweep
