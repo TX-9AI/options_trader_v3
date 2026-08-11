@@ -1,5 +1,31 @@
 """
-strategy/continuation_strategy.py — Trend-continuation on pullback. — v1.5
+strategy/continuation_strategy.py — Trend-continuation on pullback. — v1.6
+v1.6 — 2026-08-11 — CNT.7: THE CONFIRMATION WAS TOO LITERAL AND WAS REJECTING
+        TIES. v1.5 required the confirmation bar to close STRICTLY beyond the
+        tagging bar's extreme. First live session, on a strong downtrend day the
+        operator watched go untraded:
+            QQQ  need < 720.26  got 720.34   (8c,  0.011%)
+            PLTR need < 175.18  got 175.22   (4c,  0.023%)
+            CVX  need > 194.94  got 194.91   (3c)
+            TSLA need > 334.39  got 334.35   (4c)
+            SPX  need < 7735.58 got 7737.13  (1.55, 0.02%)
+        The bar closed essentially AT the extreme and failed on a rounding-level
+        margin. The thesis was right; the comparison was not.
+        NOW: the threshold carries a tolerance of CONT_CONFIRM_TOL_ATR * ATR —
+        the same principle as the BOS distance floor, because a fixed cent value
+        cannot serve both QQQ and GLD.
+        ⚠️ 0.40 IS DERIVED FROM THE SESSION. Every logged miss in ATR units
+        splits into two populations with NOTHING between them: ties at
+        0.073-0.360, genuine failures at 1.133-3.355. A 3x gap. My first draft
+        used 0.05, which would have rejected EVERY case above — a no-op wearing
+        the name of a fix, caught only by testing the constant against the
+        actual logged misses instead of shipping it.
+        ⚠️ ONE SESSION of evidence. The gap is wide and the classes unambiguous,
+        but re-derive once a week of post-deploy misses exists.
+        Also logs the MISS and the TOLERANCE, because being able to read
+        `need` against `got` is exactly what turned "the gate is firing" into
+        "the gate is failing by four cents".
+        Kill switch: OT_CONT_CONFIRM_TOL_ATR=0 restores v1.5 exactly.
 v1.5 — 2026-08-10 — 1-BAR CONFIRMATION. The FVG tag alone commits while price is
         still moving AGAINST the trend: the trade is a bet on a resumption that
         has not happened yet. Leading suspect for the 40% never-favourable
@@ -190,6 +216,7 @@ from config import CONTINUATION_STOP_LOSS_PCT   # 0.25 default
 from config import CONT_BREAKOUT_DIRECTION, CONT_BREAKOUT_MIN_ADX  # CNT.1
 from config import CONT_HANDOFF_BLOCK_COMPRESSION                  # CNT.3
 from config import CONTINUATION_REQUIRE_CONFIRM                    # v1.5
+from config import CONT_CONFIRM_TOL_ATR                            # v1.6
 CONTINUATION_TP_PCT          = 1.0    # nominal; runner is exhaustion-trailed, not TP-capped
 CONTINUATION_HANDOFF_CONV_RELAX = 0.10  # handoff path lowers the conviction floor by this
 
@@ -448,14 +475,25 @@ class ContinuationStrategy(BaseOptionsStrategy):
             try:
                 tag_bar = df_1m.iloc[-3]
                 cfm_bar = df_1m.iloc[-2]
+                # v1.6 — TOLERANCE IN ATR UNITS. v1.5's strict comparison was
+                # rejecting TIES: the first live session shows misses of 3-9
+                # cents (QQQ 0.011%, PLTR 0.023%) — the bar closed AT the
+                # extreme and failed on a rounding-level margin. Same principle
+                # as the BOS distance floor: express the threshold in the
+                # symbol's own noise units, never in raw price, because a fixed
+                # cent value cannot serve both QQQ and GLD.
+                _atr = float(getattr(vol_state, "atr_current", 0.0) or 0.0)
+                _tol = max(0.0, CONT_CONFIRM_TOL_ATR) * _atr
                 if direction == "long":
                     _tag_ok   = float(tag_bar["low"]) <= (gap.top - CONTINUATION_FVG_TAG_MIN)
-                    confirmed = _tag_ok and float(cfm_bar["close"]) > float(tag_bar["high"])
-                    _need, _got = float(tag_bar["high"]), float(cfm_bar["close"])
+                    _need     = float(tag_bar["high"]) - _tol
+                    confirmed = _tag_ok and float(cfm_bar["close"]) > _need
+                    _got      = float(cfm_bar["close"])
                 else:
                     _tag_ok   = float(tag_bar["high"]) >= (gap.bottom + CONTINUATION_FVG_TAG_MIN)
-                    confirmed = _tag_ok and float(cfm_bar["close"]) < float(tag_bar["low"])
-                    _need, _got = float(tag_bar["low"]), float(cfm_bar["close"])
+                    _need     = float(tag_bar["low"]) + _tol
+                    confirmed = _tag_ok and float(cfm_bar["close"]) < _need
+                    _got      = float(cfm_bar["close"])
             except (IndexError, KeyError, TypeError, ValueError):
                 # REFUSE. Falling through here would restore the unconfirmed
                 # entry invisibly, and only on thin tape — an absent
@@ -464,10 +502,15 @@ class ContinuationStrategy(BaseOptionsStrategy):
                             "(insufficient 1m bars) — no entry")
                 return None
             if not confirmed:
+                # v1.6 — log the MISS and the TOLERANCE. The first live session's
+                # value was that `need`/`got` could be read against each other;
+                # printing the gap directly is what turned "the gate is firing"
+                # into "the gate is failing by 4 cents". Keep it that way.
                 logger.info(
                     f"[continuation] tagged but NOT CONFIRMED: need close "
                     f"{'>' if direction == 'long' else '<'} {_need:.2f}, "
-                    f"got {_got:.2f} — waiting for the resumption bar")
+                    f"got {_got:.2f} (miss {abs(_got - _need):.2f}, "
+                    f"tol {_tol:.2f}) — waiting for the resumption bar")
                 return None
 
         if not tagged:

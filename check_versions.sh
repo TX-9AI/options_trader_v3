@@ -1,4 +1,8 @@
 #!/bin/bash
+# v4.45 — 2026-08-11 — CNT.7 confirmation tolerance. The canary pins the ATR
+#         form, because the failure mode is a SILENT NO-OP: a tolerance too
+#         small to admit any real tie leaves the gate exactly as strict while
+#         looking fixed. My first draft was 0.05 and did precisely that.
 # v4.44 — 2026-08-11 — BFLY.1 butterfly readiness rewritten around the pin.
 #         The load-bearing canary is the ABSENCE of `coil` from hard_vetoes.
 #         `_combine` treats hard_vetoes as a ZERO TEST, so restoring it there
@@ -543,9 +547,12 @@ check "main.py"                          "not _cont_blocked"           "v6.0 CNT
 check "main.py"                          "main.py — options_trader v6.0" "v6.0 header current"
 check "config.py"                        "OT_CONT_BLOCK_PREMIUM"       "v6.0 kill switch AND A/B control"
 check "tests/test_continuation_premium_block.py" "test_runaway_cannot_bypass_a_premium_regime" "v1.0 the guard that matters"
+check "strategy/continuation_strategy.py" "CONT_CONFIRM_TOL_ATR"        "v1.6 CNT.7 — the confirmation tolerance must be ATR-scaled, never raw price"
+check "config.py"                        "OT_CONT_CONFIRM_TOL_ATR"     "v1.6 kill switch AND A/B control"
+check "tests/test_continuation_confirmation.py" "test_a_too_small_tolerance_would_be_a_no_op" "v1.6 guards against a fix in name only"
 check "strategy/continuation_strategy.py" "CONTINUATION_REQUIRE_CONFIRM" "v1.5 the tag is the SETUP, the next bar is the TRIGGER"
 check "strategy/continuation_strategy.py" "confirmation UNDECIDABLE"    "v1.5 thin tape REFUSES — an absent confirmation is not a passed one"
-check "strategy/continuation_strategy.py" "continuation_strategy.py — Trend-continuation on pullback. — v1.5" "v1.5 header current"
+check "strategy/continuation_strategy.py" "continuation_strategy.py — Trend-continuation on pullback. — v1.6" "v1.6 header current"
 check "config.py"                        "OT_CONT_REQUIRE_CONFIRM"     "v1.5 kill switch AND A/B control"
 check "tests/test_continuation_confirmation.py" "test_undecidable_refuses_rather_than_passes" "v1.0 the guard that matters"
 check "analysis/regime_confluence.py"    "soft_necessary=.trend_opp, age_decay." "v1.4 PLTR GUARD — trend_opp stays multiplicative; ambient must never rescue an opposed sweep"

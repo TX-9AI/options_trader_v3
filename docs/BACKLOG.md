@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.23
+# docs/BACKLOG.md — v4.24
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -4821,6 +4821,34 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.24 — 2026-08-11 — CNT.7: the confirmation gate was rejecting TIES.**
+  Operator, on a strong downtrend day that went untraded: "that's about as
+  strong a trend as we're gonna get… it's too literal right now." Correct.
+  CNT.4 required the confirmation bar to close STRICTLY beyond the tagging
+  bar's extreme, and the live log shows misses of **3-9 cents** — QQQ 720.34 vs
+  720.26 (0.011%), PLTR 175.22 vs 175.18 (0.023%), CVX 3c, TSLA 4c, SPX 1.55 on
+  7735 (0.02%). The bar closed AT the extreme and was rejected on a
+  rounding-level margin. **The thesis was right; the comparison was not.**
+  Fixed with an ATR-scaled tolerance (continuation_strategy v1.6), same
+  principle as the BOS distance floor — a fixed cent value cannot serve both
+  QQQ and GLD.
+  **0.40 IS DERIVED, NOT PREFERRED.** Every logged miss in ATR units splits
+  into two populations with NOTHING between them: **ties 0.073-0.360, genuine
+  failures 1.133-3.355** — a 3x gap. Any value between separates them.
+  **⚠️ MY FIRST DRAFT WAS 0.05 AND WOULD HAVE REJECTED EVERY ONE OF THEM** — a
+  no-op wearing the name of a fix. Caught only by testing the constant against
+  the actual logged misses instead of shipping it, and now pinned by a test so
+  it cannot come back. One session of evidence; re-derive after a week.
+  **ALSO FOUND IN THE SAME LOGS: the counts are inflated ~3-4x.** The
+  confirmation re-evaluates every 15s against the same closed bar pair, so ONE
+  setup logs up to four identical lines (QQQ 15:23:15/30/45, 15:24:00 all read
+  `need 720.21 got 720.66`). Fleet-wide 165 NOTCONF is really ~50 distinct
+  setups. Not fixed — the duplication is harmless and de-duplicating it is a
+  separate change — but **do not read NOTCONF as a setup count.**
+  **AND CNT.6 IS WORKING HARD:** GLD **273** blocks, LLY **419**, TSLA 80,
+  META 62, NFLX 50, all with NOTCONF=0 — those boxes sat in premium regimes all
+  day and continuation was correctly refused. That is the squeeze fix doing its
+  job on its first session. 12 tests, 3 canaries, suite 397 passed.
 - **v4.23 — 2026-08-11 — BFLY.1: the butterfly readiness track was scoring a
   DIFFERENT TRADE from the one the strategy fires.** Operator: "the intent of
   that trade was if GEX was pinning and we had reason to believe price would

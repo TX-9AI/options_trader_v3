@@ -130,3 +130,65 @@ def test_undecidable_refuses_rather_than_passes():
     assert raised, \
         "the lookback must raise on thin tape so the caller can REFUSE — an " \
         "absent confirmation is not a passed one"
+
+
+# ── v1.6 — THE TOLERANCE (added 2026-08-11) ─────────────────────────────────
+# v1.5's STRICT comparison rejected TIES. The first live session logged misses
+# of 3-9 cents — QQQ 0.011%, PLTR 0.023% — where the confirmation bar closed
+# essentially AT the tagging bar's extreme and failed on a rounding-level
+# margin. The thesis was right; the comparison was too literal.
+#
+# 0.40 ATR IS DERIVED. Every logged miss expressed in ATR units splits into two
+# populations with NOTHING between them:
+#     ties    0.073 0.229 0.300 0.318 0.333 0.344 0.360
+#     genuine 1.133 1.442 1.694 1.743 3.355
+# A 3x gap, so any value in between separates them; 0.40 clears the tie tail
+# with a wide margin to the nearest real failure.
+#
+# ⚠️ MY FIRST DRAFT USED 0.05 AND WAS A NO-OP. It rejected every case above —
+# a fix in name only. Caught by testing the constant against the actual logged
+# misses rather than shipping it. That is what these two tests preserve.
+
+TIE_MISSES_ATR = [0.073, 0.229, 0.300, 0.318, 0.333, 0.344, 0.360]
+REAL_MISSES_ATR = [1.133, 1.442, 1.694, 1.743, 3.355]
+
+
+def _passes(miss_atr, tol=None):
+    tol = config.CONT_CONFIRM_TOL_ATR if tol is None else tol
+    return miss_atr < tol
+
+
+def test_the_tolerance_admits_every_observed_tie():
+    for m in TIE_MISSES_ATR:
+        assert _passes(m), \
+            f"a {m:.3f} ATR miss is a TIE — the bar closed AT the extreme. " \
+            f"Rejecting it is what silenced continuation on a strong trend day"
+
+
+def test_the_tolerance_still_rejects_every_genuine_failure():
+    for m in REAL_MISSES_ATR:
+        assert not _passes(m), \
+            f"a {m:.3f} ATR miss is a real failure to resume — admitting it " \
+            f"reopens the unconfirmed entries CNT.4 exists to stop"
+
+
+def test_the_value_sits_inside_the_measured_gap():
+    """Guards the DERIVATION, not just the number."""
+    assert max(TIE_MISSES_ATR) < config.CONT_CONFIRM_TOL_ATR < min(REAL_MISSES_ATR), \
+        f"{config.CONT_CONFIRM_TOL_ATR} must sit between the tie tail " \
+        f"({max(TIE_MISSES_ATR)}) and the nearest genuine failure " \
+        f"({min(REAL_MISSES_ATR)}) — outside that range it is either a no-op " \
+        f"or it readmits unconfirmed entries"
+
+
+def test_a_too_small_tolerance_would_be_a_no_op():
+    """The 0.05 draft: a fix in name only. Pinned so it cannot come back."""
+    assert not any(_passes(m, tol=0.05) for m in TIE_MISSES_ATR), \
+        "0.05 ATR rejects every observed tie — if this ever passes, the " \
+        "measured misses have changed and the constant must be re-derived"
+
+
+def test_zero_restores_the_strict_comparison():
+    assert not any(_passes(m, tol=0.0) for m in TIE_MISSES_ATR + REAL_MISSES_ATR), \
+        "OT_CONT_CONFIRM_TOL_ATR=0 must be the exact v1.5 behaviour, or there " \
+        "is no kill switch and no A/B control"

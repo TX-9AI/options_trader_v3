@@ -855,3 +855,31 @@ BOS_MIN_DIST_ATR = float(os.getenv("OT_BOS_MIN_DIST_ATR", "0.35"))
 # check cannot stop the slot being consumed before P3/P4 are reached.
 # Set to 0 to restore the pre-CNT.6 behaviour exactly (kill switch and A/B).
 CONT_BLOCK_PREMIUM_REGIMES = os.getenv("OT_CONT_BLOCK_PREMIUM", "1") == "1"
+
+# ── CONTINUATION CONFIRMATION TOLERANCE (v1.6, 2026-08-11) ───────────────────
+# v1.5 required the confirmation bar to close STRICTLY beyond the tagging bar's
+# extreme. Measured on the first live session, that failed BY PENNIES:
+#   QQQ  need < 720.26  got 720.34   (8c, 0.011%)
+#   PLTR need < 175.18  got 175.22   (4c, 0.023%)
+#   CVX  need > 194.94  got 194.91   (3c)
+#   TSLA need > 334.39  got 334.35   (4c)
+#   SPX  need < 7735.58 got 7737.13  (1.55, 0.02%)
+# Those are TIES, not failed resumptions — the bar closed essentially AT the
+# extreme and was rejected on a rounding-level margin. The thesis is right; the
+# comparison was too literal.
+# Expressed in ATR so it scales with the symbol: an 8c miss is nothing on QQQ
+# and everything on GLD, and a fixed cent value could never serve both.
+# 0.40 IS DERIVED FROM THE SESSION, NOT PREFERRED. Expressing every logged miss
+# in ATR units produces a CLEAN GAP with nothing in it:
+#   near-misses (ties):  0.073 · 0.229 · 0.300 · 0.318 · 0.333 · 0.344 · 0.360
+#   genuine failures:    1.133 · 1.442 · 1.694 · 1.743 · 3.355
+# The two populations separate at better than 3x, so any value between 0.36 and
+# 1.13 splits them and 0.40 sits just past the near-miss tail with a wide margin
+# before the nearest real failure. My first draft used 0.05 and would have
+# rejected EVERY case above — a no-op wearing the name of a fix, caught only by
+# testing the constant against the actual logged misses instead of shipping it.
+# ⚠️ ONE SESSION. The gap is wide and the classes are unambiguous, but this is
+# a single day's evidence — re-derive it once a week of post-deploy misses
+# exists rather than treating 0.40 as settled.
+# 0.0 restores the strict v1.5 comparison exactly (kill switch and A/B control).
+CONT_CONFIRM_TOL_ATR = float(os.getenv("OT_CONT_CONFIRM_TOL_ATR", "0.40"))
