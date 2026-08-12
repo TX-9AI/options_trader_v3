@@ -5,6 +5,12 @@
 #         the session-pool gate (London overlaps RTH by 2.5h, so its level is
 #         set by the price being traded), and the recovery anchor (from the
 #         wick, a deeper rejection reads as a farther entry).
+# v4.49 — 2026-08-11 — PF.2 containment anchor + weight-0 observer. The
+#         load-bearing canary is the §4.4 CONFIRMATION LAG guard: without it the
+#         builder returns forks anchored on information that did not exist when
+#         P2 printed, nothing errors, and every backtest result from them is
+#         fiction. Also pins the 1d frame depth — the boxes hold 84 daily bars
+#         and the engines were being handed 10.
 # v4.48 — 2026-08-11 — RGM.6. The load-bearing canary is the L1-argmax rung
 #         itself: without it the fallback silently reverts to v13 and UNKNOWN
 #         climbs back to ~18% with nothing erroring. Also pins the four-state

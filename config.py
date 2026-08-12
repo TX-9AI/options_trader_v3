@@ -737,7 +737,13 @@ FED_EVENT_KEYWORDS          = ["FOMC", "Fed", "Federal Funds Rate", "Powell"]
 # ─── TIMEFRAMES ───────────────────────────────────────────────────────────────
 
 TIMEFRAMES = {
-    "1d":  {"candles": 10,  "role": "bias"},
+    # PF.2 (2026-08-11) — RAISED 10 -> 60. The boxes were VERIFIED to already
+    # hold 84 daily bars (2026-06-11 -> 08-11, checked on SPX and GLD); this
+    # number was clipping the frame handed to the engines to 10, which is below
+    # the pitchfork anchor rule's minimum and made RECENCY=40 unsatisfiable.
+    # The history was never missing — the frame was. No new fetch, no new
+    # timing, nothing for session_guard to collide with.
+    "1d":  {"candles": 60,  "role": "bias"},
     "1h":  {"candles": 50,  "role": "structure"},
     # v4.1: 150, not 50. Below EMA_SLOW+5=55 the vote is NEUTRAL; below ~80 the
     # EMA-50 is re-seeded on the tail and materially wrong. See the header.

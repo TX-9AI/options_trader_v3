@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.28
+# docs/BACKLOG.md — v4.29
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -4996,6 +4996,60 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.29 — 2026-08-11 EOD — PF.2: THE PITCHFORK OVERLAY SHIPS, WEIGHT 0.**
+  Operator: "build it & send it. I'll deploy it now & we will see what happens
+  tomorrow. It's observe only, so win-win." Gates nothing, is read by no
+  strategy, never raises.
+  **⚠️ IT CAN LEGITIMATELY COLLECT THROUGH THE FREEZE.** EPOCH 2 hands off
+  L1/L2/entry logic Aug 17 → Aug 30 but "everything else this epoch is offline
+  or log-only". A weight-0 overlay IS log-only, so unlike RGM.5 and the London
+  bonus this does NOT face the Mon Aug 17 deadline — it gets two extra weeks of
+  observation while everything else is frozen.
+  - **THE PREREQUISITE WAS ONE NUMBER, AND THE DATA WAS ALREADY THERE.**
+    Verified live on SPX and GLD: each box holds **84 daily bars (2026-06-11 →
+    08-11)** in its own `feed_store.db`, while `TIMEFRAMES["1d"]["candles"] = 10`
+    clipped the frame handed to the engines to ten. **The history was never
+    missing — the frame was.** Raised to 60. No new fetch, no new timing, no
+    batching, nothing for session_guard to collide with. Every collection scheme
+    discussed tonight (batched wakes, harvest-time pulls, an RTH-open fetch,
+    yfinance, the TastyTrade sandbox) was solving a problem that did not exist.
+  - **§4.3.6 CONTAINMENT ANCHOR (pitchfork v1.3) — the operator's construction:**
+    "start at the present date and go backwards, and anything that falls out of
+    the channel is not included in this pitchfork." **It INVERTS §4.3** —
+    containment defines the extent, anchors follow. **It REMOVES a parameter
+    rather than adding one:** §4.3's RECENCY imposes one timescale on every
+    symbol, and the objection was that "some forks are gonna be shorter than
+    other ones — some will be a week old, some months." Under containment the
+    span is an OUTPUT. Measured, identical parameters: **NVDA 1h 12 bars, SPX 1h
+    32, SMCI 1h 139.** And it BUILDS where §4.3 refuses all six symbol-timeframes
+    tested: SMCI 1d **100% of closes contained, price at 42% of channel**.
+  - **AN OPEN QUESTION CLOSED:** §12 listed variant choice as "reasoned, not
+    evidenced". On SMCI daily modified_schiff contains 100% while raw **Andrews
+    produces no contained fork at all** — the steep-median pathology §3.2
+    predicted, now measured.
+  - **`analysis/pitchfork_observer.py` v1.0** — box-local, per the operator's
+    architecture rule ("the bots were designed to function without a controller;
+    the controller is only intended if you're running a fleet"). Builds daily +
+    hourly on a 5-min cadence from the box's own frames, journals `pitchfork`
+    with `pos_pct` — **0% = on the lower tine, 100% = the upper.** That is the
+    join key for the first consumer.
+  **⚠️ THE FIRST CONSUMER IS CONTINUATION'S PULLBACK RAIL, NOT THE CONDOR.** The
+  measurement plan named condor strikes, but the selector wakes MOVERS by design
+  so the condor is structurally starved (1 plan, 0 fills on 08-11) — and the
+  pitchfork is a TREND object being validated on a RANGE trade. Continuation is
+  now the best strategy in the book and fires 13-76 times a session. **The touch
+  study needed n≈600 and was unreachable; "where was price relative to the rail
+  when continuation fired" is ONE observation per trade.**
+  **⚠️ WHAT THIS HAS NOT ESTABLISHED: that the fork PAYS.** Containment is easy
+  on a wide channel. §11 still governs — **v4.0 tags when TWO consumers are
+  independently proven**, not when the overlay exists.
+  **⚠️ THIRD DELIBERATE-FAILURE CHECK TODAY THAT PASSED WHEN IT SHOULD HAVE GONE
+  RED.** Deleting the §4.4 confirmation-lag guard broke nothing, because the
+  fixture's P2 sat mid-frame where the guard never fires. Fixed with
+  `_leg_p2_at_the_edge` — P2 within k of the end is the ONLY shape that
+  exercises it. A fork born before its lag is served is anchored on information
+  that did not exist, and every backtest result from it is fiction.
+  11 tests, 5 canaries, suite 421.
 - **v4.28 — 2026-08-11 EOD — THE DAY SCRUBBED: fixes registered, unresolved
   carried.** Operator: "scrub the backlog, add our fixes and our unresolved for
   the day."

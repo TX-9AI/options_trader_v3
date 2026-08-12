@@ -1,5 +1,33 @@
 """
-analysis/pitchfork.py — options_trader_v3 — v1.2
+analysis/pitchfork.py — options_trader_v3 — v1.3
+
+v1.3 — 2026-08-11 — PF.2: §4.3.6 CONTAINMENT ANCHOR.
+        The operator's construction: "start at the present date and go
+        backwards, and anything that falls out of the channel is not included in
+        this pitchfork." That INVERTS §4.3 — instead of selecting three pivots
+        and hoping the resulting channel fits, CONTAINMENT DEFINES THE EXTENT
+        and the anchors follow from it.
+        ⚠️ IT REMOVES A PARAMETER RATHER THAN ADDING ONE. §4.3's RECENCY (R=40)
+        imposes ONE timescale on every symbol; the operator's objection was that
+        "some forks are gonna be shorter than other ones — some will be a week
+        old, some months, based on magnitude of moves." Under containment the
+        span is an OUTPUT. Measured, identical parameters: NVDA 1h 12 bars,
+        SPX 1h 32, SMCI 1h 139 — one rule, three epochs.
+        ⚠️ AND IT BUILDS WHERE §4.3 REFUSES EVERYTHING. On the 30-day tapes the
+        pivot rule returns SEPARATION / STRUCTURAL / FEWER_THAN_3 on all six
+        symbol-timeframes tested; containment builds SMCI 1d at 100% of closes
+        contained with price at 42% of channel, SMCI 1h 100%, SPX 1h 97%.
+        ⚠️ EVIDENCE FOR THE VARIANT — §12 listed it as an OPEN QUESTION
+        ("Modified Schiff is reasoned, not evidenced"): on SMCI daily
+        modified_schiff contains 100% while raw ANDREWS produces no contained
+        fork at all. The steep-median pathology §3.2 predicted, now measured.
+        ⚠️ DETERMINISM PRESERVED — the whole bet. No judgement, no per-symbol
+        tuning: the scan returns the FIRST (longest) window whose channel
+        contains min_share of closes.
+        ⚠️ NVDA CORRECTLY RETURNS NOTHING on a one-way move: seven bars straight
+        up off the low with no reaction. You cannot draw a fork on a straight
+        line — you need the first pullback. That is not a failure.
+        §4.3's path is UNCHANGED and still the default for build_fork().
 
 v1.2 — 2026-08-04 — §4.3.5 UNIQUENESS READING, SHIPPED DARK (default OFF).
         AW measured hourly-fork coverage at 10.1% mean / 5.3% MEDIAN / 0.0% min
@@ -123,6 +151,7 @@ NOT IMPLEMENTED HERE, ON PURPOSE
 from __future__ import annotations
 
 import logging
+import os as _os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -440,3 +469,164 @@ def build_all_variants(symbol: str, df: pd.DataFrame, timeframe: str,
     of three linear functions."""
     return {v: build_fork(symbol, df, timeframe, atr, variant=v, **kw)
             for v in VARIANTS}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  §4.3.6 — CONTAINMENT ANCHOR (PF.2, 2026-08-11)
+# ═══════════════════════════════════════════════════════════════════════════
+CONTAIN_MIN_SHARE = float(_os.environ.get("OT_PF_CONTAIN_MIN", "0.95"))
+CONTAIN_TOL_ATR   = float(_os.environ.get("OT_PF_CONTAIN_TOL_ATR", "0.25"))
+
+
+def _epoch_triple(df: pd.DataFrame, start: int, k: int):
+    """P0 = the ORIGIN of the leg inside [start:], not the newest pivot triple.
+
+    Direction falls out of WHICH extreme leads: low-then-high is an up leg and
+    the fork opens upward. P2 is the reaction after P1 and must hold on the
+    correct side of P0, which is the structural-validity rule (§4.3.3) applied
+    to a leg rather than to a pivot list.
+    """
+    lo = df["low"].values[start:]
+    hi = df["high"].values[start:]
+    if len(lo) < 3 * k + 3:
+        return None
+    ilo, ihi = int(lo.argmin()), int(hi.argmax())
+    if ilo < ihi:
+        seg = lo[ihi:]
+        if len(seg) < k + 1:
+            return None
+        j = ihi + int(seg.argmin())
+        p0 = Pivot(idx=start + ilo, price=float(lo[ilo]), kind="low", k=k,
+                   timeframe="")
+        p1 = Pivot(idx=start + ihi, price=float(hi[ihi]), kind="high", k=k,
+                   timeframe="")
+        p2 = Pivot(idx=start + j, price=float(lo[j]), kind="low", k=k,
+                   timeframe="")
+        if p2.price <= p0.price:
+            return None
+        direction = "bullish"
+    else:
+        seg = hi[ilo:]
+        if len(seg) < k + 1:
+            return None
+        j = ilo + int(seg.argmax())
+        p0 = Pivot(idx=start + ihi, price=float(hi[ihi]), kind="high", k=k,
+                   timeframe="")
+        p1 = Pivot(idx=start + ilo, price=float(lo[ilo]), kind="low", k=k,
+                   timeframe="")
+        p2 = Pivot(idx=start + j, price=float(hi[j]), kind="high", k=k,
+                   timeframe="")
+        if p2.price >= p0.price:
+            return None
+        direction = "bearish"
+    if not (p0.idx < p1.idx < p2.idx):
+        return None
+    return direction, p0, p1, p2
+
+
+def _containment(df: pd.DataFrame, start: int, origin_idx: float,
+                 origin_price: float, slope: float, p1: Pivot, p2: Pivot,
+                 atr: float, tol_atr: float) -> float:
+    """Share of CLOSES from `start` to now that sit inside the rails.
+
+    CLOSES, not wicks: a wick poking through a tine is a TOUCH, which is the
+    tradeable event the overlay exists to produce (§5.2) — not a failure of
+    containment. Tolerance is in ATR so it scales with the symbol.
+    """
+    closes = df["close"].values
+    n = len(closes)
+    if start >= n:
+        return 0.0
+    tol = max(0.0, tol_atr) * max(atr, 0.0)
+    inside = 0
+    for i in range(start, n):
+        ml = origin_price + slope * (i - origin_idx)
+        a = p1.price + slope * (i - p1.idx)
+        b = p2.price + slope * (i - p2.idx)
+        hi_r, lo_r = (a, b) if a >= b else (b, a)
+        if (lo_r - tol) <= closes[i] <= (hi_r + tol):
+            inside += 1
+    return inside / float(n - start)
+
+
+def build_fork_contained(symbol: str, df: pd.DataFrame, timeframe: str,
+                         atr: float, variant: str = DEFAULT_VARIANT,
+                         min_share: float = CONTAIN_MIN_SHARE,
+                         tol_atr: float = CONTAIN_TOL_ATR) -> Optional[Fork]:
+    """§4.3.6 — the fork extends back as far as price stays INSIDE its own channel.
+
+    WHY THIS EXISTS, and it is the operator's construction (2026-08-11): "start
+    at the present date and go backwards, and anything that falls out of the
+    channel is not included in this pitchfork." That inverts §4.3: instead of
+    selecting three pivots and hoping the resulting channel fits the tape,
+    CONTAINMENT DEFINES THE EXTENT and the anchors follow from it.
+
+    ⚠️ IT ALSO REMOVES A PARAMETER RATHER THAN ADDING ONE. §4.3's RECENCY (R=40)
+    imposes ONE timescale on every symbol. The operator's objection: "some forks
+    are gonna be shorter than other ones — some will be a week old, some months,
+    based on magnitude of moves. They're going to vary." Under containment the
+    span is an OUTPUT. Measured on the same tapes with identical parameters:
+    NVDA 1h span 12 bars, SPX 1h 32, SMCI 1h 139 — three epochs, one rule.
+
+    ⚠️ AND IT BUILDS WHERE §4.3 REFUSES. On SMCI daily the pivot-selection path
+    returns SEPARATION at every k (the legs a trader would draw are 4 and 2 bars
+    apart, inside 2k+1); the containment path returns a fork with 100% closes
+    contained and price at 42% of channel.
+
+    ⚠️ EVIDENCE FOR THE VARIANT, which §12 listed as an OPEN QUESTION ("Modified
+    Schiff is reasoned, not evidenced"): on SMCI daily modified_schiff contains
+    100% while raw andrews produces NO contained fork — the steep-median
+    pathology §3.2 predicted, now measured rather than argued.
+
+    DETERMINISM IS PRESERVED — the whole bet of §4.3. No judgement, no
+    per-symbol tuning: scan starts from the oldest bar and returns the FIRST
+    (hence longest) window whose channel contains `min_share` of closes.
+
+    ⚠️ KNOWN LIMITATION, stated because it decides how to read the output: the
+    longest containing window on a SHORT frame is often just "the whole frame".
+    Whether this segments into genuine epochs needs the ~84 daily bars the boxes
+    actually hold, which is why TIMEFRAMES["1d"]["candles"] had to be raised —
+    the store had the history all along and the engines were handed 10 bars.
+    """
+    k = FRACTAL_K.get(timeframe)
+    if k is None:
+        return _reject("NOT_ANCHOR_TF")
+    if df is None or len(df) < 3 * k + 3:
+        return _reject("FRAME_TOO_SHORT")
+    if not atr or atr <= 0:
+        return _reject("NO_ATR")
+
+    n = len(df)
+    for start in range(0, n - (3 * k + 3) + 1):
+        t = _epoch_triple(df, start, k)
+        if t is None:
+            continue
+        direction, p0, p1, p2 = t
+        p0 = Pivot(idx=p0.idx, price=p0.price, kind=p0.kind, k=k,
+                   timeframe=timeframe)
+        p1 = Pivot(idx=p1.idx, price=p1.price, kind=p1.kind, k=k,
+                   timeframe=timeframe)
+        p2 = Pivot(idx=p2.idx, price=p2.price, kind=p2.kind, k=k,
+                   timeframe=timeframe)
+        if p2.idx + k > n - 1:
+            continue                      # §4.4 confirmation lag not yet served
+        origin_idx, origin_price = _origin(p0, p1, variant)
+        m_idx = (p1.idx + p2.idx) / 2.0
+        m_price = (p1.price + p2.price) / 2.0
+        if m_idx == origin_idx:
+            continue
+        slope = (m_price - origin_price) / (m_idx - origin_idx)
+        share = _containment(df, start, origin_idx, origin_price, slope,
+                             p1, p2, atr, tol_atr)
+        if share >= min_share:
+            global _LAST_REJECT
+            _LAST_REJECT = None
+            return Fork(symbol=symbol, timeframe=timeframe,
+                        direction=direction, variant=variant,
+                        p0=p0, p1=p1, p2=p2,
+                        origin_idx=origin_idx, origin_price=origin_price,
+                        slope=slope, born_idx=p2.idx + k, k=k,
+                        atr_at_birth=float(atr),
+                        filters_passed=("CONTAINMENT_%.2f" % share,
+                                        "SPAN_%d" % (n - 1 - start)))
+    return _reject("NO_CONTAINED_WINDOW")

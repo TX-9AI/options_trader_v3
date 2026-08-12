@@ -2004,6 +2004,25 @@ def main_loop(state: BotState):
                     # while halted, while a position is open, and outside the
                     # condor window. Option chains are unrecoverable after
                     # 16:00; nothing else in the system archives them.
+                    # ── PF.2 (2026-08-11) — PITCHFORK OBSERVATION, WEIGHT 0 ──
+                    # Builds the daily + hourly forks from THIS BOX's own frames
+                    # and journals where price sits in each channel. Gates
+                    # nothing, is read by no strategy, and never raises.
+                    # Hooked HERE for the same reason chain_snapshot is: the
+                    # entry path is skipped when entries are blocked, so a hook
+                    # there would silently lose observations during halts, while
+                    # a position is open, and outside every strategy's window.
+                    # The point is the CONTINUATION JOIN — when continuation
+                    # fires, where was price relative to the rail? That is one
+                    # observation per trade at 13-76 trades a session, unlike
+                    # the touch study which needed n~600 and was unreachable.
+                    try:
+                        from analysis.pitchfork_observer import snapshot as _pf_snap
+                        _pf_snap(ctx, INSTRUMENT,
+                                 journal=(_sigj.journal if _sigj is not None
+                                          else None))
+                    except Exception:
+                        pass
                     try:
                         from analysis.chain_snapshot import snapshot as _chain_snap
                         _r = ctx.get("regime")
