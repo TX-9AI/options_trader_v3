@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.29
+# docs/BACKLOG.md — v4.31
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -3534,6 +3534,60 @@ fast as mistakes.**
   weeks already.
 
 **⬜ Fri Aug 14 — AFTER THE CLOSE**
+
+- `[DESK]` **⚠️ OBSERVER DEBT — THREE READS, ALL DUE TODAY, ALL WITH A DELETE
+  CRITERION.** Operator, 2026-08-12: *"I don't want/need any more observers
+  unless you're putting down firm dates to check them, because right now we have
+  more observers than workers and I don't have the capacity to track another
+  one."* Correct, and the debt is mine: three observe-only mechanisms shipped in
+  two days with no date attached to any of them. **The cautionary case is the
+  chain archive — written 2026-07-23 and not read until 2026-08-12, twenty days
+  later, and only then because a question happened to need it.** A rule that
+  applies from here: **an observer ships with an evaluation date and a delete
+  criterion, or it does not ship.**
+
+  - **VEL.1 — velocity stall** (exit_engine v4.16, shipped 08-12 observe-only).
+    READ: `grep 'VELOCITY STALL (observe-only' bot.log` across the fleet for
+    08-13 and 08-14. Report firings/session, the ratio distribution, and whether
+    CONTINUATION and SWEEP ratios resemble ORB's — that last one decides whether
+    `VELOCITY_MEASURED_STRATEGIES` can be extended past ORB.
+    **DECIDE:** enforce (`OT_VELOCITY_ENFORCE=1`), extend the measured list, or
+    **DELETE.**
+    ⚠️ **DELETE CRITERION: zero firings across both sessions ⇒ remove it.** A
+    mechanism that never triggers is not cautious, it is dead code that still
+    has to be read, tested and maintained. Note the floors rest on **n=22 at the
+    20-minute mark**, the thinnest part of the curve.
+
+  - **PF.2 — pitchfork observer** (shipped 08-11, live from the 08-12 wake).
+    READ: `pos_pct` on the `pitchfork` journal events, joined to continuation
+    fires — where was price in the channel when continuation fired? Also whether
+    84 daily bars SEGMENT into epochs or draw one channel around everything, and
+    whether the §4.3 pivot arm ever builds on real frames or containment is
+    carrying it entirely.
+    **DECIDE:** continue to the first consumer (continuation's pullback rail
+    replacing `bb_middle`), or stop.
+    ⚠️ **DELETE CRITERION: no daily fork builds on any box ⇒ the frame fix did
+    not take and the overlay is inert.** §11 still governs — v4.0 tags when TWO
+    consumers are independently proven, not when the overlay exists.
+
+  - **BFLY.1 — butterfly readiness** (shipped 08-11).
+    READ: does the pin-thesis score ever APPROACH firing, and did gates 1x5 ever
+    open together? SPX logged `env=PINNING` at **15:29 ET**, ninety minutes after
+    the 12:00-14:00 window shut — GEX pinning is structurally late-day while the
+    window is midday, so they may be near-mutually-exclusive BY CONSTRUCTION.
+    **DECIDE:** move the window on evidence, or stop grading a trade that cannot
+    fire.
+    ⚠️ **DELETE CRITERION: PINNING never lands inside the window across the
+    sample ⇒ the readiness track is scoring an unreachable trade.**
+
+- `[DESK·DATA]` **SHD.2 — shadow re-pull (already scheduled; the one observer
+  that HAS paid).** It produced the London 61.3% share (→ LIQ.1), the 14.0%
+  within-0.5-ATR figure that JUSTIFIED the permissive 0.05 sweep floor, and the
+  18.1%-vs-4% UNKNOWN divergence (→ RGM.6). ⚠️ Respect the 08-08 bake boundary;
+  do not pool across it. ⚠️ And carry the correction: **LIQ.1 UNDERMINED the
+  London finding it produced** — London was nearest BECAUSE it tracked price, so
+  SWP.3's London bonus is fitted to an artefact and is a CORRECTION, not an
+  option.
 - `[DESK]` **RGM.5 — CUT THE v13 CLASSIFIER'S SWEEP_REVERSAL BRANCH. MEASURED
   2026-08-11, DEFERRED TO TODAY BY THE OPERATOR.** Rationale for the deferral,
   in their words: "we've made a lot of engine changes in the last two days,
@@ -4996,6 +5050,78 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.31 — 2026-08-12 — OBSERVER DEBT: FIRM DATES AND DELETE CRITERIA.**
+  Operator: *"no more observers unless we're actually going to use the data."*
+  Three observe-only mechanisms had shipped in two days with no evaluation date
+  — VEL.1, PF.2, BFLY.1. All three now carry a **Fri Aug 14 read, a named
+  decision, and a DELETE CRITERION**. The cautionary case is on the record: the
+  chain archive was written 2026-07-23 and first read 2026-08-12, twenty days
+  later, only because a question happened to need it.
+  **STANDING RULE FROM HERE: an observer ships with an evaluation date and a
+  delete criterion, or it does not ship.**
+  ⚠️ Recorded in fairness to the one that HAS paid: the shadow observer produced
+  the London 61.3% share (→ LIQ.1), the 14.0%-within-0.5-ATR figure that
+  justified keeping the permissive 0.05 sweep floor, and the 18.1%-vs-4% UNKNOWN
+  divergence (→ RGM.6). It is the exception, not the pattern — and LIQ.1 then
+  UNDERMINED the very London finding it produced.
+- **v4.30 — 2026-08-12 — VEL.1: THE VELOCITY STALL — THE THIRD QUESTION, and
+  the FIRST READ OF THE CHAIN ARCHIVE.** Operator: "theta is a real beast on
+  every long contract near expiry."
+  **THE GAP, found by reading the 1m tape on three hard-stop trades.** They did
+  NOT fail the structure stop — **the structure stop never had cause to fire.**
+  QQQ and AVGO both ended their holds with the underlying BELOW the short entry
+  and never once closed through the structural level. QQQ: **0 closes above
+  structure, 50 minutes, -42.2%.** The loss was pure premium decay while the
+  thesis stayed technically valid.
+  `_theta_bleed` could not help either, correctly: **its gate 1 is a GAIN
+  FLOOR**, so a losing position is invisible to it. QQQ peaked +22.5% at 5.75
+  min — inside the 20-min blackout AND already above the 20% trail ceiling, so
+  theta was silent BY DESIGN; by the time the blackout lifted the gain was gone
+  and the 10% floor locked it out permanently.
+  **⇒ "the setup has not invalidated AND has not worked" had NO OWNER.**
+  - **THE STATISTIC NEEDS NO TARGET**, which is why it generalises beyond ORB:
+    `bev = |theta| / (|delta| * 1440)` = underlying pts/min at which delta gains
+    exactly offset decay. `ratio = delivered / bev`, and **1.0 IS THE FLAT
+    LINE** — below it the position bleeds even while the thesis is intact.
+  - **MEASURED, 15 sessions / 145 ORB trades, against the chain archive that had
+    been accumulating unread since 2026-07-23** (`tests/velocity_feasibility.py`
+    — the first tool ever to read it; 0 strikes missing, staleness median 2.3
+    min). Among trades STILL OPEN at each mark: winners p10 / losers p50 —
+    **5m: -21.1 / -37.3 (no separation) · 10m: 3.9 / -6.7 · 15m: 18.0 / 0.3 ·
+    20m: 29.8 / 0.9.** The median surviving LOSER treads water at ~1.0 while the
+    bottom decile of WINNERS runs at 30x it. Different regimes, not a marginal
+    difference.
+  - **⚠️ THE ENTRY-FILTER FORM WAS MEASURED AND REJECTED — INVERTED, not merely
+    weak.** Feasibility ratio at entry ran HIGHER for LOSERS at every percentile
+    (losers p50 **5.05** vs winners **3.87**, n=145); a filter would have blocked
+    8 winners against 2 losers at a 1.5 threshold. Cause: a wide range gives a
+    distant target AND a big required move — **feasibility and difficulty are
+    the same axis pointing opposite ways.** Recorded in the code so it is not
+    rebuilt.
+  - **⚠️ AND THE GREEKS DO NOT PREDICT:** winners vs losers at entry are
+    near-identical — delta 0.295/0.297, theta 0.865/0.816, gamma 0.038/0.042,
+    IV 49.8%/52.5%. Nothing about the CONTRACT chosen separates outcomes, which
+    is consistent with everything else pointing at SELECTION.
+  **SHIPPED (exit_engine v4.16 step 2c, position_manager v3.1):** four gates —
+  GRACE 10 min (**forced by data**: winners p10 at 5 min is -21.1, so the bottom
+  decile of eventual WINNERS was moving AWAY), MEASURED-strategy gate, a floor
+  at winners p10 x STRICTNESS, and CONFIRM x3 (**QQQ crossed back ABOVE
+  breakeven at minutes 41-61 before dying at 70** — a single-tick rule
+  oscillates). **ORDER IS DELIBERATE: theta_bleed FIRST**, so a stalled winner
+  exits GREEN. **INDEPENDENT gates, never a combined score** — the QQQ failure
+  was two mechanisms each correctly saying "not my problem".
+  **⚠️ SHIPS OBSERVE-ONLY** (`OT_VELOCITY_ENFORCE=0`): floors rest on n=22 at the
+  20-min mark and are ORB-derived. Non-ORB strategies are logged, never cut.
+  **⚠️ TWO ERRORS IN MY OWN TOOL, both of which INFLATED the case for a rule and
+  both caught before anything shipped:** `orb_stall_study` v1.0 never checked
+  whether a trade was still OPEN at the mark (median loser hold is 4.0 min, so
+  most of a claimed $14,559 was unreachable by construction), and its `$saved`
+  summed the FULL realized loss as if cutting mid-trade recovered everything.
+  v1.1 gates on `hold >= mark` and labels the column an upper bound. **The
+  progress-toward-target rule died on the corrected numbers** — losers p50 sits
+  ABOVE winners p10 at three of four marks once survivorship is removed.
+  **⚠️ AND THE UNDEFINED-NAME GATE EARNED ITS KEEP AGAIN** — caught `Dict` used
+  without import in the new counter annotation. 8 tests, 5 canaries, suite 429.
 - **v4.29 — 2026-08-11 EOD — PF.2: THE PITCHFORK OVERLAY SHIPS, WEIGHT 0.**
   Operator: "build it & send it. I'll deploy it now & we will see what happens
   tomorrow. It's observe only, so win-win." Gates nothing, is read by no

@@ -5,6 +5,15 @@
 #         the session-pool gate (London overlaps RTH by 2.5h, so its level is
 #         set by the price being traded), and the recovery anchor (from the
 #         wick, a deeper rejection reads as a farther entry).
+# v4.51 — 2026-08-12 — OBSERVER DEBT. Two canaries pin the EVALUATION DATE into
+#         the code itself: a backlog entry can be skimmed, a module docstring is
+#         read by whoever next touches the file. Zero firings by 08-14 means
+#         DELETE, not "leave it running".
+# v4.50 — 2026-08-12 — VEL.1 velocity stall. The load-bearing canary is the
+#         BREACH COUNTER in __init__: without it the check AttributeErrors on
+#         first call, the except swallows it, and the whole mechanism is a
+#         permanent SILENT no-op that still looks shipped. Also pins the ladder
+#         ORDER (theta_bleed before velocity) and current_delta being stashed.
 # v4.49 — 2026-08-11 — PF.2 containment anchor + weight-0 observer. The
 #         load-bearing canary is the §4.4 CONFIRMATION LAG guard: without it the
 #         builder returns forks anchored on information that did not exist when

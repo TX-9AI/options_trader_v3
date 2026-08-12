@@ -917,3 +917,56 @@ SWEEP_RECOVERY_FROM_POOL = os.environ.get("OT_SWEEP_RECOVERY_FROM_POOL", "1") ==
 # that "still holding" cannot mean "all week".
 SWEEP_LIVENESS_GATE   = os.environ.get("OT_SWEEP_LIVENESS_GATE", "1") == "1"
 SWEEP_STALE_HARD_BARS = int(os.environ.get("OT_SWEEP_STALE_HARD_BARS", "48"))
+
+# ── VEL.1 (2026-08-12) — VELOCITY STALL: "is this thing MOVING at all?" ──────
+# The third question, and until now nobody asked it. `orb_structure_stop` asks
+# "did the thesis break?"; `_theta_bleed` asks "is my GAIN about to evaporate?"
+# (gate 1 is a gain floor, so it never looks at a losing position). A LOSING
+# POSITION THAT HAS STOPPED MOVING answers NO to both and falls to the -40%
+# percentage floor, which is the ABSENCE of a mechanism rather than one.
+#
+# THE STATISTIC, and note it needs NO TARGET — which is why it generalises to
+# every long-premium strategy, not just ORB:
+#     breakeven velocity  bev = |theta| / (|delta| * 1440)     underlying pts/min
+#                               at which delta gains exactly offset decay.
+#     delivered velocity        cumulative underlying travel toward the trade's
+#                               direction, per minute since entry.
+#     ratio = delivered / bev.  1.0 is the FLAT LINE. Below it the position
+#                               bleeds even while the thesis is intact.
+#
+# MEASURED over 15 sessions / 145 ORB trades against the chain archive
+# (tests/velocity_feasibility.py), among trades STILL OPEN at each mark:
+#            mark   winners p10   losers p50   losers p90
+#             5m       -21.1         -37.3        91.3     <- NO SEPARATION
+#            10m         3.9          -6.7        20.5
+#            15m        18.0           0.3        26.7
+#            20m        29.8           0.9        18.5     <- barely overlap
+# The median surviving LOSER sits at ~1.0 — treading water exactly at breakeven
+# — while the bottom decile of WINNERS is at 30x it. Different regimes, not a
+# marginal difference.
+#
+# ⚠️ THE 5-MINUTE ROW IS WHY GRACE EXISTS: winners p10 of -21.1 means the bottom
+# decile of eventual WINNERS was moving AWAY at five minutes. Any evaluation
+# before 10 minutes kills those trades. GRACE is forced by data, not chosen.
+#
+# ⚠️ THE FLOOR IS DERIVED, NOT PICKED. Each value is the winners' p10 at that
+# mark, so a floor at STRICTNESS=1.0 admits 90% of historical winners BY
+# CONSTRUCTION. Re-run the study to refresh it; do not hand-tune it.
+VELOCITY_STALL_ENABLED  = os.environ.get("OT_VELOCITY_STALL", "1") == "1"
+# ⚠️ SHIPS OBSERVE-ONLY. The floors rest on n=22 at the 20-minute mark and were
+# derived from ORB alone. Log the breach, collect a session, THEN enforce.
+VELOCITY_STALL_ENFORCE  = os.environ.get("OT_VELOCITY_ENFORCE", "0") == "1"
+VELOCITY_GRACE_MIN      = float(os.environ.get("OT_VELOCITY_GRACE_MIN", "10"))
+VELOCITY_STRICTNESS     = float(os.environ.get("OT_VELOCITY_STRICTNESS", "1.0"))
+# consecutive breaches before cutting. ⚠️ NOT COSMETIC: the 2026-08-12 QQQ trade
+# crossed back ABOVE breakeven at minutes 41-61 before dying at 70. A single-tick
+# rule oscillates; confirmation is what makes the cumulative form usable.
+VELOCITY_CONFIRM_TICKS  = int(os.environ.get("OT_VELOCITY_CONFIRM", "3"))
+# minutes -> winners p10 ratio. Largest mark <= held wins; under the first mark
+# no check runs at all.
+VELOCITY_FLOOR_BY_MIN   = {10: 3.9, 15: 18.0, 20: 29.8}
+# ⚠️ Strategies whose floor has been MEASURED. Others are evaluated and LOGGED
+# but never cut, whatever ENFORCE says — the floors above are ORB-derived and
+# applying them blind to continuation or sweep would be an untested extrapolation
+# wearing a measured number.
+VELOCITY_MEASURED_STRATEGIES = ("ORBStrategy",)

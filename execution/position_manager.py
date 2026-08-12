@@ -1,5 +1,8 @@
 """
-execution/position_manager.py — Manages the single open options position.
+execution/position_manager.py — v3.1 — VEL.1 stashes current_delta
+        alongside current_theta: breakeven velocity is |theta|/(|delta|*1440),
+        so theta alone cannot answer whether the position is gaining or
+        bleeding. Manages the single open options position.
 v3.9 — 2026-07-22 — remove the dead PAPER_FILL_SLIPPAGE_PCT import (audit
         defect T). This module has never priced a paper fill — entry pricing
         lives in entry_engine/main and exit pricing in exit_engine, both now
@@ -267,6 +270,11 @@ class PositionManager:
                         # stash live theta so the exit engine's theta-bleed
                         # detector can see it (single-leg longs only)
                         record["current_theta"] = float(getattr(match, "theta", 0.0) or 0.0)
+                        # VEL.1 — the velocity stall check needs DELTA as well:
+                        # breakeven velocity is |theta| / (|delta| * 1440), so
+                        # theta alone cannot answer "is this position gaining or
+                        # bleeding right now". Same stash, same guard.
+                        record["current_delta"] = float(getattr(match, "delta", 0.0) or 0.0)
                         return match.mark
             except Exception:
                 pass

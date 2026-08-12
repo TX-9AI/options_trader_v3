@@ -1,5 +1,52 @@
 """
-execution/exit_engine.py — Strategy-aware exit logic for all options positions.
+execution/exit_engine.py — v4.16 — Strategy-aware exit logic for all options positions.
+v4.16 — 2026-08-12 — VEL.1: THE VELOCITY STALL, ladder step 2c. THE THIRD
+        QUESTION, and until now nobody asked it. `orb_structure_stop` asks "did
+        the thesis break?"; `_theta_bleed` asks "is my GAIN about to evaporate?"
+        — its gate 1 is a gain floor, so a LOSING position is invisible to it.
+        **A losing position that has STOPPED MOVING answers no to both** and
+        falls to the -40% percentage floor, which is the ABSENCE of a mechanism
+        rather than one. 2026-08-12 QQQ: 50 minutes and -42.2% with the
+        underlying sitting BELOW the short entry the entire hold — directionally
+        right, bleeding anyway, and nothing watching.
+        STATISTIC — and it needs NO TARGET, which is why it generalises to every
+        long-premium strategy: bev = |theta| / (|delta| * 1440) is the pts/min
+        at which delta gains exactly offset decay; ratio = delivered / bev, and
+        1.0 IS THE FLAT LINE.
+        MEASURED, 15 sessions / 145 ORB trades against the chain archive
+        (tests/velocity_feasibility.py — the FIRST tool to ever read it), among
+        trades STILL OPEN at each mark:
+              mark   winners p10   losers p50   losers p90
+               5m       -21.1        -37.3         91.3   <- NO SEPARATION
+              10m         3.9         -6.7         20.5
+              15m        18.0          0.3         26.7
+              20m        29.8          0.9         18.5   <- barely overlap
+        The median surviving LOSER treads water at ~1.0 — exactly breakeven —
+        while the bottom decile of WINNERS runs at 30x it.
+        ⚠️ ORDER IS DELIBERATE: theta_bleed evaluates FIRST so a trade up 10-20%
+        and stalled exits GREEN via that path. INDEPENDENT gates, never a
+        combined score — the QQQ failure was two mechanisms each correctly
+        saying "not my problem" with nothing aggregating that into "then NOBODY
+        is watching."
+        ⚠️ GRACE IS FORCED BY DATA: winners p10 at 5 min is -21.1, so the bottom
+        decile of eventual WINNERS was moving AWAY. No check before 10 minutes.
+        ⚠️ SHIPS OBSERVE-ONLY (OT_VELOCITY_ENFORCE=0). Floors rest on n=22 at the
+        20-minute mark and are ORB-derived; other strategies are logged, never
+        cut, whatever ENFORCE says.
+        ⚠️⚠️ EVALUATION DATE: **FRI 2026-08-14**, and it carries a DELETE
+        CRITERION — **zero firings across 08-13 and 08-14 means REMOVE THIS
+        CODE.** A mechanism that never triggers is not cautious; it is dead code
+        that still has to be read, tested and maintained. Standing rule agreed
+        with the operator 2026-08-12 after three observers shipped in two days
+        with no dates: an observer ships with an evaluation date and a delete
+        criterion, or it does not ship. The cautionary case is the chain archive
+        — written 07-23, first read 08-12, twenty days later.
+        ⚠️ THE ENTRY-FILTER FORM OF THIS IDEA WAS MEASURED AND REJECTED:
+        feasibility ratio at entry ran HIGHER for losers than winners at every
+        percentile (losers p50 5.05 vs winners 3.87, n=145) — a wide range gives
+        a distant target AND a big required move, so feasibility and difficulty
+        are the same axis pointing opposite ways. Recorded so it is not rebuilt.
+
 v4.15 — 2026-08-10 — BOS PROTECTED LEVEL GETS A MINIMUM DISTANCE. The level is
         seeded from the LOW of the first bar closing above entry. On a pullback
         entry that bar is the smallest, earliest part of the resumption, so its
@@ -338,6 +385,10 @@ logger = logging.getLogger(__name__)
 # that has had time to develop and still won't reach the trail. Without these
 # the check fires on the first green tick (see v1.5 header note).
 THETA_MIN_HOLD_MIN       = 20      # blackout: no theta exit in the first N min after entry
+from config import (VELOCITY_STALL_ENABLED, VELOCITY_STALL_ENFORCE,   # VEL.1
+                    VELOCITY_GRACE_MIN, VELOCITY_STRICTNESS,
+                    VELOCITY_CONFIRM_TICKS, VELOCITY_FLOOR_BY_MIN,
+                    VELOCITY_MEASURED_STRATEGIES)
 THETA_MIN_GAIN_PCT       = 0.10    # gain floor: don't protect a gain smaller than this
 MINUTES_PER_CALENDAR_DAY = 1440    # theta greek is $/share/CALENDAR day (not the 390 RTH min)
 
@@ -563,6 +614,10 @@ class ExitEngine:
         self._trail_active: dict = {}
         self._bos_trackers: dict = {}   # trade_id \u2192 BOSTracker (sweep only)
         self._post_target_trail: dict = {}   # trade_id \u2192 bool (ORB only)
+        # VEL.1 - consecutive velocity breaches per trade. WITHOUT THIS the
+        # check AttributeErrors on first call and the except swallows it,
+        # leaving a permanent silent no-op.
+        self._vel_breaches: dict = {}          # trade_id -> consecutive breaches
         self._trade_logger  = get_trade_logger()
         self._live_exit_alerted: set = set()  # (trade_id, kind) — one page per failure kind
 
@@ -753,6 +808,22 @@ class ExitEngine:
             decision.should_exit = True
             decision.exit_reason = f"theta_bleed pnl={pnl_pct:.1%}"
             return decision
+        # 2c. VELOCITY STALL - "is this thing MOVING at all?"
+        # ORDER IS DELIBERATE AND MUST NOT BE SWAPPED: theta_bleed evaluates
+        # FIRST so a trade that is up 10-20% and stalled exits GREEN via that
+        # path, rather than falling through to a velocity check that would
+        # let it drift back toward flat before firing.
+        # These are INDEPENDENT gates, never a combined score. The 2026-08-12
+        # QQQ failure was two mechanisms each correctly answering "not my
+        # problem" while nothing aggregated that into "then NOBODY is
+        # watching." A blended score would have averaged three healthy-ish
+        # signals into inaction; separate gates, any one of which can fire,
+        # fails safe.
+        _vel = self._velocity_stall(record, pnl_pct, df_1m)
+        if _vel is not None:
+            decision.should_exit = True
+            decision.exit_reason = _vel
+            return decision
 
         # 3. PAST 100% TP \u2014 switch to tightened FVG-aware trail, no hard exit
         if current_premium >= target:
@@ -850,6 +921,109 @@ class ExitEngine:
         return self._trail_stops.get(trade_id)
 
     # ─── Long-option theta protection + general FVG trail ─────────────────────
+    def _velocity_stall(self, record: TradeRecord, pnl_pct: float,
+                        df_1m) -> Optional[str]:
+        """Is the underlying still delivering fast enough to beat decay?
+
+        Returns an exit_reason when the position should be cut, else None.
+        NEVER RAISES - an exit path that can throw is worse than one that
+        occasionally declines to act.
+
+        THE QUESTION NOTHING ELSE ASKS. `orb_structure_stop` asks whether the
+        thesis broke; `_theta_bleed` asks whether a GAIN is about to evaporate
+        (its gate 1 is a gain floor, so a LOSING position is invisible to it).
+        A losing position that has STOPPED MOVING answers no to both, and the
+        -40% percentage floor eventually catching it is the ABSENCE of a
+        mechanism rather than one. On 2026-08-12 that cost a QQQ trade 50
+        minutes and -42.2% while the underlying sat BELOW the short entry the
+        entire time - directionally right, and bleeding anyway.
+
+        NO TARGET IS USED. bev = |theta| / (|delta| * 1440) is the option's own
+        physics, so this generalises to EVERY long-premium strategy rather than
+        only ORB. The target-based form of the same idea was MEASURED AND
+        REJECTED: feasibility ratio at entry ran HIGHER for losers than winners
+        at every percentile (losers p50 5.05 vs winners 3.87, n=145) - a wide
+        range gives a distant target AND a big required move, so feasibility and
+        difficulty turn out to be the same axis pointing opposite ways. Do not
+        reintroduce it.
+
+        FOUR GATES:
+          (1) GRACE    - no evaluation before VELOCITY_GRACE_MIN. Forced by the
+                         data, not chosen: winners p10 at 5 minutes is -21.1,
+                         i.e. the bottom decile of eventual WINNERS was moving
+                         AWAY. Any earlier check kills those trades.
+          (2) MEASURED - a strategy with no measured floor is evaluated and
+                         LOGGED but never cut, whatever ENFORCE says.
+          (3) FLOOR    - ratio must hold above winners-p10 * STRICTNESS at the
+                         largest mark <= held.
+          (4) CONFIRM  - VELOCITY_CONFIRM_TICKS consecutive breaches. QQQ crossed
+                         back ABOVE breakeven at minutes 41-61 before dying at
+                         70; a single-tick rule oscillates.
+        """
+        try:
+            if not VELOCITY_STALL_ENABLED:
+                return None
+            trade_id = str(record.get("trade_id", ""))
+            entry_time = record.get("entry_time")
+            if not entry_time:
+                return None
+            entry_dt = entry_time if isinstance(entry_time, datetime) else None
+            if entry_dt is None:
+                try:
+                    entry_dt = datetime.fromisoformat(str(entry_time))
+                except ValueError:
+                    return None
+            held = minutes_since(entry_dt)
+            if held < VELOCITY_GRACE_MIN:                      # (1) grace
+                self._vel_breaches.pop(trade_id, None)
+                return None
+            delta = abs(float(record.get("current_delta", 0.0) or 0.0))
+            theta = abs(float(record.get("current_theta", 0.0) or 0.0))
+            if delta <= 1e-6 or theta <= 0.0:
+                return None                    # no live Greeks -> do not guess
+            und_entry = float(record.get("underlying_entry", 0.0) or 0.0)
+            if und_entry <= 0 or df_1m is None or len(df_1m) == 0:
+                return None
+            und_now = float(df_1m["close"].iloc[-1])
+            short = str(record.get("direction", "")) == "short"
+            travelled = (und_entry - und_now) if short else (und_now - und_entry)
+            delivered = travelled / max(held, 1e-9)
+            bev = theta / (delta * 1440.0)
+            if bev <= 0:
+                return None
+            ratio = delivered / bev
+            marks = [m for m in sorted(VELOCITY_FLOOR_BY_MIN) if m <= held]
+            if not marks:
+                return None
+            floor = VELOCITY_FLOOR_BY_MIN[marks[-1]] * VELOCITY_STRICTNESS
+            if ratio >= floor:                                 # (3) floor
+                self._vel_breaches.pop(trade_id, None)
+                return None
+            n = self._vel_breaches.get(trade_id, 0) + 1
+            self._vel_breaches[trade_id] = n
+            if n < VELOCITY_CONFIRM_TICKS:                     # (4) confirm
+                return None
+            strategy = str(record.get("strategy", ""))
+            measured = strategy in VELOCITY_MEASURED_STRATEGIES
+            if not (VELOCITY_STALL_ENFORCE and measured):      # (2) measured
+                logger.info(
+                    "VELOCITY STALL (observe-only%s): %s %s held=%.1fm "
+                    "ratio=%.1f floor=%.1f delivered=%.4f bev=%.4f pnl=%.1f%%",
+                    "" if measured else ", UNMEASURED strategy",
+                    trade_id[:8], strategy, held, ratio, floor,
+                    delivered, bev, pnl_pct * 100.0)
+                return None
+            logger.info(
+                "VELOCITY STALL EXIT: %s held=%.1fm ratio=%.1f < floor=%.1f "
+                "(delivered %.4f pts/min vs breakeven %.4f) pnl=%.1f%%",
+                trade_id[:8], held, ratio, floor, delivered, bev,
+                pnl_pct * 100.0)
+            return (f"velocity_stall ratio={ratio:.1f}<{floor:.1f} "
+                    f"held={held:.0f}m")
+        except Exception as exc:                                # noqa: BLE001
+            logger.debug("velocity stall check failed: %s", exc)
+            return None
+
     def _theta_bleed(self, record: TradeRecord, current_premium: float,
                      pnl_pct: float) -> bool:
         """True only when a long has EARNED a real, sub-trail gain that time

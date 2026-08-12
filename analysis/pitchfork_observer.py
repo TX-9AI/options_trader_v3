@@ -5,6 +5,11 @@ analysis/pitchfork_observer.py — v1.0 — 2026-08-11 — PF.2
 BOX-LOCAL PITCHFORK OBSERVATION. Builds the DAILY and HOURLY forks from the
 box's OWN frames, caches them, and journals where price sits in each channel.
 
+⚠️⚠️ EVALUATION DATE: **FRI 2026-08-14**. DELETE CRITERION: if no daily fork
+builds on any box, the frame fix did not take and this overlay is inert — remove
+it. Standing rule agreed 2026-08-12: an observer ships with an evaluation date
+and a delete criterion, or it does not ship.
+
 ⚠️ WEIGHT 0. NOTHING GATES ON THIS. It scores nothing, vetoes nothing and is
 read by no strategy. §11 of the white paper is explicit that v1 ships observing
 only, and §12's stated risk is CONSUMER SPRAWL — "building more than one
