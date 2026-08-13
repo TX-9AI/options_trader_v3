@@ -1,5 +1,18 @@
 """
-config.py — options_trader v4.7
+config.py — options_trader v4.8
+v4.8 — 2026-08-13 — CONDOR PITCHFORK ANCHOR (PF.5). CONDOR_PITCHFORK_ANCHOR /
+        CONDOR_REQUIRE_FORK / CONDOR_PF_TIMEFRAME / CONDOR_PF_FLAT_SLOPE.
+        The pitchfork has been BUILT AND LIVE as a weight-0 observer since
+        2026-08-12 with exactly ONE call site (main.py:2091, `_pf_snap`) and
+        NOTHING has ever read the rails back. This is its first consumer — the
+        one the white paper pre-registered, because strike placement produces a
+        CREDIT that is directly comparable on identical tape.
+        DAILY fork by operator ruling. A daily fork is invalidated only by DAILY
+        closes, so an intraday session cannot kill it; the hourly one has a
+        measured p50 lifetime of 5 bars plus a k=3 confirmation lag and would
+        re-anchor mid-position. `CONDOR_PF_FLAT_SLOPE` exists because a SIGN is
+        not a SLOPE — a fork drifting 0.001%% a bar is noise, and ordering legs
+        off its sign would be reading a coin flip as structure.
 v4.7 — 2026-08-13 — CONTINUATION_STOP_LOSS_PCT default 0.25 -> 0.15. THE REPO
         DEFAULT IS THE FLEET LEVER, not the env var: every box receives
         config.py through git pull + bake, so this reaches all 15 on the bake
@@ -557,6 +570,29 @@ CONDOR_NICKEL_CLOSE         = 0.05   # Close leg when spread value decays to $0.
 # bb_middle == 0, and decide() falls back to `mid = current_price` in that case
 # — i.e. strikes and triggers computed with NO volatility reference at all.
 # 11:11 clears 11:05 with margin and removes that fallback path entirely.
+# ── CONDOR PITCHFORK ANCHOR (2026-08-13, operator directive) ─────────────────
+# "The tine should be the trigger for 'rich premium' and the short strike should
+#  be just outside the range of the rail at the most liquid strike where price
+#  has still not exceeded... consider the condor off the table if we don't have
+#  guardrails. That is the insurance policy that eliminates a bad decision in an
+#  unpredictable session."
+# DAILY fork, deliberately: "It's a guardrail, not the road." A daily fork is
+# invalidated only by DAILY closes, so an intraday session cannot kill it — the
+# rail a spread was sold against is still there while the spread is open. The
+# hourly fork has a measured p50 lifetime of 5 bars and a k=3 confirmation lag,
+# so it can be born mid-window and dead before the close: that re-anchors
+# intraday, which is another indicator, not a guardrail.
+# NO FORK -> NO CONDOR. Accepted volume cost, operator's call: "I'm ok with not
+# getting the condor if the fork isn't there."
+CONDOR_PITCHFORK_ANCHOR     = os.environ.get("OT_CONDOR_PF_ANCHOR", "1") == "1"
+CONDOR_REQUIRE_FORK         = os.environ.get("OT_CONDOR_REQUIRE_FORK", "1") == "1"
+CONDOR_PF_TIMEFRAME         = os.environ.get("OT_CONDOR_PF_TF", "daily")
+# Slope magnitude (fraction of price per bar) below which the fork is treated as
+# FLAT and leg order falls back to proximity. A sign alone is not a slope: a
+# fork drifting 0.001% a bar is noise, and ordering legs off its sign would be
+# reading a coin flip as structure.
+CONDOR_PF_FLAT_SLOPE        = float(os.environ.get("OT_CONDOR_PF_FLAT", "0.00002"))
+
 CONDOR_ENTRY_START_ET       = (11, 11)  # No condor entries before 11:11 (BB must be valid)
 CONDOR_ENTRY_CUTOFF_ET      = (14, 0)   # Standard entry cutoff
 

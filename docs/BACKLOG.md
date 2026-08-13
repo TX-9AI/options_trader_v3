@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.50
+# docs/BACKLOG.md — v4.51
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,76 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.51 — 2026-08-13 — PF.5: THE PITCHFORK GETS ITS FIRST CONSUMER.**
+  `config` v4.8 + `iron_condor_strategy` v-pfanchor + 15 tests.
+
+  **STATE OF THE OVERLAY, CONFIRMED BY READING IT.** The pitchfork is NOT in
+  concept phase — `analysis/pitchfork.py` is a full implementation (Fork with
+  `median_at`/`upper_at`/`lower_at`/`rails_at`/`is_born_by`/`rail_at_time`,
+  pivot detection, variants, the §4.3.6 containment builder),
+  `pitchfork_lifecycle.py` handles birth/invalidation/supersession, and
+  `pitchfork_observer.py` journals the rails on a cadence. **But there is
+  exactly ONE call site in the entire repo** — `main.py:2091`, `_pf_snap`,
+  wrapped in a bare `except: pass`, gated on `OT_PF_OBSERVE` — and **nothing
+  has ever read the rails back.** Built, live, unconsumed. This is the consumer
+  the white paper pre-registered, and the reason it pre-registered it: strike
+  placement produces a CREDIT, directly comparable on identical tape.
+
+  **DAILY FORK, and the reasoning is the operator's:** *"It's a guardrail, not
+  the road."* A daily fork is invalidated only by DAILY closes, so an intraday
+  session **cannot kill it** — the rail a spread was sold against is still there
+  while the spread is open. The hourly fork has a measured p50 lifetime of 5
+  bars plus a k=3 confirmation lag, so it can be born mid-window and dead before
+  the close; that re-anchors intraday, which is another indicator, not a
+  guardrail. **NO FORK -> NO CONDOR**, accepted volume cost: *"I'm ok with not
+  getting the condor if the fork isn't there. We have other trades & the trend
+  participation credit spread is going to fill in a lot of the gaps."*
+
+  **THE STRIKE RULE — three filters, then liquidity.** *"the short strike should
+  be just outside the range of the rail at the most liquid strike where price
+  has still not exceeded."* A strike qualifies only if beyond the RAIL, beyond
+  the surviving `0.80 * EM` MINIMUM DISTANCE (retained so a rail sitting on spot
+  cannot produce a strike with no room — the exact ~3-week bleed v-dualfloor
+  fixed), and **beyond the SESSION EXTREME**. That last one is new: nothing in
+  the codebase has ever tested a short strike against the session's own high or
+  low, and **a level price has already traded through today is a level the
+  market has PROVEN it can reach.** No inside fallback, ever.
+
+  **⚠️ AND A DEAD INPUT FOUND WHILE BUILDING IT.** The old selector ranked
+  liquidity as `open_interest + volume` — and `factor_sweep` found BOTH CONSTANT
+  across the entire joined sample. So `max_liq` was 0, the `else: top =
+  eligible` branch took **every** call, and **"most liquid" has silently
+  resolved to "nearest the floor" since v-dualfloor shipped.** The comment even
+  anticipated the case (*"no OI/vol data"*), which is why it degraded quietly
+  instead of failing. Ranking now keys on **BID/ASK WIDTH** — populated, and the
+  measure that actually matters on a 0DTE credit spread where a nickel-wide
+  quote trips a stop on quote noise rather than on price. OI/volume survive only
+  as a tie-break and only when non-zero, so it is correct either way.
+  ⚠️ STILL WORTH CONFIRMING ON A BOX: whether OI/volume are genuinely zero LIVE
+  or only dropped in the journal. Different bug, different fix.
+
+  **LEG ORDER FROM SLOPE.** Up-sloping fork fills the PUT side first (price
+  travels the lower rail toward the upper across the session), down-sloping
+  fills the CALL side first. `CONDOR_PF_FLAT_SLOPE` exists because **a SIGN is
+  not a SLOPE** — below it the drift is noise and ordering off it reads a coin
+  flip as structure, so the caller keeps its existing proximity rule.
+
+  **ACCEPTED RISK, his words:** *"If it gets breached, then our fork may also
+  become invalid & I can live with that because we are accepting that risk for
+  an asymmetric payoff if it holds."* So a breach and a fork invalidation are
+  THE SAME EVENT — structure and overlay agree on when the thesis died.
+
+  **15/15 PASS**, including two deliberate-failure checks: relaxing each of the
+  three filters in turn must MOVE the selection (otherwise that filter is not
+  applied and the happy-path tests would pass against a version ignoring it),
+  and flipping which contract carries the tight quote must move the selection
+  (otherwise width is not deciding). The liquidity test runs with **OI and
+  volume both ZERO** — the state the fleet is actually in — because a test with
+  populated depth would pass against the broken ranker too.
+  ⚠️ NOT YET WIRED: `decide()` still needs the rails and session extremes
+  plumbed from main.py. The helpers are tested in isolation; the strategy does
+  not consult them until that lands.
 
 - **v4.50 — 2026-08-13 — LIQ.4: THE LIQUIDITY LEDGER. `analysis/liquidity_ledger.py`
   v1.0 + 15 tests.** Operator, on being told the pool set lives only in RAM:

@@ -1,4 +1,46 @@
 """
+v-pfanchor — 2026-08-13 — PF.5: THE PITCHFORK BECOMES THE CONDOR'S ANCHOR, and
+  this is the overlay's FIRST CONSUMER. It has been live as a weight-0 observer
+  since 2026-08-12 with one call site and nothing reading the rails back.
+  OPERATOR'S SPEC, verbatim where it matters:
+    · "It's a guardrail, not the road."  -> DAILY fork only.
+    · "consider the condor off the table if we don't have guardrails. That is
+       the insurance policy that eliminates a bad decision in an unpredictable
+       session."                          -> NO FORK, NO PLAN.
+    · "The tine should be the trigger for 'rich premium' and the short strike
+       should be just outside the range of the rail at the MOST LIQUID strike
+       WHERE PRICE HAS STILL NOT EXCEEDED."
+    · leg order from the apparent slope: an UP-sloping fork fills the PUT side
+       first (price travels lower rail -> upper rail over the session), a
+       DOWN-sloping fork fills the CALL side first. Mirrored, and it falls out
+       of the geometry rather than being asserted.
+  THREE THINGS THIS CHANGES AND ONE IT DOES NOT:
+   (1) ANCHOR — short call rides the UPPER rail, short put the LOWER rail,
+       replacing the BB half of the dual floor. `0.80 * EM` SURVIVES AS A
+       MINIMUM DISTANCE: a rail sitting on top of spot must not produce a strike
+       with no breathing room, which is the exact failure v-dualfloor was
+       written to fix after ~3 weeks of bleed.
+   (2) NOT-EXCEEDED — a strike price has ALREADY TRADED THROUGH today is a
+       strike the market has proven it can reach. New constraint; nothing in the
+       codebase tested a short strike against the session's own extremes before.
+   (3) LIQUIDITY NOW KEYS ON BID/ASK WIDTH. The old `liq()` summed
+       `open_interest + volume`, and factor_sweep found BOTH CONSTANT across the
+       whole joined sample — so `max_liq` was 0, the `else: top = eligible`
+       branch took every call, and "most liquid" has silently resolved to
+       "nearest the floor" since v-dualfloor shipped. The comment even
+       anticipated it ("no OI/vol data"), which is why it degraded quietly
+       instead of failing. Width is populated and is also the measure that
+       matters on a 0DTE credit spread, where a nickel-wide quote is what trips
+       a stop on noise. OI/volume are kept ONLY as a tie-break, and only when
+       genuinely non-zero.
+   (4) UNCHANGED: the RANGING gate, the leg-2 pause, the ratchet, the nickel
+       close, the 11:11 window. This is strike SELECTION and leg ORDER, not a
+       new trade.
+  ⚠️ ACCEPTED RISK, operator's words: "If it gets breached, then our fork may
+     also become invalid & I can live with that because we are accepting that
+     risk for an asymmetric payoff if it holds." So a breach and a fork
+     invalidation are THE SAME EVENT — the structure and the overlay agree on
+     when the thesis died instead of arguing about it.
 v-audibleabandon — 2026-08-05 — `_journal_abandon`'s handler logs inside its
   except body. Flagged by the swallow census as a new TIER-1 silent handler the
   morning after it shipped. The swallow itself is correct and unchanged — a
@@ -295,6 +337,98 @@ class IronCondorStrategy(BaseOptionsStrategy):
             if outside:
                 return max(outside, key=lambda c: c.strike)
             return min(candidates, key=lambda c: abs(c.strike - band_level))
+
+    @staticmethod
+    def _liquidity_rank(c) -> tuple:
+        """Rank key for "most liquid". LOWER IS BETTER.
+
+        BID/ASK WIDTH FIRST, because it is the only liquidity signal that is
+        actually populated: factor_sweep found `open_interest` and `volume`
+        CONSTANT across the entire joined sample, so the old
+        `open_interest + volume` sum was 0 for every contract and the selector
+        fell through to its "no OI/vol data" branch on every call. Width is also
+        what matters on a 0DTE credit spread — a nickel-wide quote is what trips
+        a stop on quote noise rather than on price.
+
+        OI/volume survive ONLY as a tie-break and ONLY when non-zero, so this is
+        correct whether or not the feed starts populating them later.
+        """
+        try:
+            bid, ask = float(getattr(c, "bid", 0) or 0), float(getattr(c, "ask", 0) or 0)
+            mid = (bid + ask) / 2.0
+            width = (ask - bid) / mid if (mid > 0 and ask >= bid) else 9.99
+        except Exception:                                      # noqa: BLE001
+            width = 9.99
+        depth = (getattr(c, "open_interest", 0) or 0) + (getattr(c, "volume", 0) or 0)
+        return (round(width, 4), -depth)
+
+    def _select_beyond_rail(self, contracts: List[OptionContract], side: str,
+                            rail: float, min_distance_level: float,
+                            session_extreme: Optional[float]
+                            ) -> Optional[OptionContract]:
+        """PF.5 — the operator's rule, in the order he stated it.
+
+        A strike qualifies only if it is ALL THREE of:
+          1. BEYOND THE RAIL          — "just outside the range of the rail"
+          2. BEYOND THE MIN DISTANCE  — the surviving `0.80 * EM` floor, so a
+             rail sitting on top of spot cannot produce a strike with no room
+          3. NOT EXCEEDED BY PRICE    — beyond the session high (calls) or low
+             (puts). A level price has already traded through today is a level
+             the market has PROVEN it can reach; selling there is selling a
+             strike that has been touched and is being offered as untouched.
+        Among survivors: MOST LIQUID by bid/ask width, tie-break to the strike
+        NEAREST the rail — richest premium that still clears everything.
+
+        Returns None rather than falling back inward. No inside fallback, ever:
+        that fallback is what sold calls on top of spot for ~3 weeks.
+        """
+        def beyond(k, level):
+            return k >= level if side == "call" else k <= level
+
+        eligible = []
+        for c in contracts:
+            if not (getattr(c, "mark", 0) or 0) > 0.01:
+                continue
+            k = c.strike
+            if not beyond(k, rail):
+                continue
+            if not beyond(k, min_distance_level):
+                continue
+            if session_extreme is not None and not beyond(k, session_extreme):
+                continue
+            eligible.append(c)
+
+        if not eligible:
+            _priced = [c for c in contracts if (getattr(c, "mark", 0) or 0) > 0.01]
+            logger.info(
+                "Condor: no %s strike clears rail %.2f / min-dist %.2f / "
+                "session-extreme %s — %d/%d priced. SKIP (no inside fallback).",
+                side, rail, min_distance_level,
+                f"{session_extreme:.2f}" if session_extreme is not None else "n/a",
+                len(_priced), len(contracts))
+            return None
+
+        best_rank = min(self._liquidity_rank(c) for c in eligible)
+        cohort = [c for c in eligible
+                  if self._liquidity_rank(c)[0] <= best_rank[0] * 1.5 + 1e-9]
+        return (min(cohort, key=lambda c: c.strike) if side == "call"
+                else max(cohort, key=lambda c: c.strike))
+
+    @staticmethod
+    def _leg_order_from_slope(slope: float, flat_eps: float):
+        """Leg order from the fork's apparent slope. Returns (leg1, leg2) or
+        None when the fork is FLAT and the caller should fall back to proximity.
+
+        UP-sloping channel: price travels the LOWER rail toward the UPPER one
+        across the session, so the PUT side is the one price is leaving and it
+        fills FIRST; the call side fills later as price approaches the top.
+        DOWN-sloping: mirrored. A SIGN IS NOT A SLOPE — below `flat_eps` the
+        drift is noise and ordering off it would be reading a coin flip as
+        structure, so the caller keeps its existing proximity rule.
+        """
+        if slope is None or abs(slope) < flat_eps:
+            return None
+        return ("put", "call") if slope > 0 else ("call", "put")
 
     def _select_beyond_floor(self, contracts: List[OptionContract],
                              floor_level: float, side: str) -> Optional[OptionContract]:
