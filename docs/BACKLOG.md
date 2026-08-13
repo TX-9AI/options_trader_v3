@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.60
+# docs/BACKLOG.md — v4.61
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,51 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.61 — 2026-08-13 — SWP.3 SHIPPED.** `trade_readiness` v1.9 + 8 tests (143
+  across today's suites). **Every item approved this morning is now built.**
+
+  **THE SIGN IS REFUTED BY THREE INDEPENDENT MEASUREMENTS**, none of which knew
+  about the others: **LIQ.1** — the London level TRACKS PRICE rather than being
+  approached by it; **ANT.1** — appr_val −41%, appr_touches −45% against
+  outcome; **ANT.2** — fitted weights −0.39 / −0.40. `appr_val` entered
+  `_combine` as a POSITIVE corroborator at weight 0.25.
+
+  **WHY NOT SIMPLY INVERT IT.** `1 - appr_val` asserts *"far from any named
+  level = ready"*, which is nonsense for a SWEEP — the trade is penetration and
+  rejection AT a level. The likelier mechanism is that **PROXIMITY IS
+  PRE-SWEEP**: price near a pool means the sweep has not happened yet, so the
+  term was scoring the setup's ABSENCE. **We know the sign is wrong and we do
+  NOT know the right functional form**, and asserting an inverted one swaps one
+  unfitted prior for another. Weight ZERO; `appr_val`, `appr_touches`,
+  `appr_dist_atr` and `appr_name` STAY JOURNALED so the follow-up study needs no
+  new collection.
+
+  **⚠️ THE RENORMALISATION IS THE REAL RISK, NOT THE REMOVAL.** `TR_STAGE_BAR`
+  (0.35) and `TR_ARM_BAR` (0.55) are ABSOLUTE thresholds against the
+  corroborator SUM, and the four weights summed to exactly 1.0. Dropping 0.25
+  without redistributing would compress every sweep score by a quarter and make
+  the arm bar effectively unreachable — **the sweep track would go quiet and it
+  would look like a correction rather than a behaviour change.**
+  0.30/0.20/0.25 → **0.400/0.267/0.333**. Tests pin the sum at 1.0, the factor
+  ordering (conv > exh > fresh), that a maxed score can still ARM, and that a
+  lone corroborator still cannot — plus a deliberate-failure check proving the
+  sum assertion is reachable rather than vacuous.
+  The env override is documented as NOT standalone: raising `SWEEP_APPR_W` alone
+  pushes the sum past 1.0 and inflates every score against the absolute bars.
+
+  **LOG-ONLY** — `main.py:2045` calls `_readiness.assess_all()` and DISCARDS the
+  return, so no trade changes today. What it fixes is that every FUTURE fit
+  against the readiness composite would otherwise inherit a term measured to
+  point backwards.
+
+  **⚠️ PROCESS NOTE, three failed attempts on one header.** This file uses `#`
+  COMMENT headers, not a module docstring — my first insert wrote bare text into
+  module scope (`SyntaxError` on an em dash), my repair loop then searched for a
+  line it had already renamed and ran off the end, and a test asserted on a
+  phrase the comment wraps across two lines. Restored from git and reapplied.
+  **Testing prose is fine; testing prose LAYOUT is not** — assert on
+  wrap-stable fragments.
 
 - **v4.60 — 2026-08-13 — GRD.2 SHIPPED (FULL SEND).** `continuation_strategy`
   v1.7 + 10 tests (135 across today's suites). **The oldest open item on the

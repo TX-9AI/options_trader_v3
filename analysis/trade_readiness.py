@@ -1,4 +1,14 @@
-# analysis/trade_readiness.py — options_trader_v3 — v1.8
+# analysis/trade_readiness.py — options_trader_v3 — v1.9
+# v1.9 — 2026-08-13 — SWP.3: the sweep APPROACH corroborator's sign is
+#         refuted (LIQ.1 + ANT.1 + ANT.2, three independent lines), weight
+#         -> 0.0 and the remaining three renormalised 0.30/0.20/0.25 ->
+#         0.400/0.267/0.333 so the ABSOLUTE stage/arm bars keep their meaning.
+#         Not inverted: `1 - appr_val` would assert 'far from a level = ready',
+#         nonsense for a sweep. Sign wrong, form unknown — so the term is
+#         removed from the composite and KEPT in the journal.
+#         LOG-ONLY: main.py:2045 discards assess_all()'s return, so no trade
+#         changes today. It stops every FUTURE fit against the readiness
+#         composite inheriting a term measured to point backwards.
 # v1.8 — 2026-08-11 — BFLY.1: THE BUTTERFLY TRACK WAS SCORING A DIFFERENT TRADE.
 #         The strategy is a GEX-PIN play — Gate 5 hard-refuses unless
 #         `gex_environment == "PINNING"`, the tent is centred on `pin_strike`
@@ -354,12 +364,34 @@ DORMANT, STAGING, ARMED = "DORMANT", "STAGING", "ARMED"
 # convention as regime_confluence v1.3: each block states the minimum evidence
 # that should just barely stage, and a lone factor stays under TR_ARM_BAR.
 W_CONT_CONV, W_CONT_PULL, W_CONT_MOM = 0.40, 0.35, 0.25
-W_SWEEP_CONV, W_SWEEP_FRESH, W_SWEEP_EXH = 0.30, 0.20, 0.25
+# ── SWP.3 (2026-08-13) — THE APPROACH TERM'S SIGN IS REFUTED ─────────────────
+# `appr_val` entered as a POSITIVE corroborator at 0.25. THREE INDEPENDENT
+# measurements, none of which knew about the others, say it points the other
+# way: LIQ.1 (the London level TRACKS PRICE rather than being approached by it),
+# ANT.1 (appr_val -41%, appr_touches -45% against outcome) and ANT.2 (fitted
+# weights -0.39 / -0.40).
+# WHY NOT JUST INVERT IT. `1 - appr_val` asserts "far from any named level =
+# ready", which is nonsense for a SWEEP — the trade is penetration and rejection
+# AT a level. The likelier mechanism is that PROXIMITY IS PRE-SWEEP: price near a
+# pool means the sweep has not happened yet, so the term was scoring the setup's
+# ABSENCE. We know the sign is wrong and we do NOT know the right functional
+# form; asserting an inverted one swaps one unfitted prior for another.
+# ⚠️ THE REMAINING THREE ARE RENORMALISED TO SUM TO 1.0. TR_STAGE_BAR (0.35) and
+# TR_ARM_BAR (0.55) are ABSOLUTE thresholds against the corroborator SUM, so
+# dropping 0.25 of weight without redistributing would compress every sweep
+# score by a quarter and make the arm bar effectively unreachable — a silent
+# behaviour change wearing the costume of a correction.
+W_SWEEP_CONV, W_SWEEP_FRESH, W_SWEEP_EXH = 0.400, 0.267, 0.333
 # v1.7 — APPROACH TO A NAMED LEVEL. Conviction must RISE as price nears a pool,
 # and a level that has HELD against repeated tests outranks a virgin one.
 # Distance is price delta normalised by ATR (operator, 2026-08-10) so 0.20 away
 # is imminent on GLD and noise on NVDA without per-symbol tuning.
-W_SWEEP_APPR        = _envf("SWEEP_APPR_W", 0.25)
+W_SWEEP_APPR        = _envf("SWEEP_APPR_W", 0.0)   # SWP.3 — sign refuted.
+# ⚠️ RESTORING THIS IS NOT AS SIMPLE AS SETTING THE ENV VAR: a non-zero weight
+# pushes the corroborator sum above 1.0 unless the other three are scaled back,
+# which inflates every sweep score against the absolute bars. Change all four
+# together or not at all. `appr_val` and its detail fields STAY JOURNALED —
+# weight zero, not deleted, so the follow-up study needs no new collection.
 # BOUNDS FITTED FROM THE SHADOW OBSERVER, not guessed (BACKLOG v4.05, first
 # read 2026-08-07): only **14.0%** of observations sit within 0.5 ATR of a named
 # level, MEDIAN **2.32 ATR**. My first draft used 0.15/1.20 — which would have
