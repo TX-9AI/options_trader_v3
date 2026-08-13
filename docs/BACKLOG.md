@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.37
+# docs/BACKLOG.md — v4.38
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,79 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.38 — 2026-08-13 — ⚠️ ROLL.1: NOTHING IDENTIFIED THIS SESSION IS LIVE ON
+  THE FLEET. Operator: *"at some point we're gonna have to start implementing
+  the changes. Nothing that we've identified so far has been rolled out."*
+  HE IS RIGHT, AND THE REASON IS THE BAKE, NOT THE WORK.** GRD.1 is at origin
+  (`1db919f`), ENG.1 at `d395bba`, excursion v3.1 at dtp `ae367ca` — all
+  PUSHED, none BAKED. The boxes traded 2026-08-13 on pre-GRD.1 code. Per §18,
+  a PUSHED item is ◐ and never ✅, and only the third state changes any of the
+  data being collected.
+
+  **DEPLOYABLE TONIGHT — neither item is entry-affecting, so neither waits for
+  Mon Aug 17:**
+  1. **BAKE GRD.1** (`setup_scorer` v1.7, already at origin). The weighted
+     total is arithmetically unchanged and `grade_b` is untouched, so the
+     fire/no-fire population is provably identical — verified over 200,000
+     random signals, zero divergence in total OR in the REJECT boundary. The
+     only behavioural change is that continuation stops drawing the 1.5× size
+     multiplier on an anti-predictive grade. **That is a SIZING change, and
+     sizing is explicitly outside the Aug 17 entry gate.** Worth ~$2,748 on the
+     18-session sample.
+  2. **`OT_CONT_STOP_PCT` 0.25 -> 0.15.** Env knob (config.py:819), no code
+     deploy. Floor sweep, `max_loss_floor / ContinuationStrategy`, n=66 across
+     9 sessions, **0% win rate**: a 15% floor stops all 66 with **ZERO WINNERS
+     CUT**, NET DELTA **+8.85** units of entry premium against +2.25 at the
+     current 25%. Meets the pre-registered cheapest-threshold-catching-zero-
+     winners rule rather than an in-sample argmax. This cohort is BY DEFINITION
+     the trades where no structural stop fired — not regime_flip, not bos_exit,
+     not insurance_stop — so tightening it does not pre-empt a thesis test the
+     way an `orb_structure_stop` floor would. **That proposal was WITHDRAWN**
+     on the operator's correction: the ORB structure stop IS the thesis
+     invalidation, its 0% win rate is a definition rather than a defect, and
+     exit_engine's own comment makes the argument — *a premium-percent stop on
+     0DTE measures gamma, not thesis*.
+
+  **CONTROL-SIDE, NOT DEADLINE-BOUND:** the fleet cut (14 symbols clear ratio
+  ≥3 at 60 bars; GS/LLY/COST condemned at ANY intraday horizon by the sqrt-t
+  arithmetic — they would need ~1,190 / ~1,970 / ~780 bars to reach ratio 3).
+
+  **MON AUG 17, ENTRY-AFFECTING:** the SWP.3 approach-weighting correction
+  (three independent lines, ready) and GRD.2 if the operator approves it.
+
+- **ENG.2 — `tests/orb_conversion.py` v1.0: did ORB's setups stop, or did a
+  gate start?** `[DESK]` ENG.1 found the largest number in the project — ORB
+  earned **$5,966/session pre-excavation and $1,551 after**, while per-trade
+  value ROSE ($111.9 → $172.4) and never-favorable IMPROVED (38% → 22%). The
+  engine did not get worse at picking ORBs; it got better and nearly stopped.
+  **~$4,400/session, larger than the entry punch list combined.**
+  Counts `retest_check` events (a break registered and was being worked)
+  **deduplicated to (symbol, direction, attempt)** — a break evaluated over 200
+  ticks is one setup, not 200, which is the tick-inflation trap that made the
+  sweep opportunity audit read 4,303 "opportunities" from a handful of events —
+  against ORB entries in trades.db. Flat break supply with collapsed conversion
+  = a recoverable GATE; breaks falling in step = July's tape and nothing to
+  restore. ⚠️ ENG.1's flat available-move figure (0.322 vs 0.344) does NOT
+  settle this: that statistic is DIRECTIONLESS, and a tape can offer identical
+  movement with far fewer clean range breaks. A session with trades but no
+  journal is reported UNCOVERED and excluded from the rate rather than counted
+  as zero breaks — counting missing telemetry as absent setups would invent the
+  "setups stopped" answer. Fixture-verified incl. the uncovered-session path.
+
+- **`tests/engine_arms.py` v1.1 — two defects found on the first real run.**
+  (a) `--split` was documented as the last session of ARM A but assigns
+  `d < split` to A, so `--split 2026-07-27` put the **07-27 session in arm B**
+  — and deploys land in the EVENING (07-23's was confirmed 21:22–21:51), so the
+  boxes traded 07-27 on the PRIMITIVE engine. Now documented and defaulted as
+  the FIRST session of ARM B, 2026-07-28. **ENG.1's published arm B is one
+  session wrong and should be re-run before it is cited.**
+  (b) The ruleset audit printed *"journal starts later than these sessions"*
+  when it found no stamps — but the journal covers 07-20 onward and the real
+  cause is that the `ruleset` field postdates those rows. It reported a WRONG
+  REASON, which is the renders-cleanly-means-something-else failure class,
+  committed inside the audit built to catch it. Now distinguishes no-directory
+  / empty-directory / files-present-but-field-absent.
 
 - **v4.37 — 2026-08-13 — ENG.1: DID THE 07-27 EXCAVATION TRADE WORSE THAN THE
   PRIMITIVE L1 IT REPLACED?** `[DESK]` Operator: *"the layer one engine was

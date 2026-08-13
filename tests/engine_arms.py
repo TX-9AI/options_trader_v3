@@ -1,6 +1,22 @@
 #!/usr/bin/env python3
 """
-tests/engine_arms.py — v1.0 — 2026-08-13
+tests/engine_arms.py — v1.1 — 2026-08-13
+
+v1.1 — 2026-08-13 — TWO DEFECTS FOUND ON THE FIRST REAL RUN.
+       (a) SPLIT SEMANTICS. `--split` was documented as "last session of ARM A"
+           but the code assigns `d < split` to A, so `--split 2026-07-27` put
+           the 07-27 SESSION in arm B. Deploys land in the EVENING (the 07-23
+           deploy was confirmed 21:22-21:51), so the boxes almost certainly
+           traded 07-27 on the PRIMITIVE engine. `--split` is now documented
+           and defaulted as the FIRST SESSION OF ARM B = 2026-07-28.
+       (b) THE RULESET AUDIT LIED ABOUT ITS OWN ABSENCE. It printed "journal
+           starts later than these sessions" whenever no stamps were found —
+           but the journal covers 07-20 onward and the real cause is that the
+           `ruleset` field postdates those rows. It reported a wrong REASON,
+           which is the renders-cleanly-means-something-else failure this repo
+           exists to catch, committed inside the audit built to catch it. Now
+           distinguishes no-directory / no-files / files-present-field-absent.
+v1.0 — 2026-08-13 — first cut.
 
 DID THE CONFLUENCE EXCAVATION TRADE BETTER THAN THE PRIMITIVE L1 IT REPLACED?
 
@@ -201,8 +217,17 @@ def available_move(dates, root):
 
 
 def rulesets(dates):
-    """Distinct `ruleset` commit stamps seen per arm — BUILT != BAKED."""
+    """Distinct `ruleset` commit stamps per arm, plus WHY none were found.
+
+    v1.1 — returns (counter, reason). v1.0 collapsed three different absences
+    into one sentence that named the wrong one.
+    """
     seen = collections.Counter()
+    dirs = files = 0
+    for date in dates:
+        if os.path.isdir(os.path.join(JOURNAL, date)):
+            dirs += 1
+            files += len(glob.glob(os.path.join(JOURNAL, date, "*.jsonl")))
     for date in dates:
         for path in sorted(glob.glob(os.path.join(JOURNAL, date, "*.jsonl"))):
             try:
@@ -219,7 +244,16 @@ def rulesets(dates):
                             seen[str(rs)[:12]] += 1
             except Exception:                  # noqa: BLE001
                 continue
-    return seen
+    if seen:
+        return seen, ""
+    if not dirs:
+        return seen, "no journal directory for any session in this arm"
+    if not files:
+        return seen, f"{dirs} journal dir(s) present but EMPTY"
+    return seen, (f"{files} journal file(s) across {dirs} session(s) present, "
+                  f"but NO `ruleset` field in them — the stamp postdates these "
+                  f"rows (signal_journal v1.2). The split date stays an "
+                  f"ASSUMPTION for this arm.")
 
 
 # ── report ───────────────────────────────────────────────────────────────────
@@ -266,8 +300,10 @@ def line(label, s, sessions, move):
 
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--split", default="2026-07-27",
-                    help="last session of ARM A (the excavation commit date)")
+    ap.add_argument("--split", default="2026-07-28",
+                    help="FIRST session of ARM B. NOT the commit date: a commit "
+                         "dated D bakes on the EVENING of D, so session D still "
+                         "ran the old engine. 92c89d7 landed 07-27 -> 07-28.")
     ap.add_argument("--a-start", default="",
                     help="earliest ARM A session (default: everything on disk)")
     ap.add_argument("--b-end", default="2026-08-04",
@@ -348,10 +384,9 @@ def main(argv):
     print("  reached the boxes that day, and the split date is an assumption")
     print("  until these stamps confirm it.")
     for tag, dates in (("A", a_dates), ("B", b_dates)):
-        rs = rulesets(dates)
+        rs, why = rulesets(dates)
         if not rs:
-            print(f"    arm {tag}: no journal coverage (journal starts later than "
-                  f"these sessions)")
+            print(f"    arm {tag}: {why}")
         else:
             top = ", ".join(f"{k} x{v}" for k, v in rs.most_common(6))
             print(f"    arm {tag}: {top}")
