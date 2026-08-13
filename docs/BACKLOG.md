@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.36
+# docs/BACKLOG.md — v4.37
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,68 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.37 — 2026-08-13 — ENG.1: DID THE 07-27 EXCAVATION TRADE WORSE THAN THE
+  PRIMITIVE L1 IT REPLACED?** `[DESK]` Operator: *"the layer one engine was
+  arguably trading better than the upgraded confluence engine"* and *"the
+  earliest trading on the primitive engine was wildly successful, but I
+  intentionally steered it away with the goal of developing the confluence
+  tests that made prediction a priority."*
+
+  **This is the largest open question in the project and it outranks the entry
+  punch list.** Five independent lines now point the same way: ORB is the
+  profitable strategy and is the one setup_scorer v1.4 deliberately STRIPPED of
+  confluence inputs; the regime label carries no forward drift beyond ±0.03% at
+  any horizon; `SETUP.nf ≈ SETUP.ok`; `RGCV.nf ≈ RGCV.ok`; and sweep dried up
+  at the excavation. If the primitive arm wins in a vol-matched window, GRD.1/2/3
+  are rearranging furniture.
+
+  **THE DATES MAKE IT TESTABLE, WHICH WAS NOT EXPECTED.** `92c89d7` (2026-07-27,
+  "excavate the confluence engine") lands **eight days before** the 08-05
+  volatility contraction, so the engine change and the tape change SEPARATE.
+  Arm A = everything on or before 07-24 (trade DBs reach 07-13 via
+  `trades/_archive_pre_2026-07-23`, complete, no gaps). Arm B = 07-28 → **08-04,
+  hard stop** — crossing 08-05 would let a 15-25%/hour movement collapse answer
+  a question about the engine.
+
+  **SCHEMA BOUNDARY FOUND (probe, 2026-08-13):** `max_premium_seen` appears
+  between 07-14 (absent) and 07-21 (present); `max_premium_seen_at` only from
+  08-03. So MFE / never-favorable / capture exist on 07-20→07-24 (5 sessions)
+  vs 07-28→08-04 (6) — balanced — while 07-13→07-17 supports NET ONLY.
+  ⚠️ `excursion_report.usable()` DROPS rows without `max_premium_seen`, so an
+  option-40 run reaching into mid-July silently thins the primitive arm for a
+  reason unrelated to the engine.
+
+  **BUILT — `tests/engine_arms.py` v1.0.** Reads both the live and archived
+  trade folders. Reports per arm: n, sessions, symbols, net, $/trade, win%,
+  never-favorable, and **`$/move` — net per trade divided by that arm's median
+  available movement**, computed from the OHLC CSVs alone (deliberately NOT via
+  `regime_replay_<date>.jsonl`, which does not exist for mid-July and would have
+  made the primitive arm look empty for a non-engine reason). `$/move` is the
+  column to read: raw dollars let the TAPE answer a question about the ENGINE.
+  Rows lacking `max_premium_seen` are counted and shown as `n(mfe)`, never
+  silently dropped. Adds a RULESET AUDIT reading the journal's per-row commit
+  stamp, because BUILT ≠ PUSHED ≠ BAKED and the 07-27 split date is an
+  assumption until the stamps confirm the boxes actually ran it.
+  Verified on fixtures with a planted edge difference; **deliberate-failure
+  check passed** — with identical engines and a 2× tape difference, `$/move`
+  does not manufacture a win for the primitive arm.
+  ⚠️ NATURAL EXPERIMENT, NOT A CONTROLLED ONE. The 07-24 runaway reroute sits
+  INSIDE arm A, and CNT/SWP/LIQ landed after arm B — a difference is
+  attributable to the system as it stood, not to `regime_confluence` v1.3
+  alone. ⚠️ AND IT MAY COME BACK UNDERPOWERED: mid-July per-symbol DBs hold
+  single-digit-to-25 rows, so arm A may not clear the n=40 / 3-session floor.
+  That is a legitimate outcome — absent measurement, not a null.
+
+- **`day_trader_pro/excursion_report.py` v3.1 — `insurance_stop` was reported
+  NOWHERE.** It is the MIDDLE tier of continuation's three-stop precedence (BOS
+  protected_level → structural `insurance_stop` → 25% premium floor). Tier 1
+  reached the LEASH VERDICT via `bos_exit`, tier 3 reached the FLOOR VERDICT via
+  `FLOOR_REASON_PREFIXES`, and tier 2 fell through both plus the `unlisted`
+  fallback, which matches on the substring `"trail"`. Added to `TRAIL_FLAVORS`,
+  and a new **UNREPORTED-REASONS audit** now names any exit family that reaches
+  neither verdict block — the same failure class as v3.0's substring guard:
+  output that renders cleanly while omitting the thing you would have looked for.
 
 - **v4.36 — 2026-08-13 — WORKING_AGREEMENT §19: COMMANDS GO IN A CODE BOX, ONE
   LINE, SEMICOLON-SEPARATED.** Operator's instruction, shipped into the repo so
