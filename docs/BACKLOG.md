@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.32
+# docs/BACKLOG.md — v4.33
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5050,6 +5050,74 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.33 — 2026-08-12 EOD — SELECTION AND SIZING: four shippable conclusions,
+  and the volatility contraction confirmed a second way.**
+
+  **SEL.1 SYMBOL EDGE (15 sessions, ~5,300 ticks/symbol).** ratio = median
+  available move / breakeven, at the traded 0.15-0.25 delta bucket:
+  **QQQ 24.8 · SPX 18.3 · NVDA 15.0 · TSLA 14.1 · IWM 8.8 · AMZN 6.9 · PLTR 6.7
+  · AAPL 6.6 · MU 6.1 · GOOGL 5.0 · NFLX 3.7 · AMD 3.2 | AVGO 2.7 · ORCL 2.2 ·
+  MSFT/UNH 1.7 · GLD 1.5 · DIA/CRM/META 1.3 | SMH 1.0 · XOM/JPM/CVX 0.9 ·
+  COST 0.6 · GS 0.5 · LLY 0.4.**
+  ⚠️ THE TAIL VIEW IS THE HONEST SELECTION STATISTIC, not the median ratio. COST
+  is ratio 0.6 yet made **+$1,985** on two long-hold ORB trades. `payable%` (share
+  of ticks offering >=3x breakeven): QQQ 100% · GOOGL 79% · AMD 54% · **AVGO 44%
+  · ORCL 29% · MSFT 21% · UNH 14% · GLD 14% · DIA 11%** (TAIL ONLY — size down,
+  do NOT ban) · CRM 9% · META 8.8% · SMH 4.9% (thin but real) · **COST 0.5% ·
+  GS 0.3% · LLY 0.4% (NO PAYABLE TAIL).**
+  ⚠️ **HORIZON DEPENDENCE, unresolved:** the ratio measures a 20-BAR window while
+  COST's two winners held 102 and 24 minutes. A long-hold symbol is
+  systematically understated. **Re-run with `--horizon 60` before condemning
+  COST/CRM/META** — GS and LLY should stay condemned at any horizon (p99 ratios
+  2.2 and 2.1 against breakevens near 0.8%), and that is the test of whether the
+  horizon explanation holds or is a rationalisation.
+
+  **SPD.1 — DELTA SELECTION IS OFF THE PUNCH LIST.** 710,897 contract rows.
+  Breakeven by delta: 0.05-0.15 **0.186%** · fleet's 0.15-0.25 **0.136%** ·
+  optimum 0.25-0.35 **0.127%** · 0.60-0.85 **0.230%**. **Moving to the optimum
+  buys 7%** — spread and leverage nearly cancel across the chain. The SYMBOL axis
+  spans **42x**. The lever is which boxes wake, not which strike they buy.
+
+  **SEL.2 FLEET CORRELATION — 13 boxes are 2.8 EFFECTIVE BETS** (mean pairwise
+  rho 0.300, 5-min signed returns, 15 sessions).
+  - **QQQ/SPX 0.907** are one position. Semis complex: AVGO/QQQ 0.791, MU/QQQ
+    0.770, AMD/QQQ 0.757, AMD/MU 0.753. **IWM/SPX 0.757** — IWM is NOT the
+    small-cap diversifier it looks like.
+  - **THE DIVERSIFIERS INVERT THE CULLING LOGIC: NFLX −0.042** (and NEGATIVE to
+    the semis: MU −0.245, AMD −0.235, AVGO −0.154), AAPL 0.046, GOOGL 0.186,
+    AMZN 0.222, PLTR 0.239. **NFLX has the WORST payability ratio on the "trade
+    it" list (3.7) and is the most valuable symbol for portfolio structure.**
+    Cutting to the highest-ratio names RAISES per-trade edge and LOWERS the
+    number of bets — they pull opposite ways.
+  - ⚠️ **DIVERSIFICATION ERODES WHEN IT MATTERS: quiet half rho 0.238 → 3.4
+    effective; busy half rho 0.327 → 2.6.** Correlation is highest on the days
+    with the MOST movement, i.e. concentration and opportunity arrive together.
+    **Size against the BUSY figure.** Worst session: **2026-07-29, rho 0.545 at
+    0.140% median move — 13 boxes behaving as 1.7 positions.**
+  - PRACTICAL: ~$15K across 13 boxes is roughly **$5.8K of independent risk** on
+    a typical day and less on a busy one.
+
+  **⚠️ THE VOLATILITY CONTRACTION IS CONFIRMED BY A SECOND, INDEPENDENT PATH.**
+  SEL.2's per-session median |return| (5-min bars, straight from OHLC): **0.099-
+  0.140% before 08-05, 0.057-0.086% after — roughly halved.** The preclusion
+  census reached the same conclusion from replay ticks + forward tape excursion.
+  Different data path, same answer. **The 08-05 "regression" is the market.**
+
+  **⇒ FOUR SHIPPABLE CONCLUSIONS, none requiring the research phase:**
+  1. **Drop GS and LLY** — no payable tail at any hour including the open.
+  2. **Time-box the tier-2 names** (AVGO, ORCL, MSFT, UNH, GLD, DIA, CRM, META)
+     to roughly the first two hours; they cross below 1.0 between 11:00 and 13:00.
+  3. **Size on ~2.6 effective bets, not 13.**
+  4. **Delta selection is worthless — drop it from the punch list.**
+  ⚠️ Cutting to 13 also drops the fleet under the DXFeed subscription cap that
+  forced the 15-of-29 selection, so the morning report becomes INFORMATIONAL
+  (context for sizing) rather than DISCERNING (a gate that can be wrong) —
+  operator's framing, and it removes the failure mode where a real setup sat out
+  because the box was never woken.
+
+  **TOOLS:** `spread_by_delta` v1.0 · `symbol_edge` v1.1 (tail view) ·
+  `fleet_correlation` v1.1 (stress split). All read-only, all on data already
+  on disk.
 - **v4.32 — 2026-08-12 EOD — THE ENTRY-SIDE SESSION. Six measurements, and the
   first one stopped a wrong revert.** Operator: *"After nearly 2 months at this,
   I'm struggling to understand why these bots suck so bad… I'm challenging you

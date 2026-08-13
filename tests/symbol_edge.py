@@ -166,6 +166,8 @@ def main(argv):
     ap.add_argument("--since", default="2026-08-08")
     ap.add_argument("--horizon", type=int, default=20)
     ap.add_argument("--min-mark", type=float, default=0.05)
+    ap.add_argument("--pay-mult", type=float, default=3.0,
+                    help="a move is PAYABLE at this multiple of breakeven")
     a = ap.parse_args(argv[1:])
 
     dates = sorted(d for d in os.listdir(REPORTS)
@@ -207,6 +209,38 @@ def main(argv):
              ("marginal — only the tail pays" if ratio >= 1 else
               "UNPROFITABLE — move < spread"))
         print(f"  {sym:8}{b:>10.3f}%{m:>9.3f}%{ratio:>8.1f}{n:>9,}   {v}")
+
+    # ── TAIL-AWARE VIEW ────────────────────────────────────────────────────
+    # ⚠️ THE MEDIAN RATIO IS NOT THE WHOLE STORY, AND COST IS THE PROOF: ratio
+    # 0.6 (median move BELOW breakeven) yet **+$1,985** on two long-hold ORB
+    # trades. This book is fat-tailed — the `>+50%` premium band is 28 trades,
+    # 100% win, **+$23,773** — so what matters is not whether the TYPICAL move
+    # pays but HOW OFTEN A PAYABLE MOVE IS ON OFFER. A symbol whose median is
+    # hopeless but whose tail is alive is a SIZING and FREQUENCY question, not a
+    # ban. A symbol with neither is a ban.
+    print(f"\n  TAIL VIEW — how often is a PAYABLE move on offer?")
+    print(f"    payable = available move >= {a.pay_mult:.0f}x breakeven")
+    print(f"    {'SYM':8}{'p50 ratio':>11}{'p90 ratio':>11}{'p99 ratio':>11}"
+          f"{'payable%':>10}   verdict")
+    for ratio, sym, b, m, n in sorted(rows, reverse=True):
+        allmv = [x for h in mv[sym] for x in mv[sym][h]]
+        r90 = pctile(allmv, .90) / b
+        r99 = pctile(allmv, .99) / b
+        pay = 100.0 * sum(1 for x in allmv if x >= a.pay_mult * b) / len(allmv)
+        if ratio >= a.pay_mult:
+            v = "trade it"
+        elif pay >= 10.0:
+            v = "TAIL ONLY — size down, do not ban"
+        elif r99 >= a.pay_mult:
+            v = "tail is thin — rare, real"
+        else:
+            v = "NO PAYABLE TAIL — ban candidate"
+        print(f"    {sym:8}{ratio:>11.1f}{r90:>11.1f}{r99:>11.1f}"
+              f"{pay:>9.1f}%   {v}")
+    print(f"    ⚠️ 'payable%' is the honest selection statistic: a symbol offering")
+    print(f"       a payable move on 10%% of ticks is TRADEABLE AT LOW FREQUENCY,")
+    print(f"       not untradeable. Only a symbol whose p99 never clears the")
+    print(f"       multiple has no tail to trade at all.")
 
     print(f"\n  RATIO BY HOUR — where the day actually closes down")
     print(f"    {'SYM':8}" + "".join(f"{h:02d}:00".rjust(8) for h in hours))
