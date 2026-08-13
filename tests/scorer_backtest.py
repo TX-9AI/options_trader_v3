@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """
-tests/scorer_backtest.py — v1.1 — 2026-08-13
+tests/scorer_backtest.py — v1.2 — 2026-08-13
+
+v1.2 — 2026-08-13 — `load_trades` now carries `raw` (the whole trades.db row)
+        and DE-DUPLICATES BY `trade_id`. The raw row is for
+        `spread_counterfactual.py`, which needs `underlying_entry` and
+        `direction` — fields this tool never used. The dedupe is the correction:
+        harvest copied a CUMULATIVE trades.db into each dated folder, and even
+        post-trim the live folders still hold repeats (`trade_report` reduces
+        1,567 rows to 843 unique). Every reader of these DBs must key on
+        `trade_id`; rows without one are KEPT and counted, never dropped.
+        ⚠️ The joined counts printed by v1.0/v1.1 were therefore slightly
+        inflated. The per-dimension medians are unaffected in shape but the n
+        column was not a distinct-trade count.
 
 v1.1 — 2026-08-13 — Each scored record now carries `raw`: the whole journal
         line. Nothing in this tool reads it. It exists so `factor_sweep.py`
@@ -124,8 +136,17 @@ def load_scored(date):
     return out
 
 
-def load_trades(date):
+def load_trades(date, seen=None):
+    """Closed trades for one dated folder, DISTINCT by trade_id.
+
+    `seen` is an optional cross-date set so a trade repeated in many folders
+    counts ONCE across a whole run. Rows with no trade_id are KEPT and counted
+    — discarding unattributable rows shrinks the corpus in a way nobody can
+    audit, which is `trim_trade_dbs`' own stated principle.
+    """
     out = []
+    if seen is None:
+        seen = set()
     for path in sorted(glob.glob(os.path.join(TRADES, date, "*_trades_*.db"))):
         try:
             conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -140,10 +161,16 @@ def load_trades(date):
             ts = _iso(d.get("entry_time"))
             if ts is None:
                 continue
+            tid = d.get("trade_id")
+            if tid:
+                if tid in seen:
+                    continue
+                seen.add(tid)
             out.append({"ts": ts, "sym": d.get("symbol"),
                         "strategy": d.get("strategy"),
                         "pnl": float(d.get("pnl_usd") or 0),
-                        "setup_type": d.get("setup_type") or ""})
+                        "setup_type": d.get("setup_type") or "",
+                        "raw": d})                     # v1.2
     return out
 
 
@@ -163,10 +190,11 @@ def main(argv):
         return 1
 
     joined, rejects, unmatched, scored_n = [], [], 0, 0
+    _seen = set()                                              # v1.2 dedupe
     for date in dates:
         sc = load_scored(date)
         scored_n += len(sc)
-        tr = load_trades(date)
+        tr = load_trades(date, _seen)
         idx = collections.defaultdict(list)
         for s in sc:
             idx[(s["sym"], s["strategy"])].append(s)

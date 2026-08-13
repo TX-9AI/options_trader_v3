@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.44
+# docs/BACKLOG.md — v4.45
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,71 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.45 — 2026-08-13 — HND.1 + TC.7. ONE BAND CARRIES MORE THAN THE WHOLE
+  STRATEGY LOSS, AND ENG.2 CLOSES NEGATIVE.**
+
+  **✅ ENG.2 CLOSED — THERE WAS NEVER AN ORB VOLUME COLLAPSE.** `orb_conversion`
+  v1.1 with the `trade_id` dedupe, 6 covered sessions per arm: arm A br/sess
+  **23.5** ent/sess **7.3** conv **31%**; arm B br/sess **32.0** ent/sess **9.3**
+  conv **29%**. Conversion FLAT against the tool's own ~2% MDE, break supply UP
+  36%, entries UP 27%. No gate started and the setups did not stop. **The
+  "~$4,400/session of lost ORB" was duplicate inflation and is VOID.** ORB trades
+  eight or nine times a session and always has. Dedupe visibly working — pre-07-20
+  sessions now read 1/0/7/4/5 entries where v1.0 printed 88/88/95/31/38.
+  **Disposition: stop looking for a recoverable ORB gate.**
+
+  **🔑 HND.1 — THE PEGGED-CONVICTION HANDOFF BAND.** `factor_sweep --setup-type`,
+  `reg.conviction` bands. **handoff, conviction EXACTLY 1.00: n=128, 41% win,
+  −$52/trade, −$6,623** — larger than ContinuationStrategy's entire −$6,351;
+  everything else in continuation nets roughly +$272. **The SAME peg through
+  STANDALONE: n=128, 50% win, +$1/trade, +$179.** Same conviction, same count,
+  opposite outcome.
+  **AND THE RELAXED FLOOR IS NOT THE DEFECT.** `CONTINUATION_CONV_FLOOR = 0.45`;
+  standalone's lowest band starts at **0.4554** (right at it) while handoff
+  reaches to **0.2554** (below it) — so the floor demonstrably steps aside, **and
+  those sub-floor trades are the BEST band in either table** (77 trades, 57% win,
+  +$23/trade, +$1,745).
+  **MECHANISM:** the handoff's licence is that the label is UNRELIABLE after a
+  runaway. When the label is ALSO pegged at maximum you have the runaway AND
+  total regime confidence — the move is finished and obvious. Lateness in its
+  purest form.
+  ⚠️ **NOT A ZERO-WINNER CUT** (53 winners in the band), so it must not ship as a
+  hard gate under the pre-registered rule. Routing/sizing signal. Both tables
+  correctly read NON-MONOTONE / UNDERPOWERED — this is a single-band
+  concentration, not a trend. The two paths have OPPOSITE shapes (standalone
+  loses at LOW conviction and is flat at the peg; handoff wins at LOW and dies at
+  the peg) and probably should not share a scorer profile.
+
+  **TC.7 — `tests/spread_counterfactual.py` v1.0: would these have paid as short
+  verticals?** Operator: *"those opportunities would have fared better as
+  vertical spreads instead of paying long premium to chase spent moves."*
+  **TERMINAL ONLY, and that is his correction, not a detail.** The first design
+  counted MAXIMUM ADVERSE EXCURSION — wrong, and the same error
+  `tcs_floor_durability` v1.1 was rewritten to fix: MAE counts a TOUCH, a
+  defined-risk spread only loses on ACCEPTANCE. *"With a credit spread it doesn't
+  matter that it turned against me as long as it doesn't breach."* On the impulse
+  population that distinction was worth everything — intraday held 14.7%,
+  terminal OK 56.1%, **41.4% RECOVERED**. **Every trade that dipped through a
+  candidate short strike and came back is a LOSS for the long and a WIN for the
+  spread**, and an MAE test measures that whole population out of existence. The
+  tool reports INTRADAY / TERMINAL / **RECOVERED** separately and never merges
+  them. "Never favorable" is IRRELEVANT here — it says the LONG never went green.
+  Geometry: a bull handoff buys calls, so the credit equivalent sells a PUT
+  spread BENEATH entry; the adverse side is the side that matters, but only at
+  the close.
+  ⚠️ **THE ASYMMETRY IS PRINTED IN THE OUTPUT, not left to the reader:** the long
+  number is REAL (fills, slippage, management, early closes), the spread number
+  is MODELLED (archived quotes at the posted bid, held to expiry, no management,
+  no assignment, no commission). That tilts toward the counterfactual by
+  construction — **a narrow win for the spread is a NULL, not a result.**
+  Fixture-verified on a planted dip-and-recover: RECOVERED 100% at every offset
+  price touched through, all terminal-OK.
+
+  **`tests/scorer_backtest.py` v1.2** — `load_trades` now carries the raw row
+  (for `underlying_entry`/`direction`) and **de-duplicates by `trade_id`**.
+  ⚠️ Consequence: the joined counts printed by v1.0/v1.1 were slightly inflated;
+  `trade_report` reduces 1,567 rows to 843 unique even post-trim.
 
 - **v4.44 — 2026-08-13 — TIMELINE PAUSED; THREE TOOL DEFECTS FIXED; THE STOP
   DEFAULT MOVED.**
