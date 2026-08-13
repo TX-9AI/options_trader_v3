@@ -269,6 +269,44 @@ the operator cannot copy cleanly is a command that runs wrong.
   which is part of why `;` is the default; the conditional above is what
   replaces the protection `&&` was providing.
 
+## 20. AN ABSENCE CANARY TESTS FOR A DEFINITION, NEVER FOR A MENTION.
+Added 2026-08-13, after the trap fired for the THIRD time in this repo. The
+first two were `_orb_quality` and `main` v5.6's absence test. The third was
+caught by a brand-new test on its first run: the check asserting a removed
+config block had not come back matched the CHANGELOG ENTRY DESCRIBING ITS
+REMOVAL.
+
+**The mechanism, and it is unavoidable rather than careless.** Rule 5 requires
+every edit to carry a dated changelog entry saying what changed. When what
+changed is *"we removed `FOO`"*, the honest entry contains the token `FOO`. A
+canary written as "`FOO` must not appear in this file" is then guaranteed to
+trip on the very documentation the version discipline demands. **The two rules
+collide by construction — good hygiene creates the false positive.**
+
+**So scope the canary to the SHAPE OF A DEFINITION, not the presence of a
+string:**
+- config constants → `^FOO\s*=` (assignment at line start)
+- functions → `^\s*def FOO\(`
+- call sites → `FOO(` rather than `FOO`
+- imports → `^from .* import .*FOO` rather than `FOO`
+
+**Why this matters more than it looks.** A canary that fires on documentation
+trains you to loosen it, and the loosened version is the one that misses the
+real regression. A false positive on an absence check is not a minor annoyance;
+it is the failure mode that disarms the check. The alternative — writing
+changelog prose that avoids naming what it removed — is worse: it degrades the
+record to protect the test, which inverts what each is for.
+
+**Corollary for the writer.** If you find yourself carefully NOT spelling a name
+in a changelog so a grep stays green, stop: the canary is wrong, not the prose.
+Fix the pattern.
+
+**Corollary for the reviewer.** A canary that has never gone red is one nobody
+knows works. This one failed on its first run and that is the only reason its
+scoping can be trusted — same principle as §17's "an alarm that has never fired
+is one nobody knows works", and the same reason every fixture in this repo
+carries a deliberate-failure check.
+
 ---
 
 ### Companion files

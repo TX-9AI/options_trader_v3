@@ -1,5 +1,22 @@
 """
-main.py — options_trader v6.1
+main.py — options_trader v6.2
+v6.2 — 2026-08-13 — AFTERNOON DEBIT BLOCK. Operator: "The only other Long that
+        can fire is either part of a butterfly or an iron condor vertical
+        spread from 11 o'clock onwards." ORB/Continuation/SweepReversal are
+        refused past DEBIT_DIRECTIONAL_CUTOFF_ET (11:00 ET, env-tunable).
+        PLACED AFTER THE SIGNAL IS CHOSEN, not at dispatch: one gate instead of
+        three, so a strategy added later cannot silently bypass the rule; the
+        refused signal is fully formed so the journal records WHAT WAS REFUSED
+        (a gate that vetoes invisibly can never be calibrated from its own
+        rejections — the reasoning that put gates E and F after the score in
+        setup_scorer); and condor legs never reach it, having routed through
+        `_execute_condor_leg` above, so the credit path is exempt BY
+        CONSTRUCTION rather than by a list entry that could rot.
+        ENTRIES ONLY — open positions manage normally.
+        ⚠️ IN A TRENDING AFTERNOON THIS LEAVES NOTHING: the condor self-gates to
+        RANGING and the butterfly needs PINNING GEX. That window belongs to the
+        trend credit spread (TC.6), which is NOT BUILT. Dark on purpose until
+        it is — the measured cost of that window is negative.
 v6.1 — 2026-08-11 — RGM.6: THE FALLBACK RESOLVES TO A KNOWN LABEL.
         Operator: "unknown should be virtually eliminated by the time we freeze
         layer 1… there should be ways to extrapolate and resolve to a KNOWN
@@ -481,6 +498,7 @@ from config import (
     CONT_BLOCK_PREMIUM_REGIMES,                 # CNT.6
     REGIME_REASSESS_MINUTES, INSTRUMENT, SessionConfig, DIRECTIONAL_ONLY,
     ORB_NO_ENTRY_AFTER_ET, BROKER_RECONCILE_ENABLED, ORB_FIRES_REGARDLESS_OF_REGIME,
+    DEBIT_DIRECTIONAL_CUTOFF_ET, DEBIT_DIRECTIONAL_STRATEGIES, DEBIT_BLOCK_ACTIVE,
     BROKER_RECONCILE_INTERVAL_MIN
 )
 
@@ -1346,6 +1364,27 @@ def _safe_strategy(name: str, fn):
         return None
 
 
+def _afternoon_debit_blocked(strategy_name: str, now) -> bool:
+    """True when a LONG-PREMIUM DIRECTIONAL entry is refused by the afternoon
+    cutoff. Operator, 2026-08-13: "The only other Long that can fire is either
+    part of a butterfly or an iron condor vertical spread from 11 o'clock
+    onwards."
+
+    A FUNCTION rather than an inline condition so it can be tested without
+    standing up the whole entry path, and so the rule has ONE definition. The
+    butterfly and the condor are NOT listed here: the butterfly is the
+    operator's named exception, and condor legs never reach this gate at all
+    (they route through `_execute_condor_leg` earlier in attempt_new_entry), so
+    the credit path is exempt BY CONSTRUCTION rather than by a list entry that
+    could rot.
+    """
+    if not DEBIT_BLOCK_ACTIVE:
+        return False
+    if strategy_name not in DEBIT_DIRECTIONAL_STRATEGIES:
+        return False
+    return (now.hour, now.minute) >= tuple(DEBIT_DIRECTIONAL_CUTOFF_ET)
+
+
 def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     """Try to generate and execute a trade signal."""
     session  = get_session_guard()
@@ -1653,6 +1692,38 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     if signal is None:
         logger.info(f"STRATEGY: NO TRADE — regime={regime.primary_regime}")
         return
+
+    # ── AFTERNOON DEBIT BLOCK (2026-08-13) ────────────────────────────────────
+    # Operator: "no long contracts in the afternoon unless they're part of a
+    # vertical spread or a butterfly."
+    # PLACED HERE, AFTER THE SIGNAL IS CHOSEN, ON PURPOSE — three reasons:
+    #   1. ONE gate instead of three. Guarding each dispatch branch means the
+    #      next strategy added silently bypasses the rule.
+    #   2. The blocked signal is fully formed, so the journal records WHAT WAS
+    #      REFUSED. A gate that vetoes invisibly can never be calibrated from
+    #      its own rejections — the same reasoning that put gates E and F after
+    #      the score in setup_scorer rather than before it.
+    #   3. Condor legs never reach here (they route through
+    #      `_execute_condor_leg` above), so the credit path is untouched by
+    #      construction rather than by an exemption that could rot.
+    # Butterfly and condor are exempt; both are already window-gated elsewhere.
+    if _afternoon_debit_blocked(signal.strategy_name, now_et()):
+        if True:
+            logger.info(
+                "STRATEGY: BLOCKED — %s is long premium and it is past the "
+                "%02d:%02d ET afternoon debit cutoff (%s). Credit verticals and "
+                "the pin butterfly are unaffected.",
+                signal.strategy_name, DEBIT_DIRECTIONAL_CUTOFF_ET[0],
+                DEBIT_DIRECTIONAL_CUTOFF_ET[1], fmt_et_short())
+            if _sigj is not None:
+                try:
+                    _sigj.journal("disposition",
+                                  outcome="gate_block:afternoon_debit",
+                                  signal=_sigj.signal_ctx(signal),
+                                  regime=_sigj.regime_ctx(regime))
+                except Exception:                              # noqa: BLE001
+                    pass
+            return
 
     if not signal.is_valid:
         logger.warning(f"Invalid signal from {signal.strategy_name}")

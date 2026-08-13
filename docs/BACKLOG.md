@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.41
+# docs/BACKLOG.md — v4.43
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,76 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.42 — 2026-08-13 — AFD.1: THE AFTERNOON DEBIT BLOCK. `main` v6.2 /
+  `config` v4.6 / `tests/test_afternoon_debit_block.py` v1.0.**
+  Operator, verbatim: *"The only other Long that can fire is either part of a
+  butterfly or an iron condor vertical spread from 11 o'clock onwards."*
+  ORB / Continuation / SweepReversal are refused past
+  `DEBIT_DIRECTIONAL_CUTOFF_ET` (11:00 ET; `OT_DEBIT_CUTOFF_ET` and
+  `OT_DEBIT_BLOCK_ACTIVE` move the hour or kill the rule without a deploy).
+  ENTRIES ONLY — open positions manage normally.
+
+  **PLACED AFTER THE SIGNAL IS CHOSEN, not at dispatch**, for three reasons that
+  are all about future-proofing rather than today: one gate instead of three, so
+  a strategy added later cannot silently bypass it; the refused signal is fully
+  formed, so the journal records WHAT WAS REFUSED (a gate that vetoes invisibly
+  can never be calibrated from its own rejections — the same reasoning that put
+  gates E and F *after* the score in `setup_scorer`); and **condor legs never
+  reach it**, having routed through `_execute_condor_leg` earlier, so the credit
+  path is exempt BY CONSTRUCTION rather than by a list entry that could rot.
+
+  **⚠️ IN A TRENDING AFTERNOON THIS LEAVES NOTHING FIRING.** The condor
+  self-gates to RANGING (main.py:1607) and cancels Leg 1 on a directional flip —
+  23 of 23 plan deaths on 2026-08-04 were exactly that — and the butterfly needs
+  PINNING GEX. That window belongs to the trend credit spread (TC.6), which is
+  **NOT BUILT**. Dark on purpose until it is: the measured cost of that window
+  is negative (10:00 −$8,715 · 11:00-14:00 −$1,539.50 on a whole book of +$463).
+
+  **THREE THINGS THIS DELIVERY CAUGHT IN ITSELF, recorded because the catching
+  is the point.**
+  1. **A DUPLICATE RULE, NEARLY SHIPPED.** A parallel `AFTERNOON_NO_DEBIT_*`
+     block was drafted on top of the existing `DEBIT_DIRECTIONAL_*` one — two
+     names for one rule with the later assignment silently winning. Collapsed to
+     a single definition and **pinned by a test** asserting each constant is
+     defined exactly once.
+  2. **THE CANARY-PROSE TRAP, HIT AGAIN AND CAUGHT BY THE TEST ON ITS FIRST
+     RUN.** The absence check for the removed block tripped on the changelog
+     entry *describing* the removal. Now scoped to `^NAME\s*=` — an absence
+     canary must test for a DEFINITION, never for the name appearing anywhere.
+     Third occurrence in this repo (`_orb_quality`, main v5.6, this).
+     **PROMOTED TO WORKING_AGREEMENT §20 (v4.43, operator's instruction)** —
+     three occurrences is a standing rule, not a war story. The section states
+     the mechanism (rule 5 REQUIRES the changelog to name what it removed, so a
+     substring canary is guaranteed to trip on good hygiene — the two rules
+     collide by construction), the scoping patterns per artefact type, and the
+     corollary that matters most: **if you find yourself avoiding a name in a
+     changelog so a grep stays green, the canary is wrong, not the prose.**
+  3. **THE CONDOR EXEMPTION IS POSITIONAL, SO A SOURCE-ORDER TEST GUARDS IT.**
+     Nothing in the predicate would notice if the gate moved above
+     `_execute_condor_leg`; legs would simply start being blocked, and the only
+     symptom would be a credit strategy quietly not trading in the afternoon —
+     the exact behaviour this change exists to protect.
+
+  The predicate was extracted from an inline condition to
+  `main._afternoon_debit_blocked()` so it has ONE definition and can be tested
+  without standing up the whole entry path. **10/10 pass**, including three
+  deliberate-failure checks that prove the suite can go red: empty the strategy
+  set, move the cutoff past the sample time, and a reversed-source fixture for
+  the ordering assertion.
+
+- **⚠️ TC.4b's REFUTATION IS DOWNGRADED TO CONFOUNDED.** `--control matched`
+  draws its pseudo-impulse at a RANDOM earlier minute across the whole session
+  (`elig = [i for i in range(len(bars)) if len(bars) - i - 1 >= 5]`), so in a
+  trending tape the control floor sits systematically FURTHER FROM SPOT than a
+  recent impulse origin. The strike curve then measures offsets as a percentage
+  *of each floor*, so at the same nominal offset the control's strike is further
+  from price — and safer for a trivial distance reason. **The test conflates "is
+  this level special?" with "is this level far?"** The −3.6% ±1.7% therefore does
+  NOT establish that the impulse origin is anti-selecting. The fix is a
+  DISTANCE-MATCHED control: draw the control floor at the same %-from-spot as
+  the real one. Until that runs, TC.4's premise is UNTESTED, not refuted — and
+  the operator's "vertical spread at the floor of the move" is unharmed by it.
 
 - **v4.41 — 2026-08-13 — TC.5's POPULATION WAS WRONG. `credit_edge` v1.2.**
   Operator: *"The vertical is sold when the price is sitting in close proximity

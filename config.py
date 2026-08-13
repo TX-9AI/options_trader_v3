@@ -1,5 +1,12 @@
 """
-config.py — options_trader v4.5
+config.py — options_trader v4.6
+v4.6 — 2026-08-13 — DEBIT_DIRECTIONAL_CUTOFF_ET / _STRATEGIES / DEBIT_BLOCK_ACTIVE
+        for main v6.2's afternoon debit block. Env: OT_DEBIT_CUTOFF_ET ("HH:MM")
+        and OT_DEBIT_BLOCK_ACTIVE, so the hour moves and the rule dies without a
+        deploy. ⚠️ ONE DEFINITION ONLY — a parallel AFTERNOON_NO_DEBIT_* block
+        was drafted and removed before shipping; two names for one rule, with
+        the later assignment silently winning, is the exact failure class the
+        version discipline exists to catch.
 v4.5 — 2026-08-07 — SWP.2 + CNT.3, the two Tier-1 tuning priors.
         SWEEP_SETUP_FLOOR_SHORT (default 0.20) separates short sweeps from
         longs — three measures agree and the PLTR mechanism backs it, but n=6
@@ -339,6 +346,32 @@ HARD_CLOSE_ET               = (15, 45)
 FLATTEN_WINDOW_OPEN_ET      = (15, 40)
 ORB_NO_ENTRY_AFTER_ET       = (11, 0)   # ORB-SCOPED: ORB entries valid until 11:00 ET.
                                         #   Also the ARM condition for sweep reversal.
+# ── AFTERNOON DEBIT BLOCK (2026-08-13, operator's directive) ─────────────────
+# "no long contracts in the afternoon unless they're part of a vertical spread
+# or a butterfly."  MECHANISM: on 0DTE, an afternoon debit needs a large move
+# just to clear decay, and the payability ratio (available move / breakeven)
+# falls monotonically from the open in EVERY symbol. Measured cost of the window
+# it closes: 10:00 -$8,715 · 11:00-14:00 -$1,539.50 · 13:00 -$4,138 against a
+# whole-book +$463 (843 trades, 15 sessions).
+# EXEMPT BY DESIGN: IronCondorStrategy (credit verticals) and ButterflyStrategy
+# (a debit, but deliberately crafted OTM at a deep discount toward a GEX pin —
+# it is the operator's named exception, and its own window already starts 12:00).
+# NOT A CUTOFF ON MANAGEMENT: open positions are unaffected, this blocks ENTRIES.
+# OPERATOR, 2026-08-13, verbatim: "The only other Long that can fire is either
+# part of a butterfly or an iron condor vertical spread from 11 o'clock onwards."
+# MEASURED, 843 trades / 15 sessions: open 09:30-10:00 +$10,717.50 against
+# 10:00-11:00 -$8,715 and 11:00-14:00 -$1,539.50, on a whole book of +$463.
+# ⚠️ THE HOLE THIS LEAVES IS DELIBERATE AND NAMED: in a TRENDING afternoon the
+# condor is correctly blocked (it self-gates to RANGING at main.py:1607 and
+# cancels Leg 1 on a directional flip) and the butterfly needs PINNING GEX, so
+# NOTHING fires. That window belongs to the trend credit spread (TC.6), which is
+# NOT BUILT. Until it is, a trending afternoon is dark ON PURPOSE — which is the
+# point: the measured cost of that window is negative.
+DEBIT_DIRECTIONAL_CUTOFF_ET = tuple(int(x) for x in
+                                    os.environ.get("OT_DEBIT_CUTOFF_ET", "11:00").split(":"))
+DEBIT_DIRECTIONAL_STRATEGIES = {"ORBStrategy", "ContinuationStrategy", "SweepReversal"}
+DEBIT_BLOCK_ACTIVE          = os.environ.get("OT_DEBIT_BLOCK_ACTIVE", "1") == "1"
+
 GLOBAL_NO_ENTRY_ET          = (14, 0)   # GLOBAL: no new 0DTE entries after 14:00 ET,
                                         #   ANY strategy. Read by utils/time_utils.
 BUTTERFLY_ENTRY_CUTOFF_ET   = (14, 0)   # was 15:00 and unreachable (see v3.1 header)
