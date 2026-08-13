@@ -82,6 +82,22 @@ def cache_venue_rule(symbol: str, tick_sizes) -> bool:
         return False
 
 
+def needs_venue_rule(symbol: str) -> bool:
+    """True only if we have neither a cached rule NOR a recorded failure.
+
+    ⚠️ THIS GUARD IS LOAD-BEARING. Without it the fetcher fired an SDK call on
+    every `fetch_chain()`, which the tick loop calls from three places —
+    hundreds of needless requests per box per session and real rate-limit
+    exposure on a live path.
+
+    A FAILED attempt counts as answered. Retrying a broken fetch every tick is
+    the same hot loop with a worse error rate, and the fallback already logs a
+    warning each time it prices off the guess.
+    """
+    sym = str(symbol or "").upper()
+    return sym not in _VENUE_RULES and sym not in _FETCH_FAILED
+
+
 def mark_fetch_failed(symbol: str) -> None:
     _FETCH_FAILED.add(str(symbol).upper())
 

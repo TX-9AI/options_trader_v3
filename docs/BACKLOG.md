@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.61
+# docs/BACKLOG.md — v4.62
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,38 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **🔴 v4.62 — 2026-08-13 — HOTFIX: FRC.3's TICK-SIZE FETCH HAD NO CACHE GUARD.**
+  `options_chain` + `tick_size` (`needs_venue_rule`). **Found while the operator
+  was mid-bake; caught before it reached the fleet.**
+
+  **THE DEFECT.** The r109 patch carried the comment *"cache the VENUE'S price
+  grid once per symbol per session"* and **did no cache check whatsoever**. So
+  it fired an extra `NestedOptionChain.get()` on EVERY `fetch_chain()` — and
+  `fetch_chain` is called from three places in the tick loop (main.py:1524,
+  2024, 2172). That is **hundreds of needless SDK calls per box per session**,
+  real rate-limit exposure, on a live path, **described by a comment that
+  claimed the opposite.**
+
+  **THE FIX.** `needs_venue_rule(symbol)` — fetch only when there is neither a
+  cached rule NOR a recorded failure. **A failed attempt counts as answered**:
+  retrying a broken fetch every tick is the same hot loop with a worse error
+  rate, and the fallback already logs a warning each time it prices off the
+  guess.
+
+  **⚠️ THE TELL WAS VISIBLE AND I MISSED IT TWICE.** The `a_get` correction had
+  been applied on top of the original block rather than replacing it, so the
+  same eight-line comment appeared TWICE in the file. A duplicated comment is
+  the signature of an edit applied twice, and it was sitting directly above the
+  unguarded call. **I read that block three times — to verify the SDK method
+  name, to verify `run_async`, and to package it — and never once asked whether
+  the code did what its own comment said.** Verifying the line I changed is not
+  the same as reading the block it lives in.
+
+  **AND THE VERIFICATION COMMAND HIT MY OWN DOCUMENTED TRAP:** `grep -c`
+  returns exit status 1 on a zero count, which killed an `&&` chain and made a
+  successful check look like a failure — the exact hazard recorded this morning
+  in the fleet-command rule. `|| true`, or wrap it in `echo`.
 
 - **v4.61 — 2026-08-13 — SWP.3 SHIPPED.** `trade_readiness` v1.9 + 8 tests (143
   across today's suites). **Every item approved this morning is now built.**

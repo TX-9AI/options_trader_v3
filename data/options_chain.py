@@ -293,32 +293,34 @@ class OptionsChainFetcher:
             return cached[1]
         try:
             chain_map = run_async(get_option_chain(session, symbol))
-            # FRC.3 — cache the VENUE'S price grid once per symbol per session.
-            # Static instrument metadata, not a quote, so one fetch serves the
-            # whole session. Without it every order path falls back to a
-            # hardcoded PENNY_CLASSES guess, and an unpostable limit is either
-            # rejected or SILENTLY ADJUSTED — a fill at a price nobody chose.
-            # Best-effort: a failure here must never stop a chain fetch.
+            # FRC.3 — the VENUE'S price grid, fetched ONCE PER SYMBOL PER
+            # PROCESS. Static instrument metadata, not a quote.
+            # ⚠️ THE GUARD IS THE POINT. The first version had this comment and
+            # NO CACHE CHECK, so it fired an extra SDK call on EVERY
+            # fetch_chain() — and fetch_chain is called from three places in the
+            # tick loop. That is hundreds of needless API calls per box per
+            # session and real rate-limit exposure, on a live path, described by
+            # a comment that claimed the opposite.
+            # Best-effort: a failure here must never stop a chain fetch, and a
+            # failed attempt is remembered so it is not retried every tick
+            # either — a broken fetch must not become the same hot loop.
             try:
-                from execution.tick_size import cache_venue_rule, mark_fetch_failed
-                from tastytrade.instruments import NestedOptionChain
-                # `get`, not `a_get` — this SDK build exposes a SYNC
-                # classmethod, and `a_get` does not exist. Verified against the
-                # installed tastytrade package rather than assumed; the wrong
-                # name would have raised into the except and fallen back to the
-                # guess FOREVER, silently, which is the exact path this change
-                # removes.
-                # `get`, not `a_get` — this SDK build has no `a_get`, and
-                # `get` is a COROUTINE despite the sync-looking name
-                # (inspect.iscoroutinefunction is True), so it goes through
-                # run_async like every other SDK call here. Both facts verified
-                # against the installed package: the wrong name, or calling it
-                # without run_async, would have raised into the except and
-                # fallen back to the PENNY_CLASSES guess FOREVER, silently.
-                _noc = run_async(NestedOptionChain.get(session, symbol))
-                _noc = _noc[0] if isinstance(_noc, list) and _noc else _noc
-                if not cache_venue_rule(symbol, getattr(_noc, "tick_sizes", None)):
-                    mark_fetch_failed(symbol)
+                from execution.tick_size import (cache_venue_rule,
+                                                 mark_fetch_failed,
+                                                 needs_venue_rule)
+                if needs_venue_rule(symbol):
+                    from tastytrade.instruments import NestedOptionChain
+                    # `get`, not `a_get` — this SDK build has no `a_get`, and
+                    # `get` is a COROUTINE despite the sync-looking name
+                    # (inspect.iscoroutinefunction is True), so it goes through
+                    # run_async like every other SDK call here. Both verified
+                    # against the installed package; either mistake raises into
+                    # the except and falls back to the PENNY_CLASSES guess
+                    # FOREVER, silently.
+                    _noc = run_async(NestedOptionChain.get(session, symbol))
+                    _noc = _noc[0] if isinstance(_noc, list) and _noc else _noc
+                    if not cache_venue_rule(symbol, getattr(_noc, "tick_sizes", None)):
+                        mark_fetch_failed(symbol)
             except Exception as _tex:                          # noqa: BLE001
                 try:
                     from execution.tick_size import mark_fetch_failed
