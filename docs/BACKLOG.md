@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.56
+# docs/BACKLOG.md — v4.57
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,21 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.57 — 2026-08-13 — `slippage_audit` v1.1: PRICED ZERO OF 805 JOINED
+  TRADES.** `contract` is nested under `signal` in a scored row, not top-level.
+  **Two working references existed in the repo and I matched neither** —
+  `scorer_backtest` handles exactly this shape for `strategy`
+  (`r.get("strategy") or (r.get("signal") or {}).get("strategy")`) and
+  `factor_sweep`:138 reads `con = sig.get("contract")`. The join was fine; only
+  the field path was wrong.
+  **AND THE DIAGNOSTIC WAS THE REAL COST.** v1.0 kept ONE counter for "spread or
+  premium or qty missing", so the output said 805 trades lacked *something*
+  without naming which — a round trip on the box to learn what a per-field count
+  would have printed. **A diagnostic that cannot name the failing field is not a
+  diagnostic**, and this is the same class as the `orb_conversion` conversion
+  rates above 100%: the output contained the tell and nothing surfaced it.
+  Now counts each field separately and prints them on an empty result.
 
 - **v4.56 — 2026-08-13 — FRC.1: WHAT DOES THE BOOK LOOK LIKE ONCE YOU CROSS?**
   `tests/slippage_audit.py` v1.0.

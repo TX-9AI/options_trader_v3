@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 """
-tests/slippage_audit.py — v1.0 — 2026-08-13   (FRC.1)
+tests/slippage_audit.py — v1.1 — 2026-08-13   (FRC.1)
+
+v1.1 — 2026-08-13 — PRICED ZERO OF 805 JOINED TRADES ON THE FIRST RUN.
+        `contract` is nested under `signal` in a scored row, not at the top
+        level — the SAME shape `scorer_backtest` already handles for `strategy`
+        (`r.get("strategy") or (r.get("signal") or {}).get("strategy")`) and
+        that `factor_sweep` reads correctly at line 138 (`con =
+        sig.get("contract")`). I had two working references in the repo and
+        matched neither.
+        ALSO ADDED, because the failure was needlessly opaque: PER-FIELD miss
+        counts. v1.0 had ONE counter for "spread or premium or qty missing", so
+        the output said only that something failed, not which — and that cost a
+        round trip on the box. A diagnostic that cannot name the failing field
+        is not a diagnostic.
 
 WHAT DOES THE BOOK LOOK LIKE ONCE YOU PAY THE SPREAD?
 
@@ -95,6 +108,7 @@ def main(argv):
     dates = sorted(d for d in os.listdir(JOURNAL)
                    if len(d) == 10 and d >= a.since)
     joined, seen, no_spread = [], set(), 0
+    miss = collections.Counter()      # WHICH field failed, not just that one did
     for date in dates:
         sc = load_scored(date)
         idx = collections.defaultdict(list)
@@ -109,10 +123,22 @@ def main(argv):
             if best is None or bd > JOIN_TOL_S:
                 continue
             raw = t.get("raw") or {}
-            con = (best.get("raw") or {}).get("contract") or {}
+            # `contract` is nested under `signal`, NOT at the top of the scored
+            # row — the same shape scorer_backtest already handles for
+            # `strategy`. v1.0 read raw["contract"] and priced ZERO of 805
+            # joined trades. Fall back to the top level in case the emitter
+            # ever flattens it.
+            _sig = (best.get("raw") or {}).get("signal") or {}
+            con = _sig.get("contract") or (best.get("raw") or {}).get("contract") or {}
             spct = con.get("spread_pct_of_mid")
             prem = raw.get("entry_premium")
             qty = raw.get("contracts")
+            if spct is None:
+                miss["spread_pct_of_mid"] += 1
+            if not prem:
+                miss["entry_premium"] += 1
+            if not qty:
+                miss["contracts"] += 1
             if spct is None or not prem or not qty:
                 no_spread += 1
                 continue
@@ -129,8 +155,14 @@ def main(argv):
     print(f"  commission modelled: "
           f"{('$%.2f/contract/side' % a.commission) if a.commission else 'NONE (not in the data)'}")
     print("=" * 88)
+    if miss:
+        print("  missing per field: " + " · ".join(f"{k} {v}" for k, v in
+                                                   miss.most_common()))
     if not joined:
         print("\n  nothing priced. ABSENT MEASUREMENT, not a null.")
+        print("  The per-field counts above name WHICH lookup failed — a single")
+        print("  lumped counter said only that something did, which cost a")
+        print("  round trip.")
         return 0
 
     gross = sum(j["pnl"] for j in joined)
