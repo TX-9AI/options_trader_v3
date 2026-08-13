@@ -1,5 +1,27 @@
 """
-config.py — options_trader v4.6
+config.py — options_trader v4.7
+v4.7 — 2026-08-13 — CONTINUATION_STOP_LOSS_PCT default 0.25 -> 0.15. THE REPO
+        DEFAULT IS THE FLEET LEVER, not the env var: every box receives
+        config.py through git pull + bake, so this reaches all 15 on the bake
+        already scheduled — no systemd edit, no rotate_tokens change (its FIELDS
+        table is hardcoded to seven credentials and has no arbitrary-var path),
+        no extra restart. `OT_CONT_STOP_PCT` remains the PER-BOX OVERRIDE, which
+        is what a modular fleet wants. It is also the only path that
+        participates in the version discipline — a systemd `Environment=` line
+        is invisible to check_versions, absent from the changelog and outside
+        git entirely.
+        EVIDENCE: excursion_report floor sweep, `max_loss_floor /
+        ContinuationStrategy`, n=66 across 9 sessions at a **0%% win rate** — a
+        15%% floor stops all 66 with **ZERO WINNERS CUT**, NET DELTA +8.85 units
+        of entry premium against +2.25 at the current 25%%. Meets the
+        pre-registered cheapest-threshold-catching-zero-winners rule rather than
+        an in-sample argmax.
+        ⚠️ WHAT THIS COHORT IS, and why tightening it is not the same as
+        tightening a thesis stop: these are BY DEFINITION the trades where NO
+        structural stop fired — not regime_flip, not bos_exit, not
+        insurance_stop. The thesis was still technically intact and the premium
+        died anyway. Zero winners cut over 9 sessions is evidence it did not
+        cost anything; it is not proof that it cannot.
 v4.6 — 2026-08-13 — DEBIT_DIRECTIONAL_CUTOFF_ET / _STRATEGIES / DEBIT_BLOCK_ACTIVE
         for main v6.2's afternoon debit block. Env: OT_DEBIT_CUTOFF_ET ("HH:MM")
         and OT_DEBIT_BLOCK_ACTIVE, so the hour moves and the rule dies without a
@@ -849,7 +871,7 @@ class SessionConfig:
 # REGIME FLIP, which fires long before a 40% premium bleed. A 40% floor was
 # therefore dead weight that only ever paid out on a gap. 25% keeps the
 # backstop meaningful without letting a dead thesis bleed.
-CONTINUATION_STOP_LOSS_PCT      = float(os.environ.get("OT_CONT_STOP_PCT", "0.25"))
+CONTINUATION_STOP_LOSS_PCT      = float(os.environ.get("OT_CONT_STOP_PCT", "0.15"))
 CONTINUATION_EXHAUST_EXT_ATR    = float(os.environ.get("OT_CONT_EXT_ATR", "2.0"))   # ATRs from midline = "stretched"
 CONTINUATION_EXHAUST_MIN_GAIN   = float(os.environ.get("OT_CONT_MIN_GAIN", "0.15")) # only manage exhaustion past +15%
 CONTINUATION_EXHAUST_TRAIL_LOCK = float(os.environ.get("OT_CONT_TRAIL_LOCK", "0.85"))# extension tightens trail to 85% of premium

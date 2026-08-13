@@ -1,6 +1,31 @@
 #!/usr/bin/env python3
 """
-tests/factor_sweep.py — v1.0 — 2026-08-13
+tests/factor_sweep.py — v1.1 — 2026-08-13
+
+v1.1 — 2026-08-13 — TWO DEFECTS FOUND BY READING v1.0's OWN OUTPUT, plus the
+        filter the handoff question needs.
+        (a) **HOURS WERE UTC, LABELLED AS ET.** `entry_time` in trades.db is UTC
+            ISO and v1.0 read `.hour` off it directly, so bands printed 13..17
+            and `minutes_from_open` ran 245..509 for a 09:30 open. This is the
+            EXACT mistake `excursion_report` documents and refuses to make —
+            "entry_time is UTC and the tape is ET-offset... duplicating it
+            half-done is how the 2026-07 verdict got inverted." Now converted
+            with ZoneInfo, with a NAMED fallback rather than a silent one.
+        (b) **`MONOTONE` FIRED ON TWO BANDS.** `derived.confluence_count` takes
+            only the values 3 and 4 in the whole sample, and v1.0 called it
+            "MONOTONE RISING". Across two bands monotonicity is trivially true
+            whenever they differ — it is not evidence of a trend, it is
+            arithmetic. A verdict now needs MIN_BANDS_FOR_MONOTONE; below that
+            the cell reads TOO FEW BANDS, which is what the direct test of the
+            project's premise actually returned: absent measurement, neither
+            support nor refutation.
+        (c) `--setup-type` — the handoff question. `trend_continuation_handoff`
+            is 386 trades / 62%% of continuation volume at 52%% never-favorable
+            against standalone's 33%%, and the handoff is the path where
+            CONTINUATION_CONV_FLOOR deliberately steps aside. Filtering the
+            sweep to one setup_type asks whether the handoff population differs
+            in `reg.conviction` (the floor was skipped) or only in outcome (the
+            post-runaway tape is simply bad). Those need opposite fixes.
 
 WHAT ARE WE RECORDING AND NOT LEVERAGING?
 
@@ -71,11 +96,21 @@ import collections
 import os
 import sys
 
+try:
+    from zoneinfo import ZoneInfo
+    _ET = ZoneInfo("America/New_York")
+except Exception:                                              # noqa: BLE001
+    _ET = None
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.scorer_backtest import load_scored, load_trades, JOIN_TOL_S, JOURNAL  # noqa: E402
 
 MIN_N_DEFAULT = 12
+# A two-band table cannot evidence a trend: with two cells, "monotone" is true
+# whenever they differ at all. Three is the floor at which the word means
+# something.
+MIN_BANDS_FOR_MONOTONE = 3
 
 
 # ── factor extraction ────────────────────────────────────────────────────────
@@ -120,9 +155,16 @@ def factors(raw, trade):
 
     ts = trade.get("ts")
     if ts is not None:
-        out["derived.hour"] = float(ts.hour)
-        out["derived.minutes_from_open"] = float(
-            max(0, (ts.hour - 9) * 60 + ts.minute - 30))
+        # v1.1 — `ts` comes from trades.db `entry_time`, which is UTC. Convert,
+        # never assume. A NAMED fallback so a missing tzdata is visible in the
+        # output rather than silently shifting every band by four hours.
+        if _ET is not None:
+            et = ts.astimezone(_ET)
+            out["derived.hour_et"] = float(et.hour)
+            out["derived.minutes_from_open"] = float(
+                max(0, (et.hour - 9) * 60 + et.minute - 30))
+        else:
+            out["derived.hour_UTC_NO_TZDATA"] = float(ts.hour)
 
     # Premium-relative stop distance: how far the underlying has to travel
     # before the structural stop is hit, in ATR. Nothing scores this.
@@ -229,7 +271,11 @@ def sweep_strategy(strat, rows, nbands, min_n):
         avgs = [t[3] for t in table]
         m = monotone(avgs)
         gap = max(avgs) - min(avgs)
-        if thin:
+        if len(table) < MIN_BANDS_FOR_MONOTONE:
+            verdict = (f"TOO FEW BANDS ({len(table)}) — this factor takes too "
+                       f"few distinct values to evidence a trend. Absent "
+                       f"measurement, not a null.")
+        elif thin:
             verdict = (f"UNDERPOWERED — {len(thin)}/{len(table)} bands below "
                        f"n={min_n}. ABSENT MEASUREMENT, not a null.")
         elif m and gap > 0:
@@ -281,6 +327,9 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", default="")
     ap.add_argument("--strategy", default="")
+    ap.add_argument("--setup-type", default="",
+                    help="restrict to one setup_type, e.g. "
+                         "trend_continuation_handoff — the handoff question")
     ap.add_argument("--bands", type=int, default=5)
     ap.add_argument("--min-n", type=int, default=MIN_N_DEFAULT)
     a = ap.parse_args(argv[1:])
@@ -328,7 +377,11 @@ def main(argv):
     for j in joined:
         if a.strategy and j["strategy"] != a.strategy:
             continue
+        if a.setup_type and str(j.get("setup_type") or "") != a.setup_type:
+            continue
         by[j["strategy"]].append(j)
+    if a.setup_type:
+        print(f"\n  FILTERED to setup_type == {a.setup_type!r}")
 
     for strat, rows in sorted(by.items(), key=lambda kv: -len(kv[1])):
         sweep_strategy(strat, rows, a.bands, a.min_n)

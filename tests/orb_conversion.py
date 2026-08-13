@@ -1,6 +1,27 @@
 #!/usr/bin/env python3
 """
-tests/orb_conversion.py — v1.0 — 2026-08-13
+tests/orb_conversion.py — v1.1 — 2026-08-13
+
+v1.1 — 2026-08-13 — **DE-DUPLICATE BY `trade_id`. v1.0's ENTRY COUNTS WERE
+        INFLATED AND THE "CLIFF" IT FOUND WAS AN ARTEFACT.**
+        A box's `trades.db` is CUMULATIVE by design, and `harvest` copied the
+        whole growing file into a DATED folder — so the date in the path means
+        "when it was pulled", not "what is inside". Measured 2026-08-05 by
+        `day_trader_pro/trim_trade_dbs.py`: **2,502 of 3,298 rows (76%%) were
+        duplicates.** That trim de-duplicated the LIVE folders and MOVED the
+        pre-2026-07-23 folders to `trades/_archive_pre_<date>/` UNTRIMMED.
+        v1.0 read both and counted every row, so the archive side was inflated
+        and the live side was not — which is exactly what produced the 07-23
+        "collapse" from 73 entries to 5 and the impossible conversion rates of
+        391%%, 268%% and 317%%. Entries over breaks cannot exceed 100%%; the
+        arithmetic was the tell.
+        NOW: rows are keyed on `trade_id` across the whole run, so a trade
+        appearing in twenty dated folders counts ONCE. Rows with no `trade_id`
+        are counted separately and reported — dropping unattributable rows would
+        shrink the corpus in a way nobody could audit, which is the opposite of
+        the problem being fixed (`trim_trade_dbs`' own stated principle).
+        ⚠️ The same dedupe is still MISSING from `tests/engine_arms.py`; ENG.1's
+        published numbers stay void until it lands there too.
 
 DID ORB STOP FIRING BECAUSE THE SETUPS STOPPED, OR BECAUSE A GATE STARTED?
 
@@ -109,19 +130,42 @@ def breaks_for(date):
     return len(seen), True, events
 
 
-def orb_entries(day_dir):
-    n = 0
+def orb_entries(day_dir, seen, date):
+    """DISTINCT closed ORB trades in this folder that BELONG to `date`.
+
+    Two filters, and both are load-bearing:
+      · `trade_id` dedupe ACROSS the whole run — the same trade sits in many
+        dated folders because harvest copied a cumulative DB into each one.
+      · `entry_time` must match the folder's date, so a row that merely rode
+        along in a later pull is attributed to the session it happened in.
+    Returns (n_distinct, n_no_id) — rows without a trade_id are COUNTED, never
+    silently dropped.
+    """
+    n, no_id = 0, 0
     for path in sorted(glob.glob(os.path.join(day_dir, "*.db"))):
         try:
             conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-            for (c,) in conn.execute(
-                    "SELECT COUNT(*) FROM trades WHERE strategy='ORBStrategy'"
-                    " AND status='closed'"):
-                n += c
+            conn.row_factory = sqlite3.Row
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(trades)")}
+            rows = [dict(r) for r in conn.execute(
+                "SELECT * FROM trades WHERE strategy='ORBStrategy'"
+                " AND status='closed'")]
             conn.close()
         except Exception:                                      # noqa: BLE001
             continue
-    return n
+        for r in rows:
+            if str(r.get("entry_time") or "")[:10] != date:
+                continue
+            tid = r.get("trade_id") if "trade_id" in cols else None
+            if not tid:
+                no_id += 1
+                n += 1
+                continue
+            if tid in seen:
+                continue
+            seen.add(tid)
+            n += 1
+    return n, no_id
 
 
 def main(argv):
@@ -137,17 +181,21 @@ def main(argv):
         print(f"no dated trade folders under {TRADES}")
         return 0
 
-    rows = []
+    rows, seen, total_no_id = [], set(), 0
     for date in sorted(smap):
         if date > a.b_end:
             continue
         arm = "A" if date < a.split else "B"
         nb, covered, nev = breaks_for(date)
-        ne = orb_entries(smap[date])
+        ne, no_id = orb_entries(smap[date], seen, date)
+        total_no_id += no_id
         rows.append((date, arm, nb, ne, covered, nev))
 
     print("=" * 78)
     print("  ORB CONVERSION — did the setups stop, or did a gate start?")
+    print("  v1.1: entries are DISTINCT by trade_id and attributed to the")
+    print("  session in their entry_time. v1.0 counted duplicates and produced")
+    print("  conversion rates above 100% — the arithmetic was the tell.")
     print(f"  split: arm B begins {a.split}   |   arm B ends {a.b_end}")
     print("=" * 78)
     print(f"\n  {'date':12}{'arm':>4}{'breaks':>8}{'entries':>9}{'conv':>8}"
@@ -176,6 +224,11 @@ def main(argv):
               f"{(f'{100.0 * en / br:.0f}%' if br else '—'):>7}")
 
     a_cov, b_cov = tot["A"][3], tot["B"][3]
+    if total_no_id:
+        print(f"\n  ⚠️ {total_no_id} closed ORB row(s) carried NO trade_id and could")
+        print(f"     not be de-duplicated. They are COUNTED, not dropped —")
+        print(f"     discarding unattributable rows would shrink the corpus in a")
+        print(f"     way nobody could audit afterwards.")
     print()
     if not a_cov or not b_cov:
         print("  ⚠️ ONE ARM HAS NO JOURNAL COVERAGE. The break count for it is")

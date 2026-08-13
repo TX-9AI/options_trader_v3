@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.43
+# docs/BACKLOG.md — v4.44
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,61 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.44 — 2026-08-13 — TIMELINE PAUSED; THREE TOOL DEFECTS FIXED; THE STOP
+  DEFAULT MOVED.**
+
+  **⚠️ THE CLOCK IN PART 0 IS SUSPENDED.** Operator, 2026-08-13: the Sep 8
+  go-live, the Aug 17 deploy Monday and the Aug 17→30 L2.6 freeze window are
+  **paused indefinitely until P&L standings recover**. Consequence for
+  everything below: **entry-affecting changes are no longer gated to a Monday** —
+  they ship when built and verified. His read on how we got here: *"We've been
+  super permissive with our entries to evaluate our stops so in all fairness,
+  the stops are doing the heavy lifting on the entire system right now and it
+  seems like the only winner that's ungated is the orb trade."*
+
+  **`config` v4.7 — `CONTINUATION_STOP_LOSS_PCT` 0.25 → 0.15.** The REPO DEFAULT
+  is the fleet lever; the env var is the per-box override. Floor sweep: n=66
+  across 9 sessions, 0% win, a 15% floor stops all 66 with ZERO winners cut,
+  +8.85 units of entry premium against +2.25. Rides the bake already scheduled.
+
+  **`tests/orb_conversion.py` v1.1 — DE-DUPLICATE BY `trade_id`, and v1.0's
+  headline was an artefact.** trades.db is cumulative and harvest copied the
+  whole growing file into each dated folder, so the date meant "when pulled".
+  76% of rows were duplicates (measured by `trim_trade_dbs`), the live folders
+  were trimmed and the pre-07-23 archive was not — so v1.0 inflated one side
+  only. **That is what produced the 07-23 "collapse" from 73 entries to 5 and
+  the impossible 391%/268%/317% conversion rates. Entries over breaks cannot
+  exceed 100%; the arithmetic was the tell.** Now keyed on `trade_id` across the
+  run AND attributed to the session in `entry_time`; rows without an id are
+  counted and reported rather than dropped. Fixture-verified against a planted
+  cumulative corpus: 18 distinct trades recovered from folders totalling 72 rows.
+  ⚠️ **`tests/engine_arms.py` STILL LACKS THIS DEDUPE — ENG.1 stays void.**
+
+  **`tests/factor_sweep.py` v1.1 — two defects of my own, both found by reading
+  v1.0's output rather than by a test.**
+  (a) **HOURS WERE UTC LABELLED AS ET.** `entry_time` is UTC; v1.0 read `.hour`
+      off it directly, so bands printed 13..17 and `minutes_from_open` started
+      at 245 for a 09:30 open. This is the exact mistake `excursion_report`
+      documents and refuses to make. Now ZoneInfo-converted with a NAMED
+      fallback, so missing tzdata is visible instead of shifting every band four
+      hours. Corrected, continuation-only reads 09:00 +$8/trade · **10:00 −$18
+      (−$4,195 on 238 trades)** · 11:00 −$5 · 12:00 +$15 · **13:00 −$34** — the
+      same shape `trade_report` gets with a proper conversion, so the
+      session-phase finding cross-validates on continuation alone.
+  (b) **`MONOTONE` FIRED ON TWO BANDS.** `derived.confluence_count` takes only
+      the values 3 and 4, and v1.0 called that "MONOTONE RISING". Across two
+      cells monotonicity is arithmetic, not evidence. Now floored at three
+      bands; below it the verdict reads TOO FEW BANDS. **So the direct test of
+      this project's central premise did not run and has not run — the variable
+      barely varies. Absent measurement, neither support nor refutation.**
+  (c) `--setup-type` for the handoff question: `trend_continuation_handoff` is
+      386 trades / 62% of continuation volume at 52% never-favorable against
+      standalone's 33%, and it is the path where `CONTINUATION_CONV_FLOOR`
+      deliberately steps aside. Filtering the sweep asks whether that population
+      differs in `reg.conviction` (the floor was skipped) or only in outcome
+      (post-runaway tape is simply bad). **Those need opposite fixes**, and
+      nothing has distinguished them yet.
 
 - **v4.42 — 2026-08-13 — AFD.1: THE AFTERNOON DEBIT BLOCK. `main` v6.2 /
   `config` v4.6 / `tests/test_afternoon_debit_block.py` v1.0.**
