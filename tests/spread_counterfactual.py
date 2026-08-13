@@ -1,6 +1,25 @@
 #!/usr/bin/env python3
 """
-tests/spread_counterfactual.py — v1.1 — 2026-08-13   (TC.7)
+tests/spread_counterfactual.py — v1.2 — 2026-08-13   (TC.7)
+
+v1.2 — 2026-08-13 — OOM-KILLED ON THE FIRST WORKING RUN. Bounded work, UNBOUNDED
+        MEMORY. v1.1 cached every parsed chain snapshot for every (date, symbol)
+        it touched and never evicted: ~78 snapshots x ~120 contracts x 13 fields
+        as Python dicts, times a couple of hundred symbol-days, resident at once.
+        The kernel killed it before a single row printed.
+        THE FIX IS SCOPE, NOT CLEVERNESS — process ONE SYMBOL-DAY AT A TIME:
+        group the population by (date, symbol), collect that group's target
+        minutes FIRST, stream the .jsonl.gz once keeping ONLY snapshots within
+        the match window of a target, price the group, then drop it. Peak
+        residency is one symbol-day instead of all of them, and the file is
+        still read exactly once.
+        ⚠️ WHY NO FIXTURE CAUGHT THIS: the fixture is one symbol, one date, one
+        chain file. **A single-symbol-day fixture cannot exercise a cache that
+        only grows across symbol-days** — the same blind spot as v1.0's
+        single-snapshot fixture missing the sort tie, one level up. Scale
+        failures need a fixture with scale, and this one still does not have
+        one; the guard is the restructure, not a test.
+        Also reports peak group size so a pathological symbol-day is visible.
 
 v1.1 — 2026-08-13 — CRASH FIX: `sorted(snaps)` on `(minute, dict)` tuples.
         When two snapshots share a minute Python falls through to comparing the
@@ -121,54 +140,63 @@ def session_path(date, root):
     return out
 
 
-def chain_at(date, sym, minute, cache):
-    """The archived chain snapshot NEAREST the entry minute, as
-    {(side, strike): contract}. Nearest, not next — a snapshot 2 minutes early
-    prices the same market; requiring an exact match would discard most trades
-    on a 5-minute cadence."""
-    key = (date, sym)
-    if key not in cache:
-        snaps = []
-        path = os.path.join(CHAINS, date, f"{sym}.jsonl.gz")
-        if os.path.isfile(path):
-            import gzip
-            try:
-                with gzip.open(path, "rt", encoding="utf-8") as fh:
-                    for line in fh:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            r = json.loads(line)
-                        except Exception:                      # noqa: BLE001
-                            continue
-                        ts = r.get("ts_et") or ""
-                        if len(ts) < 16 or not r.get("underlying"):
-                            continue
-                        snaps.append((int(ts[11:13]) * 60 + int(ts[14:16]), r))
-            except Exception:                                  # noqa: BLE001
-                pass
-        # KEY ONLY. Sorting bare tuples falls through to the dict on a tie
-        # and raises — v1.0's crash, on the very first real run.
-        snaps.sort(key=lambda s: s[0])
-        cache[key] = snaps
-    snaps = cache[key]
+def load_group_chain(date, sym, minutes, window=10):
+    """Snapshots for ONE symbol-day, keeping only those near a target minute.
+
+    v1.2 — the memory fix. `minutes` is every entry minute in this group, known
+    before the file is opened, so the stream can discard the ~95%% of snapshots
+    no trade needs instead of parsing them into a cache that never shrinks.
+    Returns [(minute, {(side, strike): contract})] sorted by minute.
+    """
+    path = os.path.join(CHAINS, date, f"{sym}.jsonl.gz")
+    if not os.path.isfile(path) or not minutes:
+        return []
+    import gzip
+    keep = []
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:                              # noqa: BLE001
+                    continue
+                ts = r.get("ts_et") or ""
+                if len(ts) < 16 or not r.get("underlying"):
+                    continue
+                try:
+                    m = int(ts[11:13]) * 60 + int(ts[14:16])
+                except Exception:                              # noqa: BLE001
+                    continue
+                if min(abs(m - t) for t in minutes) > window:
+                    continue                    # nothing in this group wants it
+                rows = {}
+                for c in (r.get("contracts") or []):
+                    t = str(c.get("type") or "").lower()
+                    t = "call" if t.startswith("c") else (
+                        "put" if t.startswith("p") else "")
+                    if not t:
+                        continue
+                    try:
+                        rows[(t, round(float(c.get("strike")), 4))] = c
+                    except Exception:                          # noqa: BLE001
+                        continue
+                if rows:
+                    keep.append((m, rows))
+    except Exception:                                          # noqa: BLE001
+        return []
+    # KEY ONLY (v1.1) — bare-tuple sort falls through to the dict on a tie.
+    keep.sort(key=lambda x: x[0])
+    return keep
+
+
+def nearest(snaps, minute, window=10):
     if not snaps:
-        return None, None
+        return None
     best = min(snaps, key=lambda s: abs(s[0] - minute))
-    if abs(best[0] - minute) > 10:          # more than two cadence ticks away
-        return None, None
-    rows = {}
-    for c in (best[1].get("contracts") or []):
-        t = str(c.get("type") or "").lower()
-        t = "call" if t.startswith("c") else ("put" if t.startswith("p") else "")
-        if not t:
-            continue
-        try:
-            rows[(t, round(float(c.get("strike")), 4))] = c
-        except Exception:                                      # noqa: BLE001
-            continue
-    return rows, best[1].get("underlying")
+    return best[1] if abs(best[0] - minute) <= window else None
 
 
 def main(argv):
@@ -227,67 +255,83 @@ def main(argv):
         print("\n  empty population. ABSENT MEASUREMENT, not a null.")
         return 0
 
-    paths, chains = {}, {}
     cells = collections.defaultdict(list)
     sym_days, no_chain, no_tape, no_entry = set(), 0, 0, 0
     long_pnl = 0.0
+    peak_group = 0
 
+    # v1.2 — ONE SYMBOL-DAY AT A TIME. Group first, so the chain file for a
+    # group is opened once, filtered to that group's minutes, and DROPPED before
+    # the next group is touched. Peak residency is one symbol-day.
+    groups = collections.defaultdict(list)
     for t in pop:
-        date, sym = t["date"], t["sym"]
-        raw = t.get("raw") or {}
-        try:
-            entry = float(raw.get("underlying_entry") or 0)
-        except Exception:                                      # noqa: BLE001
-            entry = 0.0
-        direction = str(raw.get("direction") or "").lower()
-        if entry <= 0 or direction not in ("long", "short"):
-            no_entry += 1
+        groups[(t["date"], t["sym"])].append(t)
+
+    for (date, sym), grp in sorted(groups.items()):
+        usable = []
+        for t in grp:
+            raw = t.get("raw") or {}
+            try:
+                entry = float(raw.get("underlying_entry") or 0)
+            except Exception:                                  # noqa: BLE001
+                entry = 0.0
+            direction = str(raw.get("direction") or "").lower()
+            if entry <= 0 or direction not in ("long", "short"):
+                no_entry += 1
+                continue
+            usable.append((t, entry, direction,
+                           t["ts"].hour * 60 + t["ts"].minute))
+        if not usable:
             continue
-        if date not in paths:
-            paths[date] = session_path(date, root)
-        bars = paths[date].get(sym) or []
+
+        bars = (session_path(date, root) or {}).get(sym) or []
         if not bars:
-            no_tape += 1
-            continue
-        minute = t["ts"].hour * 60 + t["ts"].minute
-        rows, _spot = chain_at(date, sym, minute, chains)
-        if not rows:
-            no_chain += 1
+            no_tape += len(usable)
             continue
 
-        # THE ADVERSE SIDE. A long (bull) handoff is replaced by a PUT spread
-        # BENEATH entry; a short by a CALL spread above it.
-        side = "put" if direction == "long" else "call"
-        strikes = sorted({k[1] for k in rows})
-        fwd = [b for b in bars if b[0] >= minute]
-        if len(fwd) < 2:
-            no_tape += 1
-            continue
-        term_close = fwd[-1][3]
-        long_pnl += t["pnl"]
-        sym_days.add((date, sym))
+        snaps = load_group_chain(date, sym, [u[3] for u in usable])
+        peak_group = max(peak_group, len(snaps))
 
-        for off in OFFSETS:
-            target = entry * (1 - off) if side == "put" else entry * (1 + off)
-            cand = [s for s in strikes
-                    if (s <= target if side == "put" else s >= target)]
-            if not cand:
+        for t, entry, direction, minute in usable:
+            rows = nearest(snaps, minute)
+            if not rows:
+                no_chain += 1
                 continue
-            k = max(cand) if side == "put" else min(cand)
-            pv = price_vertical(rows, side, k, a.width)
-            if pv is None:
+            fwd = [b for b in bars if b[0] >= minute]
+            if len(fwd) < 2:
+                no_tape += 1
                 continue
-            credit, ks, kl = pv
-            # INTRADAY: did any bar TOUCH through the strike?
-            touched = any((b[2] < ks) if side == "put" else (b[1] > ks)
-                          for b in fwd)
-            loss = settle_loss(side, ks, kl, term_close, a.width)
-            cells[off].append((credit, loss, touched))
+            term_close = fwd[-1][3]
+            long_pnl += t["pnl"]
+            sym_days.add((date, sym))
+
+            # THE ADVERSE SIDE. A long (bull) handoff is replaced by a PUT
+            # spread BENEATH entry; a short by a CALL spread above it.
+            side = "put" if direction == "long" else "call"
+            strikes = sorted({k[1] for k in rows})
+            for off in OFFSETS:
+                target = entry * (1 - off) if side == "put" else entry * (1 + off)
+                cand = [k for k in strikes
+                        if (k <= target if side == "put" else k >= target)]
+                if not cand:
+                    continue
+                k = max(cand) if side == "put" else min(cand)
+                pv = price_vertical(rows, side, k, a.width)
+                if pv is None:
+                    continue
+                credit, ks, kl = pv
+                touched = any((b[2] < ks) if side == "put" else (b[1] > ks)
+                              for b in fwd)
+                loss = settle_loss(side, ks, kl, term_close, a.width)
+                cells[off].append((credit, loss, touched))
+        snaps = None                      # explicit — the whole point of v1.2
 
     print(f"\n  priced {sum(len(v) for v in cells.values()):,} spreads over "
           f"{len(sym_days)} SYMBOL-DAYS — read every n against that, not itself.")
     print(f"  skipped — no chain within 10 min {no_chain} · no tape {no_tape} ·"
           f" no entry/direction {no_entry}")
+    print(f"  peak snapshots resident for any one symbol-day: {peak_group}"
+          f"  ({len(groups)} symbol-day groups processed one at a time)")
     print(f"\n  ACTUAL LONG RESULT on the same trades: net ${long_pnl:+,.0f}"
           f"  ({len(sym_days)} symbol-days)")
 

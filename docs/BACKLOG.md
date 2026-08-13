@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.46
+# docs/BACKLOG.md — v4.47
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,28 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.47 — 2026-08-13 — `spread_counterfactual` v1.2: OOM-KILLED. BOUNDED WORK,
+  UNBOUNDED MEMORY.** v1.1 cached every parsed chain snapshot for every
+  `(date, symbol)` it touched and never evicted — ~78 snapshots x ~120 contracts
+  x 13 fields as Python dicts, times a couple of hundred symbol-days, resident
+  simultaneously. The kernel killed it before one row printed, on BOTH arms.
+  **THE FIX IS SCOPE, NOT CLEVERNESS:** group the population by
+  `(date, symbol)`, collect that group's target minutes BEFORE opening the file,
+  stream the `.jsonl.gz` once keeping only snapshots within the match window of
+  a target, price the group, drop it. The file is still read exactly once; peak
+  residency is one symbol-day. Verified identical output to v1.1 on the fixture
+  with **peak snapshots resident = 2**.
+  ⚠️ **WHY NO FIXTURE CAUGHT IT, and this is the third instance of one shape
+  today.** The fixture is one symbol, one date, one chain file — **a
+  single-symbol-day fixture cannot exercise a cache that only grows across
+  symbol-days.** Directly parallel to v1.0's single-snapshot fixture missing the
+  sort tie, one level up in scale. Pattern to carry: **a fixture tests the
+  logic at n=1; it does not test what the logic COSTS at n=many.** Scale
+  failures need a fixture with scale, and this one still has none — the guard
+  here is the restructure plus a printed peak-residency line, not a test.
+  Related standing context: the SPX box's known OOM at a 419M peak. Control is
+  not immune, and read-only tools are not exempt from memory discipline.
 
 - **v4.46 — 2026-08-13 — `spread_counterfactual` v1.1: CRASH ON THE FIRST REAL
   RUN, AND THE FIXTURE COULD NOT HAVE CAUGHT IT.** `sorted(snaps)` on
