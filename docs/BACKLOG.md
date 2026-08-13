@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.49
+# docs/BACKLOG.md — v4.50
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,61 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.50 — 2026-08-13 — LIQ.4: THE LIQUIDITY LEDGER. `analysis/liquidity_ledger.py`
+  v1.0 + 15 tests.** Operator, on being told the pool set lives only in RAM:
+  *"Our liquidity mapper exists only in memory??? It needs to reset at the
+  beginning of RTH and capture at least 3 previous highs & lows and write them
+  to a location and update it when the level is touched (held/breached)."*
+
+  **WHAT WAS ACTUALLY WRONG — worse than "not persisted".**
+  `LiquidityMapper.analyze()` opens with `lmap = LiquidityMap()` and re-derives
+  every pool from the candle window ON EVERY CALL. Consequences:
+  · **`touch_count` is not a running count** — it is `len(cluster)`, how many
+    bars in the lookback sat at that level when the map was last rebuilt. A
+    floor price hammers into five times today does not accumulate.
+  · `swept` / `rejection_confirmed` are per-build snapshots — the same defect
+    class LIQ.3 fixed one level down, where `closes_beyond` was a birth-time
+    snapshot that had to become a per-tick question.
+  · a clean SINGLE-touch low that price respects three times **never becomes a
+    pool at all** — `_find_pools` requires >=2 equal bars within
+    EQUAL_LEVEL_PCT.
+  So nothing could answer *"is this floor holding?"*, and nothing was archived.
+
+  **THE SPEC, and the operator's sentence is the whole design:** *"the wick
+  counts as a touch, but only a close counts as acceptance or rejection."*
+  **THREE counters per level, never one** — `touches` (wick contact, says
+  nothing about who won), `holds` (closed back on the origin side), `breaches`
+  (closed beyond). A single number cannot distinguish a level being DEFENDED
+  from one being GIVEN UP, which is the entire question the floor thesis asks.
+  *"It should live on the standalone bot boxes"* → per-box
+  `data/liquidity_ledger/<date>/<SYMBOL>.json`, the same convention as the chain
+  archive. The bot owns its level book; control is a consumer, never the source.
+  Resets at RTH open, seeded with PDH/PDL and prior extremes, >=3 per side.
+
+  **DESIGN CALLS WORTH KEEPING:**
+  · **Seeds are supplied by the CALLER.** The ledger does NOT derive what a
+    prior high is — `LiquidityMapper` owns that, and a competing derivation here
+    is exactly the second-lineage failure WORKING_AGREEMENT 7 forbids.
+  · **Closed bars only.** Feeding a forming bar counts a wick that has not
+    finished printing and a close that is not a close.
+  · **Atomic write** via tempfile + `os.replace`. A strategy may read the file
+    while the loop writes it, and a half-written JSON reads as an EMPTY level
+    set — indistinguishable from "no levels found", i.e. a silent wrong answer
+    rather than a loud failure.
+  · **Fire-and-forget**, every entry point swallowing every exception, per
+    `chain_snapshot.py`. Telemetry that can halt trading is a liability.
+  · **v1.0 WRITES AND DOES NOT GATE.** Prove the levels are the ones a human
+    would have drawn before wiring them to anything that fires.
+
+  **15/15 PASS.** The suite is built around the one failure that would make
+  every floor in the book look strong: **counting a bar that never reached the
+  level as a HOLD.** Two deliberate-failure checks run — one proving the reach
+  test is applied *and* not over-strict (both directions fail silently), one
+  proving two bars with IDENTICAL wicks and opposite closes score differently,
+  which is the only way to know the CLOSE is deciding acceptance.
+  ⚠️ NOT YET WIRED into the tick path — the module collects nothing until it is.
+  That is the next step and it is deliberately separate from the build.
 
 - **v4.49 — 2026-08-13 — ✅ THE ORB ANCHOR IS SUPPORTED, AND `--anchor floor`
   FOR TRENDING_BEAR.**
