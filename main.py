@@ -1,5 +1,21 @@
 """
-main.py — options_trader v6.2
+main.py — options_trader v6.3
+v6.3 — 2026-08-13 — PF.5 WIRED. The condor now consults the DAILY pitchfork and
+        the session extremes. `_condor_rails()` returns the rails or None, and
+        **None means NO CONDOR** — operator: "consider the condor off the table
+        if we don't have guardrails. That is the insurance policy that
+        eliminates a bad decision in an unpredictable session." Measured cost on
+        2026-08-12: 13 distinct daily forks across 7 of 15 boxes, so roughly
+        half the fleet becomes condor-ineligible. Accepted.
+        `_session_extremes()` takes the max across BOTH frames — each is a
+        rolling window and neither is guaranteed to reach 09:30. A late window
+        UNDERSTATES the extreme, which loosens the filter rather than tightening
+        it, so the failure direction is a missed rejection not a wrong one; the
+        strategy logs a missing extreme as a plumbing fault rather than trading
+        with the filter silently off.
+        This is the pitchfork overlay's FIRST CONSUMER — it has been live as a
+        weight-0 observer since 2026-08-12 with one call site and nothing
+        reading the rails back.
 v6.2 — 2026-08-13 — AFTERNOON DEBIT BLOCK. Operator: "The only other Long that
         can fire is either part of a butterfly or an iron condor vertical
         spread from 11 o'clock onwards." ORB/Continuation/SweepReversal are
@@ -499,6 +515,7 @@ from config import (
     REGIME_REASSESS_MINUTES, INSTRUMENT, SessionConfig, DIRECTIONAL_ONLY,
     ORB_NO_ENTRY_AFTER_ET, BROKER_RECONCILE_ENABLED, ORB_FIRES_REGARDLESS_OF_REGIME,
     DEBIT_DIRECTIONAL_CUTOFF_ET, DEBIT_DIRECTIONAL_STRATEGIES, DEBIT_BLOCK_ACTIVE,
+    CONDOR_PF_TIMEFRAME,                        # PF.5
     BROKER_RECONCILE_INTERVAL_MIN
 )
 
@@ -1364,6 +1381,52 @@ def _safe_strategy(name: str, fn):
         return None
 
 
+def _session_extremes(ctx: dict):
+    """(session_high, session_low) from the widest tape available, or (None, None).
+
+    PF.5's third strike filter: a level price has ALREADY TRADED THROUGH today
+    is a level the market has proven it can reach, so a short strike must sit
+    beyond it. This is the input.
+
+    Takes the max across BOTH frames rather than trusting one: each is a rolling
+    window and neither is guaranteed to reach 09:30. A window that starts late
+    UNDERSTATES the extreme, which makes the filter LOOSER, not tighter — so the
+    failure direction is a missed rejection rather than a wrong one. Returning
+    None on absence is deliberate: the strategy logs it as a plumbing fault
+    instead of silently trading with the filter switched off.
+    """
+    hi, lo = None, None
+    try:
+        for key in ("df_1m", "df_5m"):
+            df = ctx.get(key)
+            if df is None or getattr(df, "empty", True):
+                continue
+            h = float(df["high"].max())
+            l = float(df["low"].min())
+            hi = h if hi is None else max(hi, h)
+            lo = l if lo is None else min(lo, l)
+    except Exception as exc:                                   # noqa: BLE001
+        logger.debug("session extremes unavailable: %s", exc)
+        return None, None
+    return hi, lo
+
+
+def _condor_rails(ctx: dict):
+    """Daily pitchfork rails for the condor, or None. Never raises.
+
+    DAILY by operator ruling — "It's a guardrail, not the road." A daily fork is
+    invalidated only by DAILY closes, so an intraday session cannot move the
+    rail a spread was sold against. None means NO CONDOR, which is the whole
+    point of the gate.
+    """
+    try:
+        from analysis.pitchfork_observer import rails_for
+        return rails_for(ctx, INSTRUMENT, CONDOR_PF_TIMEFRAME)
+    except Exception as exc:                                   # noqa: BLE001
+        logger.debug("condor rails unavailable: %s", exc)
+        return None
+
+
 def _afternoon_debit_blocked(strategy_name: str, now) -> bool:
     """True when a LONG-PREMIUM DIRECTIONAL entry is refused by the afternoon
     cutoff. Operator, 2026-08-13: "The only other Long that can fire is either
@@ -1644,12 +1707,17 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
         if (signal is None and
                 not DIRECTIONAL_ONLY and
                 regime.primary_regime == Regime.RANGING):
+            _sess_hi, _sess_lo = _session_extremes(ctx)
+            _rails = _condor_rails(ctx)
             plan = _safe_strategy("CondorPlan", lambda: _iron_condor_strategy.decide(
                 regime        = regime,
                 vol_state     = ctx["vol"],
                 chain         = chain,
                 macro         = macro,
-                current_price = ctx["price"]
+                current_price = ctx["price"],
+                rails         = _rails,           # PF.5 — None means NO CONDOR
+                session_high  = _sess_hi,
+                session_low   = _sess_lo
             ))
             # Plan is informational — no order yet. Leg triggers fire on
             # subsequent ticks via check_leg_triggers().

@@ -303,3 +303,47 @@ def test_deliberate_failure_width_actually_decides():
                                 min_distance_level=0.0, session_extreme=None)
     assert (a.strike, b.strike) == (120.0, 110.0), (
         "the selection did not follow the tight quote — width is not deciding")
+
+
+# ── the fork gate, end to end ───────────────────────────────────────────────
+
+def _stub_decide_env():
+    """Minimal stand-ins so decide() can be exercised without a broker."""
+    import types
+    from analysis.regime_classifier import Regime
+    regime = types.SimpleNamespace(primary_regime=Regime.RANGING, conviction=1.0)
+    vol = types.SimpleNamespace(bb_upper=110.0, bb_lower=90.0, atr_current=0.5)
+    macro = types.SimpleNamespace(vix=15.0, is_fed_day=False)
+    chain = types.SimpleNamespace(calls=[C(k) for k in (105, 110, 115, 120)],
+                                  puts=[C(k) for k in (80, 85, 90, 95)])
+    return regime, vol, macro, chain
+
+
+def test_no_fork_means_no_plan():
+    """THE GATE. rails=None with CONDOR_REQUIRE_FORK on must produce NO PLAN —
+    a caller that forgets to pass rails gets no condor rather than a silently
+    un-anchored one. The failure mode must be missing trades, never unguarded
+    ones."""
+    import config
+    from strategy.iron_condor_strategy import IronCondorStrategy
+    if not config.CONDOR_REQUIRE_FORK:
+        return
+    s = IronCondorStrategy()
+    regime, vol, macro, chain = _stub_decide_env()
+    s._plan = None
+    assert s.decide(regime=regime, vol_state=vol, chain=chain, macro=macro,
+                    current_price=100.0, rails=None) is None
+
+
+def test_decide_accepts_rails_and_extremes_without_raising():
+    """Signature smoke test — the wiring passes three new kwargs and a
+    TypeError here would be a live crash on every condor evaluation."""
+    from strategy.iron_condor_strategy import IronCondorStrategy
+    s = IronCondorStrategy()
+    regime, vol, macro, chain = _stub_decide_env()
+    s._plan = None
+    s.decide(regime=regime, vol_state=vol, chain=chain, macro=macro,
+             current_price=100.0,
+             rails={"tf": "daily", "upper": 108.0, "median": 100.0,
+                    "lower": 92.0, "slope": 0.001},
+             session_high=107.0, session_low=93.0)

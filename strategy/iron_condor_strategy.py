@@ -191,6 +191,7 @@ from config import (
     HARD_CLOSE_ET,                                  # v-pfanchor: POP horizon
     CONDOR_PITCHFORK_ANCHOR, CONDOR_REQUIRE_FORK,   # v-pfanchor
     CONDOR_PF_FLAT_SLOPE, CONDOR_MIN_POP, CONDOR_POP_BAR_MIN,
+    CONDOR_PF_TIMEFRAME, CONDOR_MAX_QUOTE_WIDTH,
     STRIKE_INCREMENT, INSTRUMENT, VIX_BUTTERFLY_DISABLE
 )
 
@@ -571,7 +572,10 @@ class IronCondorStrategy(BaseOptionsStrategy):
 
     def decide(self, regime: RegimeState, vol_state: VolatilityState,
                chain: OptionsChain, macro: MacroSnapshot,
-               current_price: float) -> Optional[CondorPlan]:
+               current_price: float,
+               rails: Optional[dict] = None,
+               session_high: Optional[float] = None,
+               session_low: Optional[float] = None) -> Optional[CondorPlan]:
         """
         Evaluate whether to plan an iron condor. If conditions are met,
         identify both vertical spreads and set up the plan. No orders placed.
@@ -589,6 +593,23 @@ class IronCondorStrategy(BaseOptionsStrategy):
             return None  # Already have an active plan this session
 
         if regime.primary_regime != Regime.RANGING:
+            return None
+
+        # ── PF.5 FORK GATE ───────────────────────────────────────────────────
+        # Operator: "consider the condor off the table if we don't have
+        # guardrails. That is the insurance policy that eliminates a bad
+        # decision in an unpredictable session."
+        # DEFAULTS OFF-SAFE: rails=None with CONDOR_REQUIRE_FORK on means NO
+        # PLAN. A caller that forgets to pass rails gets no condor rather than a
+        # silently un-anchored one — the failure mode must be missing trades,
+        # never unguarded ones.
+        use_rails = bool(CONDOR_PITCHFORK_ANCHOR and rails)
+        if CONDOR_REQUIRE_FORK and not use_rails:
+            logger.info(
+                "Condor: NO PLAN — no usable %s pitchfork (rails=%s). The fork "
+                "is the guardrail; without it the structure has nothing to lean "
+                "on and the leg is not sold.",
+                CONDOR_PF_TIMEFRAME, "present but disabled" if rails else "absent")
             return None
 
         if macro.vix >= VIX_BUTTERFLY_DISABLE:
@@ -624,15 +645,58 @@ class IronCondorStrategy(BaseOptionsStrategy):
         call_floor = max(current_price + em_floor, bb_upper)
         put_floor  = min(current_price - em_floor, bb_lower)
 
-        short_call = self._select_beyond_floor(chain.calls, call_floor, "call")
-        short_put  = self._select_beyond_floor(chain.puts,  put_floor,  "put")
+        # ── PF.5 ANCHOR ──────────────────────────────────────────────────────
+        # The RAIL replaces the BB half of the dual floor; the 0.80*EM half
+        # SURVIVES as a minimum distance, so a rail sitting on top of spot can
+        # never produce a strike with no breathing room. That fallback is what
+        # bled for ~3 weeks and it does not come back through a new door.
+        _sigma = float(getattr(vol_state, "atr_current", 0.0) or 0.0)
+        _bars = self._bars_left(now_et, CONDOR_POP_BAR_MIN)
+        _em_only_call = current_price + em_floor
+        _em_only_put = current_price - em_floor
+
+        if use_rails:
+            call_anchor = max(float(rails["upper"]), _em_only_call)
+            put_anchor = min(float(rails["lower"]), _em_only_put)
+            _anchor_name = f"pitchfork:{rails.get('tf', CONDOR_PF_TIMEFRAME)}"
+        else:
+            call_anchor, put_anchor = call_floor, put_floor
+            _anchor_name = "dual_floor"
+
+        if session_high is None or session_low is None:
+            # FAIL OPEN, LOUDLY. The extreme is a cheap computation from data
+            # that is always present, so its absence is a plumbing fault, not a
+            # market condition — and a silent skip of a safety filter is worse
+            # than a noisy one.
+            logger.warning("Condor: session extremes MISSING (high=%s low=%s) — "
+                           "the not-exceeded filter is INERT this evaluation",
+                           session_high, session_low)
+
+        short_call = self._select_beyond_rail(
+            chain.calls, "call", call_anchor, _em_only_call, session_high,
+            spot=current_price, sigma=_sigma, bars_left=_bars,
+            min_pop=CONDOR_MIN_POP, max_width_pct=CONDOR_MAX_QUOTE_WIDTH)
+        short_put = self._select_beyond_rail(
+            chain.puts, "put", put_anchor, _em_only_put, session_low,
+            spot=current_price, sigma=_sigma, bars_left=_bars,
+            min_pop=CONDOR_MIN_POP, max_width_pct=CONDOR_MAX_QUOTE_WIDTH)
 
         if short_call is None or short_put is None:
             logger.info(
-                f"Condor: no liquid strike beyond dual floor "
-                f"(call>={call_floor:.2f}, put<={put_floor:.2f}) — SKIP, "
-                f"will not sell inside the expected move / BB band")
+                "Condor: no strike clears anchor=%s (call>=%.2f put<=%.2f), "
+                "min-dist %.2f/%.2f, session %s/%s, POP>=%.2f at %.1f bars, "
+                "width<=%.0f%% — SKIP (call=%s put=%s)",
+                _anchor_name, call_anchor, put_anchor,
+                _em_only_call, _em_only_put,
+                f"{session_high:.2f}" if session_high else "n/a",
+                f"{session_low:.2f}" if session_low else "n/a",
+                CONDOR_MIN_POP, _bars, CONDOR_MAX_QUOTE_WIDTH * 100,
+                "ok" if short_call else "none", "ok" if short_put else "none")
             return None
+
+        logger.info("Condor anchored on %s: call %s put %s (POP floor %.2f, "
+                    "%.1f bars left)", _anchor_name, short_call.strike,
+                    short_put.strike, CONDOR_MIN_POP, _bars)
 
         call_dist = short_call.strike - current_price
         put_dist  = current_price - short_put.strike

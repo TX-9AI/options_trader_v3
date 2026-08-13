@@ -1,5 +1,7 @@
 """
-config.py — options_trader v4.9
+config.py — options_trader v4.10
+v4.10 — 2026-08-13 — CONDOR_MAX_QUOTE_WIDTH (0.25 of mid). A ranking never
+        refuses; a floor does.
 v4.9 — 2026-08-13 — CONDOR_MIN_POP / CONDOR_POP_BAR_MIN. Probability-of-profit
         floor on every short leg, defaulting to 0.70 — the BOTTOM of the
         operator's 70-80%% band, because he asked explicitly not to be
@@ -615,6 +617,14 @@ CONDOR_PF_FLAT_SLOPE        = float(os.environ.get("OT_CONDOR_PF_FLAT", "0.00002
 # 67%/-0.09) and every offset at/above 76% was POSITIVE (+0.33/+0.32/+0.35).
 # The sign flips inside the operator's stated band.
 CONDOR_MIN_POP              = float(os.environ.get("OT_CONDOR_MIN_POP", "0.70"))
+# Reject a short leg quoted wider than this fraction of its mid. A RANKING never
+# refuses — it returns the least-bad strike even when every candidate is broken.
+# On 0DTE a nickel of noise on a wide quote trips the 25%% stop on the QUOTE
+# rather than on price. 0.25 is a stated PRIOR reasoned from an ADJACENT
+# population (factor_sweep's worst continuation quintile ran spread_pct_of_mid
+# 0.13-0.88 at -$37/trade; the two best bands sat under 0.043) — debit entries,
+# not condor shorts. The rejected-leg log is what would fit it properly.
+CONDOR_MAX_QUOTE_WIDTH      = float(os.environ.get("OT_CONDOR_MAX_QUOTE_WIDTH", "0.25"))
 # Minutes per bar of the ATR feeding sigma. 5m frame by default; wrong here
 # scales sqrt(T) and silently moves every POP.
 CONDOR_POP_BAR_MIN          = float(os.environ.get("OT_CONDOR_POP_BAR_MIN", "5"))

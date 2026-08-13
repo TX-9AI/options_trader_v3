@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.52
+# docs/BACKLOG.md — v4.53
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,63 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.53 — 2026-08-13 — PF.5 IS WIRED. `main` v6.3 + `config` v4.10 + condor
+  `decide()` + 27 tests.** The pitchfork overlay now has a consumer that trades.
+
+  **THE GATE TAKES EFFECT.** `_condor_rails()` returns the DAILY rails or None,
+  and **None means NO CONDOR** — operator: *"consider the condor off the table
+  if we don't have guardrails. That is the insurance policy that eliminates a
+  bad decision in an unpredictable session."* **DEFAULTS OFF-SAFE:** a caller
+  that forgets to pass rails gets no plan rather than a silently un-anchored
+  one. The failure mode must be missing trades, never unguarded ones, and a test
+  pins it.
+  **MEASURED COST, from `pitchfork_digest` 2026-08-12:** 13 distinct daily forks
+  across **7 of 15 boxes** (CVX, GS, LLY, QQQ, TLT, UNH full-session; MU
+  partial). So roughly half the fleet becomes condor-ineligible. Accepted:
+  *"I'm ok with not getting the condor if the fork isn't there."*
+
+  **⚠️ AND THE DAILY CHANNEL POSITION SAYS WHAT IT WILL ACTUALLY PRODUCE.** On
+  the 1d frame `pos_pct` runs p10 **40.8** / p50 74.2 / p90 98.5 — price lives
+  in the UPPER HALF and **essentially never visits the lower daily tine** (the
+  1h frame is the mirror image at p10 3.0, which is exactly why it is the wrong
+  guardrail for a position you hold). Under the touch trigger the CALL side arms
+  often and the PUT side rarely, so expect **mostly call-side standalones and
+  few completed two-sided condors.** That is arguably correct behaviour — if
+  price never approaches the lower tine the put side was never rich, and selling
+  it anyway is the thing this change exists to stop. One session, 13 forks:
+  a shape, not a distribution.
+
+  **THE ANCHOR.** The rail replaces the BB half of the dual floor; **`0.80 * EM`
+  survives as a MINIMUM DISTANCE** so a rail sitting on top of spot can never
+  produce a strike with no breathing room — that fallback bled for ~3 weeks and
+  does not come back through a new door. Selection then applies, in order:
+  beyond the rail → beyond the min distance → **beyond the session extreme** →
+  quote width within `CONDOR_MAX_QUOTE_WIDTH` → **POP >= `CONDOR_MIN_POP`** →
+  most liquid by bid/ask width, tie-break nearest the rail. Every skip logs the
+  full reason set, so the gate can be calibrated from its own rejections rather
+  than guessed twice.
+
+  **`_session_extremes()` takes the max across BOTH frames**, because each is a
+  rolling window and neither is guaranteed to reach 09:30. A late window
+  UNDERSTATES the extreme, which LOOSENS the filter rather than tightening it —
+  so the failure direction is a missed rejection, not a wrong one. A missing
+  extreme is logged as a **plumbing fault** rather than silently trading with
+  the filter switched off.
+
+  **`config` v4.10** adds `CONDOR_MAX_QUOTE_WIDTH` (0.25 of mid). Ranking alone
+  NEVER REFUSES — it returns the least-bad strike even when every candidate is
+  broken, and on 0DTE a nickel of noise on a wide quote trips the 25% stop on
+  the QUOTE rather than on price. Stated PRIOR reasoned from an adjacent
+  population, labelled as such.
+
+  **27/27 PASS**, now including the end-to-end gate (`rails=None` → no plan) and
+  a signature smoke test, because a `TypeError` on three new kwargs would be a
+  live crash on every condor evaluation past 11:11.
+  ⚠️ `CONDOR_PF_TIMEFRAME` and `CONDOR_MAX_QUOTE_WIDTH` were BOTH used before
+  being imported and caught by the AST name sweep — the third and fourth such
+  catch today. That sweep now runs before any condor packaging, and the gate
+  does a real `import` rather than only an `ast.parse`.
 
 - **v4.52 — 2026-08-13 — PF.6: THE POP FLOOR, AND IT VALIDATES OUT-OF-SAMPLE.**
   `config` v4.9 + condor helpers + 25 tests (was 15).
