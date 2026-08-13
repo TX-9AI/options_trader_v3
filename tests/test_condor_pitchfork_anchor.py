@@ -154,6 +154,79 @@ def test_flat_fork_returns_None_so_the_caller_keeps_proximity():
     assert IronCondorStrategy._leg_order_from_slope(None, 0.00002) is None
 
 
+# ── POP: the time-of-day gate ───────────────────────────────────────────────
+
+def test_pop_rises_as_the_session_shortens():
+    """THE WHOLE POINT. Same distance, less time, higher POP — a strike that
+    fails at 11:15 passes at 14:30 on identical geometry. No fixed-percent rule
+    can express this, which is why every offset table so far was time-blind."""
+    early = IronCondorStrategy._pop(3.0, 0.5, 40)
+    late = IronCondorStrategy._pop(3.0, 0.5, 8)
+    assert 0.80 < early < 0.85
+    assert late > 0.97
+    assert late > early
+
+
+def test_pop_rises_with_distance():
+    near = IronCondorStrategy._pop(1.0, 0.5, 40)
+    far = IronCondorStrategy._pop(3.0, 0.5, 40)
+    assert near < 0.70 < far, "the floor must separate these two"
+
+
+def test_pop_degenerate_inputs_FAIL_the_floor():
+    """A missing ATR must never read as a safe trade. 0.0 fails any floor."""
+    for bad in ((3.0, 0.0, 8), (3.0, 0.5, 0), (0.0, 0.5, 8), (-1.0, 0.5, 8)):
+        assert IronCondorStrategy._pop(*bad) == 0.0
+
+
+def test_pop_floor_rejects_a_near_strike_and_keeps_a_far_one():
+    contracts = [C(101), C(110)]
+    sel = S()._select_beyond_rail(
+        contracts, "call", rail=100.0, min_distance_level=0.0,
+        session_extreme=None, spot=100.0, sigma=0.5, bars_left=40,
+        min_pop=0.70)
+    assert sel.strike == 110.0, "the near strike passed a 0.70 POP floor"
+
+
+def test_pop_floor_is_inert_when_not_configured():
+    """min_pop=0 must leave v-dualfloor behaviour untouched."""
+    sel = S()._select_beyond_rail(
+        [C(101), C(110)], "call", rail=100.0, min_distance_level=0.0,
+        session_extreme=None, spot=100.0, sigma=0.5, bars_left=40, min_pop=0.0)
+    assert sel.strike == 101.0
+
+
+# ── quote-width floor: ranking alone never refuses ──────────────────────────
+
+def test_quote_width_floor_skips_a_broken_market():
+    """Ranking returns the least-bad strike even when every candidate is
+    broken. On 0DTE a nickel of noise on a wide quote trips the 25% stop on the
+    QUOTE rather than on price."""
+    wide_only = [C(110, bid=1.00, ask=1.80), C(115, bid=1.00, ask=1.90)]
+    assert S()._select_beyond_rail(
+        wide_only, "call", rail=105.0, min_distance_level=0.0,
+        session_extreme=None, max_width_pct=0.25) is None
+
+
+def test_quote_width_floor_keeps_a_decent_market():
+    ok = [C(110, bid=1.00, ask=1.10), C(115, bid=1.00, ask=1.80)]
+    sel = S()._select_beyond_rail(
+        ok, "call", rail=105.0, min_distance_level=0.0,
+        session_extreme=None, max_width_pct=0.25)
+    assert sel.strike == 110.0
+
+
+def test_bars_left_measures_to_the_1545_flatten():
+    """15:45, not the bell — a condor leg is CLOSED at the hard close, so that
+    is when the position actually ends. Using 16:00 overstates T and makes
+    every POP look worse than the trade really is."""
+    import datetime as dt
+    at_1400 = dt.datetime(2026, 8, 13, 14, 0)
+    assert IronCondorStrategy._bars_left(at_1400, 5.0) == 21.0     # 105 min / 5
+    past = dt.datetime(2026, 8, 13, 15, 50)
+    assert IronCondorStrategy._bars_left(past, 5.0) == 0.0
+
+
 # ── deliberate failure ──────────────────────────────────────────────────────
 
 def test_deliberate_failure_each_filter_is_load_bearing():
@@ -184,6 +257,39 @@ def test_deliberate_failure_each_filter_is_load_bearing():
     assert no_rail.strike == 105.0, (
         "dropping the rail did not move the selection — the rail is not being "
         "applied")
+
+
+def test_deliberate_failure_the_pop_floor_is_load_bearing():
+    """Drop the floor and the near strike must come back. If the same strike
+    wins either way the floor is not being applied."""
+    contracts = [C(101), C(110)]
+    gated = S()._select_beyond_rail(contracts, "call", rail=100.0,
+                                    min_distance_level=0.0, session_extreme=None,
+                                    spot=100.0, sigma=0.5, bars_left=40,
+                                    min_pop=0.70)
+    ungated = S()._select_beyond_rail(contracts, "call", rail=100.0,
+                                      min_distance_level=0.0, session_extreme=None,
+                                      spot=100.0, sigma=0.5, bars_left=40,
+                                      min_pop=0.0)
+    assert (gated.strike, ungated.strike) == (110.0, 101.0), (
+        "the POP floor did not change the selection — it is not being applied")
+
+
+def test_deliberate_failure_time_actually_moves_the_gate():
+    """The SAME near strike must FAIL early and PASS late. If it behaves the
+    same at both, bars_left is not reaching the POP calculation and the gate is
+    time-blind — the exact defect it exists to fix."""
+    contracts = [C(101)]
+    early = S()._select_beyond_rail(contracts, "call", rail=100.0,
+                                    min_distance_level=0.0, session_extreme=None,
+                                    spot=100.0, sigma=0.5, bars_left=40,
+                                    min_pop=0.70)
+    late = S()._select_beyond_rail(contracts, "call", rail=100.0,
+                                   min_distance_level=0.0, session_extreme=None,
+                                   spot=100.0, sigma=0.15, bars_left=3,
+                                   min_pop=0.70)
+    assert early is None and late is not None, (
+        "the gate did not respond to time remaining")
 
 
 def test_deliberate_failure_width_actually_decides():

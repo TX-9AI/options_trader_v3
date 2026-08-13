@@ -142,6 +142,55 @@ def _state(entry: Dict[str, Any], price: float) -> Optional[Dict[str, Any]]:
         return None
 
 
+def rails_for(ctx: dict, symbol: str, tf: str = "daily"):
+    """Rails + SLOPE for one timeframe, or None. The condor's only entry point.
+
+    Returns {"upper","median","lower","slope","tf","pos_pct"} where `slope` is
+    the rail's drift PER BAR of its own frame, signed.
+
+    WHY THE SLOPE IS COMPUTED HERE and not by the caller: the rails are three
+    linear functions of one index, so slope is `upper_at(i+1) - upper_at(i)` —
+    exact, not fitted, and free. Deriving it anywhere else would mean a second
+    place that knows the fork's geometry, which is the lineage split
+    WORKING_AGREEMENT 7 forbids. `_state()` deliberately does not carry it
+    because the journal records a POSITION, not a trajectory.
+
+    Never raises. A missing, unborn or malformed fork returns None, and the
+    caller's contract is that None means NO CONDOR.
+    """
+    if not OBSERVE:
+        return None
+    try:
+        forks = refresh(ctx, symbol)
+        entry = (forks or {}).get(tf)
+        if not entry:
+            return None
+        f = entry.get("contained")
+        if f is None:
+            return None
+        idx = float(entry["bars"] - 1)
+        if not f.is_born_by(int(idx)):
+            return None                    # 4.4 — not yet knowable
+        r = f.rails_at(idx)
+        nxt = f.rails_at(idx + 1.0)
+        price = float(ctx.get("price") or 0.0)
+        w = r["upper"] - r["lower"]
+        return {
+            "tf": tf,
+            "upper": round(r["upper"], 4),
+            "median": round(r["median"], 4),
+            "lower": round(r["lower"], 4),
+            # per-bar drift of the channel, signed. Any rail gives the same
+            # number — they share one slope by construction.
+            "slope": round(nxt["upper"] - r["upper"], 6),
+            "pos_pct": (round((price - r["lower"]) / w * 100.0, 2)
+                        if (w > 0 and price > 0) else None),
+        }
+    except Exception as exc:                                   # noqa: BLE001
+        logger.debug("rails_for failed: %s", exc)
+        return None
+
+
 def snapshot(ctx: dict, symbol: str, journal=None) -> Optional[Dict[str, Any]]:
     """Build (cadenced) and journal one `pitchfork` observation. Never raises."""
     if not OBSERVE:

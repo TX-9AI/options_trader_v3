@@ -188,6 +188,9 @@ from config import (
     CONDOR_TRIGGER_APPROACH,
     CONDOR_NICKEL_CLOSE, CONDOR_STOP_LOSS_PCT,
     CONDOR_ENTRY_START_ET, CONDOR_ENTRY_CUTOFF_ET,
+    HARD_CLOSE_ET,                                  # v-pfanchor: POP horizon
+    CONDOR_PITCHFORK_ANCHOR, CONDOR_REQUIRE_FORK,   # v-pfanchor
+    CONDOR_PF_FLAT_SLOPE, CONDOR_MIN_POP, CONDOR_POP_BAR_MIN,
     STRIKE_INCREMENT, INSTRUMENT, VIX_BUTTERFLY_DISABLE
 )
 
@@ -362,9 +365,80 @@ class IronCondorStrategy(BaseOptionsStrategy):
         depth = (getattr(c, "open_interest", 0) or 0) + (getattr(c, "volume", 0) or 0)
         return (round(width, 4), -depth)
 
+    @staticmethod
+    def _pop(distance: float, sigma_per_bar: float, bars_left: float) -> float:
+        """P(terminal close on the SAFE side of the short strike).
+
+            z   = distance / (sigma * sqrt(bars_left))
+            POP = Phi(z)
+
+        TIME IS THE WHOLE POINT. The same distance is a LARGER z late in the
+        session, so a strike that fails at 11:15 passes at 14:30 on identical
+        geometry. Every offset table built so far pooled hours and could not
+        express that.
+
+        Driftless and normal — deliberately. A drift term would be a forecast,
+        and the one thing measured all day is that this system's directional
+        forecasts do not separate. Normal understates fat tails, so this reads
+        slightly OPTIMISTIC on the extremes; the floor sits at 0.70 rather than
+        0.50 partly to absorb that.
+
+        Degenerate inputs return 0.0, which FAILS the floor. A missing ATR must
+        not read as a safe trade.
+        """
+        try:
+            import math
+            d, sig, n = float(distance), float(sigma_per_bar), float(bars_left)
+            if d <= 0 or sig <= 0 or n <= 0:
+                return 0.0
+            z = d / (sig * math.sqrt(n))
+            return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+        except Exception:                                      # noqa: BLE001
+            return 0.0
+
+    @staticmethod
+    def _bars_left(now_et_dt, bar_minutes: float) -> float:
+        """Bars of `bar_minutes` remaining until the 15:45 flatten.
+
+        15:45, not 16:00: a condor leg is closed at the hard close, so that is
+        when the position actually ends. Using the bell would overstate T and
+        make every POP look worse than the trade really is.
+        """
+        try:
+            end = now_et_dt.replace(hour=HARD_CLOSE_ET[0], minute=HARD_CLOSE_ET[1],
+                                    second=0, microsecond=0)
+            mins = (end - now_et_dt).total_seconds() / 60.0
+            return max(0.0, mins / max(1e-9, float(bar_minutes)))
+        except Exception:                                      # noqa: BLE001
+            return 0.0
+
+    @staticmethod
+    def _quote_ok(c, max_width_pct: float) -> bool:
+        """Reject a short leg quoted wider than `max_width_pct` of its mid.
+
+        RANKING ALONE NEVER REFUSES — it returns the least-bad strike even when
+        every candidate is broken. On a 0DTE credit spread a nickel of quote
+        noise on a wide market moves the spread enough to trip the 25% stop on
+        the QUOTE rather than on price, which is the failure the ratchet and the
+        floor cannot survive. So width needs a FLOOR as well as an ordering.
+        """
+        try:
+            if max_width_pct <= 0:
+                return True
+            bid, ask = float(getattr(c, "bid", 0) or 0), float(getattr(c, "ask", 0) or 0)
+            mid = (bid + ask) / 2.0
+            if mid <= 0 or ask < bid:
+                return False
+            return (ask - bid) / mid <= max_width_pct
+        except Exception:                                      # noqa: BLE001
+            return False
+
     def _select_beyond_rail(self, contracts: List[OptionContract], side: str,
                             rail: float, min_distance_level: float,
-                            session_extreme: Optional[float]
+                            session_extreme: Optional[float],
+                            spot: float = 0.0, sigma: float = 0.0,
+                            bars_left: float = 0.0, min_pop: float = 0.0,
+                            max_width_pct: float = 0.0
                             ) -> Optional[OptionContract]:
         """PF.5 — the operator's rule, in the order he stated it.
 
@@ -396,6 +470,11 @@ class IronCondorStrategy(BaseOptionsStrategy):
                 continue
             if session_extreme is not None and not beyond(k, session_extreme):
                 continue
+            if not self._quote_ok(c, max_width_pct):
+                continue
+            if min_pop > 0 and spot > 0:
+                if self._pop(abs(k - spot), sigma, bars_left) < min_pop:
+                    continue
             eligible.append(c)
 
         if not eligible:

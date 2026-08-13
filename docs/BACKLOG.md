@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.51
+# docs/BACKLOG.md — v4.52
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,68 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.52 — 2026-08-13 — PF.6: THE POP FLOOR, AND IT VALIDATES OUT-OF-SAMPLE.**
+  `config` v4.9 + condor helpers + 25 tests (was 15).
+
+  Operator: *"Selling late afternoon premium on zero DTE is incredibly risky so
+  just make sure that the factors appear favorable before executing. There
+  should be a reasonable expectation of trade success better than 50-50...
+  somewhere near the 70 to 80%% range."* And on tone: *"this approach is already
+  inherently risky. I'm aware of that and I'm comfortable with it so don't be
+  too restrictive."* → floor at the BOTTOM of his band, **0.70**, env-tunable.
+
+  **POP = Phi(z), z = distance / (sigma * sqrt(bars_left))**, horizon to the
+  **15:45 flatten** rather than the bell, because a condor leg is CLOSED at the
+  hard close and using 16:00 overstates T. Driftless and normal deliberately —
+  a drift term would be a forecast, and the one thing measured all day is that
+  this system's directional forecasts do not separate. Normal understates fat
+  tails, so it reads slightly OPTIMISTIC on the extremes; the 0.70 floor absorbs
+  some of that. Degenerate inputs return 0.0 and FAIL — a missing ATR must never
+  read as a safe trade.
+
+  **⚠️ VALIDATED ON DATA IT WAS NOT FITTED TO.** TC.7's handoff arm, terminal-OK
+  against measured EV: **58%→−0.23 · 54%→−0.33 · 63%→−0.24 · 67%→−0.09** then
+  **76%→+0.33 · 78%→+0.32 · 88%→+0.35**. **Every cell below 70%% lost money;
+  every cell at/above 76%% made it.** The sign flips inside the operator's stated
+  band. Nobody searched for 0.70 — it is a stated risk preference, not an
+  argmax, which is exactly why it is usable and why it must NOT be re-tuned on
+  this same data later. Honest cost: on the STANDALONE arm the sub-70 cells were
+  marginally POSITIVE (+0.08 at 61%%, +0.04 at 69%%), so the floor gives up ~$0.12
+  a spread there; all meaningful EV (+0.20 to +0.67) is above 70.
+  ⚠️ ONE arm, ONE conviction band, ~40 spreads a cell over 25 symbol-days, and a
+  sign flip read across two cells either side. Striking, not yet a fitted
+  threshold.
+
+  **THE TIME-OF-DAY PROPERTY IS THE POINT.** Measured in the module: 3.0 points
+  out is **POP 0.829 with 40 bars left and 0.983 with 8** — identical geometry,
+  different session remaining. Every offset table built before this pooled hours
+  and could not express it, which is why the credit_edge hour curve looked like
+  an edge appearing when it was really T shrinking.
+
+  **QUOTE-WIDTH FLOOR added alongside**, because **ranking alone never
+  refuses** — `_liquidity_rank` returns the least-bad strike even when every
+  candidate is broken. On a 0DTE credit spread a nickel of noise on a wide quote
+  trips the 25%% stop on the QUOTE rather than on price. Default 25%% of mid as a
+  stated PRIOR, not a fit: factor_sweep put the worst continuation quintile at
+  `spread_pct_of_mid` 0.13-0.88 and the two best under 0.043, which is an
+  adjacent population (debit entries, not condor shorts) — so it is reasoned
+  from a neighbour and labelled as such. The rejected-leg log is what would fit
+  it properly.
+
+  **⚠️ SIX MISSING IMPORTS CAUGHT BY AN AST SWEEP BEFORE PACKAGING** —
+  `HARD_CLOSE_ET`, `CONDOR_MIN_POP`, `CONDOR_POP_BAR_MIN`,
+  `CONDOR_PITCHFORK_ANCHOR`, `CONDOR_REQUIRE_FORK`, `CONDOR_PF_FLAT_SLOPE`. The
+  first would have been a live **NameError on the first condor evaluation past
+  11:11** — the same class that crashed IWM twice (continuation `mid`, butterfly
+  `_mult`) and is only ever caught by a box falling over. `ast.parse` +
+  import-name diff, then a real `import`, now runs before any condor packaging.
+
+  **25/25 PASS**, including four deliberate-failure checks: each of the three
+  strike filters must MOVE the selection when relaxed; the POP floor must change
+  which strike wins; and **the same near strike must FAIL early and PASS late**,
+  which is the only way to know `bars_left` actually reaches the calculation
+  rather than the gate being time-blind.
 
 - **v4.51 — 2026-08-13 — PF.5: THE PITCHFORK GETS ITS FIRST CONSUMER.**
   `config` v4.8 + `iron_condor_strategy` v-pfanchor + 15 tests.

@@ -1,5 +1,9 @@
 """
-config.py — options_trader v4.8
+config.py — options_trader v4.9
+v4.9 — 2026-08-13 — CONDOR_MIN_POP / CONDOR_POP_BAR_MIN. Probability-of-profit
+        floor on every short leg, defaulting to 0.70 — the BOTTOM of the
+        operator's 70-80%% band, because he asked explicitly not to be
+        restrictive on a trade he already knows is risky.
 v4.8 — 2026-08-13 — CONDOR PITCHFORK ANCHOR (PF.5). CONDOR_PITCHFORK_ANCHOR /
         CONDOR_REQUIRE_FORK / CONDOR_PF_TIMEFRAME / CONDOR_PF_FLAT_SLOPE.
         The pitchfork has been BUILT AND LIVE as a weight-0 observer since
@@ -592,6 +596,28 @@ CONDOR_PF_TIMEFRAME         = os.environ.get("OT_CONDOR_PF_TF", "daily")
 # fork drifting 0.001% a bar is noise, and ordering legs off its sign would be
 # reading a coin flip as structure.
 CONDOR_PF_FLAT_SLOPE        = float(os.environ.get("OT_CONDOR_PF_FLAT", "0.00002"))
+
+# ── POP FLOOR (2026-08-13, operator directive) ───────────────────────────────
+# "Selling late afternoon premium on zero DTE is incredibly risky so just make
+#  sure that the factors appear favorable before executing. There should be a
+#  reasonable expectation of trade success better than 50-50... somewhere near
+#  the 70 to 80% range."  And, on tone: "this approach is already inherently
+#  risky. I'm aware of that and I'm comfortable with it so don't be too
+#  restrictive."  Hence a FLOOR at the bottom of his band, not the top.
+# POP = P(terminal close on the safe side of the short strike)
+#     = Phi(z),  z = distance_to_strike / (sigma_per_bar * sqrt(bars_left))
+# TIME IS THE POINT: the same distance is a LARGER z late in the session, so a
+# strike that fails at 11:15 can pass at 14:30 on identical geometry. A
+# fixed-percent rule cannot express that and this is why the offset tables were
+# time-blind.
+# ⚠️ VALIDATED OUT-OF-SAMPLE, not fitted: on TC.7's handoff arm every offset
+# with terminal-OK BELOW 70% had NEGATIVE EV (58%/-0.23, 54%/-0.33, 63%/-0.24,
+# 67%/-0.09) and every offset at/above 76% was POSITIVE (+0.33/+0.32/+0.35).
+# The sign flips inside the operator's stated band.
+CONDOR_MIN_POP              = float(os.environ.get("OT_CONDOR_MIN_POP", "0.70"))
+# Minutes per bar of the ATR feeding sigma. 5m frame by default; wrong here
+# scales sqrt(T) and silently moves every POP.
+CONDOR_POP_BAR_MIN          = float(os.environ.get("OT_CONDOR_POP_BAR_MIN", "5"))
 
 CONDOR_ENTRY_START_ET       = (11, 11)  # No condor entries before 11:11 (BB must be valid)
 CONDOR_ENTRY_CUTOFF_ET      = (14, 0)   # Standard entry cutoff
