@@ -1,6 +1,35 @@
 #!/usr/bin/env python3
 """
-tests/spread_counterfactual.py — v1.2 — 2026-08-13   (TC.7)
+tests/spread_counterfactual.py — v1.3 — 2026-08-13   (TC.7)
+
+v1.3 — 2026-08-13 — `--anchor orb`. THE OPERATOR'S STRUCTURAL STRIKE RULE:
+        *"set the put spread at the top of the orb range for a runaway long and
+        the bottom of the orb range for the call spread on a runaway short."*
+        WHY IT IS A BETTER ANCHOR THAN A PERCENTAGE FROM ENTRY: the broken ORB
+        boundary IS the invalidation level. On a runaway long price broke the
+        range and never retested it, so the ORB HIGH is the floor of that move
+        and the level `orb_structure_stop` calls thesis death. A put spread
+        short there loses only if the setup was wrong. Same geometry mirrored
+        for a runaway short: the ORB LOW is now overhead, so the call spread
+        sells above it.
+        **THE DISTRIBUTION IS THE WHOLE ANSWER AND IT IS PRINTED FIRST.** v1.2
+        found the handoff NEGATIVE at 0.25-1.00%% from entry and POSITIVE at
+        1.50%%+ (+0.33/+0.32/+0.35). The handoff enters on a pullback into an
+        FVG above the broken range, so the boundary sits some distance below
+        entry. **If that distance clusters at 1.5%%+ the rule lands in the
+        profitable band BY CONSTRUCTION rather than by tuning; if it clusters
+        near 0.5%% it lands in the band that lost money.** No new collection
+        needed — the range reconstructs from the 09:30-09:35 bars already in
+        the OHLC.
+        ⚠️ OFFSETS MEAN SOMETHING DIFFERENT UNDER THIS ANCHOR. They are distance
+        BEYOND THE BOUNDARY, not beyond entry, and 0.00%% (at the boundary
+        exactly, which is the operator's literal proposal) is included.
+        ⚠️ THE CONTROL ARM STILL MATTERS. This is the population that priced
+        WORST in v1.2 and the control beat it at every offset. Distance may
+        rescue it — that is what "it doesn't matter that it turned against me as
+        long as it doesn't breach" buys — but the tape underneath is still the
+        worse tape. Run standalone on the identical anchor, and if it also wins
+        this is a general edge, not a runaway-specific one.
 
 v1.2 — 2026-08-13 — OOM-KILLED ON THE FIRST WORKING RUN. Bounded work, UNBOUNDED
         MEMORY. v1.1 cached every parsed chain snapshot for every (date, symbol)
@@ -113,6 +142,23 @@ from tests.credit_edge import (CHAINS, ohlc_root, price_vertical,           # no
                                settle_loss, OFFSETS, MIN_CREDIT)
 
 MIN_N = 30
+# The ORB is the 09:30-09:35 ET candle: 1m bars 570..574 inclusive.
+ORB_FIRST_MIN, ORB_LAST_MIN = 9 * 60 + 30, 9 * 60 + 34
+# Under --anchor orb the ladder starts AT the boundary, which is the operator's
+# literal proposal, then walks further out.
+ORB_OFFSETS = (0.0,) + OFFSETS
+
+
+def orb_range(bars):
+    """(high, low) of the 09:30-09:35 opening candle, or None.
+
+    Reconstructed from the 1m tape rather than read from a log, so it works on
+    every archived session including ones that predate any ORB journalling.
+    """
+    w = [b for b in bars if ORB_FIRST_MIN <= b[0] <= ORB_LAST_MIN]
+    if not w:
+        return None
+    return max(b[1] for b in w), min(b[2] for b in w)
 
 
 def session_path(date, root):
@@ -210,6 +256,11 @@ def main(argv):
     ap.add_argument("--conv-max", type=float, default=1.01)
     ap.add_argument("--width", type=float, default=5.0)
     ap.add_argument("--min-n", type=int, default=MIN_N)
+    ap.add_argument("--anchor", default="entry", choices=("entry", "orb"),
+                    help="entry = offsets beyond the fill (v1.2 behaviour). "
+                         "orb = offsets beyond the BROKEN ORB BOUNDARY — the "
+                         "invalidation level: ORB high for a long, low for a "
+                         "short.")
     a = ap.parse_args(argv[1:])
 
     if not os.path.isdir(JOURNAL):
@@ -259,6 +310,9 @@ def main(argv):
     sym_days, no_chain, no_tape, no_entry = set(), 0, 0, 0
     long_pnl = 0.0
     peak_group = 0
+    no_orb = 0
+    boundary_dist = []          # entry-to-boundary, % of entry — the answer
+    offsets = ORB_OFFSETS if a.anchor == "orb" else OFFSETS
 
     # v1.2 — ONE SYMBOL-DAY AT A TIME. Group first, so the chain file for a
     # group is opened once, filtered to that group's minutes, and DROPPED before
@@ -289,6 +343,11 @@ def main(argv):
             no_tape += len(usable)
             continue
 
+        orb = orb_range(bars) if a.anchor == "orb" else None
+        if a.anchor == "orb" and orb is None:
+            no_orb += len(usable)
+            continue
+
         snaps = load_group_chain(date, sym, [u[3] for u in usable])
         peak_group = max(peak_group, len(snaps))
 
@@ -308,9 +367,20 @@ def main(argv):
             # THE ADVERSE SIDE. A long (bull) handoff is replaced by a PUT
             # spread BENEATH entry; a short by a CALL spread above it.
             side = "put" if direction == "long" else "call"
+            # v1.3 — the ANCHOR. `entry` is the fill; `orb` is the BROKEN
+            # BOUNDARY, which is the invalidation level and therefore the floor
+            # of the move: ORB high under a long, ORB low under a short.
+            if a.anchor == "orb":
+                base = orb[0] if side == "put" else orb[1]
+                # Record how far the fill sat from the boundary. THIS is what
+                # decides whether the rule lands in the band that paid.
+                d = (entry - base) / entry if side == "put" else (base - entry) / entry
+                boundary_dist.append(100.0 * d)
+            else:
+                base = entry
             strikes = sorted({k[1] for k in rows})
-            for off in OFFSETS:
-                target = entry * (1 - off) if side == "put" else entry * (1 + off)
+            for off in offsets:
+                target = base * (1 - off) if side == "put" else base * (1 + off)
                 cand = [k for k in strikes
                         if (k <= target if side == "put" else k >= target)]
                 if not cand:
@@ -332,6 +402,26 @@ def main(argv):
           f" no entry/direction {no_entry}")
     print(f"  peak snapshots resident for any one symbol-day: {peak_group}"
           f"  ({len(groups)} symbol-day groups processed one at a time)")
+    if a.anchor == "orb":
+        print(f"  skipped — no ORB window in the tape {no_orb}")
+        if boundary_dist:
+            bd = sorted(boundary_dist)
+            def _q(q):
+                return bd[min(len(bd) - 1, max(0, int(round(q * (len(bd) - 1)))))]
+            print(f"\n  {'-' * 80}")
+            print(f"  ENTRY-TO-BOUNDARY DISTANCE (% of entry, n={len(bd)}) — "
+                  f"READ THIS FIRST")
+            print(f"    p10 {_q(.10):+.2f}%   p25 {_q(.25):+.2f}%   "
+                  f"p50 {_q(.50):+.2f}%   p75 {_q(.75):+.2f}%   "
+                  f"p90 {_q(.90):+.2f}%")
+            neg = sum(1 for x in bd if x <= 0)
+            print(f"    at/through the boundary already: {neg} "
+                  f"({100.0*neg/len(bd):.0f}%) — those are fills where the "
+                  f"structural strike sits AT or BEYOND spot")
+            print(f"  v1.2 found the ENTRY-anchored ladder NEGATIVE below 1.00%")
+            print(f"  and POSITIVE from 1.50%. If this distribution sits in the")
+            print(f"  second band the rule is structurally in the money; if it")
+            print(f"  sits in the first it is not, and no strike tuning fixes it.")
     print(f"\n  ACTUAL LONG RESULT on the same trades: net ${long_pnl:+,.0f}"
           f"  ({len(sym_days)} symbol-days)")
 
@@ -339,9 +429,11 @@ def main(argv):
         print("\n  nothing priced. ABSENT MEASUREMENT, not a null.")
         return 0
 
-    print(f"\n  {'offset':>8}{'n':>7}{'touched':>9}{'terminal OK':>13}"
+    print(f"\n  offsets are distance beyond "
+          + ("THE ORB BOUNDARY" if a.anchor == "orb" else "the fill"))
+    print(f"  {'offset':>8}{'n':>7}{'touched':>9}{'terminal OK':>13}"
           f"{'RECOVERED':>11}{'credit':>9}{'E[loss]':>9}{'EV/spread':>11}")
-    for off in OFFSETS:
+    for off in offsets:
         g = cells.get(off) or []
         if not g:
             continue

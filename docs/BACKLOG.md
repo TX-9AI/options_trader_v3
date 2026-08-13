@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.47
+# docs/BACKLOG.md — v4.48
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,52 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.48 — 2026-08-13 — TC.7 ANSWERED (NEGATIVE), AND `--anchor orb` FOR THE
+  OPERATOR'S STRUCTURAL STRIKE RULE.**
+
+  **TC.7 RESULT — THE SPREAD REROUTE IS NOT SUPPORTED.** conviction [1.0,1.01),
+  width 5, 18 sessions. HANDOFF (128 trades, 293 spreads, 25 symbol-days, actual
+  long **−$3,065**) EV/spread: 0.25% **−0.23** · 0.50% **−0.33** · 0.75%
+  **−0.24** · 1.00% **−0.09** · 1.50% +0.33 · 2.00% +0.32 · 3.00% +0.35.
+  **Negative at every strike distance anyone would actually sell.**
+  STANDALONE control (128 trades, 393 spreads, 34 symbol-days, long −$1,208):
+  +0.08 · +0.04 · +0.20 · +0.36 · +0.62 · +0.67 · +0.56 — **better at EVERY
+  offset.** That is the pre-registered discriminator firing: the spread does
+  better on the path where the long was already less bad, so **the handoff peg
+  is simply worse tape — worse for longs AND worse for spreads.** Rerouting
+  moves the loss rather than removing it.
+  **⚠️ THE THIRD READING IS THE CONSTRAINT ON TC.6.** `credit_edge`'s
+  UNCONDITIONAL afternoon spot-anchored call side ran **+0.65 to +0.66** at the
+  same offsets. Both TC.7 arms are worse than that everywhere. **Conditioning a
+  short vertical on a continuation signal makes it WORSE than selling one at a
+  fixed distance from spot with no signal at all.** If credit spreads are the
+  afternoon vehicle, the entry trigger is not where the edge lives.
+  ⚠️ COVERAGE: only ~42 of 128 trades priced per offset (49 / 40 skipped for no
+  chain within 10 min), so ~a third of each population is measured — and it is
+  the third with a chain archive at that minute. Uncorrected selection risk.
+  ⚠️ The modelling asymmetry still FAVOURS the spread and the handoff arm is
+  negative anyway, which strengthens the verdict rather than weakening it.
+
+  **`spread_counterfactual` v1.3 — `--anchor orb`.** Operator: *"set the put
+  spread at the top of the orb range for a runaway long and the bottom of the
+  orb range for the call spread on a runaway short."* **The broken ORB boundary
+  IS the invalidation level** — on a runaway long price broke the range and never
+  retested, so the ORB high is the floor of the move and the level
+  `orb_structure_stop` calls thesis death. A put spread short there loses only if
+  the setup was wrong. Structural, not a fitted percentage.
+  **THE ENTRY-TO-BOUNDARY DISTRIBUTION IS PRINTED FIRST AND IT IS THE ANSWER.**
+  v1.2 found the handoff negative below 1.00% and positive from 1.50%. The
+  handoff enters on a pullback into an FVG above the broken range, so the
+  boundary sits some distance below the fill. **If that distance clusters at
+  1.5%+ the rule is structurally in the money by construction; if it clusters
+  near 0.5% it is not, and no strike tuning fixes it.** Reconstructed from the
+  09:30-09:35 bars already in the OHLC — no new collection.
+  ⚠️ Offsets mean distance beyond THE BOUNDARY under this anchor, and 0.00% (the
+  operator's literal proposal) is included. ⚠️ Run the standalone control on the
+  identical anchor: if it also wins, this is a general edge and not a
+  runaway-specific one. Fixture-verified — planted ORB high 497.0 against a 500
+  entry reads p50 **+0.60%** exactly.
 
 - **v4.47 — 2026-08-13 — `spread_counterfactual` v1.2: OOM-KILLED. BOUNDED WORK,
   UNBOUNDED MEMORY.** v1.1 cached every parsed chain snapshot for every
