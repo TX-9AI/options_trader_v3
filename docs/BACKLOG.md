@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.34
+# docs/BACKLOG.md — v4.36
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,104 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.36 — 2026-08-13 — WORKING_AGREEMENT §19: COMMANDS GO IN A CODE BOX, ONE
+  LINE, SEMICOLON-SEPARATED.** Operator's instruction, shipped into the repo so
+  it survives this thread. Covers presentation (a fenced code box, because a
+  prose-wrapped command picks up soft wraps and smart quotes on mobile and has
+  to be reconstructed by eye), form (`;` not `&&`, extending §1's single-line
+  rule to the separator), and the one thing `;` costs: it does not
+  short-circuit, so §15's fail-loudly-stage-nothing gate has to live inside a
+  single-line `if ...; then ...; else echo "GATE FAILED"; fi` rather than
+  relying on `&&`. Related trap recorded in the same section — a tool exiting
+  non-zero on an empty-but-valid result cancels a trailing `&& rm -f`, which is
+  how the r88 archive survived three deploys that all looked successful.
+  **Delivery r89 was superseded by r90 without landing; this entry and v4.35
+  ship together.**
+
+- **v4.35 — 2026-08-13 — GRD.1: THE CONTINUATION GRADE IS ONE NUMBER COUNTED
+  TWICE PLUS TWO CONSTANTS — AND IT BUYS 1.5x SIZE ON LATENESS.** Found by
+  reading HEAD, not by a study. `ContinuationStrategy` has no entry in
+  `STRATEGY_PROFILES`, so it fell through to `"default"`, where
+  `regime_conviction` weighs 0.30 and `signal_quality` 0.25 — and
+  `continuation_strategy.py:614` sets `signal.conviction = regime.conviction`.
+  **55% of the grade is one column weighted twice.** `scorer_backtest` printed
+  the fingerprint and nobody read it as one: both dimensions show identical
+  medians AND identical spreads (0.913 / 0.636) over 619 trades, which is what a
+  duplicated column looks like. `vwap_alignment` and `liquidity_clear` measured
+  CONSTANT at 1.000 across all 619 — another 35%. **~90% duplicate or constant;
+  only `macro_context` (0.10, flat) varies independently.**
+
+  The grade INVERTS because of it: **A 399 trades -$8,244 (-$21/trade at 1.5x)
+  vs B 220 trades +$1,893 (+$9)**. High regime conviction means the trend is
+  already obvious, which means LATE — the confluence failure restated per trade.
+  `setup_scorer` **v1.4 stripped exactly this from the ORB** ("regime conviction
+  in costume") and left it on the strategy carrying **77% of fleet volume**.
+
+  **SHIPPED — setup_scorer v1.7, explicit continuation profile.** The weighted
+  total is **arithmetically unchanged** (0.55*conv is what 0.30+0.25 on one
+  number already computed) and `grade_b` stays 0.55, so **the fire/no-fire
+  population is provably identical — proven over 200,000 random signals, zero
+  divergence in total OR in the REJECT boundary.** The only behavioural change:
+  `grade_a` sits at 1.01, above the maximum achievable total of 1.00, so **no
+  continuation setup earns the 1.5x upgrade** until an input is proven to
+  separate. Not a permanent verdict — a refusal to pay 1.5x for a coin flip. On
+  the measured sample that is worth **~$2,748**. A GLOBAL flatten was rejected:
+  ORB's grade sorts CORRECTLY (+$56 vs -$25/trade) and earns its multiplier, so
+  the same change fleet-wide would have cost ORB $2,203 to save continuation
+  $2,748 — net +$545, not worth it. **Per-strategy or not at all.**
+
+- **⚠️ GRD.2 — CONTINUATION NEVER SETS `underlying_target`. NOT FIXED — NEEDS A
+  DECISION.** `[DESK→DEPLOY]` ORB sets entry/stop/target; continuation sets
+  entry and stop and **never assigns a target**, though `trend_strike_plan`
+  computes one (`_plan["target_price"]`, an expected-move fraction scaled by
+  ADX+conviction) and uses it to pick the strike. Consequences, all silent:
+  - `_rrr()` returns **None on every continuation signal** — which is why `rrr`
+    appears in the ORB scorer table and nowhere else. **The MIN_RRR floor (item
+    F) is structurally INERT on 77% of volume** and always has been; `None` is
+    treated as absence-of-evidence by design, so the gate cannot fire.
+  - `rrr` is the **one dimension measured to separate anywhere** (ORB: win p50
+    4.164 vs lose p50 4.851, sep -0.687 — *negatively*; high advertised R:R
+    loses). It is unmeasurable on continuation because a field is never filled.
+  - **Populating it is NOT inert** and that is why it did not ship with GRD.1.
+    Two dormant paths wake up: (a) `_pools_in_path` — with target 0.0 a LONG's
+    window `entry < p < 0.0` is empty by construction, so `liquidity_clear` has
+    been structurally dead on continuation longs, and filling the target makes
+    it live, **which moves the score and therefore the fire boundary**;
+    (b) `exit_engine._update_post_target_trail` — guarded on
+    `underlying_target > 0`, so continuation has always fallen back to the 85%
+    tightened trail instead of the FVG floor. **This changes exits.**
+  - N.2's own note applies: a factor column cannot be backfilled, so every
+    session it is missing is conditional data that never exists.
+
+- **GRD.3 — `tests/factor_sweep.py` v1.0: sweep what we RECORD but never
+  SCORE.** `[DESK]` The journal carries ~30 numbers per signal; the scorer reads
+  five. This bands the other twenty-five against realised P&L — `rrr`,
+  `contract.spread_pct_of_mid` (the per-trade version of SEL.1's 42x symbol
+  lever, on the contract actually bought), delta/iv/theta/volume/oi,
+  `entry_premium`, `vol.atr` and `bb_width` (the per-signal proxy for "is a
+  worthwhile move available today"), `macro.vix`, hour, and
+  **`confluence_count` — the direct test of the project's central premise**, on
+  805 trades instead of by argument.
+
+  Method is deliberately NOT scorer_backtest's: **a winner-median vs
+  loser-median test is blind to a sparse or binary column.** ORB's
+  `pools_in_path` reads "flat" (both medians 0.000, 78% of the population is
+  zero) while the grade built from it separates +$56 vs -$25. So: quintile
+  BANDS, **monotonicity as the verdict rather than spread**, a WINNERS-CAUGHT
+  column on every cut, and a refusal to grade any band under the sample floor.
+  Verified against a fixture with a planted truth, a planted null and a planted
+  constant — and the **deliberate-failure check passed**: on a pure-noise
+  rebuild the same factor that read MONOTONE FALLING reads NON-MONOTONE.
+  ⚠️ In-sample over ~25 factors: about one will look monotone by chance.
+  Output is a CANDIDATE for held-out re-derivation (ANT.2 pattern), not a weight.
+
+- **`tests/scorer_backtest.py` v1.1** — each scored record now carries `raw`,
+  the whole journal line, so factor_sweep imports the join instead of rewriting
+  it. **Two tools have independently re-implemented this join and both got it
+  wrong** (ANT.1 v1.0 grouped 128,503 rows as `None`; `grade_inversion_check`
+  v1.0 joined zero of 805 and is still an uncommitted loose file on control).
+  ONE JOIN, ONE OWNER.
 
 - **v4.34 — 2026-08-12 EOD — ANT.1: THE PREMISE, TESTED AT LAST — AND `r` DOES
   NOT PREDICT. But individual FACTORS do, and the aggregation destroys them.**

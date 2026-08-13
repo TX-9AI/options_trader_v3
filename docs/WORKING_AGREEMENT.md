@@ -241,6 +241,34 @@ leaves; a commit is the change, the backlog is what survives the thread.
   output that renders cleanly while meaning something other than it appears —
   a laundered green is worse than a red.
 
+## 19. COMMANDS GO IN A CODE BOX, ON ONE LINE, SEMICOLON-SEPARATED.
+Added 2026-08-13, operator's instruction. Two halves of one failure: a command
+the operator cannot copy cleanly is a command that runs wrong.
+
+- **PRESENTATION — every command the operator will run goes in a fenced code
+  box.** Not inline backticks, not prose-wrapped. A command sitting in a
+  paragraph picks up soft line-wraps and typographic quote substitution on
+  mobile, and the operator has to reconstruct it by eye before pasting. The code
+  box is the delivery mechanism, not decoration.
+- **FORM — one line, `;` separated.** §1 already forbids multi-line; this fixes
+  the separator too. No heredocs, no continuations, no blank-line-separated
+  steps the operator is expected to run in order — a sequence they have to
+  perform is a sequence that gets performed halfway.
+- **THE ONE THING `;` COSTS, AND HOW TO KEEP IT.** `;` does not short-circuit,
+  so a failed verification would sail straight on into `git commit && git push`
+  — the exact opposite of §15's requirement to fail loudly, stage nothing and
+  keep the archive. So the destructive half lives inside a single-line
+  conditional: `... ; if [ gate ]; then commit; push; rm archive; else echo
+  "GATE FAILED"; fi`. Semicolons separate the STEPS; the `if` protects the ones
+  that must not run on a red. Never let a bare `;` carry a chain whose later
+  steps depend on an earlier step succeeding.
+- **Corollary already learned the hard way (2026-08-13):** a tool that exits
+  non-zero on an empty-but-valid result will cancel a trailing `&&` clause —
+  that is how an `&& rm -f` failed to clean up three times running while the
+  command looked like it had worked. Under `;` that specific trap disappears,
+  which is part of why `;` is the default; the conditional above is what
+  replaces the protection `&&` was providing.
+
 ---
 
 ### Companion files

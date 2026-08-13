@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
-tests/scorer_backtest.py — v1.0 — 2026-08-12
+tests/scorer_backtest.py — v1.1 — 2026-08-13
+
+v1.1 — 2026-08-13 — Each scored record now carries `raw`: the whole journal
+        line. Nothing in this tool reads it. It exists so `factor_sweep.py`
+        can test the fields the scorer never looks at (rrr, contract spread,
+        atr, vix, confluence count) WITHOUT re-implementing the join. Two
+        tools have now independently re-written this join and both got it
+        wrong (ANT.1 v1.0 grouped 128,503 rows as None; grade_inversion_check
+        v1.0 joined zero of 805). ONE JOIN, ONE OWNER — import from here.
+v1.0 — 2026-08-12 — first cut.
 
 DOES THE SETUP SCORER EARN ITS KEEP — ON EVERY STRATEGY, DIMENSION BY DIMENSION?
 
@@ -109,6 +118,8 @@ def load_scored(date):
                     "strategy": r.get("strategy") or (r.get("signal") or {}).get("strategy"),
                     "total": sc.get("total"), "grade": sc.get("grade"),
                     "breakdown": sc.get("breakdown") or {},
+                    # v1.1 — the untouched journal line, for factor_sweep.
+                    "raw": r,
                 })
     return out
 
@@ -171,7 +182,8 @@ def main(argv):
                 unmatched += 1
                 continue
             joined.append({**t, "total": best["total"], "grade": best["grade"],
-                           "breakdown": best["breakdown"]})
+                           "breakdown": best["breakdown"],
+                           "raw": best.get("raw") or {}})
 
     print("=" * 78)
     print(f"  SETUP SCORER BACKTEST — {len(dates)} session(s)")

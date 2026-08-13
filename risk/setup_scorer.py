@@ -1,5 +1,31 @@
 """
 risk/setup_scorer.py — Scores and grades options trade signals A/B.
+v1.7 — 2026-08-13 — CONTINUATION GETS AN EXPLICIT PROFILE. It had none, so it
+        fell through to `"default"` — a silent default nobody chose for the
+        strategy carrying 77%% of fleet volume. In that profile
+        `regime_conviction` weighs 0.30 and `signal_quality` 0.25, and
+        continuation_strategy.py sets `signal.conviction = regime.conviction`.
+        THE SAME NUMBER, WEIGHTED TWICE = 55%% of the grade. Measured over 619
+        joined trades (scorer_backtest, 18 sessions): both dimensions report
+        identical medians AND identical spreads (0.913 / 0.636), because they
+        are one column printed twice. `vwap_alignment` and `liquidity_clear`
+        measured CONSTANT at 1.000 across all 619 — another 35%%. So ~90%% of
+        the grade was a duplicate or a constant, and the grade INVERTED:
+        A 399 trades -$8,244 (-$21/trade at 1.5x size) vs B 220 trades
+        +$1,893 (+$9). High conviction means the trend is already obvious,
+        which means LATE — v1.4 stripped exactly this from the ORB, calling it
+        "regime conviction in costume", and left it on continuation.
+        THE TOTAL IS ARITHMETICALLY UNCHANGED: 0.55*conv + 0.15*vwap +
+        0.20*liq + 0.10*macro is what the default profile already computed via
+        0.30+0.25 on one number. grade_b stays 0.55, so THE FIRE/NO-FIRE
+        POPULATION IS PROVABLY IDENTICAL — this deploy cannot change which
+        setups trade. The ONLY behavioural change is grade_a, set above the
+        reachable maximum (1.00) so no continuation setup earns the 1.5x size
+        upgrade on a grade measured to be anti-predictive. The bar comes back
+        DOWN onto whatever `tests/factor_sweep.py` proves separates; it is not
+        a permanent verdict, it is a refusal to pay 1.5x for a coin flip.
+        `signal_quality` is still journalled (breakdown is built before the
+        weighted sum) — it is telemetry now, not a grade input.
 v1.6 — 2026-07-31 — F: MIN_RRR FLOOR. Second genesis constant (`MIN_RRR = 1.3
         # UNWIRED`), read by nothing since the beginning. MEASURED premise: a
         setup with rrr = 1.00 scores 0.84 and grades **A** — a 1:1 risk-reward
@@ -141,6 +167,28 @@ STRATEGY_PROFILES = {
     "ORBStrategy": {
         "score_weights": {},   # unused — see _grade_orb
         "grade_a": 0.78,       # retained for any legacy reader; not applied
+        "grade_b": 0.55,
+    },
+    # CONTINUATION (v1.7). Was absent -> fell to "default", which weighted
+    # regime.conviction twice under two names (0.30 regime_conviction +
+    # 0.25 signal_quality, and signal.conviction IS regime.conviction).
+    # 0.55 is those two summed: the arithmetic is identical, the double count
+    # is gone, and grade_b 0.55 keeps the fire boundary byte-for-byte.
+    # grade_a is ABOVE THE MAXIMUM ACHIEVABLE TOTAL (0.55+0.15+0.20+0.10 =
+    # 1.00) BY DESIGN: no measured input separates continuation winners from
+    # losers, so nothing here earns 1.5x size. Lower it the moment factor_sweep
+    # names an input that does. vwap_alignment and liquidity_clear are retained
+    # at weight despite measuring constant across 619 trades — constant IN
+    # SAMPLE is not constant BY CONSTRUCTION, and dropping them would remove a
+    # veto that has never been observed to fire but can.
+    "ContinuationStrategy": {
+        "score_weights": {
+            "regime_conviction":    0.55,
+            "vwap_alignment":       0.15,
+            "liquidity_clear":      0.20,
+            "macro_context":        0.10,
+        },
+        "grade_a": 1.01,
         "grade_b": 0.55,
     },
     "SweepReversal": {
