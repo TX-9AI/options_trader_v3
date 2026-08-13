@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.38
+# docs/BACKLOG.md — v4.40
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,135 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.40 — 2026-08-13 — TC.6: THE AFTERNOON TREND-CREDIT ENGINE IS STILL
+  UNBUILT, AND IT NOW HAS A DIFFERENT SHORT-STRIKE RULE.** `[DESK→DEPLOY]`
+  Operator: *"don't forget to come back to the credit spread on trend
+  participation in the afternoons because that's when we don't wanna be long
+  premium. The engine for that trade's construction has not been built yet."*
+  **Standing item — do not let it fall off.** There is still no
+  `strategy/vertical_spread_strategy.py`; what exists is
+  `trade_readiness._trend_credit_spread()`, live and log-only since 2026-07-28.
+
+  **WHAT CHANGED TODAY: the anchor, not the trade.** TC.4b's matched control
+  refuted the impulse origin as a selector (−3.6% ±1.7% terminal, WORSE than an
+  arbitrary recent extreme, at every offset). So the engine must not be built
+  around `floor_px`. The trade — sell defined risk beyond a level, in the
+  afternoon, held to the bell — is unaffected and the absolute curve supports
+  it (terminal failure 8.8-12.9% at 1.00% out). **What it needs is a short-strike
+  rule from a level that IS selecting.** Three candidates, all measurable on the
+  same ladder by `credit_edge`: distance beyond SPOT (baseline, 3 weeks of
+  chains, runnable now), the PROJECTED PITCHFORK TINE (PF.4, coverage from
+  08-12), and VWAP (item AI, banked since the v1.5 bake, unavailable on SPX).
+  **Sequencing: the spot arm produces the baseline EV, and no engine gets built
+  until an anchor beats it.** Build belongs in the Aug 24 paper deploy per TC.4's
+  own note — post-freeze, four weeks before full size.
+
+- **`tests/credit_edge.py` v1.1 — `--anchor pitchfork`, and why the operator's
+  leg-ordering rule does not have to be encoded.** His point: a fork has slope
+  and therefore TIME. The short strike is FIXED once sold; the tine keeps
+  moving. On an UP-sloping fork a PUT sold at today's lower tine gets SAFER
+  every bar (the channel rises away from it) while a CALL sold at today's upper
+  tine gets more DANGEROUS (the channel rises INTO it). So the honest call
+  strike is the tine **projected to the bell**, and the buffer it needs is
+  `slope × bars_remaining` — which SHRINKS as the session runs.
+  **⇒ ONE RULE REPRODUCES HIS ORDERING:** sell each side when its strike clears
+  the tine projected to the close. Up-slope → the put clears immediately and the
+  call only clears late; down-slope → mirrored. No slope-sign branch, and it
+  handles what a branch gets wrong: a near-flat fork (both sides sellable early)
+  and a steep one late in the day (neither is).
+  `rails_at(idx)` already extrapolates — `rail_at_time()` says so outright
+  (*"Bars beyond the frame extrapolate at one index per bar"*) — so nothing new
+  is needed geometrically. SLOPE IS DERIVED, NOT ASSUMED: fitted from two
+  observations of the SAME fork, keyed on `(tf, born_idx)`, because a
+  re-anchored fork is a different object and pooling them fits a slope across a
+  discontinuity. A fork seen ONCE is SKIPPED, never projected flat, and the
+  skipped count is printed — unmeasured coverage, not an absent fork.
+  Adds a **SLOPE × SIDE** table stating the prediction before the data arrives:
+  up-slope should price the PUT side better and the CALL side worse. If that
+  asymmetry is absent, the slope is not doing the work the ordering rule assumes.
+  ⚠️ **COVERAGE IS THE BINDING CONSTRAINT, NOT THE MATHS** — PF.2's observer
+  began at the 08-12 wake, so expect this arm to REFUSE for a while. Also worth
+  holding: the time element is an HOURLY-fork phenomenon (a daily fork barely
+  moves across one session), and the hourly fork is ~3h late by §4.4 with a
+  measured p50 lifetime of 5 bars.
+
+- **v4.39 — 2026-08-13 — TC.4's PREMISE IS REFUTED; THE AFTERNOON-CREDIT DESIGN
+  SURVIVES IT; TC.5 PRICES THE OTHER HALF.**
+
+  **TC.4b CLOSED, NEGATIVE.** `tcs_floor_durability` v1.3, `--since 2026-07-28
+  --control matched`, ARMED: 6,445 distinct impulses (deduped from 41,216 scored
+  rows). Intraday floor held 14.7%, terminal OK 56.1%. **THE MATCHED CONTROL IS
+  THE VERDICT: impulse minus control, TERMINAL −3.6% ±1.7%.** An ARBITRARY recent
+  extreme on the same symbol-day survived BETTER (59.7%), and beat the impulse at
+  EVERY offset on the strike curve with the relative gap widening outward (3× at
+  3.00%). The tool pre-registered exactly this reading. **The impulse origin is
+  not selecting anything — it is mildly anti-selecting.**
+  **`TR_TCS_IMPULSE_SD_LO/HI` → DEAD.** establish 2.0-2.5 n=2186 intraday 14% /
+  terminal 57%; screaming ≥2.5 n=4248 intraday 15% / terminal 56%. Flat, against
+  an MDE of 2%. Arming already requires magnitude so there is no low-SD variance
+  to fit a ramp against. Time-to-failure p50 **6 min** — a wrong thesis, not a
+  0DTE out of clock.
+
+  **BUT THE ABSOLUTE CURVE SAYS THE OPERATOR IS RIGHT ABOUT AFTERNOON CREDIT.**
+  Terminal failure at 1.00% beyond the floor is 8.8-12.9%; at 1.50%, 4.2-7.4%. A
+  defined-risk short ~1% beyond ANY recent extreme survives to the bell ~9 times
+  in 10. **The design is supported; needing the IMPULSE STATE is not.** TC.4 was
+  built around the one input measured to carry nothing.
+
+- **TC.5 — `tests/credit_edge.py` v1.0: what does the short vertical actually
+  PAY?** `[DESK]` The durability tool said it itself — *"further OTM collects
+  less credit, and this table prices no credit at all. It bounds RISK."* Survival
+  alone decides nothing: 98.5% survival at 3% out may collect three cents.
+  Prices REAL ARCHIVED QUOTES from `chain_snapshots` — **credit = short BID −
+  long ASK** (cross both) — against the session's last OHLC close, on the SAME
+  offset ladder the durability curve prints so the two read side by side.
+  **The load-bearing detail: E[loss] is the EXACT expiry payoff, capped at
+  width, not a full-width loss on every breach.** A vertical held to expiry loses
+  only the distance price finished BEYOND the short strike; treating every breach
+  as max loss is the easiest way to make a viable credit trade look unviable.
+  Reports EV/spread and EV/width per offset AND **by hour**, so the operator's
+  theta argument — less clock left, less chance to reach the strike — is
+  measured rather than assumed. Anchors on SPOT deliberately: the impulse anchor
+  was just measured selecting nothing.
+  Verified on fixtures; **partial-loss check passed exactly** (0.75% → 4.20,
+  1.00% → 3.00, 1.50% → 0.50, capped at width beyond that, puts all safe).
+  ⚠️ Assumes HELD TO EXPIRY — no management, stop, roll, early assignment or
+  commission. It prices the trade as proposed, and cannot be compared to a
+  managed book.
+
+- **VWAP — THE STATUS THE OPERATOR ASKED FOR, and the two uses have OPPOSITE
+  verdicts.** As an ENTRY FILTER (item E) it is **dead on evidence**: the ledger
+  over 08-05/06/07 found the hard gate would block 5 trades losing $858 while
+  KEEPING 228 aligned trades losing $5,049.50 — *"an entry filter cannot repair a
+  trigger with negative drift."* As the **condor's MIDPOINT ANCHOR (item AI) it
+  is live and has never been revisited.** VW.2 CLOSED 2026-08-08 and my
+  hypothesis was wrong: the payload was never empty — 08-06 shows BELOW 5,058 /
+  ABOVE 3,912, 554 NONE — so *"VWAP data has been banking correctly since the
+  v1.5 bake, and item AI's condor midpoint has its input after all."* ⚠️ THE
+  BLOCKER THAT SENDS THIS TO THE PITCHFORK: SPX cash prints volume 0 on every
+  DXFeed bar, so `vwap=0.0 / price_vs_vwap=NONE` — a VWAP anchor is silently
+  unavailable on one of the two ALWAYS_ON boxes.
+
+- **PF.4 — YES, THE PITCHFORK WORK SUPPORTS CONDOR SHORT-STRIKE PLACEMENT, and
+  the data is already journaling.** `pitchfork_observer._state()` records
+  **`upper` / `median` / `lower` — the TINE PRICES themselves** per timeframe,
+  not merely `pos_pct`. That is exactly what strike placement needs:
+  - `median` (the sloped midline) is a drop-in candidate for the condor TRIGGER
+    anchor, currently `bb_middle` — and iron_condor's own header names the open
+    question verbatim: *"Makes the anchor question (VWAP? pitchfork median?)
+    answerable with a number instead of an argument."*
+  - `upper` / `lower` are candidates for the STRIKE FLOOR, currently the
+    `v-dualfloor` prior of `0.80 × EM` OR the BB band, whichever is farther —
+    a prior nobody fitted.
+  - A pitchfork needs only PRICE, so it works on SPX where VWAP cannot.
+  **`credit_edge`'s `--anchor` is the test bench:** same tape, same ladder,
+  terminal EV for tine-anchored vs BB vs spot. Whichever anchor prices better is
+  the answer, and it replaces an argument with a number.
+  ⚠️ **COVERAGE IS THE CONSTRAINT:** PF.2's observer began journaling at the
+  2026-08-12 wake, so this is ~2 sessions (13 daily forks / 7 symbols, 41 hourly
+  / 13 symbols). Underpowered today, accumulating daily. The spot-anchored run
+  is available now and is the baseline the tine run must beat.
 
 - **v4.38 — 2026-08-13 — ⚠️ ROLL.1: NOTHING IDENTIFIED THIS SESSION IS LIVE ON
   THE FLEET. Operator: *"at some point we're gonna have to start implementing
