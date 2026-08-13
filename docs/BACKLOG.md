@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.62
+# docs/BACKLOG.md — v4.63
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -13,6 +13,31 @@ up or a deploy window. **DESK is the only bucket effort can move**; the rest
 unblock on the calendar. Earned value: `python3 tests/evm_status.py`.
 
 ## PART 0 — THE CLOCK
+
+> **🔴 SUSPENDED 2026-08-13, RESET SAME DAY.** The Sep 8 go-live and the Aug 17
+> deploy Monday below were PAUSED INDEFINITELY on 2026-08-13 pending P&L
+> recovery. The operator then set a NEW anchor the same evening, after the
+> largest single-day behavioural change in the project's history baked to 29/29
+> boxes. **The row that is live is FRI 2026-08-28.** Everything dated Aug 17 or
+> Sep 8 below is HISTORICAL — do not act on it.
+>
+> **THE NEW SEQUENCE (operator, 2026-08-13):**
+> 1. **Fri Aug 28** — evaluate the paper-P&L impact of the 08-13 changes, once
+>    the bugs are worked out. **The two weeks to that date are a MEASUREMENT
+>    WINDOW, not a tuning window.**
+> 2. **Resume freezing the L1 dials.** L2 is mostly complete — a few
+>    verifications remain; chatter is nearly eliminated.
+> 3. **Then L3.**
+> 4. **Then final trade adjustments + stop-quality evaluation.**
+> 5. **Then live cash, REDUCED SIZE for the first week.**
+>
+> ⚠️ **RESIST RE-TUNING ON THE FIRST BAD SESSION.** Most of the 08-13 thresholds
+> are STATED PRIORS, not fits — the 0.70 POP floor, the 0.25 quote width, the
+> 11:00 cutoff. Re-fitting them on the data that motivated them turns an
+> out-of-sample validation into an in-sample one. **The full account of what
+> changed, why, the expected benefit and every tuning knob is in
+> `docs/FLEET_STATE_2026-08-13.md`.**
+
 
 | Anchor | Date | What |
 |---|---|---|
@@ -5049,6 +5074,45 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.63 — 2026-08-13 — FLEET STATE RECORDED + THE CLOCK RESET + TC.6 KILL
+  SWITCH.** `docs/FLEET_STATE_2026-08-13.md` v1.0 · `config` v4.15 ·
+  `trend_credit_spread` v1.0.
+
+  **BAKED: `7efd320` across 29/29 boxes**, 928 files synced, pycache cleared,
+  optionsbot active on all 29, then shut down clean. Hotfix `e639099` on top.
+  **This is the first time in the project's history that eleven behavioural
+  changes have landed in one bake** — and the alternative on the table that
+  morning was regressing the fleet to options_trader v2.
+
+  **`docs/FLEET_STATE_2026-08-13.md` is the account.** Per change: what, why,
+  the expected benefit with its measured basis, the env knob that tunes it, the
+  verification signature, and the honest trade-off. Also records what shipped
+  INERT (LIQ.4 unwired, FRC.2's ladder at `OT_ENTRY_LADDER=0`) and **why FRC.2
+  must stay off until `fill_model` gates paper fills** — an aggressive rung with
+  assume-fill logic manufactures edge and would look like the best change ever
+  made.
+
+  **PART 0 RESET.** The Aug 17 / Sep 8 rows are HISTORICAL. **The live anchor is
+  Fri 2026-08-28.** The two weeks to it are a MEASUREMENT window, not a tuning
+  window — most of the 08-13 thresholds are stated priors, and re-fitting them on
+  the data that motivated them converts an out-of-sample validation into an
+  in-sample one.
+
+  **TC.6 KILL SWITCH — `OT_TCS_ACTIVE` (config v4.15).** TC.6 was the ONLY new
+  FIRING strategy shipped without an env-level off switch; stopping it would have
+  needed a code change and a re-bake on a strategy that has never executed a live
+  order. **Default is ON and the operator is deliberately leaving it on:** *"bad
+  trades are still GOOD data."* The switch is for DEFECTS — a traceback or a fire
+  loop — not for losing trades. It fires only after a runaway on a trending
+  afternoon, so observations will be scarce and killing it on the first loser
+  leaves nothing to read.
+
+  **THE LARGEST UNBUILT LEVER, restated so it is not lost:** FRC.1's spread
+  quintiles. **Q5 carries $60,185 — 60%% of ALL friction — for −$169 of gross;
+  Q4+Q5 are 79%% of friction against −$6,337.** Cutting them removes four-fifths
+  of transaction cost AND improves gross, from a pre-entry filter needing no
+  forecast.
 
 - **🔴 v4.62 — 2026-08-13 — HOTFIX: FRC.3's TICK-SIZE FETCH HAD NO CACHE GUARD.**
   `options_chain` + `tick_size` (`needs_venue_rule`). **Found while the operator

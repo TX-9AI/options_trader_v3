@@ -69,6 +69,7 @@ from config import (
     CONDOR_MIN_POP, CONDOR_POP_BAR_MIN, CONDOR_MAX_QUOTE_WIDTH,
     CONDOR_EM_FLOOR_FRAC, GLOBAL_NO_ENTRY_ET, INSTRUMENT,
     CONDOR_WING_WIDTH_SPX, CONDOR_WING_WIDTH_QQQ,
+    TREND_CREDIT_ACTIVE,
 )
 from strategy.iron_condor_strategy import IronCondorStrategy
 
@@ -109,6 +110,8 @@ class TrendCreditSpread:
              width / POP — delegated to the condor's selector.
         """
         try:
+            if not TREND_CREDIT_ACTIVE:
+                return None
             now = now_et or datetime.now(ET)
             if (now.hour, now.minute) >= GLOBAL_NO_ENTRY_ET:
                 return None

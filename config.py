@@ -1,5 +1,7 @@
 """
-config.py — options_trader v4.14
+config.py — options_trader v4.15
+v4.15 — 2026-08-13 — TREND_CREDIT_ACTIVE. TC.6 was the only new firing
+        strategy with no env kill switch.
 v4.14 — 2026-08-13 — ENTRY_LIMIT_LADDER [0.50, 0.25, 0.00] @ 15s.
         DEFAULTS OFF (ENTRY_LADDER_ACTIVE=0) — the pricing primitive and the
         fill model land together, but nothing changes behaviour until the fill
@@ -310,6 +312,13 @@ INSTRUMENT          = os.environ.get("OT_INSTRUMENT", "QQQ")
 # ⚠️ PRICING ONLY. Posting an aggressive limit and ASSUMING it fills manufactures
 # edge — the better the rung, the larger the fake gain. `execution/fill_model.py`
 # is the other half and must gate any paper fill booked from these prices.
+# ── TC.6 KILL SWITCH (2026-08-13) ────────────────────────────────────────────
+# TC.6 is the ONLY brand-new FIRING strategy shipped today and was the only one
+# with no env-level off switch — stopping it would have needed a code change and
+# a re-bake, on a strategy that has never executed a live order. Every other
+# change today has one. This closes that gap.
+TREND_CREDIT_ACTIVE         = os.environ.get("OT_TCS_ACTIVE", "1") == "1"
+
 ENTRY_LIMIT_LADDER          = [0.50, 0.25, 0.00]
 ENTRY_LADDER_STEP_SEC       = float(os.environ.get("OT_ENTRY_LADDER_STEP_SEC", "15"))
 ENTRY_LADDER_ACTIVE         = os.environ.get("OT_ENTRY_LADDER", "0") == "1"
