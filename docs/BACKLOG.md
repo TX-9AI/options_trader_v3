@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.40
+# docs/BACKLOG.md — v4.41
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,49 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.41 — 2026-08-13 — TC.5's POPULATION WAS WRONG. `credit_edge` v1.2.**
+  Operator: *"The vertical is sold when the price is sitting in close proximity
+  to the short strike level so that it's rich in premium & can withstand a
+  little pressure... essentially a 'touch' of the channel outer tines should
+  trigger a short strike selection just out of reach and with good liquidity."*
+  **v1.1 priced a spread at EVERY snapshot regardless of where price sat**, which
+  pools price MID-CHANNEL (strike far, credit thin, safety high) with price AT
+  THE TINE (strike near, credit rich, risk real) and reports the blend. That is
+  why credit averaged only 14-19% of width. **The touch IS the trade.** Fixture
+  proof of exactly that: unconditioned credit 0.39, touch-conditioned **0.55** on
+  the same tape.
+  (1) `--approach` — call side fires only at high `pos_pct`, put side only at
+      low. **Not a new emission**: `pitchfork_observer` already journals
+      `pos_pct` (0% lower tine, 100% upper), and this is the same shape as the
+      condor's existing `CONDOR_TRIGGER_APPROACH`.
+  (2) **OTM GUARD, PER SIDE.** v1.1 never checked the PROJECTED tine was
+      out-of-the-money against spot, so a stale or near-flat fork projected a
+      tine at or inside spot and the tool priced short calls BELOW THE MONEY —
+      that is the `flat/call` cell in the 08-12 run (n=184, 22% safe, E[loss]
+      3.89, EV −3.04) dragging the whole pitchfork arm negative. Per SIDE, not
+      per snapshot: a steeply rising channel legitimately projects its LOWER
+      tine above spot by the bell, which kills the put side and leaves the call
+      side perfectly sellable. A per-snapshot guard would throw away the good
+      side with the bad.
+  (3) LIQUIDITY on **bid/ask width**, not volume/OI — factor_sweep found
+      `contract.volume` and `contract.oi` CONSTANT on the joined sample (zeros).
+      A filter on a constant is a filter that does nothing.
+  (4) **EFFECTIVE n IS SYMBOL-DAYS.** v1.1 printed n=139,600 spreads; every
+      spread from one symbol-day shares ONE terminal close and snapshots repeat
+      every 5 min on the same underlying, so the real count was **~336
+      independent outcomes**. Reporting spreads as n overstated power by two
+      orders of magnitude, and the header now says so before any table.
+
+- **⚠️ TWO CAVEATS ON THE v1.1 SPOT RESULTS, both mine, before anyone cites them.**
+  The 12-session window since 07-28 shows put `E[loss]` running ~2× call
+  `E[loss]` at every offset — **that is almost certainly tape direction, not an
+  edge**, since the window contains the 08-05 contraction. A call-biased rule
+  fitted here inverts in a bull stretch. **Do not build side asymmetry off
+  twelve sessions.** What DOES survive: EV/spread rising 09:00 **+0.24** →
+  12:00 **+0.52**, monotone through midday, because that is a within-run
+  comparison on the identical ladder and the conditioning problem hits both ends
+  equally. **The operator's theta argument is measured.**
 
 - **v4.40 — 2026-08-13 — TC.6: THE AFTERNOON TREND-CREDIT ENGINE IS STILL
   UNBUILT, AND IT NOW HAS A DIFFERENT SHORT-STRIKE RULE.** `[DESK→DEPLOY]`
