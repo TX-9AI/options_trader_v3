@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.31
+# docs/BACKLOG.md — v4.32
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5050,6 +5050,114 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.32 — 2026-08-12 EOD — THE ENTRY-SIDE SESSION. Six measurements, and the
+  first one stopped a wrong revert.** Operator: *"After nearly 2 months at this,
+  I'm struggling to understand why these bots suck so bad… I'm challenging you
+  to salvage this project."* What follows is the answer as far as the data goes.
+
+  **1. ⚠️⚠️ THE 08-05 "REGRESSION" IS A VOLATILITY CONTRACTION, NOT A CODE
+  DEFECT — AND I WAS ONE STEP FROM REVERTING ORB.1 AND N.8 FOR IT.** ORB was
+  **+$11,426 over 07-24..08-04** and **−$8,089 over 08-05..08-12** on identical
+  code, with long-hold win rate collapsing 72% → 38% on an IDENTICAL count of 29
+  trades. I hunted a regression through exit_engine (last behavioural change
+  07-31), ORB.1, N.8 and the BF.1-4 feed changes. **The tape settled it: median
+  available underlying movement fell 15-25% in EVERY HOUR after 08-05** (09:00
+  0.67→0.57 · 10:00 0.44→0.35 · 11:00 0.32→0.24 · 13:00 0.22→0.18 · 15:00
+  0.27→0.21). **Hours are a tape property; no engine change can touch them.**
+  On 0DTE a 20% cut in available movement is far more than a 20% cut in P&L —
+  theta is unchanged while the numerator shrinks.
+  **⇒ STANDING RULE: any P&L comparison spanning 08-05 must be NORMALISED BY
+  AVAILABLE MOVEMENT, or volatility gets attributed to code.**
+  ⚠️ RANGING fell 0.33→0.19, roughly TWICE the tape's decline — so about half of
+  that is dilution from RGM.4 + RGM.6 absorbing formerly-UNKNOWN quiet ticks
+  into the labelled population, exactly as the operator suspected ("we smoothed
+  out the labels to get rid of the unknown segments").
+
+  **2. THE CONFLUENCE SCORER IS NON-PREDICTIVE ACROSS THE ARSENAL**
+  (`scorer_backtest` v1.0 — 18 sessions, 805 joined trades, 38 unmatched; reads
+  the `scored` events INCLUDING below-B REJECTS, a control arm never used
+  before). Continuation: **every dimension sep = 0.000.** `vwap_alignment` and
+  `liquidity_clear` are CONSTANTS; `signal_quality`, `regime_conviction`,
+  `macro_context` vary and still have IDENTICAL winner/loser medians.
+  **AND THE GRADE IS INVERTED WHERE IT MATTERS:** continuation A = 399 trades
+  **−$8,244**, B = 220 trades **+$1,893**. Sweep A = 3 trades 67%, B = 28 trades
+  **82%**. ORB's `rrr` separates BACKWARDS (sep −0.687).
+  **THE CAUSE, one mechanism explaining all of it: every quality input is a
+  CONFLUENCE COUNT, and things agree AFTER a move is underway.** On a decaying
+  instrument a high score means you are LATE. ⚠️ **ORB IS THE CONTROL THAT
+  PROVES IT** — setup_scorer v1.4 deliberately stripped those inputs from ORB
+  ("regime conviction in costume") and ORB is the profitable strategy
+  (**+$5,775**). The bar also refuses almost nothing: refused median total
+  **0.456** against a taken median of **0.885**.
+
+  **3. THE TRAIL HAS A DEAD ZONE FROM +20% TO +25%.** `_update_fvg_trail` seeds
+  `current_trail` at ENTRY premium and only engages once
+  `current_premium * FVG_TRAIL_LOCK_PCT (0.80)` BEATS it — i.e. peak ≥ **+25%**
+  — while `FVG_TRAIL_ARM_PCT` arms at **+20%**. In between it runs every tick,
+  computes a floor, and SILENTLY DISCARDS IT. QQQ 2026-08-12 peaked **+22.5%**,
+  had no trail at any point, and closed **−42.2% after 70.5 min**.
+  ⚠️ THE SEED IS NOT THE BUG — refusing to lock a loss is deliberate. The
+  MISMATCH between arm and engage is.
+  ⚠️ AND MY OWN COUNTERFACTUAL WAS BIASED: `trail_engage_sweep` computes the
+  trail from `max_premium_seen`, which is the peak reached UNDER THE LOOSE
+  TRAIL. A tighter trail would have fired earlier at a lower peak, so its
+  "zero HURT at every lock" column gives the tight trail credit for a peak it
+  would have prevented. **Do not size a lock change on those numbers.**
+
+  **4. ORB SPLITS ON PEAK PREMIUM, and the split is total.** 15 sessions:
+  never-green 28 trades **0% win**; 0-10% peak 45 trades **0%**; +10-20% peak 11
+  trades **0%**. **84 trades peaked below +20% and NOT ONE WON.** Above: +20-25%
+  13/85%, +25-50% 32/94%, **>+50% 28 trades / 100% / +$23,773.**
+  ⇒ the book is fat-tailed and **WIN RATE IS THE WRONG TARGET** — ORB is
+  +$5,775 at a 43% win rate. Optimising it cuts the tail that pays.
+
+  **5. PRE.1 PRECLUSION CENSUS — 187,589 ticks, NO HARD PRECLUSION EXISTS.**
+  Every condition has a counterexample; the lowest MAX is COMPRESSION at 2.35%.
+  But the tendencies are monotone across all horizons: at 0.27% / 20 bars,
+  **09:00 86.8% · SWEEP_REVERSAL 80.8% · STALE 81.9% · COMPRESSION 40.1% ·
+  13:00 38.6% · 14:00 38.6%.**
+  ⚠️ SWEEP_REVERSAL is the most movement-rich label by **19 points** — but it is
+  **absent post-08-08** (RGM.3 removed it cleanly), so that figure describes the
+  old engine. The STATE is worth exposing as a FLAG, not restored to the argmax:
+  at **0.55% of ticks** it loses an argmax against five labels structurally,
+  which is why RGM.3 removed it and SWP.1 rewired sweep onto the L1 score.
+  ⚠️ L1 BREADTH IS FLAT — 0,1,2,3,4 regimes scoring >0 all ~33-37%. **More
+  agreement predicts nothing**, which is finding #2 appearing in the tape itself.
+
+  **6. SPD.1 + SEL.1 — DELTA BARELY MATTERS. SYMBOL IS A 42x LEVER.**
+  710,897 contract rows from the chain archive. Breakeven (the underlying %%
+  move that pays the round-trip spread) by delta: 0.05-0.15 **0.186%** · the
+  fleet's 0.15-0.25 **0.136%** · optimum 0.25-0.35 **0.127%** · 0.60-0.85
+  **0.230%**. **Moving to the optimal bucket buys 7%** — spread and leverage
+  very nearly cancel across the chain, so "buy closer to the money" is worth
+  almost nothing. **DELTA SELECTION IS OFF THE PUNCH LIST.**
+  By SYMBOL at the traded bucket, ratio = median available move / breakeven:
+  **SPX 18.0 · QQQ 16.1 · NVDA 13.9 · TSLA 11.6 · GOOGL 6.4 · AVGO 1.8 ·
+  SMH 1.0 · JPM 0.9 · CVX 0.9 · LLY 0.4 · GS 0.4.**
+  **LLY and GS cannot pay their own spread on a typical move in ANY hour** —
+  breakeven 0.714%/0.704% against typical moves of 0.271%/0.261%. Corroborated:
+  LLY −$18, GS −$303.
+  **AND A THIRD OF THE FLEET DIES AFTER 11:00** — AVGO 4.1 at 09:00 → 1.1 at
+  13:00; SMH/JPM/CVX/XOM all cross below 1.0 between 11:00 and 13:00. **That is
+  a WAKE and ENTRY-WINDOW decision, not a setup-quality one.**
+  ⚠️ CONSERVATIVE BY CONSTRUCTION: breakeven is the full round-trip cross while
+  `limit_ladder` posts AT the mark, so the residual is NO-FILL RISK not price.
+  Halve it and every ratio doubles — treat <1 as a flag to measure fill rate on.
+  ⚠️ 3 sessions post-08-08 only. **Run `--since 2026-07-23` before condemning a
+  symbol**, and confirm LLY/GS breakeven is the SYMBOL and not the delta bucket
+  landing on unusually cheap contracts for those names.
+
+  **TOOLS SHIPPED (all read-only, all reading data already on disk):**
+  `orb_stall_study` v1.2 · `velocity_feasibility` v1.0 (**first ever read of the
+  chain archive, 20 days after it started writing**) · `trail_engage_sweep` v1.0
+  · `scorer_backtest` v1.0 · `preclusion_census` v1.0 · `spread_by_delta` v1.0 ·
+  `symbol_edge` v1.0 · `pitchfork_digest` v1.0.
+  **SHIPPED TO THE FLEET:** VEL.1 velocity stall (exit_engine v4.16, step 2c,
+  **observe-only**, Fri 08-14 evaluation date + delete criterion).
+
+  **⚠️ THE MISALLOCATION, recorded because it is the lesson:** five exits shipped
+  in two days (CNT.5, SWP.4/5, LIQ.1/3, VEL.1) while every report said the
+  problem is ENTRIES. The entry-side work above is what should have come first.
 - **v4.31 — 2026-08-12 — OBSERVER DEBT: FIRM DATES AND DELETE CRITERIA.**
   Operator: *"no more observers unless we're actually going to use the data."*
   Three observe-only mechanisms had shipped in two days with no evaluation date
