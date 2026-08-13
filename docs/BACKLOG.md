@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.48
+# docs/BACKLOG.md — v4.49
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,64 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.49 — 2026-08-13 — ✅ THE ORB ANCHOR IS SUPPORTED, AND `--anchor floor`
+  FOR TRENDING_BEAR.**
+
+  **BFL.1 — THE OPERATOR'S STRUCTURAL STRIKE RULE WORKS, AND THE CONTROL PROVES
+  IT IS RUNAWAY-SPECIFIC.** `--anchor orb`, conviction [1.0,1.01), 18 sessions.
+  RUNAWAY HANDOFF (150 spreads / 18 symbol-days; long on the subset −$746):
+  entry-to-boundary p10 +0.02% · p25 +0.24% · **p50 +0.91%** · p75 +1.85% ·
+  p90 +2.65%, only 10% at/through. EV/spread **0.00% n=30 +0.52** (47% touched,
+  **90% terminal OK, 79% RECOVERED**) · 0.25% +0.32 · 0.50% +0.24 · 0.75% +0.62
+  · 1.00% +0.57 · 1.50% +0.67 · 2.00% +0.39 · 3.00% +0.46 — **every cell
+  positive**, and the 0.00% cell (the strike AT the boundary, his literal
+  proposal) is the only one clearing n=30 and the strongest result measured so
+  far.
+  STANDALONE CONTROL: entry-to-boundary **p50 −0.21%, 64% AT OR THROUGH the
+  boundary**; EV mostly NEGATIVE (−0.21 / −0.51 / −0.09 / −0.17). **The inverse
+  of the entry-anchored run, where the control beat the treatment everywhere.**
+  MECHANISM: the ORB boundary is only a floor WHEN THERE WAS A RUNAWAY — price
+  broke the range and never retested, so the boundary sits genuinely below the
+  fill. Without a runaway it is at or above the fill and the structural strike
+  lands inside the money. **The rule is runaway-specific by construction.**
+  It also escapes TC.7's finding (conditioning a spread on the CONTINUATION
+  signal made it worse than unconditional) because it conditions on the RUNAWAY
+  and anchors on the RANGE — different trigger, different strike rule.
+  ⚠️ Only the 0.00% cell clears n=30; the rest are UNDERPOWERED (n=10-29). The
+  modelling asymmetry still favours the spread, but the arm is positive at every
+  offset so the tilt is not carrying the result.
+  **DISPOSITION: the first thing measured today that supports BUILDING rather
+  than cutting.**
+
+  **BFL.2 — `--anchor floor` + `--regime`, for the TRENDING_BEAR thesis.**
+  Operator: *"There is no way I'm going to have the bots sit out during trending
+  bear"* and *"massive downward moves almost always end with them hitting a hard
+  floor. There's some spot of support that they hammer into and they cannot go
+  past it."* TRENDING_BEAR is the worst regime in the book — **118 trades, 36%
+  win, −$7,373.50**. The structure is his ORB rule mirrored: **sell a put spread
+  BENEATH the floor rather than buy puts into the move**, which also explains
+  the losses mechanically — a long put chasing a down move dies when the move
+  stalls at support, exactly what a debit cannot survive and a credit is
+  indifferent to. Both his cases reduce to ONE structure: a bull move's floor is
+  the level it broke from, a bear move's floor is the support it hammers into;
+  sell beneath it either way.
+
+  **⚠️ COLLECTION GAP FOUND WHILE BUILDING IT — THE POOL LIST IS NOT ON DISK.**
+  `LiquidityPool` carries price / kind / touch_count / name / is_named / swept
+  and lives ONLY IN MEMORY; there is no `liq_ctx` in the journal and nothing
+  writes the pools. **The input to every named-level decision is not archived** —
+  same class as the chain archive before 2026-07-23. So the floor is
+  reconstructed from the tape, and ONLY the deterministic parts: **PDL** (prior
+  session low) and **SESS_LOW** (running low up to the entry minute — up to,
+  never past, since a level formed after the fill is information the trade did
+  not have). **EQUAL-LOWS ARE DELIBERATELY EXCLUDED**: reproducing the mapper's
+  swing definition here would create a SECOND LINEAGE of the same concept, which
+  WORKING_AGREEMENT 7 and the pitchfork white paper both forbid, and a floor
+  built on a slightly different pivot rule is not the floor the bot would have
+  used. **Two exact levels is the honest scope and the result is a LOWER BOUND
+  on what a full pool set would find.** Fixture-verified: planted PDL 492.0 and
+  SESS_LOW 494.0 against a 500 entry selects SESS_LOW at p50 **+1.20%**.
 
 - **v4.48 — 2026-08-13 — TC.7 ANSWERED (NEGATIVE), AND `--anchor orb` FOR THE
   OPERATOR'S STRUCTURAL STRIKE RULE.**

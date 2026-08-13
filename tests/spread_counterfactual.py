@@ -1,6 +1,32 @@
 #!/usr/bin/env python3
 """
-tests/spread_counterfactual.py — v1.3 — 2026-08-13   (TC.7)
+tests/spread_counterfactual.py — v1.4 — 2026-08-13   (TC.7)
+
+v1.4 — 2026-08-13 — `--anchor floor`, for the operator's TRENDING_BEAR thesis:
+        *"massive downward moves almost always end with them hitting a hard
+        floor. There's some spot of support that they hammer into and they
+        cannot go past it."* TRENDING_BEAR is the worst regime in the book —
+        118 trades, 36%% win, **-$7,373.50** — and he will not sit it out.
+        THE STRUCTURE IS HIS ORB RULE MIRRORED: sell a PUT SPREAD BENEATH the
+        floor rather than buy puts into the move. It also explains the losses
+        mechanically — a long put chasing a down move dies when the move stalls
+        at support, which is exactly what a debit cannot survive and a credit is
+        indifferent to.
+        ⚠️ **THE POOL LIST IS NOT ON DISK.** `LiquidityPool` (price/kind/
+        touch_count/name/is_named/swept) lives only in memory; there is no
+        `liq_ctx` in the journal and nothing writes the pools. So the floor is
+        RECONSTRUCTED FROM THE TAPE, and only the parts that are DETERMINISTIC:
+          · PDL — the prior trading session's low
+          · SESSION LOW so far, up to the entry minute
+        **EQUAL-LOWS ARE DELIBERATELY EXCLUDED.** Reproducing the mapper's swing
+        definition here would create a SECOND LINEAGE of the same concept — the
+        thing WORKING_AGREEMENT 7 and the pitchfork white paper both forbid —
+        and a floor built on a slightly different pivot rule is not the floor
+        the bot would have used. Two levels, both exact, is the honest scope;
+        the result is a LOWER BOUND on what a full pool set would find.
+        ⇒ FILE THIS AS A COLLECTION GAP: the pools are the input to every
+        named-level decision and they are not archived. Same class as the chain
+        archive before 2026-07-23.
 
 v1.3 — 2026-08-13 — `--anchor orb`. THE OPERATOR'S STRUCTURAL STRIKE RULE:
         *"set the put spread at the top of the orb range for a runaway long and
@@ -149,6 +175,38 @@ ORB_FIRST_MIN, ORB_LAST_MIN = 9 * 60 + 30, 9 * 60 + 34
 ORB_OFFSETS = (0.0,) + OFFSETS
 
 
+def prior_date(date, root):
+    """The trading date immediately before `date` in the OHLC archive."""
+    if not root or not os.path.isdir(root):
+        return None
+    ds = sorted(d for d in os.listdir(root) if len(d) == 10 and d < date)
+    return ds[-1] if ds else None
+
+
+def named_floor(date, sym, root, minute, entry):
+    """Nearest DETERMINISTIC named support strictly below `entry`.
+
+    Returns (price, name) or None. Only two levels, both exact and both the
+    ones a human would actually name:
+      · PDL      — prior session low
+      · SESS_LOW — the running low of THIS session up to the entry minute
+                   (up to, never past — a level formed after the fill is
+                   information the trade did not have)
+    """
+    cands = []
+    pd = prior_date(date, root)
+    if pd:
+        pb = (session_path(pd, root) or {}).get(sym) or []
+        if pb:
+            cands.append((min(b[2] for b in pb), "PDL"))
+    tb = (session_path(date, root) or {}).get(sym) or []
+    upto = [b for b in tb if b[0] <= minute]
+    if upto:
+        cands.append((min(b[2] for b in upto), "SESS_LOW"))
+    below = [c for c in cands if c[0] < entry]
+    return max(below, key=lambda c: c[0]) if below else None
+
+
 def orb_range(bars):
     """(high, low) of the 09:30-09:35 opening candle, or None.
 
@@ -256,11 +314,15 @@ def main(argv):
     ap.add_argument("--conv-max", type=float, default=1.01)
     ap.add_argument("--width", type=float, default=5.0)
     ap.add_argument("--min-n", type=int, default=MIN_N)
-    ap.add_argument("--anchor", default="entry", choices=("entry", "orb"),
+    ap.add_argument("--regime", default="",
+                    help="restrict to one regime label, e.g. TRENDING_BEAR")
+    ap.add_argument("--anchor", default="entry", choices=("entry", "orb", "floor"),
                     help="entry = offsets beyond the fill (v1.2 behaviour). "
                          "orb = offsets beyond the BROKEN ORB BOUNDARY — the "
                          "invalidation level: ORB high for a long, low for a "
-                         "short.")
+                         "short. floor = nearest DETERMINISTIC named support "
+                         "below the fill (PDL or session low) — the operator's "
+                         "hard-floor thesis.")
     a = ap.parse_args(argv[1:])
 
     if not os.path.isdir(JOURNAL):
@@ -290,8 +352,11 @@ def main(argv):
             if best is None or bd > JOIN_TOL_S:
                 unmatched += 1
                 continue
-            conv = ((best.get("raw") or {}).get("regime") or {}).get("conviction")
+            _reg = (best.get("raw") or {}).get("regime") or {}
+            conv = _reg.get("conviction")
             if conv is None or not (a.conv_min <= float(conv) < a.conv_max):
+                continue
+            if a.regime and str(_reg.get("label") or "") != a.regime:
                 continue
             pop.append({**t, "date": date, "conv": float(conv)})
 
@@ -311,8 +376,10 @@ def main(argv):
     long_pnl = 0.0
     peak_group = 0
     no_orb = 0
+    no_floor = 0
+    floor_names = collections.Counter()
     boundary_dist = []          # entry-to-boundary, % of entry — the answer
-    offsets = ORB_OFFSETS if a.anchor == "orb" else OFFSETS
+    offsets = ORB_OFFSETS if a.anchor in ("orb", "floor") else OFFSETS
 
     # v1.2 — ONE SYMBOL-DAY AT A TIME. Group first, so the chain file for a
     # group is opened once, filtered to that group's minutes, and DROPPED before
@@ -370,7 +437,20 @@ def main(argv):
             # v1.3 — the ANCHOR. `entry` is the fill; `orb` is the BROKEN
             # BOUNDARY, which is the invalidation level and therefore the floor
             # of the move: ORB high under a long, ORB low under a short.
-            if a.anchor == "orb":
+            if a.anchor == "floor":
+                # THE FLOOR IS ALWAYS BELOW AND THE SPREAD IS ALWAYS A PUT.
+                # Both his cases reduce to one structure: a bull move's floor
+                # is the level it broke from, a bear move's floor is the
+                # support it hammers into. Sell beneath it either way.
+                side = "put"
+                fl = named_floor(date, sym, root, minute, entry)
+                if fl is None:
+                    no_floor += 1
+                    continue
+                base, _nm = fl
+                floor_names[_nm] += 1
+                boundary_dist.append(100.0 * (entry - base) / entry)
+            elif a.anchor == "orb":
                 base = orb[0] if side == "put" else orb[1]
                 # Record how far the fill sat from the boundary. THIS is what
                 # decides whether the rule lands in the band that paid.
@@ -402,15 +482,21 @@ def main(argv):
           f" no entry/direction {no_entry}")
     print(f"  peak snapshots resident for any one symbol-day: {peak_group}"
           f"  ({len(groups)} symbol-day groups processed one at a time)")
+    if a.anchor == "floor":
+        print(f"  skipped — no named floor below the fill {no_floor}")
+        if floor_names:
+            print("  floor used: " + " · ".join(f"{k} {v}" for k, v in
+                                                floor_names.most_common()))
     if a.anchor == "orb":
         print(f"  skipped — no ORB window in the tape {no_orb}")
+    if a.anchor in ("orb", "floor"):
         if boundary_dist:
             bd = sorted(boundary_dist)
             def _q(q):
                 return bd[min(len(bd) - 1, max(0, int(round(q * (len(bd) - 1)))))]
             print(f"\n  {'-' * 80}")
-            print(f"  ENTRY-TO-BOUNDARY DISTANCE (% of entry, n={len(bd)}) — "
-                  f"READ THIS FIRST")
+            print(f"  ENTRY-TO-{'FLOOR' if a.anchor == 'floor' else 'BOUNDARY'}"
+                  f" DISTANCE (% of entry, n={len(bd)}) — READ THIS FIRST")
             print(f"    p10 {_q(.10):+.2f}%   p25 {_q(.25):+.2f}%   "
                   f"p50 {_q(.50):+.2f}%   p75 {_q(.75):+.2f}%   "
                   f"p90 {_q(.90):+.2f}%")
@@ -430,7 +516,8 @@ def main(argv):
         return 0
 
     print(f"\n  offsets are distance beyond "
-          + ("THE ORB BOUNDARY" if a.anchor == "orb" else "the fill"))
+          + {"orb": "THE ORB BOUNDARY", "floor": "THE NAMED FLOOR"}
+          .get(a.anchor, "the fill"))
     print(f"  {'offset':>8}{'n':>7}{'touched':>9}{'terminal OK':>13}"
           f"{'RECOVERED':>11}{'credit':>9}{'E[loss]':>9}{'EV/spread':>11}")
     for off in offsets:
