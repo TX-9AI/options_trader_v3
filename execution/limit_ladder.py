@@ -92,7 +92,9 @@ def hard_close_order_mode(now_et) -> str:
 
 def limit_at_mark(mark: float,
                   cap: Optional[float] = None,
-                  floor: Optional[float] = None) -> float:
+                  floor: Optional[float] = None,
+                  symbol: str = "", side: str = "",
+                  bid: float = 0.0, ask: float = 0.0) -> float:
     """The limit price to post this attempt: the CURRENT mark, always.
 
     mark  : live mark ((bid+ask)/2, or the combined mark for a spread)
@@ -110,6 +112,19 @@ def limit_at_mark(mark: float,
         px = min(px, float(cap))
     if floor is not None:
         px = max(px, float(floor))
+    # v1.4 — SNAP TO THE VENUE GRID. `round(px, 2)` posted UNPOSTABLE prices on
+    # nickel and dime classes, and this function prices EVERY exit plus the
+    # 15:40-15:44 flatten reposts — far more orders than the entry ladder. An
+    # invalid limit is rejected, or SILENTLY ADJUSTED, and a silent adjustment
+    # is a fill at a price nobody chose. Degrades to round(px, 2) if the
+    # resolver is unavailable, so a cold import can never break pricing.
+    if symbol:
+        try:
+            from execution.tick_size import snap as _snap
+            px, _src = _snap(px, symbol, side or "buy", bid, ask)
+            return px
+        except Exception:                                      # noqa: BLE001
+            pass
     return round(px, 2)
 
 
@@ -179,3 +194,140 @@ def paper_fill_credit(mark: float,
     if floor is not None:
         px = max(px, float(floor))
     return round(px, 4)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  ENTRY LIMIT LADDER (v1.4 — 2026-08-13)  ·  FRC.2
+# ═════════════════════════════════════════════════════════════════════════════
+# Operator's manual technique, in his own worked example:
+#   bid 1.95 / ask 2.35 -> mark 2.15, spread 0.40. "I would try 2.05, 2.10 and
+#   then 2.15."
+# So the rungs are fractions of the HALF-spread, out from the mark toward the
+# near side, stepping every ENTRY_LADDER_STEP_SEC:
+#       2.05 = mark - 0.50*half   ·   2.10 = mark - 0.25*half   ·   2.15 = mark
+# Mirrored for a sell (2.25 / 2.20 / 2.15).
+#
+# ⚠️ WHY v1.0's VERSION WAS REMOVED AND THIS ONE IS DIFFERENT. v1.1 dropped the
+# old shade because it moved a FIXED NUMBER OF TICKS past the mark without
+# knowing the spread — "guesswork about a spread we cannot see". This is
+# expressed as a FRACTION OF THE MEASURED SPREAD and takes bid/ask explicitly,
+# so it is never guessing: a penny-wide quote shades a fraction of a cent, a
+# dollar-wide quote shades twenty. Same objection, different mechanism.
+#
+# ⚠️ MINIMUM TICK. The operator's example splits 0.40 into clean nickels, but on
+# a 0.04-wide quote the same fractions give 2.05 / 2.06 / 2.07 — steps the venue
+# rounds away. Without a floor the ladder would post three identical prices and
+# burn 45 seconds pretending to walk. Rungs that collapse onto a neighbour are
+# DROPPED, so a narrow quote simply has fewer rungs.
+#
+# ⚠️ THIS IS PRICING ONLY. It does not decide whether to trade, and it must NOT
+# be used to book a paper fill on its own — see `fill_model.would_fill()`.
+# Posting an aggressive limit and ASSUMING it fills manufactures edge: the
+# better the rung, the larger the fake gain.
+
+def price_increment(symbol: str, price: float) -> float:
+    """The venue's minimum quote increment for this contract.
+
+    TWO DIMENSIONS, and getting either wrong posts an unpostable limit:
+      PENNY class      -> $0.01 below $3.00, $0.05 at/above
+      NON-PENNY class  -> $0.05 below $3.00, $0.10 at/above
+
+    UNKNOWN SYMBOLS ARE TREATED AS NON-PENNY. That is the conservative
+    direction: a coarser increment is always a VALID price, while a finer one
+    may be rejected — or worse, silently adjusted by the venue, which is a fill
+    at a price nobody chose and nothing in our logs would explain.
+    """
+    try:
+        px = float(price)
+    except (TypeError, ValueError):
+        return 0.05
+    try:
+        from config import PENNY_CLASSES, PRICE_INCREMENT_BOUNDARY
+        penny = str(symbol or "").upper() in PENNY_CLASSES
+        bound = float(PRICE_INCREMENT_BOUNDARY)
+    except Exception:                                          # noqa: BLE001
+        penny, bound = False, 3.00
+    if penny:
+        return 0.01 if px < bound else 0.05
+    return 0.05 if px < bound else 0.10
+
+
+def round_to_increment(price: float, symbol: str, side: str) -> float:
+    """Snap a limit to a postable price, ALWAYS in the trader's favour.
+
+    buy  -> round DOWN (never pay more than intended)
+    sell -> round UP    (never receive less than intended)
+
+    Directional on purpose. Nearest-rounding would make roughly half of all
+    rungs MORE aggressive than the operator specified — on a dime class that is
+    a nickel of unrequested aggression per rung, which is a quarter of the very
+    edge this ladder exists to capture. Rounding away from the market costs fill
+    probability, and fill probability is measured by `fill_model`; rounding INTO
+    the market costs money silently.
+    """
+    import math
+    try:
+        px = float(price)
+    except (TypeError, ValueError):
+        return 0.0
+    inc = price_increment(symbol, px)
+    if inc <= 0:
+        return round(px, 2)
+    n = px / inc
+    snapped = (math.floor(n + 1e-9) if side == "buy"
+               else math.ceil(n - 1e-9)) * inc
+    return round(max(inc, snapped), 2)
+
+
+def entry_ladder_prices(bid: float, ask: float, side: str,
+                        rungs=None, min_tick: float = None,
+                        symbol: str = ""):
+    """Limit prices to post, in order, walking from aggressive toward the mark.
+
+    side: "buy" pays UP toward the ask, so its rungs sit BELOW the mark.
+          "sell" receives, so its rungs sit ABOVE the mark.
+    rungs: fractions of the HALF-spread out from the mark. Defaults to
+           config.ENTRY_LIMIT_LADDER.
+
+    Returns [] on an unusable quote (crossed, zero, missing) — an empty ladder
+    means the caller falls back to `limit_at_mark`, never to a guess.
+    """
+    try:
+        b, a = float(bid), float(ask)
+    except (TypeError, ValueError):
+        return []
+    if b <= 0 or a <= 0 or a < b:
+        return []
+    if rungs is None:
+        try:
+            from config import ENTRY_LIMIT_LADDER as _r
+            rungs = list(_r)
+        except Exception:                                      # noqa: BLE001
+            rungs = [0.50, 0.25, 0.00]
+
+    mark = (a + b) / 2.0
+    half = (a - b) / 2.0
+    # The venue's increment, not a hardcoded penny. On a nickel or dime class
+    # `round(px, 2)` produces an UNPOSTABLE price — the venue rejects it, or
+    # silently adjusts it, and a silently adjusted limit is a fill at a price
+    # nobody chose with nothing in the logs to explain it.
+    inc, _src = ((None, None) if min_tick is not None else (None, None))
+    if min_tick is None:
+        from execution.tick_size import resolve as _resolve
+        inc, _src = _resolve(symbol, mark, b, a)
+    else:
+        inc = float(min_tick)
+    out = []
+    for f in rungs:
+        px = mark - half * float(f) if side == "buy" else mark + half * float(f)
+        if min_tick is None:
+            from execution.tick_size import snap as _snap
+            px, _ = _snap(px, symbol, side, b, a)
+        else:
+            px = round(px, 2)
+        # clamp inside the quote — a rung must never post through the far side
+        px = max(b, min(a, px))
+        if out and abs(px - out[-1]) < inc - 1e-9:
+            continue                       # collapsed onto its neighbour
+        out.append(px)
+    return out

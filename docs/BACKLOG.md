@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.57
+# docs/BACKLOG.md — v4.59
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,122 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.59 — 2026-08-13 — FRC.3: THE VENUE'S PRICE GRID, ON EVERY ORDER PATH.**
+  `execution/tick_size.py` v1.0 + `limit_ladder` v1.4 + `options_chain` + 20
+  tests (125 across today's suites).
+
+  Operator: *"Would the box know from the options chain what increment is
+  allowed?"* then *"that should extend to all orders unambiguously."* **It does,
+  and it now does.**
+
+  **THE SDK HAS IT: `NestedOptionChain.tick_sizes`** — a list of
+  `TickSize(value, threshold, symbol)`. `threshold` expresses the $3.00 boundary
+  GENERICALLY, so nothing hardcodes 3.00 or assumes a single breakpoint. Fetched
+  once per symbol per session (static instrument metadata, not a quote) and
+  cached. **This replaces the `PENNY_CLASSES` guess I shipped hours earlier and
+  flagged as unverified** — Penny Interval Program membership is a broker/OCC
+  fact that changes and is not derivable on this box.
+
+  **RESOLUTION ORDER, so ORDER TIME NEVER GUESSES:**
+  1. **VENUE RULE** — authoritative.
+  2. **QUOTE PROOF** — an off-nickel bid PROVES a penny grid. **ASYMMETRIC:** it
+     can only REFINE downward, never coarsen, because every nickel is also a
+     valid penny. Free, and a live cross-check that can override a stale rule.
+  3. **`PENNY_CLASSES`** — last resort, and it **LOGS A WARNING** when reached,
+     so "how often are we still guessing" is a number rather than an assumption.
+  **EVERY RESOLUTION CARRIES ITS SOURCE** (venue / quote / list / default). If a
+  fill returns at a price we did not post, the log must say which produced it —
+  otherwise silent venue adjustment is undiagnosable.
+
+  **⚠️ AND THE BIGGER FIX: `limit_at_mark` PRICES EVERY EXIT** plus the
+  15:40-15:44 flatten reposts and every condor leg — far more orders than the
+  entry ladder — and it was doing `round(px, 2)`. It now snaps to the grid too.
+  Callers that pass no symbol keep the old behaviour, so nothing breaks while
+  the fetch is proven. Snapping stays DIRECTIONAL (buy down, sell up): nearest
+  would make ~half of all limits MORE aggressive than specified, and rounding
+  INTO the market costs money silently while rounding away costs fill
+  probability, which `fill_model` measures.
+
+  **⚠️ TWO SDK FACTS VERIFIED RATHER THAN ASSUMED, both of which would have
+  failed SILENTLY.** There is no `a_get` on this build — it is `get` — and `get`
+  is a **COROUTINE despite the sync-looking name**, so it needs `run_async`.
+  Either mistake raises into the `except`, marks the fetch failed, and falls
+  back to the guess **forever**, with only a debug line. Checked against the
+  installed package with `inspect.iscoroutinefunction`.
+
+  **⚠️ AND A TEST FIXTURE I GOT WRONG TWICE, worth recording because the failure
+  looked like a defect and was not.** The penny-vs-coarse assertion needs a
+  quote where **both bid and ask sit ON the nickel grid** (1.90 / 2.20) so no
+  penny proof fires, while the half-spread (0.15) puts the RUNGS off the grid so
+  the class is the only deciding fact. My first two fixtures used off-nickel
+  quotes, which correctly proved penny for BOTH symbols and made the ladders
+  identical. **The resolver was right and the test was wrong** — third attempt
+  computed the values first and asserted from measurement.
+  A companion test now pins the proof explicitly: a non-penny class quoting 2.11
+  IS quoting in pennies, whatever any list says.
+
+- **v4.58 — 2026-08-13 — FRC.2: THE ENTRY LIMIT LADDER AND THE FILL MODEL.**
+  `limit_ladder` v1.4 + `execution/fill_model.py` v1.0 + `config` v4.13/v4.14 +
+  19 tests. **SHIPS INERT — `ENTRY_LADDER_ACTIVE` defaults to 0.**
+
+  **WHY THIS OUTRANKS EVERY SELECTION LEVER.** FRC.1 measured the fleet's gross
+  edge at **+$2.70/trade against $126/trade of round-trip friction — ~2%% of the
+  spread it trades in.** Capturing half the half-spread on entry is worth on the
+  order of **$31/trade**. Fill quality is an order of magnitude larger than
+  anything on the trade-selection list.
+
+  **THE OPERATOR'S TECHNIQUE, his worked example:** bid 1.95 / ask 2.35 -> mark
+  2.15. *"I would try 2.05, 2.10 and then 2.15"*, stepping every 15s, terminal
+  rung sitting at mark and re-anchoring — *"let it sit at Mark in case price
+  comes back and the plan can activate."* Encoded as fractions of the
+  HALF-spread out from mark: `[0.50, 0.25, 0.00]`.
+
+  **WHY THIS IS NOT v1.0's SHADE, WHICH v1.1 CORRECTLY REMOVED.** That one moved
+  a FIXED NUMBER OF TICKS past the mark — *"guesswork about a spread we cannot
+  see"*. This takes bid/ask explicitly and scales with the measured spread: a
+  penny-wide quote shades a fraction of a cent, a dollar-wide one shades twenty.
+  Same objection, different mechanism, and a test pins that a wide quote shades
+  wider than a narrow one.
+
+  **⚠️ VENUE INCREMENTS — operator: *"some contracts allow one cent increments
+  others are five cents and even a few other are $.10."*** He is right and
+  `round(px, 2)` was wrong. TWO dimensions: the CLASS decides penny eligibility,
+  the PRICE LEVEL decides the step above $3.00. Penny class $0.01/$0.05;
+  non-penny $0.05/$0.10. **An unpostable limit is rejected — or worse, SILENTLY
+  ADJUSTED by the venue, which is a fill at a price nobody chose with nothing in
+  the logs to explain it.** Unknown symbols are treated as NON-PENNY, because a
+  coarser increment is always valid while a finer one may not be. Rounding is
+  DIRECTIONAL (buy down, sell up): nearest-rounding would make ~half the rungs
+  MORE aggressive than specified, which on a dime class is a nickel of
+  unrequested aggression per rung. `PENNY_CLASSES` is a STARTING list and is
+  flagged as unverified — membership is a broker/OCC fact, not derivable here.
+  Coarse grids COLLAPSE rungs rather than posting the same price three times.
+
+  **⚠️ AND THE FILL MODEL IS WHY THIS SHIPS INERT.** `paper_fill_price` books the
+  posted price and assumes it fills — defensible AT THE MARK, indefensible
+  INSIDE the spread. Shade without a fill test and every trade books 2.05 while
+  no missed entry is ever modelled: **the more aggressive the rung, the larger
+  the manufactured gain, and rung 1 would look like the best change this system
+  has ever made.** `fill_model.would_fill()` tests the FAR SIDE — a BUY needs the
+  ASK to come down to us, not the mid to drift — because testing the mid reports
+  a fill roughly twice as often and recreates exactly the optimism being
+  removed. A resting limit gets ITS price, not a better one. No fill returns
+  None and carries NO PRICE, so "fill at the last rung anyway" is awkward by
+  construction.
+  ⚠️ QUEUE POSITION IS NOT MODELLED and cannot be from this data — a limit AT
+  the touch may still not fill behind size. So this remains optimistic about
+  QUEUE (second-order) rather than about PRICE (first-order, previously
+  unmodelled entirely).
+
+  **19/19 PASS**, including two deliberate-failure checks: `would_fill` must be
+  able to REFUSE on a quote that never came to us, and the same quote on a penny
+  vs nickel class must produce DIFFERENT ladders — otherwise the increment is
+  not being applied.
+  ⚠️ NOT WIRED into `entry_engine`. The primitives and their tests land first;
+  turning `ENTRY_LADDER_ACTIVE` on without the fill model gating paper fills
+  would produce a fake win, which is precisely what this delivery is built to
+  prevent.
 
 - **v4.57 — 2026-08-13 — `slippage_audit` v1.1: PRICED ZERO OF 805 JOINED
   TRADES.** `contract` is nested under `signal` in a scored row, not top-level.

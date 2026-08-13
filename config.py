@@ -1,5 +1,12 @@
 """
-config.py — options_trader v4.12
+config.py — options_trader v4.14
+v4.14 — 2026-08-13 — ENTRY_LIMIT_LADDER [0.50, 0.25, 0.00] @ 15s.
+        DEFAULTS OFF (ENTRY_LADDER_ACTIVE=0) — the pricing primitive and the
+        fill model land together, but nothing changes behaviour until the fill
+        model is proven against live quotes.
+v4.13 — 2026-08-13 — PENNY_CLASSES + PRICE_INCREMENT_BOUNDARY. Option quote
+        increments are class- AND level-dependent; `round(px, 2)` posts invalid
+        limits on nickel/dime classes.
 v4.12 — 2026-08-13 — VERTICAL_HOLD_TO_ET (15:45). Credit verticals are exempt
         from the 15:40 flatten ladder; debit positions keep it, because the
         mark-limit phase is what stops every EOD exit paying the full spread.
@@ -279,6 +286,43 @@ INSTRUMENT          = os.environ.get("OT_INSTRUMENT", "QQQ")
 # Tradeable universe. Strike increments are a per-price-band starting point;
 # the options chain resolves to the nearest liquid strike, so a slightly-off
 # value is not fatal — tune a name here only if its fills consistently miss.
+# ── OPTION PRICE INCREMENTS (2026-08-13, operator: "some contracts allow one
+# cent increments others are five cents and even a few other are $.10") ───────
+# TWO DIMENSIONS, not one: the CLASS decides whether it quotes in pennies, and
+# the PRICE LEVEL decides the increment above the $3.00 boundary.
+#   PENNY class      : $0.01 below $3.00, $0.05 at/above
+#   NON-PENNY class  : $0.05 below $3.00, $0.10 at/above
+# ⚠️ `PENNY_CLASSES` BELOW IS A STARTING LIST, NOT A VERIFIED ONE. Membership of
+# the Penny Interval Program changes and is a BROKER/OCC fact, not something
+# derivable from anything on this box. Verify against TastyTrade's contract
+# metadata before trusting it — a wrong entry here posts an INVALID LIMIT that
+# the venue rejects or silently adjusts, and a silently adjusted limit is a fill
+# at a price nobody chose. Treated conservatively: anything NOT listed is
+# assumed NON-PENNY, so an unknown symbol posts a coarser (valid) price rather
+# than a finer (possibly rejected) one.
+# ── ENTRY LIMIT LADDER (2026-08-13, operator's manual technique) ─────────────
+# His worked example: bid 1.95 / ask 2.35 -> mark 2.15, spread 0.40.
+# "I would try 2.05, 2.10 and then 2.15" — every ENTRY_LADDER_STEP_SEC, walking
+# from aggressive toward the mark. Expressed as fractions of the HALF-spread out
+# from the mark, so it self-scales: 0.50 -> 2.05, 0.25 -> 2.10, 0.00 -> 2.15.
+# Terminal rung SITS AT MARK and re-anchors on a fresh quote each tick — his
+# words: "let it sit at Mark in case price comes back and the plan can activate."
+# ⚠️ PRICING ONLY. Posting an aggressive limit and ASSUMING it fills manufactures
+# edge — the better the rung, the larger the fake gain. `execution/fill_model.py`
+# is the other half and must gate any paper fill booked from these prices.
+ENTRY_LIMIT_LADDER          = [0.50, 0.25, 0.00]
+ENTRY_LADDER_STEP_SEC       = float(os.environ.get("OT_ENTRY_LADDER_STEP_SEC", "15"))
+ENTRY_LADDER_ACTIVE         = os.environ.get("OT_ENTRY_LADDER", "0") == "1"
+
+PENNY_CLASSES = {
+    "SPY", "QQQ", "IWM", "DIA", "GLD", "TLT",
+    "AAPL", "AMD", "AMZN", "AVGO", "COST", "CRM", "CVX", "GOOGL", "GS",
+    "JPM", "LLY", "META", "MSFT", "MU", "NFLX", "NVDA", "ORCL", "PLTR",
+    "SMCI", "SMH", "TSLA", "UNH", "XOM",
+}
+# SPX is DELIBERATELY ABSENT — index options are not in the penny program.
+PRICE_INCREMENT_BOUNDARY    = 3.00
+
 STRIKE_INCREMENTS = {
     # Index products with true 0DTE — full strategy set (condor/butterfly OK)
     "SPY": 1, "QQQ": 1, "SPX": 5, "IWM": 1,

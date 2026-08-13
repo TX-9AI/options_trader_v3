@@ -293,6 +293,39 @@ class OptionsChainFetcher:
             return cached[1]
         try:
             chain_map = run_async(get_option_chain(session, symbol))
+            # FRC.3 — cache the VENUE'S price grid once per symbol per session.
+            # Static instrument metadata, not a quote, so one fetch serves the
+            # whole session. Without it every order path falls back to a
+            # hardcoded PENNY_CLASSES guess, and an unpostable limit is either
+            # rejected or SILENTLY ADJUSTED — a fill at a price nobody chose.
+            # Best-effort: a failure here must never stop a chain fetch.
+            try:
+                from execution.tick_size import cache_venue_rule, mark_fetch_failed
+                from tastytrade.instruments import NestedOptionChain
+                # `get`, not `a_get` — this SDK build exposes a SYNC
+                # classmethod, and `a_get` does not exist. Verified against the
+                # installed tastytrade package rather than assumed; the wrong
+                # name would have raised into the except and fallen back to the
+                # guess FOREVER, silently, which is the exact path this change
+                # removes.
+                # `get`, not `a_get` — this SDK build has no `a_get`, and
+                # `get` is a COROUTINE despite the sync-looking name
+                # (inspect.iscoroutinefunction is True), so it goes through
+                # run_async like every other SDK call here. Both facts verified
+                # against the installed package: the wrong name, or calling it
+                # without run_async, would have raised into the except and
+                # fallen back to the PENNY_CLASSES guess FOREVER, silently.
+                _noc = run_async(NestedOptionChain.get(session, symbol))
+                _noc = _noc[0] if isinstance(_noc, list) and _noc else _noc
+                if not cache_venue_rule(symbol, getattr(_noc, "tick_sizes", None)):
+                    mark_fetch_failed(symbol)
+            except Exception as _tex:                          # noqa: BLE001
+                try:
+                    from execution.tick_size import mark_fetch_failed
+                    mark_fetch_failed(symbol)
+                except Exception:                              # noqa: BLE001
+                    pass
+                logger.debug("tick-size fetch skipped for %s: %s", symbol, _tex)
             if chain_map:
                 self._struct_cache[symbol] = (now, chain_map)
             return chain_map
