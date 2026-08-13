@@ -1,5 +1,10 @@
 """
-config.py — options_trader v4.10
+config.py — options_trader v4.12
+v4.12 — 2026-08-13 — VERTICAL_HOLD_TO_ET (15:45). Credit verticals are exempt
+        from the 15:40 flatten ladder; debit positions keep it, because the
+        mark-limit phase is what stops every EOD exit paying the full spread.
+v4.11 — 2026-08-13 — CONDOR_RATCHET_STANDALONE_ONLY. The ratchet closed
+        UNTESTED legs on a reversal; scoped to standalone only.
 v4.10 — 2026-08-13 — CONDOR_MAX_QUOTE_WIDTH (0.25 of mid). A ranking never
         refuses; a floor does.
 v4.9 — 2026-08-13 — CONDOR_MIN_POP / CONDOR_POP_BAR_MIN. Probability-of-profit
@@ -625,6 +630,52 @@ CONDOR_MIN_POP              = float(os.environ.get("OT_CONDOR_MIN_POP", "0.70"))
 # 0.13-0.88 at -$37/trade; the two best bands sat under 0.043) — debit entries,
 # not condor shorts. The rejected-leg log is what would fit it properly.
 CONDOR_MAX_QUOTE_WIDTH      = float(os.environ.get("OT_CONDOR_MAX_QUOTE_WIDTH", "0.25"))
+
+# ── RATCHET SCOPE (2026-08-13, operator ruling) ──────────────────────────────
+# "the ratchet is inappropriate for this trade if the condor is fully formed.
+#  It should only be in effect if there's one side open."  And:
+# "don't close a leg if it hasn't been tested - that's what the roll is for."
+# THE DEFECT IT FIXES: the base -25% stop only ever fires on the TESTED side
+# (spread value rises as price approaches your short). But the ratchet tightens
+# the UNTESTED side's stop to breakeven at +20% and +20% locked at +40% —
+# precisely because it is WINNING. On the reversal the tested side stops at -25%
+# AND the untested side hits its ratcheted stop, so a leg price never went near
+# is closed by a stop that exists only because it was profitable. That is the
+# double-stop: 5 of 14 condor symbol-days had BOTH sides stopped. It also fires
+# BEFORE the roll can ever be used, because the roll needs a tested side.
+# WHAT IS PRESERVED: `condor_stop` went 0% -> 19% win after the ratchet shipped,
+# but that evidence came mostly from STANDALONES (18 of 46 legs never got a
+# second side). Scoping to standalone keeps the gain where it was measured and
+# removes it where it disassembles a working structure.
+# ⚠️ ACCEPTED CONSEQUENCE: an untested leg that runs to +40% and reverses now
+# gives it back rather than locking +20%. That is the price of not taking apart
+# a formed condor.
+CONDOR_RATCHET_STANDALONE_ONLY = os.environ.get(
+    "OT_CONDOR_RATCHET_STANDALONE_ONLY", "1") == "1"
+
+# ── CREDIT VERTICALS HOLD TO 15:45 (2026-08-13, operator ruling) ─────────────
+# The flatten ladder opens at FLATTEN_WINDOW_OPEN (15:40) and posts mark-limits
+# until the 15:45 cross, so a DEBIT position can close without paying the
+# spread. That ladder is why it is not moved: opening it at 15:45 would leave
+# zero time for the limit phase and force EVERY end-of-day exit marketable —
+# the exact failure time_utils v3.8 was written to fix, and expensive on a book
+# whose widest spread quintile already costs -$37/trade.
+# BUT THE SIGN IS OPPOSITE FOR A CREDIT VERTICAL. A long debit sitting at 15:40
+# is decaying to ZERO, so five more minutes cost the holder and the limit phase
+# is pure upside. A SHORT vertical is decaying TOWARD the holder, and 15:40-15:45
+# is the steepest part of that curve. Operator: "It's 5 more minutes of
+# exponentially rising profit curve."
+# ⚠️ NOT held past 15:45, deliberately. Every instrument here except SPX is
+# AMERICAN-STYLE and PHYSICALLY SETTLED, so a spread finishing BETWEEN the
+# strikes assigns the short and leaves an unhedged overnight stock position —
+# "defined risk" is true at settlement, not through assignment. The paper engine
+# has no assignment model and would never show it, which is the worst kind of
+# clean result.
+# ⚠️ COST, stated rather than hidden: verticals then close AT 15:45 with no
+# limit phase of their own, so they pay the crossing. A few cents on a spread
+# that has already decayed; a worse fill on one still near its short strike.
+VERTICAL_HOLD_TO_ET         = (15, 45)
+VERTICAL_HOLD_TO_CLOSE      = os.environ.get("OT_VERTICAL_HOLD_1545", "1") == "1"
 # Minutes per bar of the ATR feeding sigma. 5m frame by default; wrong here
 # scales sqrt(T) and silently moves every POP.
 CONDOR_POP_BAR_MIN          = float(os.environ.get("OT_CONDOR_POP_BAR_MIN", "5"))

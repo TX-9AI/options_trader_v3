@@ -1,5 +1,34 @@
 """
-execution/exit_engine.py — v4.16 — Strategy-aware exit logic for all options positions.
+execution/exit_engine.py — v4.17 — Strategy-aware exit logic for all options positions.
+v4.17 — 2026-08-13 — THE RATCHET WAS CLOSING UNTESTED CONDOR LEGS. Operator:
+        "the ratchet is inappropriate for this trade if the condor is fully
+        formed. It should only be in effect if there's one side open" and
+        "don't close a leg if it hasn't been tested - that's what the roll is
+        for."
+        MECHANISM: the base -25% stop only ever fires on the TESTED side,
+        because a credit spread's value RISES as price approaches your short.
+        The RATCHET does the opposite — it tightens the UNTESTED side's stop to
+        breakeven at +20% and +20%-locked at +40% PRECISELY BECAUSE that side is
+        winning. On the reversal the tested leg stops at -25% and the untested
+        leg hits its ratcheted stop too. **A leg price never went near, closed
+        by a stop that exists only because it was profitable.** That is the
+        double-stop — 5 of 14 condor symbol-days had BOTH sides stopped — and it
+        fires BEFORE the roll can be used, because the roll needs a tested side.
+        FIX: while `_condor_sibling_open()` is true, the base floor is the ONLY
+        stop; no tier, and the stored high-water is neither applied nor updated,
+        so a leg returning to standalone resumes from a level it genuinely
+        earned. Same interlock the take-profit already used, and it FAILS CLOSED
+        (True on error) — treating a leg as part of a structure is the safe
+        error.
+        NOT CHANGED, deliberately: the adverse-regime-flip exit. It is
+        direction-aware — a call spread exits only on TRENDING_BULL, which IS
+        price rising toward that short strike — so it already fires only on the
+        threatened side and is a tested-side exit.
+        PRESERVED: `condor_stop` went 0% -> 19% win after the ratchet shipped,
+        but that evidence came mostly from STANDALONES (18 of 46 legs never got
+        a second side). Scoping keeps the gain where it was measured.
+        ⚠️ ACCEPTED COST: an untested leg that runs to +40% and reverses now
+        gives it back rather than locking +20%.
 v4.16 — 2026-08-12 — VEL.1: THE VELOCITY STALL, ladder step 2c. THE THIRD
         QUESTION, and until now nobody asked it. `orb_structure_stop` asks "did
         the thesis break?"; `_theta_bleed` asks "is my GAIN about to evaporate?"
@@ -680,7 +709,8 @@ class ExitEngine:
         if record.get("is_butterfly"):
             return self._evaluate_butterfly(record, current_premium, regime=regime)
         elif strategy == "IronCondorStrategy":
-            return self._evaluate_condor_leg(record, current_premium, regime=regime)
+            return self._evaluate_condor_leg(record, current_premium,
+                                             regime=regime, df_1m=df_1m)
         elif strategy == "ADOPTED":
             return self._evaluate_adopted(record, current_premium)
         elif strategy == "ORBStrategy":
@@ -1322,7 +1352,8 @@ class ExitEngine:
 
     def _evaluate_condor_leg(self, record: TradeRecord,
                               current_premium: float,
-                              regime: Optional[str] = None) -> ExitDecision:
+                              regime: Optional[str] = None,
+                              df_1m=None) -> ExitDecision:
         """
         Iron condor leg exit logic.
         Each leg is a credit spread — rising spread value = losing money.
@@ -1339,6 +1370,8 @@ class ExitEngine:
         from config import (CONDOR_NICKEL_CLOSE, CONDOR_STOP_LOSS_PCT,
                             CONDOR_RATCHET_BE_AT, CONDOR_RATCHET_LOCK_AT,
                             CONDOR_RATCHET_LOCK_PCT, CONDOR_TP_PCT,
+                            CONDOR_RATCHET_STANDALONE_ONLY,
+                            VERTICAL_HOLD_TO_ET, VERTICAL_HOLD_TO_CLOSE,
                             CONDOR_TP_MIN_HOLD_MIN, CONDOR_ENTRY_CUTOFF_ET)
         from utils.time_utils import ET
 
@@ -1352,10 +1385,71 @@ class ExitEngine:
         decision.current_pnl_pct = pnl_pct
         decision.current_pnl_usd = pnl_usd
 
-        if is_hard_close_time():
+        # v4.17 — CREDIT VERTICALS ARE EXEMPT FROM THE 15:40 LADDER.
+        # `is_hard_close_time()` opens at FLATTEN_WINDOW_OPEN (15:40) so a DEBIT
+        # position gets a mark-limit phase before the 15:45 cross — and that
+        # ladder is why it is NOT moved globally: opening it at 15:45 would
+        # force every EOD exit marketable, the exact failure time_utils v3.8
+        # fixed. A SHORT VERTICAL HAS THE OPPOSITE SIGN. It decays TOWARD the
+        # holder, so 15:40-15:45 is the steepest part of its curve.
+        # ⚠️ HELD TO 15:45 AND NOT PAST IT. Every instrument except SPX is
+        # American-style and physically settled, so a spread finishing BETWEEN
+        # the strikes assigns the short and leaves an unhedged overnight stock
+        # position — "defined risk" is true at settlement, not through
+        # assignment. The paper engine has no assignment model and would show a
+        # clean result that does not survive going live.
+        _vnow = datetime.now(ET)
+        _vert_close = ((_vnow.hour, _vnow.minute) >= VERTICAL_HOLD_TO_ET
+                       if VERTICAL_HOLD_TO_CLOSE else is_hard_close_time())
+        if _vert_close:
             decision.should_exit = True
             decision.exit_reason = "hard_close_15:45_ET"
             return decision
+
+        # ── TC.6 TREND CREDIT SPREAD — BREACH OR NICKEL, NOTHING ELSE ────
+        # Operator's spec: "Exit should be breached (loss) or nickel close
+        # (profit)." NO premium stop and NO ratchet, and that is not a
+        # simplification — THE MEASURED EV WAS HELD TO EXPIRY, UNMANAGED
+        # (+$0.52/spread, 90% terminal OK, 79% recovered on the ORB-anchored
+        # runaway arm). A stop bolted on afterwards is a DIFFERENT TRADE with a
+        # different expectancy, and paper results from it would not transfer.
+        # BREACH is structural, not a premium percentage: a CLOSED BAR beyond
+        # the broken ORB boundary. That is the same event `orb_structure_stop`
+        # already calls thesis death, and the level the short strike was
+        # anchored to — so structure and invalidation agree instead of arguing.
+        # CLOSED bars only: an intraday wick through the boundary is a touch,
+        # and the operator's own rule is that only a close decides acceptance.
+        if bool(record.get("is_trend_credit")):
+            _b = float(record.get("underlying_stop") or 0.0)
+            _side = record.get("option_side", "")
+            _last = None
+            try:
+                if df_1m is not None and not df_1m.empty:
+                    _last = float(df_1m["close"].iloc[-1])
+            except Exception:                                  # noqa: BLE001
+                _last = None
+            if _b > 0 and _last is not None:
+                # put spread sits BELOW the boundary -> a close below breaches;
+                # call spread sits ABOVE -> a close above breaches.
+                _breached = (_last < _b) if _side == "put" else (_last > _b)
+                if _breached:
+                    decision.should_exit = True
+                    decision.exit_reason = (
+                        f"tcs_breach: close {_last:.2f} beyond boundary {_b:.2f}")
+                    return decision
+            elif _b > 0:
+                # No tape: report it. A breach rule that cannot see price is
+                # inert, and an inert stop must never look like a passing check.
+                logger.warning("[tcs] no 1m tape — the breach rule is INERT "
+                               "this tick (boundary %.2f)", _b)
+            if current_premium <= CONDOR_NICKEL_CLOSE:
+                decision.should_exit = True
+                decision.exit_reason = f"nickel_close pnl={pnl_pct:.1%} (tcs)"
+                return decision
+            # No other exit applies: the 15:45 close is handled ABOVE, and
+            # the ratchet / 25% stop / TP below are deliberately unreachable
+            # for a trend credit spread.
+
 
         TRENDING_REGIMES = {"TRENDING_BULL", "TRENDING_BEAR", "BREAKOUT_VOLATILE"}
         if regime and regime in TRENDING_REGIMES:
@@ -1394,10 +1488,33 @@ class ExitEngine:
         elif pnl_pct >= CONDOR_RATCHET_BE_AT:
             stop_level = min(stop_level, entry_prem)
             tier = " [breakeven]"
-        prev = self._condor_ratchet.get(trade_id)
-        if prev is not None:
-            stop_level = min(stop_level, prev)      # ratchet only ever tightens
-        self._condor_ratchet[trade_id] = stop_level
+        # ── RATCHET SCOPE (v4.2, 2026-08-13 operator ruling) ──────────────
+        # "the ratchet is inappropriate for this trade if the condor is fully
+        #  formed. It should only be in effect if there's one side open."
+        # THE BASE STOP ONLY FIRES ON THE TESTED SIDE — spread value rises as
+        # price approaches your short. The RATCHET is the opposite: it tightens
+        # the UNTESTED side precisely BECAUSE it is winning, so on a reversal
+        # the tested leg stops at -25% and the untested leg hits its ratcheted
+        # stop too. A leg price never went near, closed by a stop that exists
+        # only because it was profitable. That is the double-stop (5 of 14
+        # condor symbol-days), and it fires BEFORE the roll can be used because
+        # the roll needs a tested side.
+        # `_condor_sibling_open` FAILS CLOSED (True on error) — treating a leg
+        # as part of a structure is the safe error here, and it is the same
+        # interlock the take-profit already uses.
+        _formed = (CONDOR_RATCHET_STANDALONE_ONLY
+                   and self._condor_sibling_open(record))
+        if _formed:
+            # base floor ONLY. No tier, no stored high-water — and the stored
+            # value is deliberately NOT updated while formed, so a leg returning
+            # to standalone resumes from the high-water it genuinely earned
+            # rather than one set while the structure was intact.
+            stop_level, tier = base_stop, " [formed: base only]"
+        else:
+            prev = self._condor_ratchet.get(trade_id)
+            if prev is not None:
+                stop_level = min(stop_level, prev)  # ratchet only ever tightens
+            self._condor_ratchet[trade_id] = stop_level
 
         if current_premium >= stop_level:
             decision.should_exit = True

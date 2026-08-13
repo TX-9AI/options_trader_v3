@@ -1,5 +1,10 @@
 """
-main.py — options_trader v6.3
+main.py — options_trader v6.4
+v6.4 — 2026-08-13 — TC.6 WIRED. TrendCreditSpread dispatches after the condor
+        and routes through `_execute_condor_leg`, deferring when a condor plan
+        holds the symbol. Exit is BREACH-OR-NICKEL via `is_trend_credit`
+        (exit_engine v4.17) — the measured +$0.52/spread was HELD TO EXPIRY,
+        UNMANAGED, so the ratchet and 25%% stop are deliberately unreachable.
 v6.3 — 2026-08-13 — PF.5 WIRED. The condor now consults the DAILY pitchfork and
         the session extremes. `_condor_rails()` returns the rails or None, and
         **None means NO CONDOR** — operator: "consider the condor off the table
@@ -664,6 +669,7 @@ from utils import mem_trace          # MEM.2 — in-process tracemalloc, env-gat
 mem_trace.start(logger)
 from strategy.butterfly_strategy import ButterflyStrategy
 from strategy.iron_condor_strategy import IronCondorStrategy
+from strategy.trend_credit_spread import TrendCreditSpread
 from strategy.continuation_strategy import ContinuationStrategy
 
 from risk.risk_manager import init_risk_manager, get_risk_manager
@@ -685,6 +691,11 @@ _orb_strategy     = ORBStrategy()
 _sweep_strategy   = SweepReversalStrategy()
 _butterfly_strategy = ButterflyStrategy()
 _iron_condor_strategy = IronCondorStrategy()
+# TC.6 — trend credit spread. Sits with the other strategy instances and is
+# UNGUARDED on purpose: it imports only config + IronCondorStrategy, both
+# already hard dependencies here, so a guarded import would hide a real
+# breakage rather than tolerate an optional one.
+_trend_credit_strategy = TrendCreditSpread()
 _continuation_strategy = ContinuationStrategy()
 
 
@@ -1756,6 +1767,33 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
                 except Exception:
                     pass
             _execute_condor_leg(leg_signal, state, ctx)
+
+    # ── TC.6 TREND CREDIT SPREAD ─────────────────────────────────────────────
+    # Sells a defined-risk vertical BEYOND the broken ORB boundary after a
+    # runaway. Placed HERE, after the condor, for two reasons:
+    #   · it routes through `_execute_condor_leg` like a condor leg, so it must
+    #     sit where that path is reachable;
+    #   · the condor holds the slot when both want the symbol — it got there
+    #     first, and stacking a third credit spread on one underlying is
+    #     unmanaged risk. `condor_active` carries that deferral.
+    # NOT blocked by AFD.1: `DEBIT_DIRECTIONAL_STRATEGIES` is a name list and a
+    # credit vertical is not on it — correct by construction, pinned by a test.
+    if signal is None:
+        _tcs_hi, _tcs_lo = _session_extremes(ctx)
+        tcs_sig = _safe_strategy("TrendCreditSpread", lambda: (
+            _trend_credit_strategy.generate_signal(
+                orb           = orb,
+                regime        = regime,
+                vol_state     = ctx["vol"],
+                chain         = chain,
+                macro         = macro,
+                current_price = ctx["price"],
+                session_high  = _tcs_hi,
+                session_low   = _tcs_lo,
+                condor_active = _iron_condor_strategy.has_active_plan)))
+        if tcs_sig is not None:
+            _execute_condor_leg(tcs_sig, state, ctx)
+            return
 
     if signal is None:
         logger.info(f"STRATEGY: NO TRADE — regime={regime.primary_regime}")

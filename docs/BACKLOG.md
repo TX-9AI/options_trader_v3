@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.53
+# docs/BACKLOG.md — v4.55
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,139 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.55 — 2026-08-13 — TC.6 IS BUILT AND WIRED.** `strategy/trend_credit_spread.py`
+  v1.0 + `exit_engine` v4.17 + `main` v6.4 + `config` v4.12 + 8 tests (104 across
+  today's suites).
+
+  **THE TRADE.** Sell a defined-risk vertical BEYOND the broken ORB boundary
+  after a runaway. A runaway broke the opening range and never retested, so the
+  boundary IS the floor of that move and the level `orb_structure_stop` already
+  calls thesis death — structure and invalidation become the same event.
+  MEASURED (`spread_counterfactual --anchor orb`, runaway-handoff arm, 18
+  sessions): EV positive at EVERY offset; the 0.00% cell — the strike AT the
+  boundary — **n=30, +$0.52/spread, 90% terminal OK, 79% RECOVERED**, with entry
+  sitting p50 +0.91% above the boundary. The STANDALONE control was mostly
+  NEGATIVE on the same anchor, so **the edge is runaway-specific by
+  construction** and `invalidation_reason == "runaway"` is a hard gate.
+
+  **TIMING IS THE POP GATE, NOT A CLOCK.** Proximity cannot trigger it — in a
+  runaway price moves AWAY from the boundary, so waiting for a return is waiting
+  for the thesis to fail. The runaway confirmation is the event; POP decides
+  when it may fire, and the same distance is a larger z later in the session.
+  The afternoon-credit thesis arrives from the arithmetic rather than a
+  hardcoded hour.
+
+  **EXIT: BREACH OR NICKEL, NOTHING ELSE.** Operator's spec, and not a
+  simplification — **the measured EV was HELD TO EXPIRY, UNMANAGED**, so a
+  premium stop bolted on afterwards is a different trade whose paper results
+  would not transfer. BREACH is a **CLOSED BAR** beyond the boundary (a wick is
+  a touch; only a close decides acceptance). The ladder is now: 15:45 close →
+  TC.6 breach/nickel (returns) → regime flip → ratchet → TP → nickel, so a TC.6
+  leg can never reach the ratchet or the 25% stop. A test pins the ORDER, and a
+  guard asserts no premium-stop symbol appears inside the branch — verified able
+  to fail by injecting one.
+
+  **STRIKE SELECTION HAS ONE OWNER** — it imports
+  `IronCondorStrategy._select_beyond_rail` rather than cloning it.
+  **DEFERS TO THE CONDOR** when a plan holds the symbol: the condor is already
+  the only strategy allowed two concurrent positions, and a third credit spread
+  on one underlying is unmanaged risk.
+  **NOT blocked by AFD.1** — `DEBIT_DIRECTIONAL_STRATEGIES` is a name list and a
+  credit vertical is not on it. Correct by construction.
+
+  **`config` v4.12 — VERTICAL_HOLD_TO_ET (15:45).** The flatten ladder opens at
+  15:40 so a DEBIT position gets a mark-limit phase before the cross, and that
+  ladder is why it was NOT moved globally: opening it at 15:45 would force every
+  EOD exit marketable — the exact failure `time_utils` v3.8 fixed, expensive on
+  a book whose widest spread quintile already costs −$37/trade. **A short
+  vertical has the opposite sign**: it decays TOWARD the holder, so 15:40-15:45
+  is the steepest part of its curve. Operator: *"It's 5 more minutes of
+  exponentially rising profit curve."*
+  ⚠️ **NOT held past 15:45, and this is a hard limit.** Every instrument except
+  SPX is AMERICAN-STYLE and PHYSICALLY SETTLED, so a spread finishing BETWEEN
+  the strikes assigns the short and leaves an unhedged overnight stock position.
+  "Defined risk" is true at settlement, not through assignment — and the paper
+  engine has NO assignment model, so it would report a clean result that does
+  not survive going live.
+
+  **🔴 CND.8 — FOLLOW-UP, AND IT IS BIGGER THAN TONIGHT'S FIXES. THE CONDOR HAS
+  NO STRUCTURAL EXIT.** `_condor_sibling_open()` is the ONLY cross-leg awareness
+  anywhere in the exit path. The ratchet keys on `trade_id`, the stop reads that
+  leg's own premium, the regime flip that leg's own side, the nickel that leg's
+  own value. **A "condor" is two independent verticals plus one interlock plus
+  the roll — the structure exists in the plan and in entry, and does NOT exist
+  in the exit logic.** There is no combined-value exit, no net-credit stop, no
+  "both sides safe, close the structure" rule. Measured consequence: 5 of 14
+  condor symbol-days had BOTH sides stopped. Before designing it, re-measure the
+  double-stop rate under condor v2 — the 5-of-14 predates dualfloor, when both
+  legs fired 15 seconds apart mid-channel, which is the worst possible
+  configuration for whipsaw.
+
+  **⚠️ FOUR MISPLACED EDITS CAUGHT TODAY, all by verification rather than care:
+  a duplicate config block, a changelog with no code behind it, two silent
+  no-op `.replace` calls, a block landing in `_evaluate_orb` instead of the
+  condor path, and an instantiation landing inside an `except` body.** Method
+  changed in response: slice to the target function FIRST, then assert the
+  enclosing function by AST afterwards, and assert module-level bindings by AST
+  rather than by grep. Every one of those was invisible to `ast.parse`.
+
+- **v4.54 — 2026-08-13 — CND.7: THE RATCHET WAS DISASSEMBLING WORKING CONDORS.**
+  `exit_engine` v4.17 + `config` v4.11 + 7 tests.
+
+  Operator, on being shown the exit ladder: *"So you're telling me a take profit
+  signal could disassemble a working condor? And also a floor percentage loss
+  would fire before the roll plan went into effect? I don't want either of those
+  scenarios ever happening."*
+
+  **ONE OF THE TWO WAS ALREADY PREVENTED.** The take-profit at exit_engine:1412
+  already reads `and not self._condor_sibling_open(record)`, is time-gated to
+  after the entry cutoff, and the sibling check **FAILS CLOSED** (True on error
+  = treat as condor = do not TP). It can only ever fire on a standalone.
+
+  **THE OTHER WAS REAL, AND THE RATCHET IS THE MECHANISM.** The base -25% stop
+  only ever fires on the TESTED side — a credit spread's value RISES as price
+  approaches your short. **The ratchet does the opposite: it tightens the
+  UNTESTED side's stop to breakeven at +20% and +20%-locked at +40% precisely
+  BECAUSE that side is winning.** On the reversal the tested leg stops at -25%
+  and the untested leg hits its ratcheted stop as well — **a leg price never
+  went near, closed by a stop that exists only because it was profitable.**
+  That is the double-stop (**5 of 14 condor symbol-days had BOTH sides
+  stopped**), and it fires BEFORE the roll can ever be used, because the roll
+  needs a tested side. `_condor_sibling_open()` was sitting right there and the
+  ratchet never called it.
+
+  **FIX:** while the sibling is open, the base floor is the ONLY stop. No tier,
+  and the stored high-water is neither applied nor updated, so a leg returning
+  to standalone resumes from a level it genuinely earned rather than one set
+  while the structure was intact.
+
+  **NOT CHANGED, and I nearly over-applied this:** the adverse-regime-flip exit.
+  It is DIRECTION-AWARE — a call spread exits only on TRENDING_BULL, which IS
+  price rising toward that short strike — so it already fires only on the
+  threatened side and is a tested-side exit by construction.
+
+  **PRESERVED:** `condor_stop` went **0% -> 19% win** after the ratchet shipped,
+  but that evidence came mostly from STANDALONES (18 of 46 legs never got a
+  second side). Scoping keeps the gain exactly where it was measured and removes
+  it only where it takes apart a working structure.
+  ⚠️ ACCEPTED COST, stated to the operator before shipping: an untested leg that
+  runs to +40% and reverses now gives it back rather than locking +20%.
+
+  **⚠️ THE STRUCTURAL FINDING UNDERNEATH, worth its own workstream.**
+  `_condor_sibling_open()` is the ONLY cross-leg awareness in the entire exit
+  path. The ratchet keys on `trade_id`, the stop reads that leg's own premium,
+  the regime flip that leg's own side, the nickel that leg's own value. **A
+  "condor" is two independent verticals plus one interlock plus the roll — the
+  structure exists in the plan and in entry, and does NOT exist in the exit
+  logic.** There is no combined-value exit, no net-credit stop, no "both sides
+  safe, close the structure" rule. That is the next condor question and it is
+  bigger than this fix.
+
+  **7/7 PASS**, including a deliberate-failure check (scope on vs off must
+  DIFFER, and must LOOSEN not tighten) and a source-shape assertion that the
+  engine still contains the branch the test models — scoped to a definition, not
+  a mention, per WORKING_AGREEMENT 20.
 
 - **v4.53 — 2026-08-13 — PF.5 IS WIRED. `main` v6.3 + `config` v4.10 + condor
   `decide()` + 27 tests.** The pitchfork overlay now has a consumer that trades.
