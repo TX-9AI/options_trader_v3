@@ -1,5 +1,32 @@
 """
-strategy/continuation_strategy.py — Trend-continuation on pullback. — v1.6
+strategy/continuation_strategy.py — Trend-continuation on pullback. — v1.7
+v1.7 — 2026-08-13 — GRD.2: POPULATE `underlying_target`. `trend_strike_plan`
+        has ALWAYS computed it (EM fraction scaled by ADX + conviction) and USED
+        IT to pick the strike, then DISCARDED it — so the bot was never
+        target-free, it was TARGET-BLIND, and three consumers sat inert on 77% of
+        fleet volume: `_rrr()` returned None on every continuation signal (which
+        is why `rrr` appears in ORB's scorer table and nowhere else, and why the
+        MIN_RRR floor was structurally inert on most of the book);
+        `_pools_in_path` scans `entry < p < target`, so with 0.0 a LONG's window
+        is EMPTY BY CONSTRUCTION and `liquidity_clear` was a structural constant
+        at 1.000 rather than a measured one; and
+        `exit_engine._update_post_target_trail` is guarded on `> 0`, so
+        continuation always fell back to the blunt 85% trail instead of the FVG
+        floor past 100% TP.
+        ⚠️ NOT A TAKE-PROFIT, AND NOTHING CONSUMES IT AS ONE. The operator's
+        no-target design stands — "the multiple is a want, not a need... use
+        stops creatively so nothing stops them running when they're correct."
+        This is the R denominator and the trail's reference. A test pins that no
+        exit fires on reaching it.
+        ⚠️ THE ENTRY GATE BARELY MOVES, and that is arithmetic not opinion:
+        `liq_score = max(1 - n*0.25, 0)` at weight 0.20 removes AT MOST 0.20
+        from a continuation total whose measured p50 is 0.885, against a
+        grade_b bar of 0.55 — even 4+ blocking pools leaves 0.685 and still
+        fires. THE REAL CHANGE IS THE EXIT TRAIL. A test pins the arithmetic so
+        the claim fails loudly if a weight or the bar moves.
+        ORB's A/B grade also reads `_pools_in_path`, but ORB already populated
+        its target and GRD.1 set continuation's grade_a to 1.01, so that path is
+        untouched here.
 v1.6 — 2026-08-11 — CNT.7: THE CONFIRMATION WAS TOO LITERAL AND WAS REJECTING
         TIES. v1.5 required the confirmation bar to close STRICTLY beyond the
         tagging bar's extreme. First live session, on a strong downtrend day the
@@ -597,6 +624,26 @@ class ContinuationStrategy(BaseOptionsStrategy):
                 f"(em={_plan['em']:.2f} liquid={_plan['n_liquid']})")
             return None
         _c = _plan["contract"]
+        # ── GRD.2 — POPULATE `underlying_target` ─────────────────────────────
+        # `trend_strike_plan` has ALWAYS computed this (EM fraction scaled by
+        # ADX + conviction) and USED IT to pick the strike — then discarded it.
+        # So the bot was never target-free; it was TARGET-BLIND, and three
+        # consumers sat inert on 77% of fleet volume:
+        #   · `_rrr()` returned None on every continuation signal, which is why
+        #     `rrr` appears in ORB's scorer table and nowhere else — and why the
+        #     MIN_RRR floor was structurally inert on most of the book.
+        #   · `_pools_in_path` scans `entry < p < target`; with target 0.0 a
+        #     LONG's window is empty BY CONSTRUCTION, so `liquidity_clear` has
+        #     been a structural constant at 1.000, not a measured one.
+        #   · `exit_engine._update_post_target_trail` is guarded on
+        #     `underlying_target > 0`, so continuation always fell back to the
+        #     blunt 85% trail instead of the FVG floor past 100% TP.
+        # ⚠️ THIS IS NOT A TAKE-PROFIT AND NOTHING CONSUMES IT AS ONE. The
+        # operator's no-target design stands: "the multiple is a want, not a
+        # need... use stops creatively so nothing stops them running when
+        # they're correct." This is the R denominator and the trail's reference,
+        # not an exit trigger.
+        signal.underlying_target = float(_plan["target_price"] or 0.0)
         signal.strike        = _c.strike
         signal.entry_premium = _c.mark
         signal.option_symbol = getattr(_c, "symbol", "") or getattr(_c, "option_symbol", "")

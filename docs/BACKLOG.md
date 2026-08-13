@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.59
+# docs/BACKLOG.md — v4.60
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,56 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.60 — 2026-08-13 — GRD.2 SHIPPED (FULL SEND).** `continuation_strategy`
+  v1.7 + 10 tests (135 across today's suites). **The oldest open item on the
+  board, approved this morning and built tonight.**
+
+  **THE BOT WAS NEVER TARGET-FREE. IT WAS TARGET-BLIND.** `trend_strike_plan`
+  has always computed `target_price` (EM fraction scaled by ADX + conviction)
+  and USED IT to pick the strike — then discarded it. One line restores it, and
+  three consumers that were inert on **77% of fleet volume** wake up:
+  · **`_rrr()`** returned None on every continuation signal. That is why `rrr`
+    appears in ORB's scorer table and nowhere else, and why the MIN_RRR floor
+    was structurally inert across most of the book. `rrr` is also the ONE
+    dimension measured to separate anywhere, and it has been unmeasurable on the
+    strategy carrying most of the volume.
+  · **`_pools_in_path`** scans `entry < p < target`; with 0.0 a LONG's window is
+    **empty by construction**, so `liquidity_clear` was a STRUCTURAL constant at
+    1.000, not a measured one. The scorer showing it flat was the symptom.
+  · **`_update_post_target_trail`** is guarded on `underlying_target > 0`, so
+    continuation always fell back to the blunt 85% trail instead of the FVG
+    floor past 100% TP.
+
+  **⚠️ NOT A TAKE-PROFIT, AND NOTHING CONSUMES IT AS ONE.** The operator's
+  no-target design stands verbatim — *"the multiple is a want, not a need... use
+  stops creatively so nothing stops them running when they're correct, but the
+  leash tightens quickly when they're wrong."* This is the R denominator and the
+  trail's reference. A test asserts no exit fires on reaching it, so a future
+  edit cannot quietly turn it into one.
+
+  **⚠️ THE ENTRY GATE BARELY MOVES — ARITHMETIC, NOT OPINION.**
+  `liq_score = max(1 - n*0.25, 0)` at weight 0.20 removes AT MOST **0.20** from
+  a continuation total whose measured p50 is **0.885**, against a `grade_b` bar
+  of **0.55**. Even 4+ blocking pools leaves **0.685** and still fires. **THE
+  REAL BEHAVIOURAL CHANGE IS THE EXIT TRAIL.** A test pins the arithmetic so the
+  claim fails loudly if a weight or the bar ever moves.
+  ORB's A/B grade ALSO reads `_pools_in_path` — but ORB already populated its
+  target, and GRD.1 set continuation's `grade_a` to 1.01 so it cannot grade A
+  regardless. That path is untouched.
+
+  **PLACEMENT MATTERS:** `_plan` is built AFTER the signal is constructed, so
+  the assignment cannot live in the `OptionsSignal(...)` call and must sit after
+  the `if not _plan["ok"]` return — otherwise a failed plan writes 0.0 and looks
+  populated. Both pinned by tests.
+
+  **ATTRIBUTION WARNING FOR THE FIRST BAKED SESSION.** Nothing from 2026-08-13
+  has reached the fleet. GRD.1, the 0.15 stop floor, AFD.1, PF.5/PF.6, CND.7,
+  the 15:45 vertical hold, TC.6 and now GRD.2 all land in ONE bake. Read the
+  first session as **"did anything break"**, not "which change helped" — the
+  three separately-observable GRD.2 signatures (`rrr` appearing in the scorer
+  breakdown, `liquidity_clear` moving off 1.000, `post_target_trail` appearing
+  in `exit_reason`) are the only per-change attribution available.
 
 - **v4.59 — 2026-08-13 — FRC.3: THE VENUE'S PRICE GRID, ON EVERY ORDER PATH.**
   `execution/tick_size.py` v1.0 + `limit_ladder` v1.4 + `options_chain` + 20
