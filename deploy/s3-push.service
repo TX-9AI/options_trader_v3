@@ -1,0 +1,21 @@
+# options_trader_v3/deploy/s3-push.service — v1.0
+# 2026-08-12 — initial release. Box-side warehouse pusher (chain snapshots).
+# Oneshot, driven by s3-push.timer. Runs under SYSTEM python: boto3 is present
+# there fleet-wide and absent from the bot venv, and this must never depend on
+# the venv. Touches no bot unit and requires no bot restart.
+[Unit]
+Description=Vertigo warehouse push (chain snapshots -> S3)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/options-trader
+Environment=OT_S3_BUCKET=vertigo-warehouse-tx9ai
+Environment=OT_S3_REGION=us-east-2
+Environment=OT_S3_PREFIX=raw
+Environment=OT_S3_PUSH=1
+ExecStart=/usr/bin/python3 /home/ubuntu/options-trader/warehouse/s3_push.py
+# Never let a stuck network call pile up runs behind it.
+TimeoutStartSec=240
