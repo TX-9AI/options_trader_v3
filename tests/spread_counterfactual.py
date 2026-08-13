@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-tests/spread_counterfactual.py — v1.0 — 2026-08-13   (TC.7)
+tests/spread_counterfactual.py — v1.1 — 2026-08-13   (TC.7)
+
+v1.1 — 2026-08-13 — CRASH FIX: `sorted(snaps)` on `(minute, dict)` tuples.
+        When two snapshots share a minute Python falls through to comparing the
+        DICTS and raises `TypeError: '<' not supported between instances of
+        'dict' and 'dict'`. Now sorted on the KEY ONLY.
+        ⚠️ WHY THE FIXTURE MISSED IT, and this is the reusable part: the fixture
+        wrote ONE snapshot per symbol-day, so the tuple comparator was never
+        reached — a single-element list cannot exercise a sort. A fixture that
+        cannot produce a TIE cannot test a tie-break. The fixture now writes two
+        snapshots at the SAME minute, which reproduces the crash against v1.0.
 
 WOULD THESE TRADES HAVE PAID AS SHORT VERTICALS INSTEAD OF LONG PREMIUM?
 
@@ -138,7 +148,10 @@ def chain_at(date, sym, minute, cache):
                         snaps.append((int(ts[11:13]) * 60 + int(ts[14:16]), r))
             except Exception:                                  # noqa: BLE001
                 pass
-        cache[key] = sorted(snaps)
+        # KEY ONLY. Sorting bare tuples falls through to the dict on a tie
+        # and raises — v1.0's crash, on the very first real run.
+        snaps.sort(key=lambda s: s[0])
+        cache[key] = snaps
     snaps = cache[key]
     if not snaps:
         return None, None

@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.45
+# docs/BACKLOG.md — v4.46
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,21 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.46 — 2026-08-13 — `spread_counterfactual` v1.1: CRASH ON THE FIRST REAL
+  RUN, AND THE FIXTURE COULD NOT HAVE CAUGHT IT.** `sorted(snaps)` on
+  `(minute, dict)` tuples — when two chain snapshots share a minute, Python
+  falls through to comparing the DICTS and raises. Now sorted on the KEY ONLY.
+  **THE REUSABLE LESSON IS THE FIXTURE, NOT THE SORT.** The fixture wrote ONE
+  snapshot per symbol-day, so the tuple comparator was never reached — **a
+  single-element list cannot exercise a sort, and a fixture that cannot produce
+  a TIE cannot test a tie-break.** Same family as the deliberate-failure rule
+  already in the method notes: a fixture that cannot fail is not evidence. The
+  fixture now writes two snapshots at the same minute and reproduces the crash
+  against v1.0.
+  ✅ NOT AFFECTED: the join and the conviction filter were correct on the first
+  run — both arms returned **population 128, unmatched 0**, exactly the band
+  HND.1 identified.
 
 - **v4.45 — 2026-08-13 — HND.1 + TC.7. ONE BAND CARRIES MORE THAN THE WHOLE
   STRATEGY LOSS, AND ENG.2 CLOSES NEGATIVE.**
