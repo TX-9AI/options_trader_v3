@@ -1,6 +1,22 @@
 #!/usr/bin/env python3
 """
-tests/readiness_label_study.py — v1.0 — 2026-08-12  (ANT.1)
+tests/readiness_label_study.py — v1.2 — 2026-08-12  (ANT.1)
+
+v1.2 — ⚠️ THE VERDICT WAS WRONG AND FLATTERED THE RESULT. v1.1 measured SPREAD
+       across r bands and printed "80% SEPARATES" for continuation and "162%
+       SEPARATES" for sweep — when both tables are U-SHAPED and the LOWEST band
+       wins (continuation 0.0-0.2 -> 0.340; sweep 0.0-0.2 -> 0.468, more than
+       double every other band). The spread came entirely from the bottom band.
+       The printed warning said monotonicity was the claim; the code never
+       checked it. Now it does, and it names an INVERSE monotone relationship as
+       a usable finding rather than a failure — several factors turned out to
+       separate NEGATIVELY.
+
+v1.1 — FIXED THE PAYLOAD PATH and added per-factor separation. v1.0 read the
+       emitter's inner dict and assumed it was top level; the record actually
+       nests under a "readiness" key, so all 128,503 joined rows grouped as
+       `None` and every table printed empty. The labelling and the join were
+       correct — only the field extraction was wrong.
 
 DOES THE ANTICIPATION LAYER PREDICT? — the test of the project's own premise.
 
@@ -139,7 +155,15 @@ def main(argv):
                         continue
                     if not str(r.get("event", "")).startswith("readiness"):
                         continue
-                    strat = r.get("strategy")
+                    # ⚠️ THE PAYLOAD NESTS UNDER "readiness" — v1.0 read the
+                    # emitter's INNER dict and assumed it was top level, so every
+                    # row grouped as None and every table came back empty on
+                    # 128,503 joined rows. Same nesting the pitchfork observer
+                    # uses; I should have expected it.
+                    rd = r.get("readiness")
+                    if not isinstance(rd, dict):
+                        rd = r
+                    strat = rd.get("strategy")
                     if a.track and strat != a.track:
                         continue
                     ts = str(r.get("ts_et") or "")[11:16]
@@ -162,9 +186,9 @@ def main(argv):
                         continue
                     rows.append({
                         "strat": strat, "sym": sym,
-                        "r": r.get("r"), "machine": r.get("machine"),
-                        "slope": r.get("slope_per_min"), "peak": r.get("peak_r"),
-                        "factors": r.get("factors") or {},
+                        "r": rd.get("r"), "machine": rd.get("machine"),
+                        "slope": rd.get("slope_per_min"), "peak": rd.get("peak_r"),
+                        "factors": rd.get("factors") or {},
                         "fwd": fwd, "hour": int(ts[:2]),
                     })
 
@@ -210,14 +234,38 @@ def main(argv):
             print(f"    {lab:14}{len(sub):>8,}" +
                   "".join(f"{(v if v is not None else 0):>10.3f}" for v in p50) +
                   "".join(f"{(v if v is not None else 0):>10.3f}" for v in p90))
-        vals = [v for v in seps.values() if v is not None]
-        if len(vals) >= 2:
-            lift = (max(vals) - min(vals)) / max(min(vals), 1e-9) * 100
-            verdict = ("SEPARATES" if lift >= 25 else
-                       ("weak" if lift >= 10 else "FLAT — r does not predict"))
-            print(f"    ⇒ spread across r bands at 10 bars: {lift:.0f}%  {verdict}")
-            print(f"      ⚠️ a MONOTONE rise is the claim, not merely a spread —")
-            print(f"      check the column reads in order before believing it.")
+        # ⚠️ v1.2 — THE VERDICT NOW REQUIRES MONOTONICITY. v1.1 measured the
+        # SPREAD across r bands and flagged continuation "80% SEPARATES" and
+        # sweep "162% SEPARATES" — when both tables are U-SHAPED and the LOWEST
+        # r band wins (continuation 0.0-0.2 -> 0.340, the highest of any band;
+        # sweep 0.0-0.2 -> 0.468, more than double every other). The spread was
+        # driven ENTIRELY by the bottom band. The warning text said monotone was
+        # the claim and the code did not check it.
+        ordered = [seps[lab] for _lo, _hi, lab in bands
+                   if lab in seps and seps[lab] is not None]
+        if len(ordered) >= 3:
+            lift = (max(ordered) - min(ordered)) / max(min(ordered), 1e-9) * 100
+            rising = all(ordered[i + 1] >= ordered[i] * 0.98
+                         for i in range(len(ordered) - 1))
+            falling = all(ordered[i + 1] <= ordered[i] * 1.02
+                          for i in range(len(ordered) - 1))
+            top_is_max = ordered[-1] >= max(ordered) * 0.98
+            bot_is_max = ordered[0] >= max(ordered) * 0.98
+            if rising and lift >= 25:
+                v = "PREDICTS — monotone rise"
+            elif falling and lift >= 25:
+                v = "PREDICTS INVERSELY — monotone fall, flip the sign"
+            elif bot_is_max:
+                v = "U-SHAPED, LOWEST BAND WINS — r does NOT predict"
+            elif top_is_max and lift >= 25:
+                v = "top band highest but NOT monotone — weak"
+            else:
+                v = "FLAT / NON-MONOTONE — r does not predict"
+            print(f"    ⇒ spread {lift:.0f}%   {v}")
+            print(f"      ⚠️ SPREAD IS NOT SEPARATION. A U-shaped table with a")
+            print(f"      high bottom band is the CONFLUENCE FAILURE — evidence")
+            print(f"      accumulates AFTER the move starts, so a high score")
+            print(f"      means late, not likely.")
 
         # ── does the state machine predict? ────────────────────────────────
         print(f"\n  FORWARD MOVE BY MACHINE STATE")
@@ -253,6 +301,57 @@ def main(argv):
             print(f"       should beat a picture merely HIGH. If Q4 beats the top r")
             print(f"       band, gate on slope; if not, the premise loses its")
             print(f"       distinctive claim even where the level survives.")
+
+    # ── PER-FACTOR SEPARATION ──────────────────────────────────────────────
+    # The payload carries `factors` (conv, appr_val, appr_dist_atr,
+    # appr_touches, age_bars, ...). `r` is their combination, so a flat `r`
+    # could still hide ONE factor that separates while the others dilute it.
+    # This is the same question scorer_backtest asked of the confluence
+    # dimensions — and there the answer was that every one was flat.
+    print(f"\n{'='*78}\n  PER-FACTOR SEPARATION — is any single factor doing work?")
+    print(f"{'='*78}")
+    for strat, g in sorted(by.items(), key=lambda kv: -len(kv[1])):
+        if len(g) < a.min_n:
+            continue
+        names = set()
+        for x in g:
+            names.update(k for k, v in (x["factors"] or {}).items()
+                         if isinstance(v, (int, float)))
+        if not names:
+            continue
+        print(f"\n  {strat}   n={len(g):,}")
+        print(f"    {'factor':18}{'n':>8}{'lo p50@10':>11}{'hi p50@10':>11}"
+              f"{'lift':>8}   verdict")
+        out = []
+        for nm in sorted(names):
+            vals = [(x["factors"][nm], x["fwd"].get(10)) for x in g
+                    if isinstance(x["factors"].get(nm), (int, float))
+                    and 10 in x["fwd"]]
+            if len(vals) < 200:
+                continue
+            vs = sorted(v for v, _f in vals)
+            q1, q3 = vs[len(vs)//4], vs[3*len(vs)//4]
+            if q3 <= q1:
+                out.append((0.0, nm, None, None, len(vals), "CONSTANT"))
+                continue
+            lo = [f for v, f in vals if v <= q1]
+            hi = [f for v, f in vals if v >= q3]
+            if len(lo) < 50 or len(hi) < 50:
+                continue
+            mlo, mhi = pctile(lo, .5), pctile(hi, .5)
+            lift = (mhi - mlo) / max(mlo, 1e-9) * 100
+            v = ("SEPARATES" if abs(lift) >= 25 else
+                 ("weak" if abs(lift) >= 10 else "flat"))
+            out.append((abs(lift), nm, mlo, mhi, len(vals), v))
+        for _k, nm, mlo, mhi, n_, v in sorted(out, reverse=True):
+            if mlo is None:
+                print(f"    {nm[:17]:18}{n_:>8,}{'—':>11}{'—':>11}{'—':>8}   {v}")
+            else:
+                print(f"    {nm[:17]:18}{n_:>8,}{mlo:>11.3f}{mhi:>11.3f}"
+                      f"{((mhi-mlo)/max(mlo,1e-9)*100):>7.0f}%   {v}")
+        print(f"    lo/hi = bottom vs top QUARTILE of that factor. A factor that")
+        print(f"    SEPARATES while `r` is flat means the COMBINATION is diluting")
+        print(f"    it — which is a weighting fix, not a measurement failure.")
 
     print(f"\n  ── HOW TO READ THIS ──")
     print(f"    A band table that rises MONOTONELY with r is the premise working.")

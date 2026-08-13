@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.33
+# docs/BACKLOG.md — v4.34
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5050,6 +5050,73 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **v4.34 — 2026-08-12 EOD — ANT.1: THE PREMISE, TESTED AT LAST — AND `r` DOES
+  NOT PREDICT. But individual FACTORS do, and the aggregation destroys them.**
+  128,503 labelled readiness rows across 18 sessions, joined to forward tape
+  movement (directionless, the WEAK test on purpose). No new collection.
+
+  **⚠️ FIRST, MY OWN VERDICT LOGIC WAS WRONG AND FLATTERED THE RESULT.** The tool
+  flagged continuation "80% SEPARATES" and sweep "162% SEPARATES" — but it
+  measured SPREAD across r bands, not MONOTONICITY. **The tables are U-SHAPED and
+  the LOWEST band wins:**
+      continuation  r 0.0-0.2 -> **0.340** · 0.2-0.4 0.189 · 0.4-0.6 0.231 ·
+                    0.6-0.8 0.220 · 0.8-1.0 0.238   (p50 @10 bars)
+      sweep         r 0.0-0.2 -> **0.468** · 0.2-0.4 0.207 · 0.4-0.6 0.182 ·
+                    0.6-0.8 0.179 · 0.8-1.0 0.216
+  The warning text I wrote says "a MONOTONE rise is the claim, not merely a
+  spread" — and the code did not check it. **Fix the verdict to require
+  monotonicity before this tool is used again.**
+
+  **⇒ `r` DOES NOT PREDICT. LOW readiness precedes MORE movement than high.**
+  That is the CONFLUENCE FAILURE AGAIN, inside the layer built to avoid it:
+  readiness rises as evidence accumulates, and evidence accumulates AFTER the
+  move begins. Same mechanism that made the setup scorer's A grade an
+  anti-signal (A −$8,244 / B +$1,893).
+  - **SLOPE IS FLAT** — the premise's sharpest form ("a picture ASSEMBLING should
+    beat one merely HIGH"): continuation Q1 0.218 → Q4 0.243; sweep 0.186 →
+    0.205; butterfly and TCS show nothing. **The distinctive claim does not
+    survive its own test.**
+  - **MACHINE STATE IS FLAT** — ARMED barely differs from DORMANT on any track.
+
+  **⇒ BUT THE FACTOR TABLE IS THE REAL FINDING, AND IT IS ACTIONABLE.** Single
+  factors separate strongly where their COMBINATION `r` does not:
+  - **SWEEP'S FACTORS SEPARATE HARD AND ALL NEGATIVELY: `appr_touches` −45% ·
+    `appr_val` −41% · `age_bars` −31%.** FEWER touches, WEAKER approach and a
+    YOUNGER sweep precede MORE movement. **SWP.3's approach factor is scoring
+    BACKWARDS** — the same factor fitted to the shadow observer's 61.3% London
+    share that LIQ.1 then showed was an artefact (London tracked price because
+    its window overlaps RTH by 2.5h). **Two independent lines now say SWP.3's
+    weighting is wrong.**
+  - **CONDOR `room_val` +77% (put) and +45% (call)** — the strongest HONEST
+    signal in the run, on the strategy that never fires. condor_call `conv` +39%.
+  - **BUTTERFLY `conv` +60%**, its only non-constant factor besides `narrow_val`.
+  - **`conv` INVERTS BY STRATEGY:** continuation −6% · sweep +25% · butterfly
+    +60% · condor_call +39%. One input, four different relationships — so a
+    single global weighting for it cannot be right.
+  - **TCS `floor_px` −40%**, and its `mom_val`/`ext_damp`/`armext_*` are all
+    CONSTANTS.
+  - ⚠️ CONSTANTS EVERYWHERE: continuation `mom_val`; butterfly `squeeze_val`;
+    sweep `is_sweep`, `fresh_val`; condor `origin_px/origin_em/ext_val/ext_frac/
+    ext_fires`. **A constant cannot be thresholded and cannot be re-weighted —
+    fixing it means changing what it MEASURES.**
+
+  **⇒ WHAT THIS CHANGES.** The roadmap's Phase-1 premise — "gate on the
+  anticipation layer" — **does not survive as stated**: `r` is not a predictor.
+  But the layer is not worthless. It carries factors with real signal that the
+  aggregation cancels, several of them NEGATIVE where the design assumed
+  positive. **The work is re-deriving the combination from measured signs and
+  magnitudes, not gating on `r` as it stands.**
+  ⚠️ SCOPE: this is the DIRECTIONLESS test — availability, not direction. A
+  factor that cannot predict available movement cannot predict a directional
+  outcome, so failures here are conclusive; successes are necessary and not
+  sufficient. And readiness journals on state CHANGE and heartbeat, so this
+  measures the moments readiness chose to record, a biased sample by
+  construction.
+
+  **TOOL:** `readiness_label_study` v1.1 (v1.0 read the emitter's inner dict and
+  assumed top level; the payload nests under a `readiness` key, so all 128,503
+  rows grouped as `None` and every table printed empty — the join was always
+  correct, only the field path was wrong).
 - **v4.33 — 2026-08-12 EOD — SELECTION AND SIZING: four shippable conclusions,
   and the volatility contraction confirmed a second way.**
 
