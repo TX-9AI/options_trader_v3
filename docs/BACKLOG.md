@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.55
+# docs/BACKLOG.md — v4.56
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5049,6 +5049,48 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.56 — 2026-08-13 — FRC.1: WHAT DOES THE BOOK LOOK LIKE ONCE YOU CROSS?**
+  `tests/slippage_audit.py` v1.0.
+
+  **THE GAP NOBODY HAS PRICED.** `PAPER_FILL_SLIPPAGE_PCT` is **0.0** and
+  commission is not modelled anywhere. `limit_ladder.paper_fill_price` books the
+  MARK, and is explicit about what it assumes: *"paper is now honest about PRICE
+  but still optimistic about FILL RATE — the residual gap to model later is
+  no-fill risk, not slippage."* Under a mark-limit policy that is a defensible
+  baseline — but **every number produced today (the +$463 book, TC.7's
+  +$0.52/spread, the POP validation) is measured against a fill that may not
+  happen at that price.**
+
+  **IT DOES NOT NEED A FORWARD WEEK.** `contract.spread_pct_of_mid` is already
+  journaled per scored trade and `contracts` is in trades.db, so friction is
+  computable on sessions ALREADY COLLECTED. Round trip costs ONE FULL SPREAD
+  (buy the ask = mid + half, sell the bid = mid - half), so
+  `friction = spread_pct_of_mid * entry_premium * contracts * 100`.
+
+  **⚠️ THREE LIMITS, PRINTED IN THE OUTPUT RATHER THAN BURIED:** the spread is
+  measured AT ENTRY and 0DTE exit spreads are usually wider, so this is a **LOWER
+  BOUND**; it assumes you cross BOTH ways, so the truth sits between this net and
+  the gross and WHERE it sits is a **fill-rate** question the tool cannot answer;
+  and commission is absent from the data entirely (`--commission` adds it
+  explicitly rather than inventing one).
+
+  **THE COHORT IT EXISTS FOR.** 279 of 843 trades close in under a minute, ~218
+  of them `regime_flip` at a **0.3-minute median hold** for **+$1,308 gross**. A
+  mark-limit posted and cancelled within eighteen seconds is exactly where
+  "assume it fills" is least true, and that population pays entry AND exit
+  friction on every trade. **If friction exceeds its gross it is a
+  pure-subtraction population regardless of what the mark-based P&L says** — and
+  that is a SELECTION finding, not a fill finding, so it does not go away by
+  filling better. The report flags any cohort whose sign flips.
+
+  Fixture-verified against planted truth: $60/trade friction across 10 trades
+  reproduces exactly ($600 friction, $800 gross, $200 net) and the sub-minute
+  cohort planted to invert does invert (**+$80 gross -> −$160 net**).
+
+  **NEXT AFTER THIS (operator-approved order): the `spread_pct_of_mid` friction
+  gate.** Widest quintile 125 trades, 37%% win, **−$4,626** — a PRE-ENTRY filter
+  needing no forecast, and this audit's quintile table is its own evidence base.
 
 - **v4.55 — 2026-08-13 — TC.6 IS BUILT AND WIRED.** `strategy/trend_credit_spread.py`
   v1.0 + `exit_engine` v4.17 + `main` v6.4 + `config` v4.12 + 8 tests (104 across
