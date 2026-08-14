@@ -145,3 +145,84 @@ def test_no_premium_stop_inside_the_tcs_branch():
         assert banned not in seg, (
             f"{banned} appears inside the TC.6 branch — the measured EV was "
             "HELD TO EXPIRY, UNMANAGED, and a stop changes the trade")
+
+
+# ── the fall-through that shipped, and the test that missed it ─────────────
+
+def test_the_branch_ENDS_in_a_return_not_just_contains_one():
+    """⚠️ THE v1.0 TEST ASSERTED THE BRANCH CONTAINED TWO `return decision`
+    STATEMENTS. IT DID. And it was still broken.
+
+    Neither return covers the path where NEITHER breach NOR nickel fires — and
+    that path fell through to the ratchet and the 25% condor stop. Observed live
+    2026-08-14: a $0.06 credit sets stop_premium at $0.07 (credit x 1.25), so
+    ONE CENT of widening closed the trade. Every TC.6 leg on the fleet stopped
+    out within seconds of opening.
+
+    Counting returns proves nothing about the path that has none. This asserts
+    on the branch's LAST STATEMENT, which is the only thing that makes the
+    ratchet unreachable.
+    """
+    import ast
+    tree = ast.parse(SRC)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and "is_trend_credit" in (
+                ast.get_source_segment(SRC, node.test) or ""):
+            last = node.body[-1]
+            assert isinstance(last, ast.Return), (
+                "the TC.6 branch does not END in a return — it falls through to "
+                "the ratchet and the 25% stop, which is a different trade from "
+                "the one that was measured")
+            return
+    raise AssertionError("the TC.6 branch is gone from exit_engine")
+
+
+def test_every_path_out_of_the_branch_is_a_return():
+    """Stronger form: no statement after the branch's own control flow can leak
+    into the condor ladder."""
+    import ast
+    tree = ast.parse(SRC)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and "is_trend_credit" in (
+                ast.get_source_segment(SRC, node.test) or ""):
+            src_seg = ast.get_source_segment(SRC, node)
+            assert src_seg.rstrip().endswith("return decision")
+            return
+
+
+# ── the joint EV test ──────────────────────────────────────────────────────
+
+def test_joint_ev_requires_rich_credit_at_low_pop_and_allows_thin_at_high():
+    """THE SHAPE IS THE POINT. A flat credit floor and a flat POP floor are
+    INDEPENDENT, and independent is the bug: POP >= 0.70 selects FAR strikes,
+    far strikes pay little, and neither floor ever sees the other.
+    credit/width > L*(1-POP)/POP links them."""
+    import config
+    L = config.TCS_LOSS_GIVEN_BREACH
+    req = lambda pop: L * (1.0 - pop) / pop
+    assert req(0.70) > req(0.80) > req(0.90) > req(0.95)
+    assert req(0.70) > 0.20, "a POP-0.70 strike must pay richly"
+    assert req(0.95) < 0.05, "a POP-0.95 strike may be thin"
+
+
+def test_joint_ev_blocks_the_2026_08_14_live_fills():
+    """Regression on real fills: NVDA sold a $5-wide for $0.06 and PLTR a
+    $6-wide for $0.08 at 10:02 ET. Both must fail on EV ALONE, even at a
+    generous POP."""
+    import config
+    L = config.TCS_LOSS_GIVEN_BREACH
+    for credit, width, pop in ((0.06, 5.0, 0.96), (0.08, 6.0, 0.96)):
+        assert credit / width <= L * (1.0 - pop) / pop, (
+            f"credit {credit} on width {width} still clears the EV test")
+    # and a real one still passes
+    assert 0.55 / 5.0 > L * (1.0 - 0.90) / 0.90
+
+
+def test_unresolvable_pop_is_a_skip_not_a_pass():
+    """A missing ATR must never read as a safe trade — `_pop` returns 0.0 and
+    the caller must SKIP, not divide by it."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "strategy",
+                            "trend_credit_spread.py"), encoding="utf-8").read()
+    i = src.index("pop = self._sel._pop(")
+    assert "if pop <= 0.0:" in src[i:i + 400]
+    assert "return None" in src[i:i + 600]

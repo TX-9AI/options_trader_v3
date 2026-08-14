@@ -1,5 +1,10 @@
 """
-config.py — options_trader v4.15
+config.py — options_trader v4.17
+v4.17 — 2026-08-14 — TCS_LOSS_GIVEN_BREACH: the credit and POP floors are
+        now ONE joint EV test rather than two independent ones.
+v4.16 — 2026-08-14 — TC.6 HOTFIX: TCS_START_ET (11:00), TCS_MIN_CREDIT_PCT_WIDTH
+        (0.10), TCS_MIN_CREDIT_NICKEL_MULT (4.0), TCS_COOLDOWN_MIN (30). It
+        rapid-fired the fleet selling $0.06 credits on $5 wides at 10:02 ET.
 v4.15 — 2026-08-13 — TREND_CREDIT_ACTIVE. TC.6 was the only new firing
         strategy with no env kill switch.
 v4.14 — 2026-08-13 — ENTRY_LIMIT_LADDER [0.50, 0.25, 0.00] @ 15s.
@@ -318,6 +323,50 @@ INSTRUMENT          = os.environ.get("OT_INSTRUMENT", "QQQ")
 # a re-bake, on a strategy that has never executed a live order. Every other
 # change today has one. This closes that gap.
 TREND_CREDIT_ACTIVE         = os.environ.get("OT_TCS_ACTIVE", "1") == "1"
+# ── TC.6 ENTRY GATES (2026-08-14 HOTFIX — it rapid-fired the whole fleet) ─────
+# Observed 10:02 ET on 08-14: NVDA sold a $5-wide for $0.06, PLTR a $6-wide for
+# $0.08, and every box re-entered seconds after a nickel close.
+# THREE THINGS WERE MISSING AND EACH ONE ALONE WOULD HAVE STOPPED IT:
+#  (1) NO AFTERNOON GATE. Designed as afternoon trend participation, coded
+#      against GLOBAL_NO_ENTRY_ET (14:00). It fired at 10:02.
+#  (2) NO MINIMUM CREDIT — and the POP floor CAUSES this. POP rises with
+#      distance, so requiring POP >= 0.70 selects for FAR strikes, and far
+#      strikes collect almost nothing. The probability half of the gate shipped
+#      without the payoff half. A gate that only demands SAFETY systematically
+#      finds the worst-paid trade that clears it.
+#  (3) NO RE-ENTRY COOLDOWN. With credit $0.06 and the nickel close at $0.05,
+#      total profit potential is ONE CENT — the trade closes on the tick it
+#      opens, then reopens. "No per-session limit" was the operator's call and
+#      is respected; a LOOP is a defect, not a limit question.
+TCS_START_ET                = (11, 0)     # afternoon only, matches AFD.1
+# Credit must clear BOTH floors. Width-relative keeps risk/reward sane;
+# nickel-relative guarantees the trade has room to exist at all.
+# 0.10 is a STATED PRIOR inside the measured band: credit_edge ran 8-19% of
+# width at sellable offsets, and TC.7's ORB-anchored 0.00% cell was ~17%.
+TCS_MIN_CREDIT_PCT_WIDTH    = float(os.environ.get("OT_TCS_MIN_CREDIT_PCT", "0.10"))
+# ── THE JOINT EV TEST (2026-08-14) ───────────────────────────────────────────
+# Operator: "The trade should at least enter on some expectation of profit, not
+# all willy nilly like this."
+# A flat credit floor and a flat POP floor are INDEPENDENT tests, and independent
+# is the bug: POP >= 0.70 selects FAR strikes, far strikes pay little, and the
+# two floors never talk to each other. The correct condition is a single
+# inequality:
+#       EV = credit * POP - L * width * (1 - POP) > 0
+#   =>  credit / width  >  L * (1 - POP) / POP
+# so a LOW-POP strike must pay RICHLY and a HIGH-POP strike may be thin. That is
+# the shape a credit spread actually has.
+# `L` is loss-given-breach as a fraction of width. **NOT 1.0**: a breach rarely
+# runs the full width by the bell — TC.7's ORB-anchored cell measured E[loss]
+# 0.35 on a $5 wide (7% of width) at 90% terminal-OK, and credit_edge put real
+# credits at 8-19% of width. At L=1.0 a POP-0.70 strike would need 30% of width,
+# which essentially never occurs, and the gate would silence TC.6 entirely —
+# over-correcting into silence is its own failure.
+# L=0.5 is a STATED PRIOR: it requires 21% of width at POP 0.70, 5.6% at POP
+# 0.90, 2.6% at POP 0.95. Conservative against the measured 7%, and it produces
+# the right ORDERING regardless of the exact value.
+TCS_LOSS_GIVEN_BREACH       = float(os.environ.get("OT_TCS_LGB", "0.5"))
+TCS_MIN_CREDIT_NICKEL_MULT  = float(os.environ.get("OT_TCS_NICKEL_MULT", "4.0"))
+TCS_COOLDOWN_MIN            = float(os.environ.get("OT_TCS_COOLDOWN_MIN", "30"))
 
 ENTRY_LIMIT_LADDER          = [0.50, 0.25, 0.00]
 ENTRY_LADDER_STEP_SEC       = float(os.environ.get("OT_ENTRY_LADDER_STEP_SEC", "15"))

@@ -1,5 +1,28 @@
 """
-strategy/trend_credit_spread.py — options_trader_v3 — v1.0 — 2026-08-13  (TC.6)
+strategy/trend_credit_spread.py — options_trader_v3 — v1.1 — 2026-08-14  (TC.6)
+
+v1.1 — 2026-08-14 — 🔴 LIVE HOTFIX: IT RAPID-FIRED THE WHOLE FLEET.
+        Observed 10:02 ET: NVDA sold a $5-wide for $0.06, PLTR a $6-wide for
+        $0.08, every box re-entering seconds after a nickel close. THREE gates
+        were missing and each alone would have stopped it:
+        (1) NO AFTERNOON GATE — designed as afternoon trend participation, coded
+            against GLOBAL_NO_ENTRY_ET (14:00) only. Now TCS_START_ET (11:00),
+            matching AFD.1.
+        (2) NO MINIMUM CREDIT, **and the POP floor CAUSES this**. POP rises with
+            distance, so POP >= 0.70 selects for FAR strikes and far strikes
+            collect almost nothing. The probability half shipped without the
+            payoff half — a gate that only demands SAFETY systematically finds
+            the worst-paid trade that clears it. Now TWO floors: width-relative
+            (0.10, inside credit_edge's measured 8-19% band) keeps risk/reward
+            sane, and nickel-relative (4x the nickel close) guarantees the trade
+            has ROOM TO EXIST — $0.06 against a $0.05 nickel is one cent of
+            total profit potential. Checked against the live fills: NVDA and
+            PLTR BLOCKED, SPX ($0.55 on a $5 wide = 11%) PASSES.
+        (3) NO RE-ENTRY COOLDOWN. "No per-session limit" was the operator's call
+            and stands — a LOOP is a defect, not a limit question. 30 min.
+        ⚠️ The stop-out itself was exit_engine's missing terminal return (v4.18),
+        not an entry problem. These gates stop the FIRING; that fixed the
+        LOSING.
 
 TREND PARTICIPATION BY SELLING PREMIUM BENEATH THE MOVE.
 
@@ -69,7 +92,9 @@ from config import (
     CONDOR_MIN_POP, CONDOR_POP_BAR_MIN, CONDOR_MAX_QUOTE_WIDTH,
     CONDOR_EM_FLOOR_FRAC, GLOBAL_NO_ENTRY_ET, INSTRUMENT,
     CONDOR_WING_WIDTH_SPX, CONDOR_WING_WIDTH_QQQ,
-    TREND_CREDIT_ACTIVE,
+    TREND_CREDIT_ACTIVE, TCS_START_ET, TCS_MIN_CREDIT_PCT_WIDTH,
+    TCS_MIN_CREDIT_NICKEL_MULT, TCS_COOLDOWN_MIN, CONDOR_NICKEL_CLOSE,
+    TCS_LOSS_GIVEN_BREACH, CONDOR_MIN_POP,
 )
 from strategy.iron_condor_strategy import IronCondorStrategy
 
@@ -85,6 +110,7 @@ class TrendCreditSpread:
     def __init__(self):
         # Borrow the condor's selector rather than clone it — ONE owner.
         self._sel = IronCondorStrategy.__new__(IronCondorStrategy)
+        self._last_fire = None      # cooldown anchor — see the loop note below
 
     @staticmethod
     def _wing_width() -> float:
@@ -115,6 +141,19 @@ class TrendCreditSpread:
             now = now_et or datetime.now(ET)
             if (now.hour, now.minute) >= GLOBAL_NO_ENTRY_ET:
                 return None
+            # ── AFTERNOON ONLY (hotfix 2026-08-14) ───────────────────────────
+            # This is AFTERNOON trend participation and was coded against the
+            # 14:00 global cutoff only. It fired at 10:02 ET across the fleet.
+            if (now.hour, now.minute) < TCS_START_ET:
+                return None
+            # ── RE-ENTRY COOLDOWN ────────────────────────────────────────────
+            # The operator's "no per-session limit" stands — a LOOP is a defect,
+            # not a limit question. With a $0.06 credit and a $0.05 nickel close
+            # the trade closed on the tick it opened and reopened immediately.
+            if self._last_fire is not None:
+                _mins = (now - self._last_fire).total_seconds() / 60.0
+                if _mins < TCS_COOLDOWN_MIN:
+                    return None
 
             if getattr(orb, "invalidation_reason", "") != "runaway":
                 return None
@@ -174,6 +213,53 @@ class TrendCreditSpread:
                             "(undefined risk is never sold)", long_strike)
                 return None
 
+            # ── MINIMUM CREDIT — THE PAYOFF HALF OF THE GATE ─────────────────
+            # ⚠️ THE POP FLOOR CAUSES THIS PROBLEM. POP rises with distance, so
+            # requiring POP >= 0.70 selects for FAR strikes — and far strikes
+            # collect almost nothing. Shipping the probability half without the
+            # payoff half means the gate systematically finds the WORST-PAID
+            # trade that clears it. Observed: $0.06 on a $5 wide (1.2%), $0.08
+            # on a $6 wide (1.3%).
+            # TWO floors, both cheap, each catching a different failure:
+            #   · width-relative keeps risk/reward sane
+            #   · nickel-relative guarantees the trade has ROOM TO EXIST —
+            #     credit $0.06 against a $0.05 nickel close is one cent of
+            #     total profit potential.
+            credit = max(0.0, (short.bid or 0.0) - (long_c.ask or 0.0))
+
+            # ── THE JOINT EV TEST — "some expectation of profit" ─────────────
+            # EV = credit*POP - L*width*(1-POP) > 0
+            #   => credit/width > L*(1-POP)/POP
+            # LOW POP must pay RICHLY; HIGH POP may be thin. A flat credit floor
+            # and a flat POP floor are INDEPENDENT, and independent is the bug:
+            # POP>=0.70 selects far strikes, far strikes pay little, and neither
+            # floor ever sees the other.
+            pop = self._sel._pop(abs(short.strike - current_price), sigma, bars)
+            if pop <= 0.0:
+                logger.info("[tcs] POP unresolvable (sigma %.4f, bars %.1f) — "
+                            "SKIP. A missing input is not a safe trade.",
+                            sigma, bars)
+                return None
+            req = TCS_LOSS_GIVEN_BREACH * (1.0 - pop) / pop
+            if credit / width <= req:
+                logger.info(
+                    "[tcs] NEGATIVE EV — credit %.2f = %.1f%% of width %.0f, "
+                    "needs > %.1f%% at POP %.2f (L=%.2f). SKIP.",
+                    credit, 100.0 * credit / width, width, 100.0 * req, pop,
+                    TCS_LOSS_GIVEN_BREACH)
+                return None
+
+            floor_w = TCS_MIN_CREDIT_PCT_WIDTH * width
+            floor_n = TCS_MIN_CREDIT_NICKEL_MULT * CONDOR_NICKEL_CLOSE
+            if credit < floor_w or credit < floor_n:
+                logger.info(
+                    "[tcs] credit %.2f below floor (width %.2f = %.0f%% of %.0f, "
+                    "nickel %.2f = %.1fx %.2f) — SKIP",
+                    credit, floor_w, TCS_MIN_CREDIT_PCT_WIDTH * 100, width,
+                    floor_n, TCS_MIN_CREDIT_NICKEL_MULT, CONDOR_NICKEL_CLOSE)
+                return None
+
+            self._last_fire = now
             return self._build_signal(side, short, long_c, direction, boundary,
                                       current_price, regime, bars)
         except Exception as exc:                               # noqa: BLE001

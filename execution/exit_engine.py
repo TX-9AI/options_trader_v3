@@ -1,5 +1,19 @@
 """
-execution/exit_engine.py — v4.17 — Strategy-aware exit logic for all options positions.
+execution/exit_engine.py — v4.18 — Strategy-aware exit logic for all options positions.
+v4.18 — 2026-08-14 — 🔴 LIVE FIX: THE TC.6 BRANCH HAD NO TERMINAL RETURN.
+        When NEITHER breach NOR nickel fired it fell straight through to the
+        ratchet and the 25% condor stop. `_execute_condor_leg` writes
+        stop_premium = credit x 1.25 at entry, so a $0.06 credit put the stop at
+        $0.07 — ONE CENT of widening closed the trade. Every TC.6 leg on the
+        fleet stopped out within seconds of opening on 2026-08-14.
+        THE MEASURED EV WAS HELD TO EXPIRY, UNMANAGED. A premium stop is a
+        different trade, which is the entire reason the branch exists.
+        ⚠️ THE TEST THAT MISSED IT asserted the branch CONTAINED two
+        `return decision` statements. It did. Neither covered the path where
+        neither condition fires — the path that was broken. **Counting returns
+        proves nothing about the path that has none.** Now asserted on the
+        branch's LAST STATEMENT via AST, and verified to FAIL against the
+        shipped version.
 v4.17 — 2026-08-13 — THE RATCHET WAS CLOSING UNTESTED CONDOR LEGS. Operator:
         "the ratchet is inappropriate for this trade if the condor is fully
         formed. It should only be in effect if there's one side open" and
@@ -1446,6 +1460,17 @@ class ExitEngine:
                 decision.should_exit = True
                 decision.exit_reason = f"nickel_close pnl={pnl_pct:.1%} (tcs)"
                 return decision
+            # ⚠️ TERMINAL RETURN — THE WHOLE POINT OF THE BRANCH.
+            # Without this the branch FALLS THROUGH to the ratchet and the 25%
+            # condor stop below. Observed live 2026-08-14: a $0.06 credit sets
+            # stop_premium at $0.07 (credit x 1.25), so ONE CENT of widening
+            # closed the trade — every TC.6 leg on the fleet stopped out within
+            # seconds. The measured EV was HELD TO EXPIRY, UNMANAGED; a premium
+            # stop is a different trade.
+            # The v1.0 test asserted the branch contained two `return decision`
+            # statements. It did. It never exercised the path where NEITHER
+            # breach NOR nickel fires — which is the path that was broken.
+            return decision
             # No other exit applies: the 15:45 close is handled ABOVE, and
             # the ratchet / 25% stop / TP below are deliberately unreachable
             # for a trend credit spread.
