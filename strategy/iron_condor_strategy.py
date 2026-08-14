@@ -175,6 +175,7 @@ from enum import Enum
 from typing import Optional, List, Tuple
 from zoneinfo import ZoneInfo
 
+from strategy import credit_vertical as cv
 from strategy.base_strategy import BaseOptionsStrategy, OptionsSignal
 from analysis.regime_classifier import RegimeState, Regime
 from analysis.volatility_engine import VolatilityState, VolatilityEngine
@@ -342,173 +343,46 @@ class IronCondorStrategy(BaseOptionsStrategy):
                 return max(outside, key=lambda c: c.strike)
             return min(candidates, key=lambda c: abs(c.strike - band_level))
 
+    # ── SHARED CREDIT-VERTICAL MATH LIVES IN strategy/credit_vertical.py ──────
+    # (TCS.1, 2026-08-14) `_liquidity_rank`, `_pop`, `_bars_left`, `_quote_ok`,
+    # `_select_beyond_rail` and `_leg_order_from_slope` were defined HERE and
+    # borrowed by TrendCreditSpread, which instantiated this class purely to
+    # reach them. Moving them to a module OWNED BY NEITHER strategy is the whole
+    # point: a condor tuning change can no longer silently retune trend
+    # participation, and TC.6 no longer needs the condor to exist.
+    # ⚠️ THEY ARE NOT REIMPLEMENTED — they were LIFTED VERBATIM, and leaving a
+    # second copy here would recreate exactly the divergence this removes.
+    # Thin delegating wrappers keep this class's own call sites unchanged.
+
     @staticmethod
     def _liquidity_rank(c) -> tuple:
-        """Rank key for "most liquid". LOWER IS BETTER.
-
-        BID/ASK WIDTH FIRST, because it is the only liquidity signal that is
-        actually populated: factor_sweep found `open_interest` and `volume`
-        CONSTANT across the entire joined sample, so the old
-        `open_interest + volume` sum was 0 for every contract and the selector
-        fell through to its "no OI/vol data" branch on every call. Width is also
-        what matters on a 0DTE credit spread — a nickel-wide quote is what trips
-        a stop on quote noise rather than on price.
-
-        OI/volume survive ONLY as a tie-break and ONLY when non-zero, so this is
-        correct whether or not the feed starts populating them later.
-        """
-        try:
-            bid, ask = float(getattr(c, "bid", 0) or 0), float(getattr(c, "ask", 0) or 0)
-            mid = (bid + ask) / 2.0
-            width = (ask - bid) / mid if (mid > 0 and ask >= bid) else 9.99
-        except Exception:                                      # noqa: BLE001
-            width = 9.99
-        depth = (getattr(c, "open_interest", 0) or 0) + (getattr(c, "volume", 0) or 0)
-        return (round(width, 4), -depth)
+        return cv.liquidity_rank(c)
 
     @staticmethod
     def _pop(distance: float, sigma_per_bar: float, bars_left: float) -> float:
-        """P(terminal close on the SAFE side of the short strike).
-
-            z   = distance / (sigma * sqrt(bars_left))
-            POP = Phi(z)
-
-        TIME IS THE WHOLE POINT. The same distance is a LARGER z late in the
-        session, so a strike that fails at 11:15 passes at 14:30 on identical
-        geometry. Every offset table built so far pooled hours and could not
-        express that.
-
-        Driftless and normal — deliberately. A drift term would be a forecast,
-        and the one thing measured all day is that this system's directional
-        forecasts do not separate. Normal understates fat tails, so this reads
-        slightly OPTIMISTIC on the extremes; the floor sits at 0.70 rather than
-        0.50 partly to absorb that.
-
-        Degenerate inputs return 0.0, which FAILS the floor. A missing ATR must
-        not read as a safe trade.
-        """
-        try:
-            import math
-            d, sig, n = float(distance), float(sigma_per_bar), float(bars_left)
-            if d <= 0 or sig <= 0 or n <= 0:
-                return 0.0
-            z = d / (sig * math.sqrt(n))
-            return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
-        except Exception:                                      # noqa: BLE001
-            return 0.0
+        return cv.pop(distance, sigma_per_bar, bars_left)
 
     @staticmethod
     def _bars_left(now_et_dt, bar_minutes: float) -> float:
-        """Bars of `bar_minutes` remaining until the 15:45 flatten.
-
-        15:45, not 16:00: a condor leg is closed at the hard close, so that is
-        when the position actually ends. Using the bell would overstate T and
-        make every POP look worse than the trade really is.
-        """
-        try:
-            end = now_et_dt.replace(hour=HARD_CLOSE_ET[0], minute=HARD_CLOSE_ET[1],
-                                    second=0, microsecond=0)
-            mins = (end - now_et_dt).total_seconds() / 60.0
-            return max(0.0, mins / max(1e-9, float(bar_minutes)))
-        except Exception:                                      # noqa: BLE001
-            return 0.0
+        return cv.bars_left(now_et_dt, bar_minutes, HARD_CLOSE_ET)
 
     @staticmethod
     def _quote_ok(c, max_width_pct: float) -> bool:
-        """Reject a short leg quoted wider than `max_width_pct` of its mid.
-
-        RANKING ALONE NEVER REFUSES — it returns the least-bad strike even when
-        every candidate is broken. On a 0DTE credit spread a nickel of quote
-        noise on a wide market moves the spread enough to trip the 25% stop on
-        the QUOTE rather than on price, which is the failure the ratchet and the
-        floor cannot survive. So width needs a FLOOR as well as an ordering.
-        """
-        try:
-            if max_width_pct <= 0:
-                return True
-            bid, ask = float(getattr(c, "bid", 0) or 0), float(getattr(c, "ask", 0) or 0)
-            mid = (bid + ask) / 2.0
-            if mid <= 0 or ask < bid:
-                return False
-            return (ask - bid) / mid <= max_width_pct
-        except Exception:                                      # noqa: BLE001
-            return False
-
-    def _select_beyond_rail(self, contracts: List[OptionContract], side: str,
-                            rail: float, min_distance_level: float,
-                            session_extreme: Optional[float],
-                            spot: float = 0.0, sigma: float = 0.0,
-                            bars_left: float = 0.0, min_pop: float = 0.0,
-                            max_width_pct: float = 0.0
-                            ) -> Optional[OptionContract]:
-        """PF.5 — the operator's rule, in the order he stated it.
-
-        A strike qualifies only if it is ALL THREE of:
-          1. BEYOND THE RAIL          — "just outside the range of the rail"
-          2. BEYOND THE MIN DISTANCE  — the surviving `0.80 * EM` floor, so a
-             rail sitting on top of spot cannot produce a strike with no room
-          3. NOT EXCEEDED BY PRICE    — beyond the session high (calls) or low
-             (puts). A level price has already traded through today is a level
-             the market has PROVEN it can reach; selling there is selling a
-             strike that has been touched and is being offered as untouched.
-        Among survivors: MOST LIQUID by bid/ask width, tie-break to the strike
-        NEAREST the rail — richest premium that still clears everything.
-
-        Returns None rather than falling back inward. No inside fallback, ever:
-        that fallback is what sold calls on top of spot for ~3 weeks.
-        """
-        def beyond(k, level):
-            return k >= level if side == "call" else k <= level
-
-        eligible = []
-        for c in contracts:
-            if not (getattr(c, "mark", 0) or 0) > 0.01:
-                continue
-            k = c.strike
-            if not beyond(k, rail):
-                continue
-            if not beyond(k, min_distance_level):
-                continue
-            if session_extreme is not None and not beyond(k, session_extreme):
-                continue
-            if not self._quote_ok(c, max_width_pct):
-                continue
-            if min_pop > 0 and spot > 0:
-                if self._pop(abs(k - spot), sigma, bars_left) < min_pop:
-                    continue
-            eligible.append(c)
-
-        if not eligible:
-            _priced = [c for c in contracts if (getattr(c, "mark", 0) or 0) > 0.01]
-            logger.info(
-                "Condor: no %s strike clears rail %.2f / min-dist %.2f / "
-                "session-extreme %s — %d/%d priced. SKIP (no inside fallback).",
-                side, rail, min_distance_level,
-                f"{session_extreme:.2f}" if session_extreme is not None else "n/a",
-                len(_priced), len(contracts))
-            return None
-
-        best_rank = min(self._liquidity_rank(c) for c in eligible)
-        cohort = [c for c in eligible
-                  if self._liquidity_rank(c)[0] <= best_rank[0] * 1.5 + 1e-9]
-        return (min(cohort, key=lambda c: c.strike) if side == "call"
-                else max(cohort, key=lambda c: c.strike))
+        return cv.quote_ok(c, max_width_pct)
 
     @staticmethod
     def _leg_order_from_slope(slope: float, flat_eps: float):
-        """Leg order from the fork's apparent slope. Returns (leg1, leg2) or
-        None when the fork is FLAT and the caller should fall back to proximity.
+        return cv.leg_order_from_slope(slope, flat_eps)
 
-        UP-sloping channel: price travels the LOWER rail toward the UPPER one
-        across the session, so the PUT side is the one price is leaving and it
-        fills FIRST; the call side fills later as price approaches the top.
-        DOWN-sloping: mirrored. A SIGN IS NOT A SLOPE — below `flat_eps` the
-        drift is noise and ordering off it would be reading a coin flip as
-        structure, so the caller keeps its existing proximity rule.
-        """
-        if slope is None or abs(slope) < flat_eps:
-            return None
-        return ("put", "call") if slope > 0 else ("call", "put")
+    def _select_beyond_rail(self, contracts, side: str, rail: float,
+                            min_distance_level: float, session_extreme,
+                            spot: float = 0.0, sigma: float = 0.0,
+                            bars_left: float = 0.0, min_pop: float = 0.0,
+                            max_width_pct: float = 0.0):
+        return cv.select_beyond_rail(
+            contracts, side, rail, min_distance_level, session_extreme,
+            spot=spot, sigma=sigma, bars=bars_left, min_pop=min_pop,
+            max_width_pct=max_width_pct)
 
     def _select_beyond_floor(self, contracts: List[OptionContract],
                              floor_level: float, side: str) -> Optional[OptionContract]:

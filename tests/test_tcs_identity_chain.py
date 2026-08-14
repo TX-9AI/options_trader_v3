@@ -109,12 +109,12 @@ def test_a_condor_leg_is_unaffected():
 def test_the_exit_gates_on_exactly_the_key_the_record_sets():
     """The whole defect was a key that one side wrote and the other never
     received. Assert both halves name the SAME string."""
-    assert 'record.get("is_trend_credit")' in EXIT
+    assert 'is_trend_participation(record)' in EXIT
     assert "is_trend_credit  = 1 if _is_tcs else 0," in leg_fn()
 
 
 def test_the_exit_reads_the_bound_from_underlying_stop():
-    i = EXIT.index('if bool(record.get("is_trend_credit")):')
+    i = EXIT.index("if is_trend_participation(record):")
     seg = EXIT[i:i + 900]
     assert 'record.get("underlying_stop")' in seg
 
@@ -125,7 +125,7 @@ def test_the_exit_branch_still_terminates():
     import ast
     tree = ast.parse(EXIT)
     for n in ast.walk(tree):
-        if isinstance(n, ast.If) and "is_trend_credit" in (
+        if isinstance(n, ast.If) and "is_trend_participation" in (
                 ast.get_source_segment(EXIT, n.test) or ""):
             assert isinstance(n.body[-1], ast.Return)
             return

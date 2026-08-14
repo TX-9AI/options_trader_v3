@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.72
+# docs/BACKLOG.md — v4.74
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5074,6 +5074,86 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **🔴 v4.74 — 2026-08-14 — TCS.2 STAGE 1: THE TC.6 EXIT DIED ON EVERY RESTART.**
+  `strategy/structure.py` v1.0 (new) · `exit_engine` v4.20 · 8 tests (162 total).
+  **Found while designing the credit-vertical type hierarchy — this is a LIVE
+  DEFECT, not groundwork.**
+
+  **`is_trend_credit` IS NOT A COLUMN.** 69 columns in the trades table and it is
+  not one of them. It was written into the in-memory record and never persisted.
+  `get_open_trades_live()` does `SELECT *`, so **any restart rehydrated an open
+  trend-participation position WITHOUT the flag**, the exit branch gated on it
+  stopped firing, and the leg dropped into the condor ladder with the ratchet and
+  the **25%% premium stop**.
+  **⚠️ SAME BUG AS THE 08-14 IDENTITY FIX, ONE LEVEL DOWN:** fixed for the process
+  that OPENED the trade, still broken for any process that INHERITS it — and the
+  hop that dropped it is a **systemctl restart, which happens on every bake.**
+
+  **THE FIX IS TO DERIVE, NOT TO CARRY.** `strategy` and `setup_type` ARE real
+  columns, already written correctly, already round-tripping. `structure.of()`
+  reads them.
+  **⚠️ WHY NOT JUST ADD THE COLUMN:** it would fix tomorrow and not today — every
+  position opened before the migration still rehydrates without it, `SELECT *`
+  returns None, and None reads as False. **The exact failure, silently.**
+  Deriving works on rows that already exist, including any open right now, and on
+  the 108 mislabelled rows from 08-14 (`strategy="IronCondorStrategy"` with
+  `setup_type="trend_credit_short"` — the setup type is the only surviving truth
+  in those).
+  **FAILS CLOSED:** an unrecognised record is DIRECTIONAL, the most restrictive
+  reading. A misread must never hand a position a LOOSER exit than it earned.
+  The old flag is still honoured when present; only its ABSENCE stopped meaning
+  "not a trend credit".
+
+  **Stage 1 of the type hierarchy the operator called for** — `CreditVertical`
+  base with `IronCondorLeg` and `TrendParticipation` specialising it, so identity
+  is the OBJECT rather than a flag that must be copied at every hop. Stage 1 is
+  the discriminator and it round-trips; stages 2 (base class, arithmetic lifted
+  verbatim) and 3 (dispatch on type) follow. **Operator's call, and the evidence
+  supports it: every defect found today was a HALF-MEASURE, not an over-reach.**
+
+- **v4.73 — 2026-08-14 — TCS.1: TREND PARTICIPATION DE-COUPLED FROM THE CONDOR.**
+  `strategy/credit_vertical.py` v1.0 (new, shared) · `trend_credit_spread.py` ·
+  `iron_condor_strategy.py` · `base_strategy.py` · `config` · 154 tests.
+
+  **THE COUPLING WAS THE CAUSE OF THE 108 BAD TRADES, not a tidiness issue.**
+  TC.6 borrowed **six `CONDOR_*` constants**, **five condor methods**, set
+  `is_iron_condor = True`, and executed and exited through
+  `_execute_condor_leg` / `_evaluate_condor_leg`. Two consequences:
+  · changing a condor knob silently retuned a DIFFERENT TRADE, and nothing said so;
+  · because TC.6 rode the condor's execution path, its identity had to survive
+    as a FLAG on a record the condor built — and when that path hardcoded condor
+    identity, the flag never arrived. **A trade living inside another trade's
+    plumbing fails the moment one hop drops a field.**
+
+  **WHAT CHANGED:** shared selection math lifted VERBATIM into
+  `strategy/credit_vertical.py`, imported by both and owned by neither; TC.6 gets
+  `TCS_*` constants; the condor keeps thin delegating wrappers so its own call
+  sites are untouched.
+  **⚠️ VALUES ARE PROVABLY IDENTICAL** — a test asserts each `TCS_*` default
+  still equals the `CONDOR_*` value it replaced, so a future divergence is a
+  DECISION rather than a drift. (The check earned its place immediately: I
+  guessed `TCS_WING_WIDTH_SPX = 25` and the condor's real value is **5**.)
+
+  **`is_iron_condor` → `is_credit_vertical`.** It NEVER meant "this is a condor":
+  all four uses select CREDIT-SPREAD MATH — validity by four legs, stop as a
+  RISING spread value, TP as decay toward zero. **That mis-naming is why TC.6 had
+  to declare itself a condor to get correct arithmetic.** Kept as a two-way
+  property ALIAS so both names address ONE field — a missed rename cannot produce
+  a signal that is a credit vertical to one half of the system and a debit to the
+  other.
+
+  **⚠️ THREE THINGS THE FINE-TOOTH PASS CAUGHT, ALL SELF-INFLICTED MINUTES
+  EARLIER:**
+  1. **I renamed the SETTER and not the FIELD.** `sig.is_credit_vertical = True`
+     was an attribute nothing read, so `is_valid` and `stop_premium()` would have
+     used **DEBIT math on a credit spread** — the identity-chain bug's exact
+     shape, reintroduced while fixing it.
+  2. **I created the shared module and only half-wired it** — the condor kept its
+     own copies of all six helpers, so there were TWO lineages, which is what the
+     module exists to remove.
+  3. **An absence check matched its own explanatory comment** — WORKING_AGREEMENT
+     20, third occurrence. Now scoped by AST to a real `ImportFrom`.
 
 - **🔴 v4.72 — 2026-08-14 — SIM.1/2/3 REVERTED. THEY DUPLICATED
   `replay_confluence.py` AND MODIFIED A LIVE MODULE TO DO IT.**

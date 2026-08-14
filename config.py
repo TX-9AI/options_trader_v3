@@ -324,6 +324,20 @@ INSTRUMENT          = os.environ.get("OT_INSTRUMENT", "QQQ")
 # with no env-level off switch — stopping it would have needed a code change and
 # a re-bake, on a strategy that has never executed a live order. Every other
 # change today has one. This closes that gap.
+# ── TC.6 OWNS ITS OWN CONSTANTS (TCS.1, 2026-08-14) ──────────────────────────
+# ⚠️ TREND PARTICIPATION BORROWED SIX `CONDOR_*` KNOBS, so changing one for the
+# CONDOR silently retuned a DIFFERENT TRADE and nothing said so. These are the
+# same numbers under names that mean what they govern.
+# **VALUES ARE IDENTICAL TO THE CONDOR DEFAULTS THEY REPLACE** — this is a
+# de-coupling, not a re-tune, and `tests/test_tcs_decoupling.py` asserts the
+# equality so a future divergence is a DECISION rather than a drift.
+TCS_MIN_POP                 = float(os.environ.get("OT_TCS_MIN_POP", "0.70"))
+TCS_MAX_QUOTE_WIDTH         = float(os.environ.get("OT_TCS_MAX_QUOTE_WIDTH", "0.25"))
+TCS_POP_BAR_MIN             = float(os.environ.get("OT_TCS_POP_BAR_MIN", "5"))
+TCS_NICKEL_REF              = float(os.environ.get("OT_TCS_NICKEL_REF", "0.05"))
+TCS_WING_WIDTH_SPX          = float(os.environ.get("OT_TCS_WING_SPX", "5"))
+TCS_WING_WIDTH_QQQ          = float(os.environ.get("OT_TCS_WING_QQQ", "5"))
+
 TREND_CREDIT_ACTIVE         = os.environ.get("OT_TCS_ACTIVE", "1") == "1"
 # ── TC.6 ENTRY GATES (2026-08-14 HOTFIX — it rapid-fired the whole fleet) ─────
 # Observed 10:02 ET on 08-14: NVDA sold a $5-wide for $0.06, PLTR a $6-wide for

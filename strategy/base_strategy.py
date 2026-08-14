@@ -65,7 +65,14 @@ class OptionsSignal:
     # ── Iron Condor legs (4-leg) ─────────────────────────────────────
     # Credit spread: sell short put + buy long put (lower side)
     #                sell short call + buy long call (upper side)
-    is_iron_condor:       bool  = False
+    # ⚠️ RENAMED FROM `is_iron_condor` (TCS.1, 2026-08-14). It NEVER meant "this
+    # is a condor" — every use below selects CREDIT-SPREAD MATH: validity by four
+    # legs, stop as a RISING spread value, TP as decay toward zero. The old name
+    # is why TrendCreditSpread had to declare itself a condor to get correct
+    # arithmetic, which is the coupling that produced the 2026-08-14 identity
+    # bug. `is_iron_condor` is kept as a read/write ALIAS below so no caller
+    # breaks mid-flight.
+    is_credit_vertical:   bool  = False
     short_put_contract:   Optional[OptionContract] = None
     long_put_contract:    Optional[OptionContract] = None
     short_call_contract:  Optional[OptionContract] = None
@@ -115,7 +122,7 @@ class OptionsSignal:
                 self.center_contract is not None and
                 self.upper_contract is not None
             )
-        if self.is_iron_condor:
+        if self.is_credit_vertical:
             return (
                 self.net_credit > 0 and
                 self.short_put_contract is not None and
@@ -130,11 +137,24 @@ class OptionsSignal:
             self.underlying_entry > 0
         )
 
+    @property
+    def is_iron_condor(self) -> bool:
+        """Back-compat alias. ⚠️ Both names address ONE field — a caller setting
+        either gets identical behaviour, so a missed rename cannot produce a
+        signal that is a credit vertical to one half of the system and a debit
+        to the other. That divergence is precisely what the rename exists to
+        make impossible."""
+        return self.is_credit_vertical
+
+    @is_iron_condor.setter
+    def is_iron_condor(self, v: bool) -> None:
+        self.is_credit_vertical = bool(v)
+
     def stop_premium(self) -> float:
         """Premium level at which we exit (25% loss)."""
         if self.is_butterfly:
             return self.net_debit * (1 - self.stop_loss_pct)
-        if self.is_iron_condor:
+        if self.is_credit_vertical:
             # For a credit spread, "loss" means the spread VALUE rises
             # (we sold it, so rising value = losing money). Stop level
             # is expressed here as the spread value at which we exit.
@@ -145,7 +165,7 @@ class OptionsSignal:
         """Premium level at which trailing stop activates (50% TP)."""
         if self.is_butterfly:
             return self.net_debit + self.max_profit * 0.5
-        if self.is_iron_condor:
+        if self.is_credit_vertical:
             # Condor profits as the spread value DECAYS toward zero.
             # 50% TP = spread value has decayed to 50% of credit received.
             return self.net_credit * 0.5
@@ -155,7 +175,7 @@ class OptionsSignal:
         """Full TP premium target."""
         if self.is_butterfly:
             return self.net_debit + self.max_profit * self.tp_pct
-        if self.is_iron_condor:
+        if self.is_credit_vertical:
             # TP = spread value has decayed to (1 - tp_pct) of credit.
             # e.g. tp_pct=0.50 means close at 50% of max profit captured,
             # i.e. spread value has fallen to 50% of the credit received.

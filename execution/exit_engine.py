@@ -1,5 +1,20 @@
 """
-execution/exit_engine.py — v4.19 — Strategy-aware exit logic for all options positions.
+execution/exit_engine.py — v4.20 — Strategy-aware exit logic for all options positions.
+v4.20 — 2026-08-14 — 🔴 THE TC.6 BRANCH DIED ON RESTART. `is_trend_credit` IS
+        NOT A COLUMN in the trades table — it lives only in the in-memory
+        record. `get_open_trades_live()` does SELECT *, so **any restart
+        rehydrated an open trend-participation position WITHOUT the flag**, this
+        branch stopped firing, and the leg dropped into the condor ladder with
+        the ratchet and the 25% premium stop. Same bug as the 08-14 identity fix,
+        one level down: fixed for the process that OPENED the trade, still broken
+        for any process that INHERITS it — and the hop that dropped it is a
+        systemctl restart, which happens on every bake.
+        Now DERIVED from `strategy` / `setup_type`, which are REAL COLUMNS and
+        already round-trip. No new column, no migration — a column would fix
+        tomorrow and not today, because rows opened before it would still
+        rehydrate as None and read as False. The old flag is still honoured when
+        present; only its ABSENCE stopped meaning "not a trend credit".
+        See strategy/structure.py.
 v4.19 — 2026-08-14 — 🔴 CNT.1 SHIPPED HALF A FEATURE AND THIS IS THE OTHER HALF.
         The entry branch (continuation_strategy, CNT.1, 2026-08-07) lets
         continuation OPEN on BREAKOUT_VOLATILE, taking direction from the trend
@@ -1445,7 +1460,7 @@ class ExitEngine:
         # anchored to — so structure and invalidation agree instead of arguing.
         # CLOSED bars only: an intraday wick through the boundary is a touch,
         # and the operator's own rule is that only a close decides acceptance.
-        if bool(record.get("is_trend_credit")):
+        if is_trend_participation(record):
             _b = float(record.get("underlying_stop") or 0.0)
             _side = record.get("option_side", "")
             _last = None

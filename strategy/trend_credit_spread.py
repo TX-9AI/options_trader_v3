@@ -93,9 +93,14 @@ the short strike it was sold against does not move either.
 ⚠️ **THE MEASURED EV WAS HELD TO EXPIRY, UNMANAGED.** No premium stop, no
 ratchet. `is_trend_credit` keeps `exit_engine` out of the condor ladder.
 
-STRIKE SELECTION HAS ONE OWNER — `IronCondorStrategy._select_beyond_rail`
-implements floor -> min-distance -> not-exceeded -> quote-width -> POP. Imported,
-never cloned.
+STRIKE SELECTION HAS ONE OWNER, AND IT IS NEITHER STRATEGY.
+`strategy/credit_vertical.py` implements rail -> min-distance -> not-exceeded ->
+quote-width -> POP, and both this file and the condor import it. TC.6 used to
+instantiate `IronCondorStrategy` to borrow five of its methods and six of its
+`CONDOR_*` knobs — so a condor tuning change silently retuned this trade, and
+its identity had to survive as a flag on a record built by the condor's own
+execution path. That is the coupling that produced 108 bad trades on
+2026-08-14.
 """
 
 import logging
@@ -105,14 +110,17 @@ from typing import Optional
 import pytz
 
 from config import (
-    CONDOR_MIN_POP, CONDOR_POP_BAR_MIN, CONDOR_MAX_QUOTE_WIDTH,
-    GLOBAL_NO_ENTRY_ET, INSTRUMENT,
-    CONDOR_WING_WIDTH_SPX, CONDOR_WING_WIDTH_QQQ,
-    TREND_CREDIT_ACTIVE, TCS_START_ET,
-    TCS_MIN_CREDIT_NICKEL_MULT, CONDOR_NICKEL_CLOSE,
-    TCS_LOSS_GIVEN_BREACH, CONDOR_MIN_POP, CONT_BREAKOUT_MIN_ADX,
+    TCS_MIN_POP, TCS_MAX_QUOTE_WIDTH, TCS_POP_BAR_MIN, TCS_NICKEL_REF,
+    TCS_WING_WIDTH_SPX, TCS_WING_WIDTH_QQQ,
+    TREND_CREDIT_ACTIVE, TCS_START_ET, TCS_MIN_CREDIT_NICKEL_MULT,
+    TCS_LOSS_GIVEN_BREACH, CONT_BREAKOUT_MIN_ADX,
+    GLOBAL_NO_ENTRY_ET, INSTRUMENT, HARD_CLOSE_ET,
 )
-from strategy.iron_condor_strategy import IronCondorStrategy
+# ⚠️ NOT `from strategy.iron_condor_strategy import IronCondorStrategy`.
+# TC.6 previously instantiated the condor to borrow five of its methods. The
+# shared math now lives in a module OWNED BY NEITHER, so neither strategy can
+# retune the other by accident — and TC.6 no longer needs the condor to exist.
+from strategy import credit_vertical as cv
 
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("US/Eastern")
@@ -125,13 +133,12 @@ class TrendCreditSpread:
     name = "TrendCreditSpread"
 
     def __init__(self):
-        # Borrow the condor's selector rather than clone it — ONE owner.
-        self._sel = IronCondorStrategy.__new__(IronCondorStrategy)
+        pass
 
     @staticmethod
     def _wing_width() -> float:
-        return (CONDOR_WING_WIDTH_SPX if INSTRUMENT in ("SPX", "SPXW")
-                else CONDOR_WING_WIDTH_QQQ)
+        return (TCS_WING_WIDTH_SPX if INSTRUMENT in ("SPX", "SPXW")
+                else TCS_WING_WIDTH_QQQ)
 
     def generate_signal(self, regime, vol_state, chain, macro,
                         current_price: float, trend=None,
@@ -291,31 +298,31 @@ class TrendCreditSpread:
                 return None
 
             sigma = float(getattr(vol_state, "atr_current", 0.0) or 0.0)
-            bars = self._sel._bars_left(now, CONDOR_POP_BAR_MIN)
+            bars = cv.bars_left(now, TCS_POP_BAR_MIN, HARD_CLOSE_ET)
 
             contracts = chain.puts if side == "put" else chain.calls
-            short = self._sel._select_beyond_rail(
+            short = cv.select_beyond_rail(
                 contracts, side, bound, min_dist, extreme,
-                spot=current_price, sigma=sigma, bars_left=bars,
-                min_pop=CONDOR_MIN_POP, max_width_pct=CONDOR_MAX_QUOTE_WIDTH)
+                spot=current_price, sigma=sigma, bars=bars,
+                min_pop=TCS_MIN_POP, max_width_pct=TCS_MAX_QUOTE_WIDTH)
             if short is None:
                 logger.info(
                     "[tcs] no %s strike clears ORB bound %.2f / min-dist %.2f "
                     "/ POP>=%.2f at %.1f bars — SKIP",
-                    side, bound, min_dist, CONDOR_MIN_POP, bars)
+                    side, bound, min_dist, TCS_MIN_POP, bars)
                 return None
 
             width = self._wing_width()
             long_strike = (short.strike - width if side == "put"
                            else short.strike + width)
-            long_c = self._sel._find_contract_at_strike(contracts, long_strike)
+            long_c = cv.find_contract_at_strike(contracts, long_strike)
             if long_c is None or long_c.strike == short.strike:
                 logger.info("[tcs] no protective wing at %.2f — SKIP "
                             "(undefined risk is never sold)", long_strike)
                 return None
 
             credit = max(0.0, (short.bid or 0.0) - (long_c.ask or 0.0))
-            pop = self._sel._pop(abs(short.strike - current_price), sigma, bars)
+            pop = cv.pop(abs(short.strike - current_price), sigma, bars)
             if pop <= 0.0:
                 logger.info("[tcs] POP unresolvable (sigma %.4f, bars %.1f) — "
                             "SKIP. A missing input is not a safe trade.",
@@ -328,7 +335,7 @@ class TrendCreditSpread:
                     "needs > %.1f%% at POP %.2f — SKIP",
                     credit, 100.0 * credit / width, width, 100.0 * req, pop)
                 return None
-            floor_n = TCS_MIN_CREDIT_NICKEL_MULT * CONDOR_NICKEL_CLOSE
+            floor_n = TCS_MIN_CREDIT_NICKEL_MULT * TCS_NICKEL_REF
             if credit < floor_n:
                 logger.info("[tcs] credit %.2f below %.1fx nickel (%.2f) — "
                             "no room to profit, SKIP",
@@ -362,7 +369,7 @@ class TrendCreditSpread:
             underlying_stop=boundary,
             regime=str(getattr(regime, "primary_regime", "")),
         )
-        sig.is_iron_condor = True             # credit-vertical math, not debit
+        sig.is_credit_vertical = True         # credit-spread math, not debit
         sig.is_trend_credit = True            # exit_engine: breach-or-nickel ONLY
         sig.net_credit = max(0.0, (short.bid or 0.0) - (long_c.ask or 0.0))
         if side == "call":

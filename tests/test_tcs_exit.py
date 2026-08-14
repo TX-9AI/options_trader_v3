@@ -47,7 +47,7 @@ def test_tcs_branch_returns_before_the_ratchet_and_the_25pct_stop():
     """THE ONE THAT MATTERS. If the TC.6 branch sits after the ratchet, a trend
     credit spread inherits the condor's stop and we are no longer trading what
     was measured."""
-    tcs = line_of('if bool(record.get("is_trend_credit")):')
+    tcs = line_of("if is_trend_participation(record):")
     ratchet = line_of("RATCHET SCOPE")
     stop = line_of('decision.exit_reason = f"condor_stop')
     tp = line_of("TIME-GATED TAKE PROFIT")
@@ -60,7 +60,7 @@ def test_hard_close_still_outranks_everything():
     """15:45 is unconditional and must precede the TC.6 branch — a position
     cannot be held past the flatten by any exit rule."""
     assert line_of('decision.exit_reason = "hard_close_15:45_ET"') < \
-        line_of('if bool(record.get("is_trend_credit")):')
+        line_of("if is_trend_participation(record):")
 
 
 def test_no_nickel_close_on_trend_participation():
@@ -88,7 +88,7 @@ def test_the_tcs_branch_returns_rather_than_falling_through():
 
 def test_breach_reads_the_CLOSE_column_only():
     body = condor_fn()
-    seg = body[body.index('if bool(record.get("is_trend_credit")):'):]
+    seg = body[body.index("if is_trend_participation(record):"):]
     seg = seg[:seg.index("return decision", seg.index("tcs_breach"))]
     assert 'df_1m["close"]' in seg, "the breach rule is not reading closes"
     for wick in ('df_1m["high"]', 'df_1m["low"]'):
@@ -102,7 +102,7 @@ def test_breach_direction_is_side_aware():
     spread sits above so a close ABOVE breaches. Getting this backwards would
     exit every winner and hold every loser."""
     body = condor_fn()
-    seg = body[body.index('if bool(record.get("is_trend_credit")):'):]
+    seg = body[body.index("if is_trend_participation(record):"):]
     m = re.search(r'_breached\s*=\s*\((.*?)\)\s*if\s*_side\s*==\s*"put"\s*else\s*\((.*?)\)', seg)
     assert m, "the side-aware breach expression is missing"
     assert "<" in m.group(1) and ">" in m.group(2), (
@@ -114,7 +114,7 @@ def test_missing_tape_is_reported_not_silently_passed():
     """A breach rule that cannot see price is INERT, and an inert stop must
     never look like a passing check."""
     body = condor_fn()
-    seg = body[body.index('if bool(record.get("is_trend_credit")):'):]
+    seg = body[body.index("if is_trend_participation(record):"):]
     assert "logger.warning" in seg and "INERT" in seg, \
         "a missing 1m tape is not being reported"
 
@@ -125,7 +125,7 @@ def test_ordinary_condor_legs_are_untouched():
     """`is_trend_credit` gates the whole branch, so a normal condor leg still
     gets ratchet, stop, TP and nickel."""
     body = condor_fn()
-    assert body.count('record.get("is_trend_credit")') == 1
+    assert body.count("is_trend_participation(record)") == 1
     for keeper in ("RATCHET SCOPE", "condor_stop", "condor_tp"):
         assert keeper in body, f"{keeper} was removed from the condor path"
 
@@ -140,7 +140,7 @@ def tcs_branch_source() -> str:
     import ast
     tree = ast.parse(SRC)
     for node in ast.walk(tree):
-        if isinstance(node, ast.If) and "is_trend_credit" in (
+        if isinstance(node, ast.If) and "is_trend_participation" in (
                 ast.get_source_segment(SRC, node.test) or ""):
             return ast.get_source_segment(SRC, node) or ""
     raise AssertionError("the TC.6 branch is gone from exit_engine")
@@ -175,7 +175,7 @@ def test_the_branch_ENDS_in_a_return_not_just_contains_one():
     import ast
     tree = ast.parse(SRC)
     for node in ast.walk(tree):
-        if isinstance(node, ast.If) and "is_trend_credit" in (
+        if isinstance(node, ast.If) and "is_trend_participation" in (
                 ast.get_source_segment(SRC, node.test) or ""):
             last = node.body[-1]
             assert isinstance(last, ast.Return), (
@@ -192,7 +192,7 @@ def test_every_path_out_of_the_branch_is_a_return():
     import ast
     tree = ast.parse(SRC)
     for node in ast.walk(tree):
-        if isinstance(node, ast.If) and "is_trend_credit" in (
+        if isinstance(node, ast.If) and "is_trend_participation" in (
                 ast.get_source_segment(SRC, node.test) or ""):
             src_seg = ast.get_source_segment(SRC, node)
             assert src_seg.rstrip().endswith("return decision")
@@ -232,7 +232,7 @@ def test_unresolvable_pop_is_a_skip_not_a_pass():
     the caller must SKIP, not divide by it."""
     src = open(os.path.join(os.path.dirname(__file__), "..", "strategy",
                             "trend_credit_spread.py"), encoding="utf-8").read()
-    i = src.index("pop = self._sel._pop(")
+    i = src.index("pop = cv.pop(")
     assert "if pop <= 0.0:" in src[i:i + 400]
     assert "return None" in src[i:i + 600]
 
@@ -306,3 +306,80 @@ def test_the_bound_is_the_orb_level_and_it_is_sovereign():
     assert 'side, bound, extreme = "put", orb_high, None' in s_
     assert 'side, bound, extreme = "call", orb_low, None' in s_
     assert 'min_dist = float("inf") if side == "put" else float("-inf")' in s_
+
+
+# ── TCS.1 de-coupling ──────────────────────────────────────────────────────
+
+def test_tc6_does_not_import_or_instantiate_the_condor():
+    """It used to instantiate `IronCondorStrategy` purely to borrow five of its
+    methods — so TC.6 could not exist without the condor, and a condor change
+    reached it silently."""
+    import ast
+    # ⚠️ AST, NOT SUBSTRING. A substring check matches the COMMENT that explains
+    # the removal — WORKING_AGREEMENT 20: an absence canary tests for a
+    # DEFINITION, never for a mention. This one caught its own comment.
+    tree = ast.parse(tcs_src())
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom):
+            assert "iron_condor" not in (n.module or ""), \
+                "TC.6 imports the condor again"
+    code = "\n".join(l for l in tcs_src().split("\n")
+                     if not l.lstrip().startswith("#"))
+    assert "IronCondorStrategy.__new__" not in code
+    assert "self._sel" not in code
+
+
+def test_tc6_uses_no_CONDOR_constants():
+    """Six `CONDOR_*` knobs governed a trade that is not a condor. Changing one
+    for the condor silently retuned this one, and nothing said so."""
+    import re
+    s = tcs_src()
+    code = "\n".join(l for l in s.split("\n")
+                     if not l.strip().startswith("#") and "CONDOR_" in l)
+    assert not re.search(r"\bCONDOR_[A-Z_]+\b", code), \
+        f"TC.6 still reads a condor constant: {code[:200]}"
+
+
+def test_the_tcs_defaults_equal_the_condor_values_they_replaced():
+    """⚠️ THIS IS A DE-COUPLING, NOT A RE-TUNE. If these ever diverge it must be
+    a DECISION, recorded — not a drift nobody noticed."""
+    import config as c
+    for tcs, condor in (("TCS_MIN_POP", "CONDOR_MIN_POP"),
+                        ("TCS_MAX_QUOTE_WIDTH", "CONDOR_MAX_QUOTE_WIDTH"),
+                        ("TCS_POP_BAR_MIN", "CONDOR_POP_BAR_MIN"),
+                        ("TCS_NICKEL_REF", "CONDOR_NICKEL_CLOSE"),
+                        ("TCS_WING_WIDTH_SPX", "CONDOR_WING_WIDTH_SPX"),
+                        ("TCS_WING_WIDTH_QQQ", "CONDOR_WING_WIDTH_QQQ")):
+        assert abs(float(getattr(c, tcs)) - float(getattr(c, condor))) < 1e-9, \
+            f"{tcs} has drifted from {condor}"
+
+
+def test_the_shared_math_has_exactly_one_implementation():
+    """Both strategies must DELEGATE. A second copy in either recreates the
+    divergence the module was created to remove."""
+    ic = open(os.path.join(os.path.dirname(__file__), "..", "strategy",
+                           "iron_condor_strategy.py"), encoding="utf-8").read()
+    for fn, shared in (("_liquidity_rank", "cv.liquidity_rank"),
+                       ("_pop", "cv.pop"),
+                       ("_quote_ok", "cv.quote_ok"),
+                       ("_select_beyond_rail", "cv.select_beyond_rail")):
+        i = ic.index(f"def {fn}(")
+        body = ic[i:i + 700]
+        assert shared in body, f"condor's {fn} no longer delegates to {shared}"
+
+
+def test_the_credit_math_flag_is_named_for_what_it_does():
+    """`is_iron_condor` never meant "this is a condor" — it selected CREDIT
+    SPREAD math. That name is why TC.6 had to declare itself a condor to get
+    correct arithmetic. Both names now address ONE field, so a missed rename
+    cannot make a signal a credit vertical to one half of the system and a debit
+    to the other."""
+    from strategy.base_strategy import OptionsSignal
+    s1 = OptionsSignal(strategy_name="X", setup_type="y", direction="neutral")
+    s1.is_credit_vertical = True
+    assert s1.is_iron_condor is True
+    s2 = OptionsSignal(strategy_name="X", setup_type="y", direction="neutral")
+    s2.is_iron_condor = True
+    assert s2.is_credit_vertical is True
+    s2.net_credit, s2.stop_loss_pct = 0.60, 0.25
+    assert abs(s2.stop_premium() - 0.75) < 1e-9, "credit math not selected"
