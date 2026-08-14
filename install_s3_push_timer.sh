@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# options_trader_v3/install_s3_push_timer.sh — v1.0
+# options_trader_v3/install_s3_push_timer.sh — v1.1
+# v1.1 — 2026-08-13 — the report line stops crying wolf. v1.0 read `next` out of
+#        `systemctl list-timers` with an awk column offset, which printed "- -"
+#        on most boxes and sent me hunting a scheduling fault twice. It now asks
+#        systemd directly. NOTE an empty NEXT is still legitimate and expected:
+#        a timer shows no next elapse while its unit is ACTIVE, i.e. while a
+#        drain is in flight. That is health, not failure — so it is labelled.
 # v1.0 — 2026-08-12 — initial release. Installs the box-side warehouse pusher
 #        (warehouse/s3_push.py) as s3-push.service + s3-push.timer, sourced
 #        from deploy/ in the repo rather than written inline, so the units are
@@ -49,6 +55,10 @@ sudo systemctl enable --now s3-push.timer >/dev/null 2>&1
 
 # ── Report by NAME, not by exit code ─────────────────────────────────────────
 ACTIVE=$(systemctl is-active s3-push.timer 2>/dev/null)
-NEXT=$(systemctl list-timers s3-push.timer --no-pager --no-legend 2>/dev/null | head -1 | awk '{print $1" "$2}')
+NEXT=$(systemctl show s3-push.timer -p NextElapseUSecRealtime --value 2>/dev/null)
+RUNNING=$(systemctl is-active s3-push.service 2>/dev/null)
+# An empty NEXT while the service is activating is CORRECT: systemd schedules no
+# next elapse while the unit is running. Say so rather than printing a bare dash.
+if [ -z "$NEXT" ] && [ "$RUNNING" = "activating" ]; then NEXT="(draining now)"; fi
 echo "s3-push.timer host=$(hostname) active=${ACTIVE:-unknown} next=${NEXT:-unknown}"
 exit 0

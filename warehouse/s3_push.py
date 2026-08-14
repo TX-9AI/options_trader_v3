@@ -1,9 +1,24 @@
 #!/usr/bin/env python3
-# options_trader_v3/warehouse/s3_push.py — v1.4
+# options_trader_v3/warehouse/s3_push.py — v1.5
 """
 Box-side warehouse pusher — ships locally-written archives to S3.
 
 CHANGELOG
+    v1.5 — 2026-08-13 — WH.6: SINGLE INSTANCE, AND POLITE. Two pushers could run
+           at once — the 5-minute timer plus the EOD conductor's SSH `--verify`,
+           which drains before it reports. Both loaded the same ledgers and both
+           flushed: last write won, progress was lost and redone, and the
+           per-prefix counters could end up wrong — which would make `--verify`
+           report OK or SHORT INCORRECTLY. No duplicate objects (content-hash
+           keys) and no data loss, but the verify signal is the whole point of
+           the EOD gate, so an untrustworthy one is worse than none.
+           (a) flock on every invocation path. A normal timer run that finds the
+               lock held exits 0 silently — the run already in flight is doing
+               the work.
+           (b) `--verify` waits up to OT_S3_LOCK_WAIT seconds for the lock. If it
+               cannot get it, it SKIPS the drain and verifies anyway, reporting
+               `drained=no` so control can tell "nothing left to push" apart from
+               "someone else is still pushing".
     v1.4 — 2026-08-13 — WH.5: STREAM ORDER. The first full fleet count exposed
            an ordering fault of mine: the streams ran chains -> trades ->
            journal -> shadow -> ohlc -> eod -> orb -> candles, so the 110,639
@@ -112,9 +127,11 @@ import gzip
 import hashlib
 import json
 import os
+import fcntl
 import socket
 import sqlite3
 import sys
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -228,6 +245,35 @@ def flush_all():
         if not save_ledger(data, path):
             ok = False
     return ok
+
+
+def acquire_lock(wait_s: int = 0):
+    """Exclusive flock, or None. Guards EVERY invocation path.
+
+    The timer and the EOD conductor's `--verify` are different entrypoints to
+    the same work, and nothing else was stopping them overlapping. Two
+    processes sharing one ledger is not a duplicate-object problem — the keys
+    are content-hashed — it is a LOST PROGRESS and WRONG COUNTERS problem, and
+    wrong counters make the verify line lie in both directions.
+    """
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        fh = open(LOCK_PATH, "w")
+    except Exception:
+        return None
+    deadline = time.time() + max(0, wait_s)
+    while True:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fh
+        except OSError:
+            if time.time() >= deadline:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
+                return None
+            time.sleep(1)
 
 
 def _confirm(key: str, body: bytes, counters: dict):
@@ -448,6 +494,8 @@ EOD_DIR      = os.path.join(_HOME, "eod")
 ORB_STATE    = os.path.join(_OT, "orb_state.json")
 ORB_RANGE    = os.path.join(_OT, "orb_range.json")
 
+LOCK_PATH     = os.path.join(STATE_DIR, "s3_push.lock")
+LOCK_WAIT     = int(os.environ.get("OT_S3_LOCK_WAIT", "120"))
 COUNTERS_PATH = os.path.join(STATE_DIR, "prefix_counters.json")
 FLUSH_EVERY   = int(os.environ.get("OT_S3_FLUSH_EVERY", "200"))
 
@@ -734,6 +782,15 @@ def main(argv=None) -> int:
                 and not os.path.isdir(OHLC_ROOT)):
             return 0  # idle box with nothing at all. Say nothing.
 
+        # ── ONE PUSHER AT A TIME ────────────────────────────────────────────
+        # A normal run that loses the race exits silently: the run already in
+        # flight is doing exactly this work. --verify waits, because the EOD
+        # conductor is blocking on its answer, and falls back to verify-only.
+        lock = acquire_lock(LOCK_WAIT if do_verify else 0)
+        drained = lock is not None
+        if lock is None and not do_verify:
+            return 0
+
         import boto3  # imported late so a missing SDK cannot break --report
 
         s3 = boto3.client("s3", region_name=REGION)
@@ -781,6 +838,8 @@ def main(argv=None) -> int:
         ]
 
         for name, fn in stages:
+            if not drained:
+                break                  # verify-only: another pusher holds the lock
             try:
                 p_, f_ = fn()
             except Exception:
@@ -796,10 +855,15 @@ def main(argv=None) -> int:
         if do_verify:
             # ONE machine-readable line. The EOD conductor parses this to decide
             # whether a box may be stopped, so it must be stable and exit 0.
+            if not drained:
+                # Another pusher is mid-drain and owns the ledgers; re-read from
+                # disk so we verify against ITS progress, not our stale copy.
+                counters = load_ledger(COUNTERS_PATH)
             short, loc, remote = verify(s3, BUCKET, counters)
-            print("DRAIN host={} sym={} pushed={} failed={} prefixes={} "
-                  "local={} s3={} short={} {}".format(
-                      HOST, me or "?", total_pushed, total_failed, len(counters),
+            print("DRAIN host={} sym={} drained={} pushed={} failed={} "
+                  "prefixes={} local={} s3={} short={} {}".format(
+                      HOST, me or "?", "yes" if drained else "no",
+                      total_pushed, total_failed, len(counters),
                       loc, remote, len(short),
                       "OK" if (not short and not total_failed) else "SHORT"))
             for pfx, exp, got in short[:5]:

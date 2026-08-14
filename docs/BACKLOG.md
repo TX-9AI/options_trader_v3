@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.36
+# docs/BACKLOG.md — v4.37
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -114,6 +114,7 @@ BAKED is changing nothing about today's data.
 | **CV.1 — two canary reds at clean HEAD** | ⬜ **OPEN** | ⬜ | n/a (offline) | **Confirmed present on a PRISTINE clone, NOT introduced by any 08-08 delivery.** `check_versions.sh` pins `v5.4 main header current` while `main.py` is at **v5.8**, and one canary expects `tests/condor_plan_lifetime.py`, which **does not exist in the repo**. Consequence is the reason this is an item and not a footnote: the sweep now ends `DONE — 2 CANARY/PARITY FAILURE(S)` on a perfectly clean checkout, so **its own DONE banner has stopped being usable as a gate** — the cried-wolf failure this repo has already paid for once (WORKING_AGREEMENT §17: an alarm that spams is an alarm that gets filtered). Either update the pin to v5.8 and re-point or delete the orphaned canary; both are one-line edits. Left for the operator's call rather than folded silently into another delivery. |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
+| **WH.6 — single-instance lock + deprioritised unit** | ✅ 08-13 | ⬜ | ⬜ **needs bake + installer** | flock on all paths; `--verify` falls back to verify-only with `drained=no`; Nice=15/idle IO so a drain never competes with candle fetch; installer `next=` fixed; 80 checks |
 | **WH.5 — stream ordering** | ✅ 08-13 | ⬜ | ⬜ **needs bake + installer** | bulk journal starved ohlc/eod/candles; order now perishable-first, TimeoutStartSec 240->1800, per-stage isolation; 74 checks incl. 6 pinning the order |
 | **WH.4 — pre-stop drain + box-side verify** | ✅ 08-13 | ⬜ | ⬜ **built, not deployed** | s3_push v1.3 (incremental flush, prefix counters, `--verify`); eod_backfill v1.2 + eod_report v0.2 gate the stop; **livelock fixed**: ledger was saved only at end vs TimeoutStartSec=240; 67 checks |
 | **WH.3 — remaining six streams -> warehouse** | ✅ 08-13 | ⬜ | ⬜ **built, not baked** | journal/shadow/OHLC/candles/eod/orb; VIX single-writer; ORB capture-on-state; 59 checks pass. WH.2 reconciled 1197/1197 |
@@ -5001,6 +5002,49 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.37 — 2026-08-13 — WH.6: ONE PUSHER AT A TIME, AND IT RUNS LAST IN THE QUEUE.**
+  `warehouse/s3_push.py` v1.5, `deploy/s3-push.service` v1.2,
+  `install_s3_push_timer.sh` v1.1. Raised by the operator asking a scheduling
+  question — *"will the harvester still try to collect all of those data points
+  from the boxes while the boxes are also simultaneously trying to push them?"*
+  - **THE DEFECT I INTRODUCED IN WH.4.** The 5-minute timer and the EOD
+    conductor's SSH `--verify` are two entrypoints to the same work, and
+    `--verify` DRAINS before it reports. With `TimeoutStartSec` now 1800 and
+    journals large, an overlap was likely rather than theoretical. Both
+    processes loaded the same ledgers and both flushed: last write won, so
+    **progress was lost and redone, and the per-prefix counters could end up
+    wrong — which would make `--verify` report OK or SHORT INCORRECTLY.** No
+    duplicate objects and no data loss, because keys are content-hashed. But an
+    untrustworthy verify is worse than no verify: the EOD gate exists to decide
+    whether a box may go dark.
+  - **flock on every invocation path**, not just the one I happened to be
+    thinking about. A timer run that loses the race exits 0 silently — the run
+    in flight is doing exactly that work. `--verify` waits up to 120s, and if it
+    still cannot get the lock it SKIPS the drain, re-reads the counters from
+    disk so it measures the OTHER process's progress rather than its own stale
+    copy, and reports `drained=no` so control can tell "nothing left to push"
+    apart from "someone else is still pushing".
+  - **THE PUSHER IS NOW THE LOWEST-PRIORITY THING ON THE BOX** — `Nice=15`,
+    `IOSchedulingClass=idle`, `CPUSchedulingPolicy=batch`. The OnBootSec
+    catch-up fires while the conductor is waiting on `_produce`/`_poll_bars`
+    (PRODUCE_TIMEOUT=210s), so a drain was competing for CPU and disk in exactly
+    the window the conductor needs the box responsive. Nothing depends on this
+    push finishing quickly — it is archival.
+  - **THE INSTALLER STOPS CRYING WOLF.** v1.0 read `next` from a
+    `systemctl list-timers` awk column offset and printed "- -", sending me
+    hunting a scheduling fault TWICE. It now asks systemd directly — and an
+    empty NEXT is labelled `(draining now)` rather than left as a bare dash,
+    because a timer legitimately schedules no next elapse while its unit is
+    running. That is health, not failure.
+  - **DUAL-WRITE IS INTENTIONAL AND STAYS.** Harvest keeps collecting what the
+    boxes push (decision #5). Both sides are read-only on the same files, so the
+    duplication is wasted transfer, not a corruption risk. Sever only after
+    report outputs are compared.
+  - `tests/test_s3_push.py` v1.5 — **80 checks**, including the deliberate
+    contention case: a second pusher with the lock held must not push and must
+    not corrupt the first one's ledger.
+  - **⚠️ NEEDS BAKE + INSTALLER** — both the unit and the installer changed.
 
 - **v4.36 — 2026-08-13 — WH.5: STREAM ORDER. THE BULK JOURNAL WAS STARVING EVERY STREAM BEHIND IT.**
   `warehouse/s3_push.py` v1.4, `deploy/s3-push.service` v1.1.

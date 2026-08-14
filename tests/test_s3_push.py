@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-# options_trader_v3/tests/test_s3_push.py — v1.4
+# options_trader_v3/tests/test_s3_push.py — v1.5
 """
 Behavioural proof for warehouse/s3_push.py against planted archives.
 
 CHANGELOG
+    v1.5 — 2026-08-13 — WH.6: the lock. The case that matters is the DELIBERATE
+           contention one — a second pusher, with the lock already held, must
+           not push and must not corrupt the first one's ledger.
     v1.4 — 2026-08-13 — WH.5: pins the STAGE ORDER. The fault it guards against
            is not a crash — every stream worked — it was that the bulk journal
            ran early and starved the small perishable streams behind it for a
@@ -447,6 +450,40 @@ check("ohlc runs before signal_journal (the starvation that happened)",
       _pos["ohlc"] < _pos["signal_journal"])
 check("candles runs before signal_journal", _pos["candles"] < _pos["signal_journal"])
 check("signal_journal is LAST", _pos["signal_journal"] == max(_pos.values()))
+
+
+# 27 — the lock: one pusher at a time
+reset()
+os.makedirs(os.environ["OT_WAREHOUSE_STATE"], exist_ok=True)
+s3_push.LOCK_PATH = os.path.join(os.environ["OT_WAREHOUSE_STATE"], "s3_push.lock")
+h1 = s3_push.acquire_lock(0)
+check("first caller takes the lock", h1 is not None)
+h2 = s3_push.acquire_lock(0)
+check("SECOND caller is refused while it is held", h2 is None)
+import time as _t
+_t0 = _t.time()
+h3 = s3_push.acquire_lock(2)
+check("a waiting caller gives up after its budget", h3 is None and _t.time() - _t0 >= 2,
+      round(_t.time() - _t0, 1))
+h1.close()
+h4 = s3_push.acquire_lock(0)
+check("lock is reacquirable once released", h4 is not None)
+h4.close()
+
+# 28 — a held lock must not let a second run touch the ledger
+reset()
+p5 = write_archive("2026-08-12", "GS", [snap("2026-08-12T09:35:00-04:00", "GS")])
+held = s3_push.acquire_lock(0)
+s3_push._OPEN.clear()
+lp2 = os.path.join(os.environ["OT_WAREHOUSE_STATE"], "contend.json")
+led_x = s3_push.load_ledger(lp2)
+led_x[p5] = {"n": 1, "last_sha": "sentinel", "confirmed_utc": "t"}
+s3_push.save_ledger(led_x, lp2)
+blocked = s3_push.acquire_lock(0)
+check("contending run cannot proceed", blocked is None)
+check("the first run's ledger entry is intact",
+      s3_push.load_ledger(lp2)[p5]["last_sha"] == "sentinel")
+held.close()
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("ALL CHECKS PASSED" if not FAILS else "FAILURES: " + ", ".join(FAILS)))
