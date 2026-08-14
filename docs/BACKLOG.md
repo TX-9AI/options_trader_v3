@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.34
+# docs/BACKLOG.md — v4.35
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -114,6 +114,7 @@ BAKED is changing nothing about today's data.
 | **CV.1 — two canary reds at clean HEAD** | ⬜ **OPEN** | ⬜ | n/a (offline) | **Confirmed present on a PRISTINE clone, NOT introduced by any 08-08 delivery.** `check_versions.sh` pins `v5.4 main header current` while `main.py` is at **v5.8**, and one canary expects `tests/condor_plan_lifetime.py`, which **does not exist in the repo**. Consequence is the reason this is an item and not a footnote: the sweep now ends `DONE — 2 CANARY/PARITY FAILURE(S)` on a perfectly clean checkout, so **its own DONE banner has stopped being usable as a gate** — the cried-wolf failure this repo has already paid for once (WORKING_AGREEMENT §17: an alarm that spams is an alarm that gets filtered). Either update the pin to v5.8 and re-point or delete the orphaned canary; both are one-line edits. Left for the operator's call rather than folded silently into another delivery. |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
+| **WH.4 — pre-stop drain + box-side verify** | ✅ 08-13 | ⬜ | ⬜ **built, not deployed** | s3_push v1.3 (incremental flush, prefix counters, `--verify`); eod_backfill v1.2 + eod_report v0.2 gate the stop; **livelock fixed**: ledger was saved only at end vs TimeoutStartSec=240; 67 checks |
 | **WH.3 — remaining six streams -> warehouse** | ✅ 08-13 | ⬜ | ⬜ **built, not baked** | journal/shadow/OHLC/candles/eod/orb; VIX single-writer; ORB capture-on-state; 59 checks pass. WH.2 reconciled 1197/1197 |
 | **WH.2 — trades -> warehouse** | ✅ 08-13 | ⬜ | ⬜ **built, not deployed** | s3_push v1.1; per-`trade_id` content-hash ledger = change-data-capture; ET-day bucketing; **v1.0 duplicate-key bug found and fixed**, new test proven to FAIL on the old basis; 39 checks pass |
 | **WH.1b — warehouse layout specification** | ✅ 08-13 | ⬜ | ⬜ **doc only, nothing migrated by it** | `docs/WAREHOUSE_LAYOUT.md` v1.0; all 29 boxes probed for every artifact; `ruleset` code-fingerprint found; no naive-local timestamps fleet-wide; SPX 91% explained as a 2 GB swapfile |
@@ -4999,6 +5000,42 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.35 — 2026-08-13 — WH.4: BOXES PROVE THEY FILLED THE BUCKET BEFORE THEY GO DARK — AND A LIVELOCK OF MINE IS FIXED.**
+  `warehouse/s3_push.py` v1.3, `day_trader_pro/eod_backfill.py` v1.2,
+  `day_trader_pro/eod_report.py` v0.2.
+  - **THE GAP THE OPERATOR CAUGHT.** The EOD conductor wakes sat-out boxes five
+    at a time, pulls candles, and puts them straight back to sleep. A box that
+    goes down before its 5-minute timer fires never pushes. Worse, and NOT
+    raised by the operator: `eod_report.py` stops the TRADED boxes the same
+    way, and those hold chains, journal, shadow and trades — the least
+    recoverable data in the system.
+  - **VERIFICATION RUNS ON THE BOX, NOT ON CONTROL** (operator's call, and the
+    right one). Control would otherwise need a model of each box's local state
+    to know what "complete" means — exactly the coupling this project removes.
+    The box holds its own ledger and answers in one machine-readable line.
+  - **MY OWN LIVELOCK, FOUND WHILE BUILDING THIS.** v1.0-v1.2 saved the ledger
+    ONCE at the end of main(). The unit sets `TimeoutStartSec=240`, so the
+    first journal backlog to run past four minutes would have been killed with
+    NO progress recorded — re-PUTting everything next run, forever. Content
+    hashing meant no duplicates would appear, so it would have **failed
+    silently rather than loudly**, which is the exact class this repo keeps
+    paying for. Ledgers now flush every 200 confirmations.
+  - **VERIFY IS COUNT + BYTES PER `dt=`/`sym=` PREFIX, NOT A CONTENT HASH.**
+    Operator asked whether a hash would be better; it would re-verify something
+    read-back-and-compare already proved at PUT time. Both signals come back
+    from `list_objects_v2` free. Per-prefix rather than a global total, because
+    a global count can match while one day is short and another is long.
+  - **FAILURE POLICY: WARN, THEN STOP ANYWAY.** A stopped box's data is
+    STRANDED, not lost — the OnBootSec catch-up drains it on next wake — while
+    a box left running blocks the batch loop against the stream cap of 10.
+    Unconfirmed boxes are named in the Telegram warnings.
+  - `tests/test_s3_push.py` v1.3 — **67 checks**, including three deliberate
+    failures: a vanished object must report SHORT, a truncated object must
+    report SHORT **on bytes where count alone would pass**, and a drain killed
+    partway must leave progress on disk.
+  - **⚠️ TWO REPOS.** otv3 bakes via option 25; the control files land on
+    1-REPORTER only.
 
 - **v4.34 — 2026-08-13 — WH.3: THE REMAINING SIX STREAMS. EVERY BOX ARTIFACT NOW HAS A PATH TO THE WAREHOUSE.**
   `warehouse/s3_push.py` v1.2. WH.2 reconciled first: **`TRADE_OBJECTS=1197`

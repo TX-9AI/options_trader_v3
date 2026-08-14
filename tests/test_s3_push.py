@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-# options_trader_v3/tests/test_s3_push.py — v1.2
+# options_trader_v3/tests/test_s3_push.py — v1.3
 """
 Behavioural proof for warehouse/s3_push.py against planted archives.
 
 CHANGELOG
+    v1.3 — 2026-08-13 — WH.4: prefix counters, incremental flush, and verify.
+           The flush test is the important one — it asserts that a drain KILLED
+           partway leaves progress behind, which is the failure v1.0-v1.2 would
+           have hit silently the first time a journal backlog ran past
+           TimeoutStartSec.
     v1.2 — 2026-08-13 — WH.3 coverage: journal/shadow jsonl trees, OHLC and EOD
            whole-file pushes, candle high-water marks, the VIX single-writer
            rule, and ORB capture-on-state. Includes the negative cases that
@@ -362,6 +367,64 @@ check("a NEW attempt lands as its own object", pr3 == 1 and len(s3r.store) == 2,
 
 # 20 — own_symbol reads the instrument off the OHLC tree
 check("own_symbol() derives instrument from OHLC dir", s3_push.own_symbol() == "SPX", s3_push.own_symbol())
+
+
+# ── WH.4 ────────────────────────────────────────────────────────────────────
+class ListStub(StubS3):
+    """StubS3 plus the paginator surface verify() uses."""
+    def get_paginator(self, _op):
+        store = self.store
+        class _P:
+            def paginate(self_inner, Bucket=None, Prefix="", **kw):
+                yield {"Contents": [{"Key": k, "Size": len(v)}
+                                    for k, v in store.items() if k.startswith(Prefix)]}
+        return _P()
+
+# 21 — counters accrue per dt=/sym= prefix
+reset()
+pc1 = write_archive("2026-08-12", "SPX", [snap("2026-08-12T09:35:00-04:00", "SPX"),
+                                          snap("2026-08-12T09:40:00-04:00", "SPX")])
+s3k = ListStub(); ledk = {}; cnt = {}
+s3_push.push_file(s3k, "B", pc1, "2026-08-12", "SPX", ledk, cnt)
+pfx = "raw/chain_snapshots/dt=2026-08-12/sym=SPX/"
+check("counter keyed by dt=/sym= prefix", pfx in cnt, list(cnt))
+check("counter n matches objects pushed", cnt[pfx]["n"] == 2, cnt.get(pfx))
+check("counter bytes are non-zero", cnt[pfx]["bytes"] > 0, cnt.get(pfx))
+
+# 22 — verify agrees when S3 holds everything
+short, loc, rem = s3_push.verify(s3k, "B", cnt)
+check("verify: no short prefixes on a clean push", short == [], short)
+check("verify: local and s3 totals agree", loc == rem == 2, (loc, rem))
+
+# 23 — DELIBERATE FAILURE: an object vanishing from S3 must be reported SHORT
+s3k.store.pop(sorted(s3k.store)[0])
+short2, loc2, rem2 = s3_push.verify(s3k, "B", cnt)
+check("verify CATCHES a missing object", len(short2) == 1 and rem2 == 1, (short2, rem2))
+
+# 24 — DELIBERATE FAILURE: a truncated object must be reported SHORT (bytes)
+s3m = ListStub(); ledm = {}; cntm = {}
+s3_push.push_file(s3m, "B", pc1, "2026-08-12", "SPX", ledm, cntm)
+k0 = sorted(s3m.store)[0]
+s3m.store[k0] = b"x"                       # same count, far fewer bytes
+short3, _, _ = s3_push.verify(s3m, "B", cntm)
+check("verify CATCHES truncation via BYTES (count alone would pass)",
+      len(short3) == 1, short3)
+
+# 25 — incremental flush: a drain killed partway leaves progress on disk
+reset()
+os.makedirs(os.environ["OT_WAREHOUSE_STATE"], exist_ok=True)
+lp = os.path.join(os.environ["OT_WAREHOUSE_STATE"], "flush_probe.json")
+s3_push._OPEN.clear(); s3_push._SINCE_FLUSH[0] = 0
+s3_push.FLUSH_EVERY = 2
+led_f = s3_push.load_ledger(lp)
+pf = write_archive("2026-08-12", "MU", [snap("2026-08-12T09:3%d:00-04:00" % i, "MU")
+                                        for i in range(4)])
+s3f = ListStub(); cf = {}
+s3_push.push_file(s3f, "B", pf, "2026-08-12", "MU", led_f, cf)
+on_disk = s3_push.load_ledger(lp)
+check("ledger persisted MID-drain, not only at the end",
+      on_disk.get(pf, {}).get("n", 0) >= 2, on_disk)
+s3_push.FLUSH_EVERY = 200
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("ALL CHECKS PASSED" if not FAILS else "FAILURES: " + ", ".join(FAILS)))

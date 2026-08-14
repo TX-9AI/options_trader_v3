@@ -1,9 +1,26 @@
 #!/usr/bin/env python3
-# options_trader_v3/warehouse/s3_push.py — v1.2
+# options_trader_v3/warehouse/s3_push.py — v1.3
 """
 Box-side warehouse pusher — ships locally-written archives to S3.
 
 CHANGELOG
+    v1.3 — 2026-08-13 — WH.4: survivable drains and box-side verification.
+           (a) INCREMENTAL LEDGER SAVES. v1.0-v1.2 saved the ledger ONCE at the
+               end of main(). The unit sets TimeoutStartSec=240, so a backlog
+               drain longer than four minutes was killed with NO progress
+               recorded — every object re-PUT next run, forever. Content-hashed
+               keys meant no duplicates appeared, so it would have livelocked
+               silently rather than failing loudly. Ledgers now flush every
+               FLUSH_EVERY confirmations.
+           (b) PER-PREFIX COUNTERS. Each confirmation increments an O(1)
+               {n, bytes} counter for its dt=/sym= prefix. No per-object
+               bookkeeping.
+           (c) `--verify`. Drains, then reconciles those counters against what
+               S3 actually holds — per prefix, on COUNT and BYTES, both of
+               which list_objects_v2 returns for free. Prints ONE
+               machine-readable line and always exits 0. This is what the EOD
+               conductor gates a box's shutdown on, so the box answers for
+               itself instead of control modelling the box's local state.
     v1.2 — 2026-08-13 — WH.3: the remaining six streams. signal_journal and
            shadow (append-only jsonl, same offset ledger as chains, with
            `ruleset` and `event` lifted into the envelope); OHLC day-CSVs
@@ -181,9 +198,37 @@ def load_ledger(path: str = LEDGER_PATH) -> dict:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        data = data if isinstance(data, dict) else {}
     except Exception:
-        return {}
+        data = {}
+    _OPEN[path] = data          # register for mid-drain flushing
+    return data
+
+
+def flush_all():
+    """Persist every open ledger. Called mid-drain, not just at the end.
+
+    The whole point: a drain killed at TimeoutStartSec must leave PROGRESS
+    behind. Saving only at the end meant a long backlog could never finish and
+    would silently repeat itself forever.
+    """
+    ok = True
+    for path, data in _OPEN.items():
+        if not save_ledger(data, path):
+            ok = False
+    return ok
+
+
+def _confirm(key: str, body: bytes, counters: dict):
+    """Record one confirmed object: bump its prefix counters, flush if due."""
+    prefix = key.rsplit("/", 1)[0] + "/"
+    c = counters.setdefault(prefix, {"n": 0, "bytes": 0})
+    c["n"] += 1
+    c["bytes"] += len(body)
+    _SINCE_FLUSH[0] += 1
+    if _SINCE_FLUSH[0] >= FLUSH_EVERY:
+        _SINCE_FLUSH[0] = 0
+        flush_all()
 
 
 def save_ledger(ledger: dict, path: str = LEDGER_PATH) -> bool:
@@ -223,8 +268,12 @@ def envelope(rec: dict, sym: str, day: str, line_idx: int, src_file: str) -> byt
     return json.dumps(env, separators=(",", ":"), default=str).encode("utf-8")
 
 
-def put_and_verify(s3, bucket: str, key: str, body: bytes) -> bool:
-    """PUT then GET then byte-compare. Anything short of equality is False."""
+def put_and_verify(s3, bucket: str, key: str, body: bytes, counters=None) -> bool:
+    """PUT then GET then byte-compare. Anything short of equality is False.
+
+    On success the object is recorded against its dt=/sym= prefix counters,
+    which is what `--verify` later reconciles against S3.
+    """
     try:
         s3.put_object(Bucket=bucket, Key=key, Body=body)
     except Exception:
@@ -233,10 +282,14 @@ def put_and_verify(s3, bucket: str, key: str, body: bytes) -> bool:
         got = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
     except Exception:
         return False
-    return got == body
+    if got != body:
+        return False
+    if counters is not None:
+        _confirm(key, body, counters)
+    return True
 
 
-def push_file(s3, bucket, path, day, sym, ledger):
+def push_file(s3, bucket, path, day, sym, ledger, counters=None):
     """Push every unconfirmed line of one source file. Returns (pushed, failed)."""
     lines = read_lines(path)
     entry = ledger.get(path) or {}
@@ -267,7 +320,7 @@ def push_file(s3, bucket, path, day, sym, ledger):
         key = "{}/{}s/dt={}/sym={}/{}-{}.json".format(
             PREFIX, DATATYPE, day, sym, _epoch_ms(rec, mtime_ms), sha[:16]
         )
-        if not put_and_verify(s3, bucket, key, body):
+        if not put_and_verify(s3, bucket, key, body, counters):
             failed += 1
             break  # stop this file; next run retries from the same offset
         ledger[path] = {
@@ -326,7 +379,7 @@ def trade_envelope(rec: dict, sym: str, day: str) -> bytes:
     return json.dumps(env, separators=(",", ":"), default=str).encode("utf-8")
 
 
-def push_trades(s3, bucket: str, db_path: str, ledger: dict):
+def push_trades(s3, bucket: str, db_path: str, ledger: dict, counters=None):
     """Push every trade row whose CONTENT has changed since last push.
 
     Trade rows MUTATE — written at entry, rewritten at exit. So this is not
@@ -364,7 +417,7 @@ def push_trades(s3, bucket: str, db_path: str, ledger: dict):
         except Exception:
             ems = 0
         key = "%s/trades/dt=%s/sym=%s/%d-%s.json" % (PREFIX, day, sym, ems, sha[:16])
-        if not put_and_verify(s3, bucket, key, trade_envelope(rec, sym, day)):
+        if not put_and_verify(s3, bucket, key, trade_envelope(rec, sym, day), counters):
             failed += 1
             break
         ledger[tid] = sha
@@ -383,6 +436,14 @@ FEED_DB      = os.path.join(_OT, "data", "feed_store.db")
 EOD_DIR      = os.path.join(_HOME, "eod")
 ORB_STATE    = os.path.join(_OT, "orb_state.json")
 ORB_RANGE    = os.path.join(_OT, "orb_range.json")
+
+COUNTERS_PATH = os.path.join(STATE_DIR, "prefix_counters.json")
+FLUSH_EVERY   = int(os.environ.get("OT_S3_FLUSH_EVERY", "200"))
+
+# Every ledger this process has opened, so a mid-drain flush can persist all of
+# them. Registered by load_ledger; flushed by _confirm.
+_OPEN = {}
+_SINCE_FLUSH = [0]
 
 MISC_LEDGER   = os.path.join(STATE_DIR, "misc_ledger.json")
 CANDLE_LEDGER = os.path.join(STATE_DIR, "candle_ledger.json")
@@ -441,7 +502,7 @@ def _wrap(datatype, rec, sym, day, extra=None):
     return json.dumps(env, separators=(",", ":"), default=str).encode("utf-8")
 
 
-def push_jsonl_tree(s3, bucket, root, datatype, ledger):
+def push_jsonl_tree(s3, bucket, root, datatype, ledger, counters=None):
     """signal_journal and shadow: <date>/<SYM>.jsonl, append-only, plain text.
 
     Same offset-resume contract as the chain archive. `ruleset` and `event` are
@@ -475,7 +536,7 @@ def push_jsonl_tree(s3, bucket, root, datatype, ledger):
             body = _wrap(datatype, rec, sym, day, extra)
             ems = _epoch_ms(rec, 0) if isinstance(rec, dict) else 0
             key = "%s/%s/dt=%s/sym=%s/%d-%s.json" % (PREFIX, datatype, day, sym, ems, sha[:16])
-            if not put_and_verify(s3, bucket, key, body):
+            if not put_and_verify(s3, bucket, key, body, counters):
                 failed += 1
                 break
             ledger[path] = {"n": idx + 1, "last_sha": sha, "confirmed_utc": _now_utc()}
@@ -483,7 +544,7 @@ def push_jsonl_tree(s3, bucket, root, datatype, ledger):
     return pushed, failed
 
 
-def push_whole_files(s3, bucket, items, datatype, ledger):
+def push_whole_files(s3, bucket, items, datatype, ledger, counters=None):
     """One object per FILE, not per row. For OHLC day-CSVs and the EOD pair.
 
     A day-CSV holds ~390 candles; one object per candle would be 390x the
@@ -507,7 +568,7 @@ def push_whole_files(s3, bucket, items, datatype, ledger):
                      {"src_file": os.path.basename(path), "content_sha256": sha})
         key = "%s/%s/dt=%s/sym=%s/%s-%s.json" % (PREFIX, datatype, day, sym,
                                                  os.path.basename(path), sha[:16])
-        if not put_and_verify(s3, bucket, key, body):
+        if not put_and_verify(s3, bucket, key, body, counters):
             failed += 1
             continue
         ledger[path] = sha
@@ -515,7 +576,7 @@ def push_whole_files(s3, bucket, items, datatype, ledger):
     return pushed, failed
 
 
-def push_candles(s3, bucket, db_path, ledger, me):
+def push_candles(s3, bucket, db_path, ledger, me, counters=None):
     """feed_store candles — ALL intervals, high-water mark per symbol+interval.
 
     The store is a rolling window (pruned), not an archive, so re-reading it
@@ -557,7 +618,7 @@ def push_candles(s3, bucket, db_path, ledger, me):
                       "ts_from": int(rows[0]["ts_epoch_ms"]), "ts_to": top})
         key = "%s/candles/dt=%s/sym=%s/interval=%s/%d-%s.json" % (
             PREFIX, day, sym, iv, top, sha[:16])
-        if put_and_verify(s3, bucket, key, body):
+        if put_and_verify(s3, bucket, key, body, counters):
             ledger[lk] = top
             pushed += 1
         else:
@@ -566,7 +627,7 @@ def push_candles(s3, bucket, db_path, ledger, me):
     return pushed, failed
 
 
-def push_orb(s3, bucket, ledger, me):
+def push_orb(s3, bucket, ledger, me, counters=None):
     """ORB state, captured ON STATE rather than on a clock time.
 
     orb_state.json is rewritten EVERY TICK with no log, so every historical ORB
@@ -594,7 +655,7 @@ def push_orb(s3, bucket, ledger, me):
         body = _wrap(kind, rec, me or "UNKNOWN", day,
                      {"orb_state": state, "attempt": rec.get("attempt")})
         key = "%s/%s/dt=%s/sym=%s/%s.json" % (PREFIX, kind, day, me or "UNKNOWN", sha[:16])
-        if put_and_verify(s3, bucket, key, body):
+        if put_and_verify(s3, bucket, key, body, counters):
             ledger[path] = sha
             pushed += 1
         else:
@@ -602,9 +663,43 @@ def push_orb(s3, bucket, ledger, me):
     return pushed, failed
 
 
+def verify(s3, bucket: str, counters: dict):
+    """Reconcile this box's confirmations against what S3 actually holds.
+
+    Per dt=/sym= prefix, on COUNT and BYTES. Both come back from
+    list_objects_v2 at no extra cost, so this is a handful of LIST calls
+    rather than a HEAD per object — fast enough to gate a wake/verify/stop
+    cycle on.
+
+    Deliberately NOT a content hash: every object was already read back and
+    byte-compared at PUT time, so content was verified against the source when
+    it landed. The failure still live afterwards is "it never arrived", which
+    counts catch, and "it arrived short", which bytes catch.
+    """
+    short = []
+    tot_local = tot_s3 = 0
+    for prefix, exp in sorted(counters.items()):
+        n = b = 0
+        try:
+            pg = s3.get_paginator("list_objects_v2")
+            for page in pg.paginate(Bucket=bucket, Prefix=prefix):
+                for o in page.get("Contents", []) or []:
+                    n += 1
+                    b += int(o.get("Size", 0) or 0)
+        except Exception:
+            short.append((prefix, exp["n"], -1))
+            continue
+        tot_local += int(exp["n"])
+        tot_s3 += n
+        if n < int(exp["n"]) or b < int(exp["bytes"]):
+            short.append((prefix, exp["n"], n))
+    return short, tot_local, tot_s3
+
+
 def main(argv=None) -> int:
     argv = argv or sys.argv[1:]
     report = "--report" in argv
+    do_verify = "--verify" in argv
 
     try:
         if not ENABLED:
@@ -613,30 +708,32 @@ def main(argv=None) -> int:
             return 0
 
         files = discover()
-        if (not files and not report and not os.path.exists(TRADES_DB)
+        if (not files and not report and not do_verify
+                and not os.path.exists(TRADES_DB)
                 and not os.path.isdir(OHLC_ROOT)):
             return 0  # idle box with nothing at all. Say nothing.
 
         import boto3  # imported late so a missing SDK cannot break --report
 
         s3 = boto3.client("s3", region_name=REGION)
+        counters = load_ledger(COUNTERS_PATH)
         ledger = load_ledger()
         total_pushed = 0
         total_failed = 0
 
         for path, day, sym in files:
-            p, f = push_file(s3, BUCKET, path, day, sym, ledger)
+            p, f = push_file(s3, BUCKET, path, day, sym, ledger, counters)
             total_pushed += p
             total_failed += f
 
         if total_pushed or total_failed:
-            save_ledger(ledger)
+            flush_all()
 
         # ── trades (WH.2) — independent ledger, independent failure ─────────
         t_ledger = load_ledger(TRADES_LEDGER)
-        t_pushed, t_failed = push_trades(s3, BUCKET, TRADES_DB, t_ledger)
+        t_pushed, t_failed = push_trades(s3, BUCKET, TRADES_DB, t_ledger, counters)
         if t_pushed or t_failed:
-            save_ledger(t_ledger, TRADES_LEDGER)
+            flush_all()
         total_pushed += t_pushed
         total_failed += t_failed
 
@@ -645,10 +742,10 @@ def main(argv=None) -> int:
         misc = load_ledger(MISC_LEDGER)
         m_p = m_f = 0
         for root, dtype in ((JOURNAL_ROOT, "signal_journal"), (SHADOW_ROOT, "shadow")):
-            a, b = push_jsonl_tree(s3, BUCKET, root, dtype, misc)
+            a, b = push_jsonl_tree(s3, BUCKET, root, dtype, misc, counters)
             m_p += a
             m_f += b
-        a, b = push_whole_files(s3, BUCKET, discover(OHLC_ROOT, ".csv"), "ohlc", misc)
+        a, b = push_whole_files(s3, BUCKET, discover(OHLC_ROOT, ".csv"), "ohlc", misc, counters)
         m_p += a
         m_f += b
         eod_items = []
@@ -658,22 +755,38 @@ def main(argv=None) -> int:
                     eod_items.append((os.path.join(EOD_DIR, n), _eod_day(EOD_DIR), me))
         except Exception:
             pass
-        a, b = push_whole_files(s3, BUCKET, eod_items, "eod", misc)
+        a, b = push_whole_files(s3, BUCKET, eod_items, "eod", misc, counters)
         m_p += a
         m_f += b
-        a, b = push_orb(s3, BUCKET, misc, me)
+        a, b = push_orb(s3, BUCKET, misc, me, counters)
         m_p += a
         m_f += b
         if m_p or m_f:
-            save_ledger(misc, MISC_LEDGER)
+            flush_all()
 
         c_ledger = load_ledger(CANDLE_LEDGER)
-        c_p, c_f = push_candles(s3, BUCKET, FEED_DB, c_ledger, me)
+        c_p, c_f = push_candles(s3, BUCKET, FEED_DB, c_ledger, me, counters)
         if c_p or c_f:
-            save_ledger(c_ledger, CANDLE_LEDGER)
+            flush_all()
 
         total_pushed += m_p + c_p
         total_failed += m_f + c_f
+
+        flush_all()      # always: a run that pushed nothing may still have
+                         # nothing to save, and one that did must not lose it
+
+        if do_verify:
+            # ONE machine-readable line. The EOD conductor parses this to decide
+            # whether a box may be stopped, so it must be stable and exit 0.
+            short, loc, remote = verify(s3, BUCKET, counters)
+            print("DRAIN host={} sym={} pushed={} failed={} prefixes={} "
+                  "local={} s3={} short={} {}".format(
+                      HOST, me or "?", total_pushed, total_failed, len(counters),
+                      loc, remote, len(short),
+                      "OK" if (not short and not total_failed) else "SHORT"))
+            for pfx, exp, got in short[:5]:
+                print("  SHORT {} expected>={} got={}".format(pfx, exp, got))
+            return 0
 
         if total_pushed or total_failed or report:
             print(
