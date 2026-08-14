@@ -184,6 +184,11 @@ def prior_sessions(date, symbol, n):
     return sorted(seen)[-n:] if seen else []
 
 
+# The trend engine's requirement, stated once so nothing has to remember it.
+TREND_MIN_BARS = 55          # EMA_SLOW + 5, per analysis/trend_engine
+SLOWEST_TF = "1h"
+
+
 def load_hot_book(date, symbol, warmup_days):
     """Prior-session bars concatenated ahead of the target date — the HOT BOOK.
 
@@ -195,18 +200,28 @@ def load_hot_book(date, symbol, warmup_days):
     That is the most dangerous failure a simulator can have: silence that looks
     like a result.
     """
-    frames = []
-    for d in prior_sessions(date, symbol, warmup_days):
+    wanted = prior_sessions(date, symbol, warmup_days)
+    frames, got = [], []
+    for d in wanted:
         df = _load_one_day(d, symbol)
         if df is not None and not df.empty:
             frames.append(df)
+            got.append(d)
     today = _load_one_day(date, symbol)
     if today is None or today.empty:
-        return None, 0
+        return None, {"asked": warmup_days, "dirs": len(wanted), "loaded": 0,
+                      "missing": wanted}
     frames.append(today)
     book = pd.concat(frames).sort_index()
     book = book[~book.index.duplicated(keep="last")]
-    return book, len(frames) - 1
+    # ⚠️ REQUESTED IS NOT LOADED. A session directory can exist without THIS
+    # symbol in it — a box that did not wake, a symbol added later — and the
+    # frame is then silently absent. Asking for 10 and getting 3 must be
+    # visible, because 3 is not enough to prime the trend engine and the run
+    # would report a quiet day that never happened.
+    return book, {"asked": warmup_days, "dirs": len(wanted),
+                  "loaded": len(got),
+                  "missing": [d for d in wanted if d not in got]}
 
 
 def _load_one_day(date, symbol):
@@ -298,9 +313,14 @@ def main(argv):
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args(argv[1:])
 
-    df, warm = load_hot_book(a.date, a.symbol, a.warmup)
+    # SIM.2 — the HOT BOOK is a shared module, not a private helper here. One
+    # definition of "primed", read from the trend engine's own constants, so no
+    # tool can soften the wording of a starved run.
+    from data.hot_book import prime as hb_prime, verify_prime, describe
+    df, hb = hb_prime(a.symbol, a.date, a.warmup)
     if df is None or df.empty:
-        print(f"no OHLC for {a.symbol} on {a.date}. ABSENT MEASUREMENT.")
+        for line in describe(hb):
+            print(f"  {line}")
         return 1
     chains = load_chain_series(a.date, a.symbol)
     vix = load_vix_series(a.date, a.symbol)
@@ -316,20 +336,27 @@ def main(argv):
     import main as bot
     bot.get_cache = lambda symbol=a.symbol: cache
 
+
     h0, m0 = (int(x) for x in a.t0.split(":"))
     h1, m1 = (int(x) for x in a.t1.split(":"))
+    # ⚠️ FILTER BY DATE, NOT JUST TIME-OF-DAY. `df` now spans the whole HOT
+    # BOOK, so a time-of-day filter alone selects 09:30-10:00 on EVERY preloaded
+    # session — eleven days of ticks for a thirty-minute window, replaying dates
+    # nobody asked for and starting the run ~10 sessions before the target with
+    # an unprimed trend engine. Introduced the moment the hot book was added;
+    # visible only because the tick COUNT did not match the window.
     ticks = [t for t in df.index
-             if h0 * 60 + m0 <= t.hour * 60 + t.minute <= h1 * 60 + m1]
+             if t.strftime("%Y-%m-%d") == a.date
+             and h0 * 60 + m0 <= t.hour * 60 + t.minute <= h1 * 60 + m1]
     ticks = ticks[::max(1, a.step)]
 
     print("=" * 84)
     print(f"  REPLAY SIM — {a.symbol} {a.date}   {a.t0}-{a.t1}"
           f"   {len(ticks)} tick(s)   {len(chains)} chain snapshot(s)")
-    print(f"  HOT BOOK: {warm} prior session(s) preloaded, {len(df)} bars total"
-          f"   VIX from journal: {len(vix)} point(s)")
-    if warm == 0:
-        print("  ⚠️ NO HOT BOOK — the trend engine will vote NEUTRAL all day and")
-        print("     nothing trend-gated can fire. This run proves nothing.")
+    _chk = verify_prime(df, ticks[0]) if ticks else None
+    for line in describe(hb, _chk):
+        print(f"  {line}")
+    print(f"  VIX from journal: {len(vix)} point(s)")
     print("  REAL: vol · trend · structure · liquidity · ORB · regime ·"
           " strategies · scorer · exits")
     print("  FAKED: the cache (truncated, NO LOOKAHEAD) · the clock · the chain\n  ⚠️ VOLUME IS SYNTHETIC (constant 0) — the archive has none. Any\n     volume-derived signal is INERT here, not measured.")

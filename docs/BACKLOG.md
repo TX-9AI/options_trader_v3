@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.69
+# docs/BACKLOG.md — v4.70
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5074,6 +5074,43 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.70 — 2026-08-14 — SIM.2: THE HOT BOOK IS A GENERIC MODULE.**
+  `data/hot_book.py` v1.0 · `devtools` v1.29 (option **58**) · replay delegates.
+  Operator: *"I want a generic hot book to prime every run regardless of which
+  symbol we are running... just as long as the trend engine will read states
+  after it's warm."*
+
+  **IT VERIFIES THE PRIME AGAINST THE ENGINE'S OWN CONSTANTS**, never a number
+  written here: `EMA_SLOW + 5` imported from config, and `tf_weights` parsed
+  from `trend_engine` so a frame added there cannot go unverified. **Counting
+  SESSIONS is a proxy; counting BARS PER FRAME at the first tick is the fact.**
+
+  **AND IT REPORTS WEIGHT LOST, NOT PASS/FAIL** — because a starved frame votes
+  NEUTRAL and contributes NOTHING, so the aggregate still works at reduced
+  weight. Measured: **12 warmup sessions → 85%% of the vote live (usable);
+  2 sessions → 65%% (not usable).**
+  ⚠️ **THE `1d` FRAME NEEDS 55 DAILY BARS — about 11 WEEKS of archive**, and the
+  OHLC archive starts around 2026-07-13. So **1d is starved on every realistic
+  replay** and the run carries 85%% of the trend weight. That is a data-depth
+  fact, not a defect, and it is printed on every run rather than discovered.
+
+  **⚠️ THE HARD LIMIT (operator: "we don't have the tape for that session
+  yet"):** a session is replayable ONLY after the EOD conductor has harvested
+  its OHLC to control. **Same-day replay is impossible before EOD.** Stated in
+  the module, in the menu entry, and in the failure message.
+  ⚠️ ASKED IS NOT LOADED: a session directory can exist without a given symbol
+  in it, so the report always prints asked / dirs / **LOADED** and names what
+  was missing. Asking for 10 and getting 3 must be visible.
+
+  **🔴 AND THE HOT BOOK EXPOSED A BUG IT HAD JUST CREATED.** With the book
+  loaded, `df` spans eleven sessions — and the driver's tick filter was
+  TIME-OF-DAY ONLY, so it selected 09:30-10:00 on EVERY preloaded session:
+  **23 ticks for a 30-minute window, replaying dates nobody asked for and
+  starting ~10 sessions before the target with an unprimed engine.** Caught
+  because the prime check reported NOT PRIMED and the tick COUNT did not match
+  the window — neither would have been visible without the verification.
+  Ticks are now scoped to the target date.
 
 - **v4.69 — 2026-08-14 — SIM.1: A REPLAY SIMULATOR. `tests/replay_sim.py` v1.0
   + `utils/time_utils` injectable clock.** Operator: *"With the inert trading
