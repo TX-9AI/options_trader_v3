@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.37
+# docs/BACKLOG.md — v4.38
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -114,6 +114,13 @@ BAKED is changing nothing about today's data.
 | **CV.1 — two canary reds at clean HEAD** | ⬜ **OPEN** | ⬜ | n/a (offline) | **Confirmed present on a PRISTINE clone, NOT introduced by any 08-08 delivery.** `check_versions.sh` pins `v5.4 main header current` while `main.py` is at **v5.8**, and one canary expects `tests/condor_plan_lifetime.py`, which **does not exist in the repo**. Consequence is the reason this is an item and not a footnote: the sweep now ends `DONE — 2 CANARY/PARITY FAILURE(S)` on a perfectly clean checkout, so **its own DONE banner has stopped being usable as a gate** — the cried-wolf failure this repo has already paid for once (WORKING_AGREEMENT §17: an alarm that spams is an alarm that gets filtered). Either update the pin to v5.8 and re-point or delete the orphaned canary; both are one-line edits. Left for the operator's call rather than folded silently into another delivery. |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
+| **WH.7 — fix devtools EMERGENCY STOP** | ⬜ | ⬜ | ⬜ **SAFETY, do first, standalone** | broken per operator 08-13; same item the Jul 22 renumber clobbered; from HEAD, verify BY NAME; must NOT ride inside the renumber |
+| **WH.8 — control-side warehouse reader** | ⬜ | ⬜ | ⬜ | reproduce fleet_trades shape + `box` tag; latest-state-per-trade_id then status='closed'; blocks WH.9/WH.10 |
+| **WH.9 — S3 utils in the devtools menu** | ⬜ | ⬜ | ⬜ | per-prefix counts, ledger reconcile, per-box drain/verify — the checks pasted by hand all session |
+| **WH.10 — menu reorder + renumber** | ⬜ | ⬜ | ⬜ **after WH.7/8/9** | from HEAD; EMERGENCY STOP / Verify / DRILL verified BY NAME, never by position |
+| **WH.11 — run 40 + 41 from the bucket** | ⬜ | ⬜ | ⬜ **gate on WH.12** | diff both sources; read-back-and-compare applied to reports |
+| **WH.12 — curtail control redundancy (SEVER)** | ⬜ | ⬜ | ⬜ **blocked by WH.11** | 41 globs all bundles — ephemeral reports/ shortens its window SILENTLY; standings.py can never leave SSH |
+| **WH.13 — clean day_trader_pro of non-repo artifacts** | ⬜ | ⬜ | ⬜ | incl. the ROWS=0 trades.db in a `~/options-trader` that should not exist on control |
 | **WH.6 — single-instance lock + deprioritised unit** | ✅ 08-13 | ⬜ | ⬜ **needs bake + installer** | flock on all paths; `--verify` falls back to verify-only with `drained=no`; Nice=15/idle IO so a drain never competes with candle fetch; installer `next=` fixed; 80 checks |
 | **WH.5 — stream ordering** | ✅ 08-13 | ⬜ | ⬜ **needs bake + installer** | bulk journal starved ohlc/eod/candles; order now perishable-first, TimeoutStartSec 240->1800, per-stage isolation; 74 checks incl. 6 pinning the order |
 | **WH.4 — pre-stop drain + box-side verify** | ✅ 08-13 | ⬜ | ⬜ **built, not deployed** | s3_push v1.3 (incremental flush, prefix counters, `--verify`); eod_backfill v1.2 + eod_report v0.2 gate the stop; **livelock fixed**: ledger was saved only at end vs TimeoutStartSec=240; 67 checks |
@@ -5002,6 +5009,52 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.38 — 2026-08-13 EOD — THE WAREHOUSE QUEUE, WRITTEN DOWN BEFORE IT IS FORGOTTEN.**
+  Nothing built here. This entry exists so the seven items the operator named at
+  the end of the 08-13 session survive the session, with their dependencies
+  stated — several of them are ordered, and doing them out of order is how the
+  July 22 menu incident happened.
+  - **1. FIX THE EMERGENCY STOP — DO THIS FIRST AND ON ITS OWN.** The operator
+    volunteered that devtools option 27 is currently broken. It is the fleet's
+    safety control, go-live is Tue Sep 8, and it is the SAME item a v1.18
+    renumber clobbered on July 22. It must NOT be folded into the renumber
+    (item 4): changing a broken safety control and moving its number in one
+    commit is exactly how that failure happened. Start from HEAD; verify BY
+    NAME afterwards, never by position or count.
+  - **2. REPOINT THE DEVTOOLS REPORTS AT THE BUCKET.** Needs the control-side
+    warehouse READER first — reproducing the `fleet_trades_<date>.json` shape
+    incl. the synthetic `box` tag, taking the LATEST state per `trade_id` then
+    filtering `status='closed'` for 40. Blocks 4 and 5.
+  - **3. ADD S3 BUCKET UTILS TO THE MENU** — per-prefix counts, a reconcile
+    against the fleet ledgers, a per-box drain/verify. These are the checks that
+    have been pasted by hand all session; they belong in the menu.
+  - **4. REORDER + RENUMBER THE MENU.** Operator's sequencing: only AFTER the
+    collectors are repointed (2) and control aggregates report output to
+    `/reports`. Adding items in 3 moves the numbers, so 3 lands before 4, and 1
+    lands before both. **From HEAD. Destructive/safety items verified BY NAME:
+    EMERGENCY STOP, Verify, blind-alert DRILL.**
+  - **5. RUN THE TEST REPORTS OUT OF THE BUCKET.** 40 and 41 are the named
+    benchmarks. Run BOTH sources and diff the outputs — read-back-and-compare
+    applied to reports instead of objects. **This is the gate on 6.**
+  - **6. CURTAIL REDUNDANCY ON CONTROL.** The sever step (decision #5,
+    dual-write then sever). Do NOT start until 5 has matched. ⚠️ Report 41 globs
+    every historical `fleet_trades_*.json`, so making `reports/` ephemeral
+    SILENTLY SHORTENS its cumulative window rather than erroring — 41 must be
+    re-sourced from the warehouse before anything in `reports/` is curtailed.
+    ⚠️ `standings.py` (48) can never be served from S3; it reads live intraday
+    state over SSH and must keep doing so.
+  - **7. CLEAN THE day_trader_pro DIRECTORY** of artifacts that do not belong to
+    the repo. Known: a `trades.db` with the full 84-col schema and ROWS=0 sitting
+    in a `~/options-trader` that should not exist on control at all (control's
+    checkout is `~/options-trader-v3`, suffixed and inert) — smoke-test
+    scaffolding from a delivered tarball that was never removed. `reports/`,
+    `ohlc/`, `trades/`, `signal_journal/` and `chain_snapshots/` are already
+    correctly gitignored there.
+  - **STILL OPEN FROM THE BUILD:** `derived/` and `meta/` are specified but
+    unbuilt; feed_store vs OHLC overlap undecided; OHLC `volume` carries
+    decimals and nobody knows why; no cost ceiling estimated; and the 07-23 trap
+    is still live — **no report reads the warehouse yet.**
 
 - **v4.37 — 2026-08-13 — WH.6: ONE PUSHER AT A TIME, AND IT RUNS LAST IN THE QUEUE.**
   `warehouse/s3_push.py` v1.5, `deploy/s3-push.service` v1.2,
