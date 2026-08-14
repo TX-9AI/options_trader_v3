@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.71
+# docs/BACKLOG.md — v4.72
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5075,6 +5075,57 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
 
+- **🔴 v4.72 — 2026-08-14 — SIM.1/2/3 REVERTED. THEY DUPLICATED
+  `replay_confluence.py` AND MODIFIED A LIVE MODULE TO DO IT.**
+  `utils/time_utils.py` restored to e594d91 · `data/hot_book.py`,
+  `tests/replay_sim.py`, `tests/tcs_v21_backtest.py` DELETED · `devtools` v1.30
+  drops option 58 · `FLEET_STATE_2026-08-13.md` folded into HISTORY and deleted.
+
+  **THE CAUSE IS A PROCESS FAILURE, NOT A DESIGN ONE.** The operator's opening
+  instruction on this thread was *"Read all available md files in both repos"*
+  and *"Rule#1: ALWAYS adhere to the working agreement."* I read BACKLOG,
+  WORKING_AGREEMENT and MECHANICS on demand and never read ROADMAP, VALIDATION,
+  HISTORY, FILE_MAP or the whitepaper. Two days of work sat on that gap.
+
+  **WHAT IT COST:**
+  · **`replay_confluence.py` HAS DONE THIS SINCE v1.2, 2026-07-21** —
+    `--warm-sessions`, default 8, as-of replay over deterministic tape. I
+    rebuilt it as `hot_book` + `replay_sim`, 774 lines, in ignorance.
+  · **AND I REBUILT IT WITH THE BUG ITS v2.2 EXISTS TO PREVENT.** That version
+    (2026-08-01) added FRAME CAPS FROM CONFIG *"so the replay sees exactly what
+    LIVE sees… at warm >= 7 the replay's 1h frame reaches 55+ bars and VOTES,
+    while live holds it at 50 and it stays NEUTRAL. The offline corpus would
+    have carried a directional vote production does not have."* My hot book
+    reported **"✅ PRIMED — 100%% of the trend vote live"** and called it an
+    achievement. **By this repo's own standard that is the DEFECT**, not the
+    goal.
+  · **A LIVE MODULE WAS MODIFIED FOR A TEST ARTIFACT.** `utils/time_utils.py`
+    has **14 call sites across five modules** — precisely the wide fan-in
+    WORKING_AGREEMENT 7 says to check `FILE_MAP.md` before touching. I did not.
+    Being inert in production was luck, not diligence. Reverted exactly; the
+    only consumer was `replay_sim`, so nothing is orphaned.
+  · **A NEW DOC FILE WAS CREATED** against `docs/README.md`'s explicit rule —
+    *"don't create a new file… Completed work → HISTORY. The sprawl this
+    replaced grew one well-intentioned file at a time."* Folded in verbatim with
+    a `<!-- was: -->` provenance marker; docs back to the sanctioned set.
+
+  **⚠️ AND THE TERMINOLOGY WENT TO THE WRONG PLACE.** The operator asked to
+  codify trend continuation vs trend participation; I put it in a strategy
+  changelog header and BACKLOG. `MECHANICS.md` — which `docs/README.md` names as
+  the home for behaviour — had **zero** mentions. Now defined there, under
+  §Strategies, with the stale "log-only readiness track" framing marked
+  SUPERSEDED. BACKLOG points at it rather than duplicating it.
+
+  **KEPT, DELIBERATELY:** every defect fix and every operator-directed change —
+  TC.6's terminal return and identity chain, CNT.1's exit half, AFD.1
+  pre-dispatch, TC.6 v2.1 with the sovereign ORB bound, CND.7's ratchet scope,
+  the 15:45 vertical hold, GRD.2, SWP.3. **149 tests pass after the revert.**
+  ⚠️ NEXT, AGREED AND SEPARATE: de-couple TC.6 from the condor's namespace and
+  plumbing. It currently borrows SIX `CONDOR_*` constants, five methods, sets
+  `is_iron_condor = True`, and routes through `_execute_condor_leg` /
+  `_evaluate_condor_leg` — **which is exactly why a dropped flag produced 108
+  bad trades.** A trade living inside another trade's plumbing.
+
 - **v4.71 — 2026-08-14 — SIM.3: THE SYNTHETIC PAD.** `data/hot_book.py` ·
   `replay_sim --pad` · `devtools` v1.29 option 58 prompts for it.
   Operator: *"What if you duplicate the current session x10 just for the sake of
@@ -5271,12 +5322,9 @@ opening the file showed history before it showed anything still to do.*
   `trend_credit_spread` v2.1 · `main` v6.7 · `exit_engine` · `config` v4.18 ·
   135 tests.
 
-  **🔵 TERMINOLOGY, FIXED (operator, 2026-08-14):**
-  · **TREND CONTINUATION** = the LONG (DEBIT) contract placed on an ORB runaway
-    handoff. Blocked after 11:00 by AFD.1.
-  · **TREND PARTICIPATION** = a CREDIT SPREAD at the floor of a move, BOUNDED by
-    the ORB HIGH (long) / ORB LOW (short), INVALIDATED BY A BREACH of that
-    level. **No exit before the session hard close except a breach.**
+  **🔵 TERMINOLOGY, FIXED (operator, 2026-08-14) — the definitions now live in
+  `MECHANICS.md` §Strategies, which is where behaviour is documented. Recorded
+  here only as the pointer.**
 
   **THE LEVEL vs THE ENGINE — and v2.0 over-corrected.** Operator: *"those
   levels are fixtures."* The ORB ENGINE must not gate an afternoon trade (no

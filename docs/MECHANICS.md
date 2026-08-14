@@ -1379,6 +1379,30 @@ requires all three: **location** (at a named pool), **penetration**, and **rejec
 delta targeting, scaled inversely to reversal strength (strong snap → far-OTM; weak →
 near-ATM). **BOS exit** on the 1m chart — closes only, no wicks.
 
+##### TERMINOLOGY — the two trend trades are DIFFERENT TRADES (fixed 2026-08-14)
+
+These names were used loosely and it caused real confusion. They are now fixed:
+
+- **TREND CONTINUATION** is the **LONG (DEBIT)** contract placed on an **ORB
+  runaway handoff**. Directional, buys premium, and is **BLOCKED AFTER 11:00 ET**
+  by AFD.1 along with every other debit directional.
+- **TREND PARTICIPATION** is a **CREDIT SPREAD bounded by the ORB RANGE** — the
+  ORB HIGH for a long, the ORB LOW for a short — **invalidated by a close
+  through that level**, and **otherwise unrelated to the other trades.** It sells
+  premium, runs 11:00–14:00, and nothing closes it before the session hard close
+  except a breach.
+
+⚠️ **THE RUNAWAY IS SLOT ARBITRATION, NOT A SHARED PREMISE.** ORB owns
+09:35–11:00. A runaway is the one condition that definitively frees that slot
+(ORB is INVALIDATED and never re-arms), which is why continuation-handoff and
+sweep-reversal may take it. **After 11:00 ORB owns nothing**, so trend
+participation requires no runaway and asks no permission — it uses the ORB
+range only as a PRICE LEVEL, recomputed from the 09:30–09:35 bars, never from
+the ORB engine's state.
+
+The two trades share a name fragment and nothing else: opposite premium
+direction, different windows, different anchors, different invalidation.
+
 ##### Trend Continuation (NEW 2026-07-18 — paper-first, the trend-native trade)
 The trade the `trend_engine v3.1` fix exists to enable. Fires **only in a trending regime** —
 and because the classifier is *stingy* about calling trend (it is a high bar to clear), a
@@ -1465,6 +1489,10 @@ Derived: call wall, put wall, pin strike, flip strike, environment. The condor i
 
   **WHAT EXISTS TODAY, precisely — asked directly on 2026-08-04 and worth writing
   down rather than re-deriving.** There is **no `strategy/vertical_spread_strategy.py`**.
+  ⚠️ SUPERSEDED 2026-08-14 — `strategy/trend_credit_spread.py` (TrendCreditSpread)
+  is now a REAL FIRING STRATEGY, not a readiness track. See the TERMINOLOGY block
+  under §Strategies. What follows describes the log-only precursor.
+
   What runs is the READINESS TRACK, `analysis/trade_readiness._trend_credit_spread()`,
   live on the fleet since 2026-07-28 and log-only; `tests/canary_trend_credit_spread.py`
   exists to prove it is *wired and inert*, not that it trades. It is scored, journaled
