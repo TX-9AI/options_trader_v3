@@ -63,16 +63,25 @@ def test_hard_close_still_outranks_everything():
         line_of('if bool(record.get("is_trend_credit")):')
 
 
+def test_no_nickel_close_on_trend_participation():
+    """Operator, 2026-08-14: "There should be no closing it short of a BREACH of
+    that level or the SESSION HARD CLOSE cutoff." Revises the earlier
+    breach-or-nickel spec. A nickel close is a PROFIT exit and caps a position
+    whose measured EV was HELD TO EXPIRY, UNMANAGED."""
+    seg = tcs_branch_source()
+    assert "CONDOR_NICKEL_CLOSE" not in seg, (
+        "a nickel close is back in the TC.6 branch — the only exits are a "
+        "breach of the ORB bound and the 15:45 hard close")
+
+
 def test_the_tcs_branch_returns_rather_than_falling_through():
     """Both TC.6 exits must `return decision`. A fall-through would drop the leg
     into the condor ladder below with no further guard."""
     body = condor_fn()
-    seg = body[body.index('if bool(record.get("is_trend_credit")):'):
-               body.index("        _prev_hard = None") if "_prev_hard = None" in body
-               else body.index("# ── ADVERSE REGIME FLIP") if "ADVERSE REGIME FLIP" in body
-               else body.index("RATCHET SCOPE")]
-    assert seg.count("return decision") >= 2, \
-        "the breach and nickel paths do not both return"
+    seg = tcs_branch_source()
+    # Counting returns proves nothing about the path that has none — that was
+    # the v1.0 defect. Assert the branch ENDS in one.
+    assert seg.rstrip().endswith("return decision")
 
 
 # ── breach is a CLOSE, never a wick ────────────────────────────────────────
@@ -226,3 +235,74 @@ def test_unresolvable_pop_is_a_skip_not_a_pass():
     i = src.index("pop = self._sel._pop(")
     assert "if pop <= 0.0:" in src[i:i + 400]
     assert "return None" in src[i:i + 600]
+
+
+# ── TC.6 v2.1 entry shape ──────────────────────────────────────────────────
+
+def tcs_src():
+    return open(os.path.join(os.path.dirname(__file__), "..", "strategy",
+                             "trend_credit_spread.py"), encoding="utf-8").read()
+
+
+def test_no_em_floor_can_override_the_orb_bound():
+    """DIS-INHERITED FROM THE CONDOR. `_select_beyond_rail` requires a strike to
+    clear BOTH the rail and the min-distance, so whichever is further out wins.
+    An EM-derived floor beyond the ORB high would push the strike past the
+    operator's level — a FITTED PERCENTAGE overriding a STRUCTURAL one."""
+    s = tcs_src()
+    assert "CONDOR_EM_FLOOR_FRAC" not in s
+    assert 'min_dist = float("inf") if side == "put" else float("-inf")' in s
+
+
+def test_price_must_be_outside_the_range_at_entry():
+    """Entry and exit must agree. The exit calls a close back through the bound
+    INVALIDATION, so entering while price is already inside means the trade is
+    born in the state its own exit calls dead — the CNT.1 failure shape."""
+    s = tcs_src()
+    assert "_outside = (current_price > bound if side == \"put\"" in s
+    assert "back INSIDE the range" in s
+
+
+def test_no_cooldown_gate():
+    """Removed 2026-08-14: a timer stacked on nine substantive gates suppresses
+    valid re-entries without preventing a single bad one. The loop it was added
+    for is fixed at the source."""
+    s = tcs_src()
+    assert "TCS_COOLDOWN_MIN" not in s and "_last_fire" not in s
+
+
+def test_the_not_exceeded_filter_is_dis_inherited():
+    """⚠️ IT MADE THE BOUND DECORATIVE, not merely redundant.
+
+    `session_low` <= `orb_low` < `orb_high` — the opening range is PART of the
+    session — so requiring a put strike to clear BOTH the bound AND the session
+    low collapses to the session low EVERY TIME. The strike was always placed
+    below the ORB LOW and never at the specified level, so the ENTRY placed it
+    somewhere the EXIT never referenced. Mirrored for calls.
+    Safety is carried by POP >= 0.70 and the joint EV test, which ask the same
+    question in sigma*sqrt(T) terms FROM NOW rather than backward-looking."""
+    s_ = tcs_src()
+    assert 'side, bound, extreme = "put", orb_high, None' in s_
+    assert 'side, bound, extreme = "call", orb_low, None' in s_
+
+
+def test_the_arithmetic_that_made_the_bound_decorative():
+    """Pin the relationship itself, so nobody re-adds the filter without
+    noticing it can only ever dominate."""
+    orb_high, orb_low = 582.50, 578.10
+    session_low = min(orb_low, 575.0)          # the range is part of the session
+    assert session_low <= orb_low < orb_high
+    # a put strike clearing BOTH collapses to the extreme
+    assert min(orb_high, session_low) == session_low
+
+
+def test_the_bound_is_the_orb_level_and_it_is_sovereign():
+    """A bullish vote sells PUTS beneath the ORB HIGH — the level price broke
+    from, which is the floor of that move and the RICHER strike because it sits
+    closer to spot. Mirrored for a bearish vote at the ORB LOW.
+    Nothing else may displace it: `extreme` is None, and the EM floor is a
+    non-binding sentinel."""
+    s_ = tcs_src()
+    assert 'side, bound, extreme = "put", orb_high, None' in s_
+    assert 'side, bound, extreme = "call", orb_low, None' in s_
+    assert 'min_dist = float("inf") if side == "put" else float("-inf")' in s_

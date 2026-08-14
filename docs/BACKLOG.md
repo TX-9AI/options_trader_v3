@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.65
+# docs/BACKLOG.md — v4.68
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5074,6 +5074,186 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **🔴 v4.68 — 2026-08-14 — THE HANDOFF DROPPED EVERY FLAG. TC.6's IDENTITY
+  NEVER REACHED THE RECORD.** `main` v6.8 · 12 tests (149 total).
+  **Found by auditing the LOGIC against stated intent — not by a test, and not
+  by watching P&L.** Operator: *"I don't need P&L — I'm asking if the logic is
+  written, sound, and true to the intent I named?"*
+
+  **THE STRATEGY AND THE EXIT ENGINE WERE BOTH CORRECT AND THE TRADE STILL DID
+  THE WRONG THING.** `_execute_condor_leg` builds the record for BOTH a condor
+  leg and a trend credit spread, and hardcoded condor identity onto both:
+  · **`is_trend_credit` never reached the record**, so the exit branch — gated
+    on `record.get("is_trend_credit")` — **COULD NEVER FIRE.** Every TC.6 leg
+    fell into the condor ladder with the ratchet and the 25%% premium stop.
+    **That is the `stop=$0.69` on a $0.55 credit in the 10:02 Telegram alerts**,
+    and it means the terminal-return fix shipped that morning repaired a branch
+    that never executed.
+  · **`underlying_stop` was never set**, so even had the branch fired the breach
+    rule would have had NO BOUND and skipped itself silently.
+  · **`strategy` and `regime` were hardcoded**, so TC.6 trades logged as
+    IronCondorStrategy in RANGING and their P&L was attributed to the condor —
+    which is why they never appeared in any continuation query.
+
+  **FIX:** identity comes from the SIGNAL, never from the function it routes
+  through. `_is_tcs` drives `strategy`, `regime`, `underlying_stop`,
+  `is_trend_credit`, and **`stop_premium = 0.0`** for a trend credit spread.
+  The condor path is untouched.
+
+  **⚠️ THE LESSON: A FLAG IS ONLY REAL IF IT SURVIVES EVERY HOP.** Unit tests on
+  the producer and the consumer both passed while the wire between them was cut.
+  The new tests are CHAIN assertions — signal -> record -> exit — because that
+  is the only place the defect was visible.
+
+  **ALSO IN THIS DELIVERY — the not-exceeded filter is dis-inherited, and it was
+  worse than redundant: IT MADE THE BOUND DECORATIVE.** `session_low <= orb_low
+  < orb_high` (the opening range is PART of the session), so requiring a put
+  strike to clear BOTH collapsed to the session low **every time** — the strike
+  was always placed below the ORB LOW and never at the operator's level, so the
+  ENTRY placed it somewhere the EXIT never referenced. Mirrored for calls.
+  Operator: *"wouldn't the orb bounds be 'richer' than the furthest away it's
+  been?"* Yes — the bound sits CLOSER to spot. Measured on one quote: **credit
+  0.60 at the bound vs 0.20 under the filter, 3x.** And POP is the better
+  instrument anyway: "price traded here today" is backward-looking, while POP
+  asks the same question in sigma*sqrt(T) terms FROM NOW.
+
+  **`tests/tcs_v21_backtest.py`** replays the shipped gate stack sequentially
+  against archived chains and tape. ⚠️ **IT BACKTESTS ONE OF THE THREE
+  CORRECTIONS.** The direction gate is a PROXY (the trend vote and ADX are NOT
+  archived; reimplementing the trend engine would be a second lineage), so the
+  live gate is stricter and the trade count is an UPPER BOUND. **CNT.1's exit
+  fix and AFD.1's pre-dispatch move are not backtestable at all** — the
+  counterfactual is not in the data, and any number claiming otherwise would be
+  fabricated. Settlement math verified directly against six planted cases;
+  max loss is width-credit and never more.
+
+- **v4.67 — 2026-08-14 — NAMING CODIFIED + TC.6 v2.1 DIS-INHERITS THE CONDOR.**
+  `trend_credit_spread` v2.1 · `main` v6.7 · `exit_engine` · `config` v4.18 ·
+  135 tests.
+
+  **🔵 TERMINOLOGY, FIXED (operator, 2026-08-14):**
+  · **TREND CONTINUATION** = the LONG (DEBIT) contract placed on an ORB runaway
+    handoff. Blocked after 11:00 by AFD.1.
+  · **TREND PARTICIPATION** = a CREDIT SPREAD at the floor of a move, BOUNDED by
+    the ORB HIGH (long) / ORB LOW (short), INVALIDATED BY A BREACH of that
+    level. **No exit before the session hard close except a breach.**
+
+  **THE LEVEL vs THE ENGINE — and v2.0 over-corrected.** Operator: *"those
+  levels are fixtures."* The ORB ENGINE must not gate an afternoon trade (no
+  runaway flag, no slot arbitration, nothing a restart can erase); the ORB LEVEL
+  is a price on a chart. `main._opening_range()` recomputes it from the TAPE
+  using the SAME window constants the engine uses — restart-proof, available
+  past the cutoff, and incapable of becoming a second opinion about where the
+  range is. His own note on the earlier call: *"In the heat of the moment,
+  post-11am my instinct was to dismiss any orb-related thesis as to why they
+  weren't firing."*
+
+  **DIS-INHERITED FROM THE CONDOR:**
+  · **the 0.80 x EM minimum distance.** The condor needs an EM floor because it
+    sells around a PIN with no structural level to lean on; TC.6 HAS one. A
+    strike must clear BOTH constraints in `_select_beyond_rail`, so **an EM
+    floor beyond the ORB high would push the strike past the specified level —
+    a FITTED percentage silently overriding a STRUCTURAL one.** Neutralised with
+    a non-binding sentinel rather than deleted, because the selector is shared
+    and the condor still needs it.
+  · **the nickel close.** A profit exit caps a position whose measured EV was
+    HELD TO EXPIRY, UNMANAGED.
+  RETAINED deliberately: quote width (liquidity is universal), POP >= 0.70 (the
+  operator's own 70-80%% band, stated about exactly this trade), the
+  not-exceeded session extreme, and deferral to an active condor plan.
+
+  **ADDED — PRICE MUST BE OUTSIDE THE RANGE AT ENTRY.** The exit calls a close
+  back through the bound INVALIDATION, so entering while price is already inside
+  means **the trade is born in the state its own exit calls dead** — the exact
+  CNT.1 failure shape that made every breakout continuation a one-tick artefact
+  for a week. Entry and exit must agree about the same level.
+
+  **REMOVED — the 30-minute cooldown.** Operator: *"It's gated enough. The
+  cooldown is excessive."* It was an emergency brake during the rapid-fire
+  incident and the wrong instrument for the right worry: the loop came from a
+  $0.06 credit sitting one cent from a nickel close and one cent from a mis-set
+  stop, all now fixed at the source. **A timer stacked on nine substantive gates
+  suppresses valid re-entries without preventing a single bad one.** The config
+  constant survives at 0 so a re-add needs no config change.
+
+  **THE ENTRY, CONCRETELY:** opening range 582.50/578.10, price 588.00 at 13:20,
+  session low 585.00, ADX 27, vote BULLISH. Price is OUTSIDE the range → put
+  spread beneath the move, bound = ORB high 582.50 → **short 582.50 / long
+  577.50**, ~$0.55 credit on a $5 width. Exits only on a 1-minute close back
+  below 582.50, or 15:45.
+  ⚠️ TWO THINGS CAN STILL MOVE THE STRIKE OFF THE BOUND: the not-exceeded
+  session extreme (if price traded below the ORB high during the afternoon) and
+  POP (if the runaway is shallow). Both are defensible; both mean the bound is
+  not sovereign, which is an open question for the operator.
+
+- **🔴 v4.66 — 2026-08-14 — THE SLOT MAP, AUDITED AND ENFORCED.** `main` v6.6 ·
+  `trend_credit_spread` v2.0 · 10 tests (129 across the 08-13/14 suites).
+
+  **THE SPEC, as the operator stated it:** *"The reason it requires a runaway
+  before 11am is because ORB OWNS THAT SLOT. So a runaway is the only exception
+  a different trade can execute."* and *"Trend participation should have nothing
+  to do with orb range after the 11AM cutoff... If they are linked in any way
+  after 11AM, then it's wrong."*
+  BEFORE 11:00 — ORB owns it; a runaway is SLOT ARBITRATION, freeing it for
+  `trend_continuation_handoff` (first refusal, by dispatch order) or
+  SweepReversal (only on a NAMED level, main.py:1683).
+  AFTER 11:00 — ORB/Continuation/Sweep all blocked by AFD.1 (all three are debit
+  directional). Three non-overlapping regimes, one occupant each: condor
+  (RANGING + daily fork), butterfly (12:00-14:00 + PINNING GEX), TC.6
+  (directional trend vote). TC.6 defers to an active condor plan.
+
+  **🔴 DEFECT 1 — AFD.1 WAS A POST-SELECTION VETO, AND THAT IS PROBABLY WHY TC.6
+  FIRED ZERO TIMES ON 2026-08-14.** The gate ran at line 1818, AFTER ORB (1571),
+  continuation (1631), sweep (1672), butterfly, condor and TC.6 (1786) had all
+  been evaluated. So past 11:00 a debit strategy still **WON** the slot:
+  `signal` went non-None, **TC.6 sits behind `if signal is None` and never
+  ran**, and only then was the debit signal refused. **The tick produced NO
+  TRADE AT ALL, and the slot the spec assigns to TC.6 was consumed by a strategy
+  forbidden to trade in it.**
+  Placing the gate after selection was right for JOURNALLING (the refused signal
+  is fully formed) and **wrong for ARBITRATION**. Now computed ONCE before
+  Priority 1; ORB/Continuation/Sweep are SKIPPED, not evaluated-then-refused.
+  The post-selection gate is RETAINED as defence in depth — it costs nothing,
+  still journals a fully-formed refusal, and catches a future strategy added to
+  `DEBIT_DIRECTIONAL_STRATEGIES` that forgets the pre-gate.
+  ⚠️ **NO UNIT TEST OF THE PREDICATE COULD HAVE CAUGHT THIS.**
+  `_afternoon_debit_blocked` was always correct — it was simply CALLED TOO LATE.
+  The new tests are SOURCE-ORDER assertions, and the ordering test is verified
+  to FAIL against the version that shipped this morning.
+
+  **TC.6 v2.0 — THE ORB LINK IS SEVERED ENTIRELY.** No `orb` parameter, no
+  `invalidation_reason` gate. Anchored on the **SESSION EXTREME** — the
+  operator's own original framing, *"a vertical spread at the floor of the
+  Move"* — with direction from the **live trend vote** (`overall_direction` +
+  ADX, the same source CNT.1's breakout branch uses).
+  WHY THE ORB ANCHOR WAS WRONG FROM THE START: (a) it is a 09:30-09:35 structure,
+  four hours stale by 13:00; (b) the morning runaway and the afternoon trend can
+  be DIFFERENT MOVES, even opposite ones — the gate would PASS and the trade
+  would be incoherent; (c) `orb_state.json` is **WRITE-ONLY, no load path
+  anywhere**, so the ORB engine is memory-only and the 10:37 restart wiped
+  `invalidation_reason` on all 15 boxes — and since ORB cannot re-arm past its
+  cutoff, the flag was gone PERMANENTLY for the session. Persisting it would
+  have preserved a bad design and made it durable.
+  Measured basis (`spread_counterfactual --anchor floor`, 18 sessions):
+  TRENDING_BEAR +0.39/+0.48/+0.46 and TRENDING_BULL +0.60/+0.66/+0.78 at
+  0.00%%/0.25%%/0.50%% beyond the floor. ⚠️ **Both arms positive, so this is a
+  GENERAL credit edge, not a regime-specific one** — weaker evidence than the
+  ORB result whose control FAILED. Stated plainly.
+  Every early return now LOGS. A gate that can silence a strategy for a whole
+  session without leaving a line is how 2026-08-14's afternoon was spent
+  guessing.
+
+  **⚠️ TWO ORDERING DEFECTS FOUND AND NOT FIXED — deliberately, mid-session:**
+  (a) TC.6 sits BELOW butterfly and condor behind `if signal is None`, so a
+  butterfly at 12:30 skips it. They *should* never collide (butterfly needs
+  RANGING/COMPRESSION + a GEX pin, TC.6 needs a directional vote) — but nothing
+  ENFORCES that, and ordering decides if they ever do.
+  (b) Pre-11:00, continuation at Priority 2 still starves butterfly (P3) and
+  condor (P4), both behind `if signal is None`. Measured over 13 sessions:
+  **RANGING → continuation 94 vs condor 27; COMPRESSION → continuation 39 vs
+  butterfly 6.** Documented in CNT.6's own comment. Changing dispatch priority
+  is a larger behavioural change than a mid-session hotfix should carry.
 
 - **🔴 v4.65 — 2026-08-14 — CNT.1 SHIPPED HALF A FEATURE ON 2026-08-07 AND IT
   RAN BROKEN FOR A WEEK.** `exit_engine` v4.19 + 9 tests (119 across the

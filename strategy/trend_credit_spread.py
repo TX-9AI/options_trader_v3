@@ -1,85 +1,101 @@
 """
-strategy/trend_credit_spread.py — options_trader_v3 — v1.1 — 2026-08-14  (TC.6)
+strategy/trend_credit_spread.py — options_trader_v3 — v2.1 — 2026-08-14  (TC.6)
 
-v1.1 — 2026-08-14 — 🔴 LIVE HOTFIX: IT RAPID-FIRED THE WHOLE FLEET.
-        Observed 10:02 ET: NVDA sold a $5-wide for $0.06, PLTR a $6-wide for
-        $0.08, every box re-entering seconds after a nickel close. THREE gates
-        were missing and each alone would have stopped it:
-        (1) NO AFTERNOON GATE — designed as afternoon trend participation, coded
-            against GLOBAL_NO_ENTRY_ET (14:00) only. Now TCS_START_ET (11:00),
-            matching AFD.1.
-        (2) NO MINIMUM CREDIT, **and the POP floor CAUSES this**. POP rises with
-            distance, so POP >= 0.70 selects for FAR strikes and far strikes
-            collect almost nothing. The probability half shipped without the
-            payoff half — a gate that only demands SAFETY systematically finds
-            the worst-paid trade that clears it. Now TWO floors: width-relative
-            (0.10, inside credit_edge's measured 8-19% band) keeps risk/reward
-            sane, and nickel-relative (4x the nickel close) guarantees the trade
-            has ROOM TO EXIST — $0.06 against a $0.05 nickel is one cent of
-            total profit potential. Checked against the live fills: NVDA and
-            PLTR BLOCKED, SPX ($0.55 on a $5 wide = 11%) PASSES.
-        (3) NO RE-ENTRY COOLDOWN. "No per-session limit" was the operator's call
-            and stands — a LOOP is a defect, not a limit question. 30 min.
-        ⚠️ The stop-out itself was exit_engine's missing terminal return (v4.18),
-        not an entry problem. These gates stop the FIRING; that fixed the
-        LOSING.
+v2.1 — 2026-08-14 — NAMING CODIFIED, AND THE CONDOR RULES DIS-INHERITED.
+        **TREND CONTINUATION** = the LONG (DEBIT) contract placed on an ORB
+        runaway handoff. Blocked after 11:00 by AFD.1.
+        **TREND PARTICIPATION** (this file) = a CREDIT SPREAD at the floor of a
+        move, BOUNDED BY THE ORB HIGH for a long / ORB LOW for a short, and
+        INVALIDATED BY A BREACH of that level. Nothing else closes it before the
+        session hard close.
+        THE OPERATOR'S CORRECTION THAT MATTERS: *"those levels are fixtures."*
+        The ORB **ENGINE** must not gate an afternoon trade — no runaway flag,
+        no slot arbitration, no `invalidation_reason`, and nothing a restart can
+        erase. The ORB **LEVEL** is a price on a chart and is recomputed from
+        the TAPE (`main._opening_range`). v2.0 over-corrected by removing both.
+        DIS-INHERITED FROM THE CONDOR:
+          · **the 0.80 x EM minimum distance.** The condor needs it because it
+            sells around a PIN with no structural level; TC.6 HAS one. Since a
+            strike must clear BOTH constraints, an EM floor beyond the ORB high
+            would push the strike past the specified level — a FITTED
+            percentage silently overriding a STRUCTURAL one.
+          · **the nickel close.** A profit exit caps a position whose measured
+            EV was HELD TO EXPIRY, UNMANAGED.
+        ADDED: **price must be OUTSIDE the range at entry.** The exit calls a
+        close back through the bound INVALIDATION, so entering while price is
+        already inside means the trade is BORN IN THE STATE ITS OWN EXIT CALLS
+        DEAD — the CNT.1 failure shape, which made every breakout continuation
+        a one-tick artefact for a week.
+        REMOVED: **the 30-minute cooldown.** It was an emergency brake during
+        the rapid-fire incident and the wrong instrument for the right worry —
+        the loop came from a $0.06 credit sitting one cent from a nickel close
+        and one cent from a mis-set stop, all now fixed at the source. Operator:
+        *"It's gated enough. The cooldown is excessive."*
+        RETAINED from the condor, deliberately: quote width (liquidity is
+        universal), POP >= 0.70 (the operator's own 70-80%% band, stated about
+        exactly this trade), the not-exceeded session extreme, and deferral to
+        an active condor plan (real deconfliction, not conflation).
 
-TREND PARTICIPATION BY SELLING PREMIUM BENEATH THE MOVE.
+AFTERNOON TREND PARTICIPATION BY SELLING PREMIUM BENEATH THE MOVE.
 
-Operator's design, assembled over 2026-08-13:
-  · *"The afternoon trend participation is going to be a vertical spread at the
-     floor of the Move. We don't have to catch the very beginning. We just have
-     to catch it near the beginning."*
-  · *"set the put spread at the top of the orb range for a runaway long and the
-     bottom of the orb range for the call spread on a runaway short."*
-  · *"that's when we don't wanna be long premium."*
-  · Exit: *breached (loss) or nickel close (profit)*. No per-session limit.
-    Trend label NOT required at fire time.
+⚠️ v2.0 — **THE ORB LINK IS SEVERED.** Operator, 2026-08-14, after TC.6 went
+silent for an entire afternoon: *"Trend participation should have nothing to do
+with orb range after the 11AM cutoff... If they are linked in any way after
+11AM, then it's wrong."*
 
-WHY THE ORB BOUNDARY IS THE ANCHOR — and it is a structural claim, not a fit.
-A runaway broke the opening range and never came back to retest it, so the
-broken boundary IS the floor of that move and the level `orb_structure_stop`
-already calls thesis death. A put spread short there loses only if the setup
-was wrong. Structure and invalidation become the SAME event, which is exactly
-the accepted risk the operator stated: *"If it gets breached, then our fork may
-also become invalid & I can live with that because we are accepting that risk
-for an asymmetric payoff if it holds."*
+WHY THE ORB ANCHOR WAS WRONG, and it was wrong from the start:
+  · **IT WAS THE WRONG LEVEL.** v1.x anchored on the broken ORB boundary, which
+    was imported from a measurement of MORNING runaway trades where price was
+    still near the opening range. By 13:00 that range is four hours stale and
+    price may be nowhere near it.
+  · **IT MADE AN AFTERNOON STRATEGY DEPEND ON MORNING STATE.** `orb_state.json`
+    is WRITE-ONLY — there is no load path anywhere in the repo — so the ORB
+    engine lives entirely in memory. The 2026-08-14 10:37 restart wiped
+    `invalidation_reason` on all 15 boxes, and because ORB cannot re-arm past
+    its 11:00 cutoff, **the runaway flag was gone permanently for the session.**
+    TC.6's hard gate became unsatisfiable no matter what the tape did. A whole
+    afternoon of zero fires, from a silent gate.
+  · **AND THE GATE WAS SILENT**, which is how the afternoon was spent guessing.
 
-────────────────────────────────────────────────────────────────────────────
-WHAT WAS MEASURED, AND THE ONE CONDITION THE EV DEPENDS ON
-────────────────────────────────────────────────────────────────────────────
-`spread_counterfactual --anchor orb`, runaway-handoff arm, 18 sessions:
-  EV/spread POSITIVE AT EVERY OFFSET; the 0.00%% cell — the strike AT the
-  boundary, the operator's literal proposal — was **n=30, +$0.52, 90%% terminal
-  OK, 79%% RECOVERED**. Entry sat p50 **+0.91%%** above the boundary.
-The STANDALONE control was mostly NEGATIVE on the same anchor, because without
-a runaway the boundary sits at or above the fill 64%% of the time and the
-"structural strike" lands inside the money. **So the edge is runaway-specific by
-construction** — which is why `orb.invalidation_reason == "runaway"` is a HARD
-gate here and not a preference.
+THE ANCHOR IS NOW THE SESSION EXTREME — the operator's own original framing,
+*"a vertical spread at the floor of the Move."* Session LOW for a bull trend,
+session HIGH for a bear. It updates continuously, exists on every box every day,
+survives restarts, and needs nothing from the morning.
 
-⚠️ **THE EV WAS MEASURED HELD TO EXPIRY, UNMANAGED** — no stop, no ratchet, no
-   early close. A premium stop bolted on afterwards is NOT the trade that was
-   measured. Hence breach-or-nickel only, per the operator's spec, and hence
-   `is_trend_credit` on the signal so `exit_engine` can tell this apart from a
-   condor leg rather than inheriting the condor's 25%% stop by accident.
+MEASURED (`spread_counterfactual --anchor floor`, 18 sessions, PDL + session
+low): TRENDING_BEAR +0.39 / +0.48 / +0.46 and TRENDING_BULL +0.60 / +0.66 /
++0.78 at 0.00%% / 0.25%% / 0.50%% beyond the floor.
+⚠️ **BOTH ARMS POSITIVE, so this is a GENERAL credit edge rather than a
+regime-specific one** — weaker evidence than the ORB result, whose control
+FAILED. Stated plainly rather than dressed up.
 
-────────────────────────────────────────────────────────────────────────────
-TIMING IS THE POP GATE, NOT A CLOCK
-────────────────────────────────────────────────────────────────────────────
-Proximity cannot be the trigger: in a runaway price moves AWAY from the
-boundary, so waiting for it to come back is waiting for the thesis to fail. The
-runaway confirmation is the event. What decides WHEN it can fire is
-`POP = Phi(distance / (sigma * sqrt(bars_left)))` — the same distance is a
-larger z later in the session, so an identical setup fails in the morning and
-passes in the afternoon. That is the operator's afternoon-credit thesis arriving
-from the arithmetic instead of from a hardcoded hour.
+⚠️ AND THE RUNAWAY GATE WAS A CATEGORY ERROR. Operator: *"The reason it
+requires a runaway before 11am is because ORB OWNS THAT SLOT. So a runaway is
+the only exception a different trade can execute."* The runaway is a
+SLOT-ARBITRATION rule, never an anchoring rule — ORB owns 09:35-11:00, and a
+runaway is the one condition where ORB is definitively out (INVALIDATED, never
+re-arms) so the slot frees. The correct occupants of that freed slot ALREADY
+EXIST and are unchanged by this file: `trend_continuation_handoff` (via
+`_is_runaway`) and `SweepReversal` (gates on `invalidation_reason in ("runaway",
+"timeout")`).
+**AFTER 11:00 ORB HAS STOPPED ENTIRELY — there is no slot to arbitrate**, so
+requiring the arbitration condition was asking permission from a strategy that
+is not running. TC.6 owns afternoon trend participation outright.
 
-STRIKE SELECTION HAS ONE OWNER. `IronCondorStrategy._select_beyond_rail` already
-implements rail -> min-distance -> not-exceeded -> quote-width -> POP -> most
-liquid. It is imported, not reimplemented: a second copy of that logic is the
-lineage split WORKING_AGREEMENT 7 forbids, and it would drift the first time
-either side is tuned.
+DIRECTION COMES FROM THE TREND VOTE (`overall_direction` + ADX), the same source
+CNT.1's breakout branch already uses — no new machinery, and no dependence on
+any morning artefact.
+
+EXIT: BREACH OR NICKEL. Breach is a CLOSED BAR through the floor recorded AT
+ENTRY. Fixed, not ratcheting: a floor that follows price would tighten the
+invalidation on a winning trade, which is the opposite of letting it run — and
+the short strike it was sold against does not move either.
+⚠️ **THE MEASURED EV WAS HELD TO EXPIRY, UNMANAGED.** No premium stop, no
+ratchet. `is_trend_credit` keeps `exit_engine` out of the condor ladder.
+
+STRIKE SELECTION HAS ONE OWNER — `IronCondorStrategy._select_beyond_rail`
+implements floor -> min-distance -> not-exceeded -> quote-width -> POP. Imported,
+never cloned.
 """
 
 import logging
@@ -90,11 +106,11 @@ import pytz
 
 from config import (
     CONDOR_MIN_POP, CONDOR_POP_BAR_MIN, CONDOR_MAX_QUOTE_WIDTH,
-    CONDOR_EM_FLOOR_FRAC, GLOBAL_NO_ENTRY_ET, INSTRUMENT,
+    GLOBAL_NO_ENTRY_ET, INSTRUMENT,
     CONDOR_WING_WIDTH_SPX, CONDOR_WING_WIDTH_QQQ,
-    TREND_CREDIT_ACTIVE, TCS_START_ET, TCS_MIN_CREDIT_PCT_WIDTH,
-    TCS_MIN_CREDIT_NICKEL_MULT, TCS_COOLDOWN_MIN, CONDOR_NICKEL_CLOSE,
-    TCS_LOSS_GIVEN_BREACH, CONDOR_MIN_POP,
+    TREND_CREDIT_ACTIVE, TCS_START_ET,
+    TCS_MIN_CREDIT_NICKEL_MULT, CONDOR_NICKEL_CLOSE,
+    TCS_LOSS_GIVEN_BREACH, CONDOR_MIN_POP, CONT_BREAKOUT_MIN_ADX,
 )
 from strategy.iron_condor_strategy import IronCondorStrategy
 
@@ -103,37 +119,48 @@ ET = pytz.timezone("US/Eastern")
 
 
 class TrendCreditSpread:
-    """Sell a defined-risk vertical beyond the broken ORB boundary."""
+    """Sell a defined-risk vertical beyond the session extreme — the floor of
+    the current move. Afternoon only; owns the slot outright once ORB stops."""
 
     name = "TrendCreditSpread"
 
     def __init__(self):
         # Borrow the condor's selector rather than clone it — ONE owner.
         self._sel = IronCondorStrategy.__new__(IronCondorStrategy)
-        self._last_fire = None      # cooldown anchor — see the loop note below
 
     @staticmethod
     def _wing_width() -> float:
         return (CONDOR_WING_WIDTH_SPX if INSTRUMENT in ("SPX", "SPXW")
                 else CONDOR_WING_WIDTH_QQQ)
 
-    def generate_signal(self, orb, regime, vol_state, chain, macro,
-                        current_price: float,
+    def generate_signal(self, regime, vol_state, chain, macro,
+                        current_price: float, trend=None,
+                        orb_high: Optional[float] = None,
+                        orb_low: Optional[float] = None,
                         session_high: Optional[float] = None,
                         session_low: Optional[float] = None,
                         condor_active: bool = False,
                         now_et: Optional[datetime] = None):
         """Returns a condor-leg-shaped OptionsSignal, or None.
 
-        GATES, in the order they can refuse and each logged:
-          1. RUNAWAY REQUIRED — the control arm was negative without one.
-          2. NOT past the global entry cutoff.
-          3. NO ACTIVE CONDOR on this symbol. The condor is already the only
-             strategy allowed two concurrent positions; stacking a third credit
-             spread on one underlying is unmanaged risk, and the condor holds
-             the slot because it got there first.
-          4. A strike clearing rail / min-distance / session-extreme / quote
-             width / POP — delegated to the condor's selector.
+        ⚠️ NO `orb` PARAMETER. v1.x took one and gated on
+        `invalidation_reason == "runaway"`; both are gone. After 11:00 ORB has
+        stopped and owns nothing, so there is no slot to arbitrate and no
+        morning level worth anchoring to.
+
+        GATES, in order, EACH ONE LOGGED — a gate that can silence a strategy
+        for a whole session without leaving a line is how 2026-08-14's afternoon
+        was spent guessing:
+          1. active flag
+          2. inside the 11:00 -> GLOBAL_NO_ENTRY_ET window
+          3. no active condor plan (it holds the slot; a third credit spread on
+             one underlying is unmanaged risk)
+          5. a directional trend vote clearing CONT_BREAKOUT_MIN_ADX
+          6. a session extreme on the floor side
+          7. a strike clearing floor / min-distance / not-exceeded / quote-width
+             / POP
+          8. a protective wing
+          9. positive EV, and a credit with room to exist
         """
         try:
             if not TREND_CREDIT_ACTIVE:
@@ -141,67 +168,141 @@ class TrendCreditSpread:
             now = now_et or datetime.now(ET)
             if (now.hour, now.minute) >= GLOBAL_NO_ENTRY_ET:
                 return None
-            # ── AFTERNOON ONLY (hotfix 2026-08-14) ───────────────────────────
-            # This is AFTERNOON trend participation and was coded against the
-            # 14:00 global cutoff only. It fired at 10:02 ET across the fleet.
             if (now.hour, now.minute) < TCS_START_ET:
                 return None
-            # ── RE-ENTRY COOLDOWN ────────────────────────────────────────────
-            # The operator's "no per-session limit" stands — a LOOP is a defect,
-            # not a limit question. With a $0.06 credit and a $0.05 nickel close
-            # the trade closed on the tick it opened and reopened immediately.
-            if self._last_fire is not None:
-                _mins = (now - self._last_fire).total_seconds() / 60.0
-                if _mins < TCS_COOLDOWN_MIN:
-                    return None
-
-            if getattr(orb, "invalidation_reason", "") != "runaway":
-                return None
-            direction = str(getattr(orb, "break_direction", "") or "").lower()
-            if direction not in ("long", "short"):
-                return None
-
+            # ── NO COOLDOWN. REMOVED 2026-08-14 ──────────────────────────────
+            # It was added as an emergency brake when TC.6 rapid-fired the fleet,
+            # and at that moment it was the wrong instrument for the right
+            # worry: the loop existed because a $0.06 credit sat one cent from a
+            # $0.05 nickel close and one cent from a mis-set stop. Those are
+            # fixed at the source — the exit no longer falls through to a
+            # premium stop, the nickel close is gone entirely, and the joint EV
+            # test refuses a credit that thin.
+            # The trade is now gated on: the 11:00-14:00 window, a directional
+            # trend vote clearing ADX, an ORB bound that exists, PRICE OUTSIDE
+            # the range, no active condor, a strike clearing not-exceeded /
+            # quote-width / POP, a protective wing, positive EV, and a credit
+            # with room. Operator: "It's gated enough. The cooldown is
+            # excessive." A timer stacked on top of nine substantive gates
+            # suppresses valid re-entries without preventing a single bad one.
             if condor_active:
-                logger.info("[tcs] deferring — a condor plan holds this symbol; "
-                            "stacking a third credit spread is unmanaged risk")
+                logger.info("[tcs] deferring — a condor plan holds this symbol")
                 return None
 
-            orb_high = float(getattr(orb, "orb_high", 0) or 0)
-            orb_low = float(getattr(orb, "orb_low", 0) or 0)
-            if orb_high <= 0 or orb_low <= 0:
+            # ── DIRECTION FROM THE LIVE TREND VOTE ───────────────────────────
+            # The same source CNT.1's breakout branch uses. Nothing from the
+            # morning: the runaway that freed ORB's slot may have been a
+            # DIFFERENT MOVE, or the opposite one, and selling against a level
+            # set by a move that already ended is how v1.x could pass its gate
+            # and still be incoherent.
+            _dir = str(getattr(trend, "overall_direction", "NEUTRAL") or "NEUTRAL").upper()
+            _adx = float(getattr(trend, "primary_adx", 0.0) or 0.0)
+            if _dir not in ("BULLISH", "BEARISH"):
+                logger.info("[tcs] no directional trend vote (%s) — SKIP", _dir)
+                return None
+            if _adx < CONT_BREAKOUT_MIN_ADX:
+                logger.info("[tcs] ADX %.1f below %.1f — SKIP",
+                            _adx, CONT_BREAKOUT_MIN_ADX)
                 return None
 
-            # A runaway LONG broke UP, so the boundary below is the ORB HIGH and
-            # the credit trade is a PUT spread beneath it. Mirrored for a short.
-            if direction == "long":
-                side, boundary, extreme = "put", orb_high, session_low
+            # ── THE FLOOR OF THE MOVE = THE SESSION EXTREME ──────────────────
+            # Bull trend -> sell PUTS beneath the session LOW.
+            # Bear trend -> sell CALLS above the session HIGH.
+            # It updates as the move does, exists on every box every day, and
+            # survives a restart — unlike the ORB range, which is a 09:30-09:35
+            # structure held only in memory.
+            # ── THE BOUND (operator's spec, 2026-08-14) ──────────────────────
+            # "Trend participation is a credit spread at the floor of a move,
+            #  bounded by the ORB HIGH mark for a long & invalidated by a
+            #  breach. Or, at the ORB LOW mark for a short & also invalidated by
+            #  a breach of that level."
+            # A runaway LONG broke UP through the ORB high, so that level is the
+            # FLOOR of the move and the credit trade is a PUT spread beneath it.
+            # Mirrored for a short at the ORB low.
+            # ⚠️ THE LEVEL, NOT THE ENGINE. `orb_high`/`orb_low` arrive
+            # RECOMPUTED FROM THE TAPE (main._opening_range) — no runaway flag,
+            # no `invalidation_reason`, no slot arbitration, and nothing that a
+            # restart can erase. The ORB ENGINE owns 09:35-11:00; after 11:00 it
+            # owns nothing, but the opening range is still a price on a chart.
+            # The SESSION extreme is retained as the not-exceeded filter: a
+            # strike price has already traded through today is one the market
+            # has proven it can reach.
+            # ⚠️ NO NOT-EXCEEDED FILTER. DIS-INHERITED 2026-08-14, and this one
+            # was not merely redundant — IT MADE THE BOUND DECORATIVE.
+            # The arithmetic is unavoidable: `session_low` <= `orb_low` <
+            # `orb_high` (the opening range is PART of the session), so
+            # requiring a put strike to clear BOTH the bound AND the session low
+            # collapses to the session low **every single time**. The strike was
+            # always placed below the ORB LOW and never at the operator's level.
+            # Mirrored exactly for calls. So the ENTRY placed the strike
+            # somewhere the EXIT never referenced — the CNT.1 failure shape one
+            # layer up.
+            # AND IT COST THE PREMIUM. Operator: *"wouldn't the orb bounds be
+            # 'richer' than the furthest away it's been?"* Yes — the bound sits
+            # CLOSER to spot, so it is the richer level; the extreme is further,
+            # thinner, and always won.
+            # POP IS THE BETTER INSTRUMENT ANYWAY. "Price traded through here
+            # today" is backward-looking and ignores time remaining and current
+            # volatility. POP asks the same question — can price REACH this
+            # strike — in sigma*sqrt(T) terms FROM NOW. A level touched at 09:45
+            # may be unreachable at 13:00 with 2.75h left, and POP knows that
+            # while the extreme does not. Safety is carried by POP >= 0.70 and
+            # the joint EV test, not by a cruder proxy that binds harder.
+            # `session_high`/`session_low` are still accepted for telemetry and
+            # for a future study; they no longer gate.
+            if _dir == "BULLISH":
+                side, bound, extreme = "put", orb_high, None
+                direction = "long"
             else:
-                side, boundary, extreme = "call", orb_low, session_high
-
-            em = self._sel._expected_move_from_straddle(chain, current_price)
-            if em <= 0:
-                logger.debug("[tcs] no expected move — cannot set the minimum "
-                             "distance floor")
+                side, bound, extreme = "call", orb_low, None
+                direction = "short"
+            if not bound or bound <= 0:
+                logger.warning("[tcs] no opening-range %s — the bound is the "
+                               "anchor, SKIP rather than trade without one",
+                               "high" if side == "put" else "low")
                 return None
-            em_floor = em * CONDOR_EM_FLOOR_FRAC
-            min_dist = (current_price - em_floor if side == "put"
-                        else current_price + em_floor)
+
+            # ── NO EM FLOOR. DIS-INHERITED FROM THE CONDOR ───────────────────
+            # The condor needs an EM-derived minimum distance because it sells
+            # around a PIN with no structural level to lean on. **TC.6 HAS a
+            # structural level — the ORB bound.**
+            # `_select_beyond_rail` requires a strike to clear BOTH the rail and
+            # the min-distance, so WHICHEVER IS FURTHER OUT WINS. If 0.80 x EM
+            # sat beyond the ORB high it would push the strike past the level the
+            # operator specified and the bound would stop being the bound — a
+            # FITTED PERCENTAGE silently overriding a STRUCTURAL LEVEL, which is
+            # backwards. Neutralised with a sentinel that can never bind rather
+            # than deleted from the shared selector, because that selector is
+            # also the condor's and the condor still needs it.
+            min_dist = float("inf") if side == "put" else float("-inf")
+
+            # ── PRICE MUST BE OUTSIDE THE RANGE AT ENTRY ─────────────────────
+            # The exit calls a close back through the bound INVALIDATION. If
+            # price is already inside the range when we enter, the trade is BORN
+            # IN THE STATE ITS OWN EXIT CALLS DEAD — the same entry/exit
+            # disagreement that made every breakout continuation a one-tick
+            # artefact for a week (CNT.1, fixed 2026-08-14).
+            _outside = (current_price > bound if side == "put"
+                        else current_price < bound)
+            if not _outside:
+                logger.info("[tcs] price %.2f is back INSIDE the range (bound "
+                            "%.2f) — the move that set the level has failed, "
+                            "SKIP", current_price, bound)
+                return None
 
             sigma = float(getattr(vol_state, "atr_current", 0.0) or 0.0)
             bars = self._sel._bars_left(now, CONDOR_POP_BAR_MIN)
 
             contracts = chain.puts if side == "put" else chain.calls
             short = self._sel._select_beyond_rail(
-                contracts, side, boundary, min_dist, extreme,
+                contracts, side, bound, min_dist, extreme,
                 spot=current_price, sigma=sigma, bars_left=bars,
                 min_pop=CONDOR_MIN_POP, max_width_pct=CONDOR_MAX_QUOTE_WIDTH)
             if short is None:
                 logger.info(
-                    "[tcs] no %s strike clears boundary %.2f / min-dist %.2f / "
-                    "extreme %s / POP>=%.2f at %.1f bars — SKIP",
-                    side, boundary, min_dist,
-                    f"{extreme:.2f}" if extreme else "n/a",
-                    CONDOR_MIN_POP, bars)
+                    "[tcs] no %s strike clears ORB bound %.2f / min-dist %.2f "
+                    "/ POP>=%.2f at %.1f bars — SKIP",
+                    side, bound, min_dist, CONDOR_MIN_POP, bars)
                 return None
 
             width = self._wing_width()
@@ -213,27 +314,7 @@ class TrendCreditSpread:
                             "(undefined risk is never sold)", long_strike)
                 return None
 
-            # ── MINIMUM CREDIT — THE PAYOFF HALF OF THE GATE ─────────────────
-            # ⚠️ THE POP FLOOR CAUSES THIS PROBLEM. POP rises with distance, so
-            # requiring POP >= 0.70 selects for FAR strikes — and far strikes
-            # collect almost nothing. Shipping the probability half without the
-            # payoff half means the gate systematically finds the WORST-PAID
-            # trade that clears it. Observed: $0.06 on a $5 wide (1.2%), $0.08
-            # on a $6 wide (1.3%).
-            # TWO floors, both cheap, each catching a different failure:
-            #   · width-relative keeps risk/reward sane
-            #   · nickel-relative guarantees the trade has ROOM TO EXIST —
-            #     credit $0.06 against a $0.05 nickel close is one cent of
-            #     total profit potential.
             credit = max(0.0, (short.bid or 0.0) - (long_c.ask or 0.0))
-
-            # ── THE JOINT EV TEST — "some expectation of profit" ─────────────
-            # EV = credit*POP - L*width*(1-POP) > 0
-            #   => credit/width > L*(1-POP)/POP
-            # LOW POP must pay RICHLY; HIGH POP may be thin. A flat credit floor
-            # and a flat POP floor are INDEPENDENT, and independent is the bug:
-            # POP>=0.70 selects far strikes, far strikes pay little, and neither
-            # floor ever sees the other.
             pop = self._sel._pop(abs(short.strike - current_price), sigma, bars)
             if pop <= 0.0:
                 logger.info("[tcs] POP unresolvable (sigma %.4f, bars %.1f) — "
@@ -244,23 +325,17 @@ class TrendCreditSpread:
             if credit / width <= req:
                 logger.info(
                     "[tcs] NEGATIVE EV — credit %.2f = %.1f%% of width %.0f, "
-                    "needs > %.1f%% at POP %.2f (L=%.2f). SKIP.",
-                    credit, 100.0 * credit / width, width, 100.0 * req, pop,
-                    TCS_LOSS_GIVEN_BREACH)
+                    "needs > %.1f%% at POP %.2f — SKIP",
+                    credit, 100.0 * credit / width, width, 100.0 * req, pop)
                 return None
-
-            floor_w = TCS_MIN_CREDIT_PCT_WIDTH * width
             floor_n = TCS_MIN_CREDIT_NICKEL_MULT * CONDOR_NICKEL_CLOSE
-            if credit < floor_w or credit < floor_n:
-                logger.info(
-                    "[tcs] credit %.2f below floor (width %.2f = %.0f%% of %.0f, "
-                    "nickel %.2f = %.1fx %.2f) — SKIP",
-                    credit, floor_w, TCS_MIN_CREDIT_PCT_WIDTH * 100, width,
-                    floor_n, TCS_MIN_CREDIT_NICKEL_MULT, CONDOR_NICKEL_CLOSE)
+            if credit < floor_n:
+                logger.info("[tcs] credit %.2f below %.1fx nickel (%.2f) — "
+                            "no room to profit, SKIP",
+                            credit, TCS_MIN_CREDIT_NICKEL_MULT, floor_n)
                 return None
 
-            self._last_fire = now
-            return self._build_signal(side, short, long_c, direction, boundary,
+            return self._build_signal(side, short, long_c, direction, bound,
                                       current_price, regime, bars)
         except Exception as exc:                               # noqa: BLE001
             logger.warning("[tcs] generate_signal failed: %s", exc)

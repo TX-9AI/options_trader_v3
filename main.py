@@ -1,5 +1,27 @@
 """
-main.py — options_trader v6.4
+main.py — options_trader v6.8
+v6.8 — 2026-08-14 — TC.6 IDENTITY THROUGH THE EXECUTION PATH.
+        `_execute_condor_leg` hardcoded condor identity onto every record it
+        built, so `is_trend_credit` and `underlying_stop` never reached the
+        trade and the exit branch gated on them COULD NEVER FIRE. Every trend
+        credit spread inherited the condor ratchet and the 25%% premium stop.
+        Identity now derives from the SIGNAL: strategy, regime, underlying_stop,
+        is_trend_credit, and stop_premium=0 for a trend credit spread.
+v6.7 — 2026-08-14 — `_opening_range()`: the ORB high/low recomputed FROM THE
+        TAPE as trend PARTICIPATION's bound. Separates the ORB ENGINE (no
+        runaway gate, no slot arbitration past 11:00) from the ORB LEVEL (a
+        price, not a dependency). Restart-proof and available past the cutoff.
+v6.6 — 2026-08-14 — AFD.1 MOVED TO PRE-DISPATCH. It was a POST-SELECTION veto,
+        so past 11:00 a debit strategy still WON the slot: `signal` went
+        non-None, TC.6 (behind `if signal is None`) never ran, and the debit
+        signal was refused afterwards — **the tick produced NO trade and the
+        afternoon slot was consumed by a strategy forbidden to trade in it.**
+        Likely the real reason TC.6 fired zero times on 2026-08-14, independent
+        of the runaway gate. ORB / Continuation / Sweep are now SKIPPED, not
+        evaluated-then-refused. The post-selection gate is retained as defence
+        in depth.
+v6.5 — 2026-08-14 — TC.6 v2.0 call site: no `orb`, pass `trend`. The runaway
+        gate was slot arbitration, not anchoring — after 11:00 ORB owns nothing.
 v6.4 — 2026-08-13 — TC.6 WIRED. TrendCreditSpread dispatches after the condor
         and routes through `_execute_condor_leg`, deferring when a condor plan
         holds the symbol. Exit is BREACH-OR-NICKEL via `is_trend_credit`
@@ -521,6 +543,7 @@ from config import (
     ORB_NO_ENTRY_AFTER_ET, BROKER_RECONCILE_ENABLED, ORB_FIRES_REGARDLESS_OF_REGIME,
     DEBIT_DIRECTIONAL_CUTOFF_ET, DEBIT_DIRECTIONAL_STRATEGIES, DEBIT_BLOCK_ACTIVE,
     CONDOR_PF_TIMEFRAME,                        # PF.5
+    RTH_OPEN_ET, ORB_WINDOW_MINUTES,            # TC.6 v2.1 — range from tape
     BROKER_RECONCILE_INTERVAL_MIN
 )
 
@@ -1289,10 +1312,14 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState,
 
     # Register the leg as a TRACKED position so it is managed, exited, and P&L'd.
     # The condor is the ONLY strategy allowed a second concurrent position.
+    # One function serves two trades; the identity must come from the SIGNAL,
+    # never from the function it happens to route through.
+    _is_tcs = bool(getattr(signal, "is_trend_credit", False))
     record = make_record(
         trade_id         = str(uuid.uuid4()),
         symbol           = INSTRUMENT,
-        strategy         = "IronCondorStrategy",
+        strategy         = ("TrendCreditSpread" if _is_tcs
+                            else "IronCondorStrategy"),
         setup_type       = signal.setup_type,
         setup_grade      = "B",
         setup_score      = delta_score,          # street-sign: |short-strike delta|
@@ -1309,10 +1336,36 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState,
         entry_premium    = fill_credit,                # credit basis for exits
         total_cost       = max_loss,
         max_loss         = max_loss,
-        stop_premium     = fill_credit * (1 + CONDOR_STOP_LOSS_PCT),
+        # NO PREMIUM STOP ON A TREND CREDIT SPREAD. Its measured EV was HELD
+        # TO EXPIRY, UNMANAGED, and its only exits are a breach of the bound or
+        # the 15:45 close. Writing a stop here is what made a $0.06 credit
+        # closeable on one cent of widening.
+        stop_premium     = (0.0 if _is_tcs
+                            else fill_credit * (1 + CONDOR_STOP_LOSS_PCT)),
         target_premium   = CONDOR_NICKEL_CLOSE,
         underlying_entry = getattr(signal, "underlying_entry", 0.0),
-        regime           = "RANGING",
+        # ⚠️ TC.6 CARRIES ITS OWN IDENTITY THROUGH THIS PATH (2026-08-14).
+        # This function builds the record for BOTH a condor leg and a trend
+        # credit spread, and it was hardcoding condor identity onto both. The
+        # consequences were total, not cosmetic:
+        #   · `is_trend_credit` never reached the record, so
+        #     `_evaluate_condor_leg`'s TC.6 branch — gated on
+        #     `record.get("is_trend_credit")` — COULD NEVER FIRE. Every TC.6 leg
+        #     fell into the condor ladder and picked up the ratchet and the 25%
+        #     premium stop. That is the `stop=$0.69` on a $0.55 credit seen in
+        #     Telegram at 10:02 on 2026-08-14.
+        #   · `underlying_stop` was never set, so even had the branch fired the
+        #     breach rule would have had NO BOUND to test and would have skipped
+        #     itself silently.
+        #   · `strategy` and `regime` were hardcoded, so TC.6 trades were logged
+        #     as IronCondorStrategy in RANGING and their P&L was attributed to
+        #     the condor.
+        # The strategy and the exit engine were both correct in isolation; the
+        # HANDOFF between them dropped every flag they agreed on.
+        regime           = ("RANGING" if not _is_tcs
+                            else getattr(signal, "regime", "") or "TRENDING"),
+        underlying_stop  = getattr(signal, "underlying_stop", 0.0),
+        is_trend_credit  = 1 if _is_tcs else 0,
         vix_at_entry     = getattr(signal, "vix_at_signal", 0.0),
         adx_at_entry      = getattr(signal, "adx_at_signal", 0.0)
                             or (state.current_regime.adx if state.current_regime else 0.0),
@@ -1390,6 +1443,43 @@ def _safe_strategy(name: str, fn):
                      "next priority; other strategies unaffected. %s: %s",
                      name, type(exc).__name__, exc, exc_info=True)
         return None
+
+
+def _opening_range(ctx: dict):
+    """(orb_high, orb_low) recomputed FROM THE TAPE, or (None, None).
+
+    ⚠️ DELIBERATELY NOT READ FROM THE ORB ENGINE. Trend PARTICIPATION must not
+    depend on the ORB engine after 11:00 — no runaway flag, no slot
+    arbitration, no `invalidation_reason`. But the opening-range HIGH and LOW
+    are just the extremes of the RTH_OPEN_ET -> +ORB_WINDOW_MINUTES bars, and a
+    price level is not an engine dependency. Recomputing them here means:
+      · **RESTART-PROOF.** `orb_state.json` is WRITE-ONLY — no load path exists
+        anywhere in the repo — so the ORB engine is memory-only, and the
+        2026-08-14 10:37 restart wiped its state on all 15 boxes. A level
+        derived from bars cannot be wiped.
+      · **AVAILABLE PAST THE CUTOFF.** The engine stops at 11:00; the bars do
+        not go anywhere.
+      · **ONE DEFINITION, NOT TWO.** Same window constants the engine uses, so
+        this cannot drift into a second opinion about where the range is.
+
+    1m frame only — a 5m frame cannot resolve a 5-minute window.
+    """
+    try:
+        df = ctx.get("df_1m")
+        if df is None or getattr(df, "empty", True):
+            return None, None
+        h0, m0 = RTH_OPEN_ET
+        start = h0 * 60 + m0
+        end = start + ORB_WINDOW_MINUTES              # exclusive
+        mins = [t.hour * 60 + t.minute for t in df.index]
+        rows = [i for i, m in enumerate(mins) if start <= m < end]
+        if not rows:
+            return None, None
+        win = df.iloc[rows]
+        return float(win["high"].max()), float(win["low"].min())
+    except Exception as exc:                                   # noqa: BLE001
+        logger.debug("opening range unavailable: %s", exc)
+        return None, None
 
 
 def _session_extremes(ctx: dict):
@@ -1553,6 +1643,30 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
         return
 
     # ── Strategy dispatch: regime → strategy ──────────────────────────────────
+    # ── AFD.1 PRE-DISPATCH BLOCK (v6.6, 2026-08-14) ──────────────────────────
+    # ⚠️ THIS WAS A POST-SELECTION VETO AND THAT WAS THE BUG. The gate ran AFTER
+    # every strategy had been evaluated, so past 11:00 a debit strategy could
+    # still WIN the slot — `signal` became non-None, TC.6 (which sits behind
+    # `if signal is None`) never ran, and only THEN was the debit signal
+    # refused. **The tick produced no trade at all, and the slot the spec says
+    # TC.6 owns was consumed by a strategy forbidden to trade in it.**
+    # Placing it after the signal was chosen was right for JOURNALLING (the
+    # refused signal is fully formed) and wrong for ARBITRATION. A strategy that
+    # cannot trade in this window must not be EVALUATED in it.
+    # The post-selection gate below is RETAINED as defence in depth: it costs
+    # nothing, it still journals a fully-formed refusal if anything slips
+    # through, and it catches a future strategy added to
+    # DEBIT_DIRECTIONAL_STRATEGIES that forgets this pre-gate.
+    _now_disp = now_et()
+    _afd_orb  = _afternoon_debit_blocked("ORBStrategy", _now_disp)
+    _afd_cont = _afternoon_debit_blocked("ContinuationStrategy", _now_disp)
+    _afd_swp  = _afternoon_debit_blocked("SweepReversal", _now_disp)
+    if _afd_orb or _afd_cont or _afd_swp:
+        logger.info("[afd] pre-dispatch: debit directional blocked past the "
+                    "cutoff (orb=%s cont=%s sweep=%s) — the afternoon slot "
+                    "belongs to the credit structures",
+                    _afd_orb, _afd_cont, _afd_swp)
+
     # Priority 1: ORB — only when the engine has a CONFIRMED break+retest.
     # With ORB_FIRES_REGARDLESS_OF_REGIME on, a confirmed ORB also fires under
     # UNKNOWN and SWEEP_REVERSAL (ORB beats sweep — the engine no longer defers
@@ -1562,7 +1676,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
         Regime.TRENDING_BULL, Regime.TRENDING_BEAR,
         Regime.BREAKOUT_VOLATILE, Regime.RANGING, Regime.COMPRESSION
     )
-    if orb_confirmed and (
+    if orb_confirmed and not _afd_orb and (
             regime.primary_regime in _orb_ok_regimes
             or (ORB_FIRES_REGARDLESS_OF_REGIME and
                 regime.primary_regime in (Regime.UNKNOWN, Regime.SWEEP_REVERSAL))):
@@ -1622,7 +1736,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
         logger.info(f"[continuation] BLOCKED — regime {regime.primary_regime} is a "
                     f"premium regime; a continuation needs a trend to continue "
                     f"(runaway={_is_runaway}). Butterfly/Condor now get the slot.")
-    if signal is None and not _cont_blocked and (
+    if signal is None and not _cont_blocked and not _afd_cont and (
             _is_runaway
             or regime.primary_regime in (Regime.TRENDING_BULL, Regime.TRENDING_BEAR,
                                          Regime.BREAKOUT_VOLATILE)):
@@ -1666,7 +1780,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     _l1r = ctx.get("l1")
     if _l1r is not None:
         _sweep_setup = (getattr(_l1r, "scores", {}) or {}).get("SWEEP_REVERSAL") or 0.0
-    if signal is None and _sweep_setup >= SWEEP_SETUP_FLOOR:
+    if signal is None and not _afd_swp and _sweep_setup >= SWEEP_SETUP_FLOOR:
         sweep_sig = _safe_strategy("SweepReversal", lambda: _sweep_strategy.generate_signal(
             regime        = regime,
             setup_score   = _sweep_setup,
@@ -1780,14 +1894,17 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     # credit vertical is not on it — correct by construction, pinned by a test.
     if signal is None:
         _tcs_hi, _tcs_lo = _session_extremes(ctx)
+        _orb_hi, _orb_lo = _opening_range(ctx)   # from the TAPE, not the engine
         tcs_sig = _safe_strategy("TrendCreditSpread", lambda: (
             _trend_credit_strategy.generate_signal(
-                orb           = orb,
                 regime        = regime,
                 vol_state     = ctx["vol"],
                 chain         = chain,
                 macro         = macro,
                 current_price = ctx["price"],
+                trend         = ctx.get("trend"),   # direction source
+                orb_high      = _orb_hi,            # bound, recomputed from bars
+                orb_low       = _orb_lo,
                 session_high  = _tcs_hi,
                 session_low   = _tcs_lo,
                 condor_active = _iron_condor_strategy.has_active_plan)))

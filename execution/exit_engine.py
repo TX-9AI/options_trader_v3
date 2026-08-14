@@ -1468,10 +1468,12 @@ class ExitEngine:
                 # inert, and an inert stop must never look like a passing check.
                 logger.warning("[tcs] no 1m tape — the breach rule is INERT "
                                "this tick (boundary %.2f)", _b)
-            if current_premium <= CONDOR_NICKEL_CLOSE:
-                decision.should_exit = True
-                decision.exit_reason = f"nickel_close pnl={pnl_pct:.1%} (tcs)"
-                return decision
+            # ⚠️ NO NICKEL CLOSE. Operator, 2026-08-14: "There should be no
+            # closing it short of a BREACH of that level or the SESSION HARD
+            # CLOSE cutoff." This revises the earlier breach-or-nickel spec.
+            # A nickel close is a PROFIT exit, and taking it caps a position
+            # whose measured EV was HELD TO EXPIRY, UNMANAGED. The 15:45 close
+            # above is the only other way out.
             # ⚠️ TERMINAL RETURN — THE WHOLE POINT OF THE BRANCH.
             # Without this the branch FALLS THROUGH to the ratchet and the 25%
             # condor stop below. Observed live 2026-08-14: a $0.06 credit sets

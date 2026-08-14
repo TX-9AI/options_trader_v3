@@ -1,5 +1,7 @@
 """
-config.py — options_trader v4.17
+config.py — options_trader v4.18
+v4.18 — 2026-08-14 — TCS_COOLDOWN_MIN retired to 0 (TC.6 no longer reads it);
+        TCS_MIN_CREDIT_PCT_WIDTH superseded by the joint EV test.
 v4.17 — 2026-08-14 — TCS_LOSS_GIVEN_BREACH: the credit and POP floors are
         now ONE joint EV test rather than two independent ones.
 v4.16 — 2026-08-14 — TC.6 HOTFIX: TCS_START_ET (11:00), TCS_MIN_CREDIT_PCT_WIDTH
@@ -366,7 +368,13 @@ TCS_MIN_CREDIT_PCT_WIDTH    = float(os.environ.get("OT_TCS_MIN_CREDIT_PCT", "0.1
 # the right ORDERING regardless of the exact value.
 TCS_LOSS_GIVEN_BREACH       = float(os.environ.get("OT_TCS_LGB", "0.5"))
 TCS_MIN_CREDIT_NICKEL_MULT  = float(os.environ.get("OT_TCS_NICKEL_MULT", "4.0"))
-TCS_COOLDOWN_MIN            = float(os.environ.get("OT_TCS_COOLDOWN_MIN", "30"))
+# ⚠️ RETIRED 2026-08-14, NOT DELETED. TC.6 no longer reads this. It was an
+# emergency brake during the rapid-fire incident and was the wrong instrument
+# for the right worry — the loop came from a $0.06 credit sitting one cent from
+# a nickel close and one cent from a mis-set stop, all fixed at the source. The
+# constant survives so a future re-add needs no config change; nothing consults
+# it today.
+TCS_COOLDOWN_MIN            = float(os.environ.get("OT_TCS_COOLDOWN_MIN", "0"))
 
 ENTRY_LIMIT_LADDER          = [0.50, 0.25, 0.00]
 ENTRY_LADDER_STEP_SEC       = float(os.environ.get("OT_ENTRY_LADDER_STEP_SEC", "15"))
