@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.64
+# docs/BACKLOG.md — v4.65
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5074,6 +5074,51 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **🔴 v4.65 — 2026-08-14 — CNT.1 SHIPPED HALF A FEATURE ON 2026-08-07 AND IT
+  RAN BROKEN FOR A WEEK.** `exit_engine` v4.19 + 9 tests (119 across the
+  08-13/14 suites).
+
+  **THE CONTRADICTION.** CNT.1's ENTRY branch lets continuation OPEN on
+  `BREAKOUT_VOLATILE` — direction from the trend vote instead of the label,
+  gated on ADX — and tags it `trend_continuation_breakout`. `still_trending` in
+  the EXIT only ever accepted `TRENDING_BULL` / `TRENDING_BEAR`.
+  **So every breakout continuation was BORN ALREADY FAILING ITS OWN EXIT TEST.**
+  Open on tick N with the label at BREAKOUT_VOLATILE; on tick N+1 the exit reads
+  **the same unchanged label**, finds it is not TRENDING_*, and closes as
+  `regime_flip`. **THE LABEL NEVER FLIPPED — the exit reason was a lie**, and
+  the block sits BEFORE `bos_exit`, so nothing else ever got a look.
+
+  **THE TIMESTAMPS ARE THE PROOF.** SMH 14:24:19→14:24:34, re-enter
+  14:24:49→14:25:04, eight in a row. **15-second holds — exactly one tick.** A
+  hold equal to the tick interval, identical every time, is a structural exit
+  firing immediately, not a market outcome. P&L was symmetric noise because a
+  one-tick hold is one tick of random walk minus the spread: SMH's eight netted
+  **−$29**, GS's eight **+$331** on the identical mechanism.
+
+  **⚠️ AND THE DIAGNOSTIC TRAP IS THE MORE VALUABLE RECORD.** Eight identical
+  15-second trades read as CHURN, and I proposed a per-symbol cooldown — the
+  same fix that was correct for TC.6 an hour earlier. **A cooldown would have
+  spaced out incoherent trades and hidden the evidence that exposed the
+  defect** — strictly worse than leaving it alone. The operator rejected it:
+  *"It's not a re-entry or cooldown problem. It's firing random losing trades
+  into the ether & immediately stopping out. That is not a coherent setup. The
+  fact that it's doing it in succession is only a side effect. If they were
+  profitable it wouldn't be a problem!"* **The symptom is not the bug, and the
+  right fix for one symptom is not the right fix for the same symptom with a
+  different cause.**
+
+  **THE FIX.** `still_trending` accepts `BREAKOUT_VOLATILE` when
+  `setup_type` ends in `_breakout`. A breakout continuation lives or dies on the
+  TREND VOTE it was born from, not on a label test it was never able to pass.
+  Scoped: standalone and handoff are unchanged, a genuine flip to RANGING still
+  exits, and a MISSING `setup_type` does NOT grant the exemption (fails closed,
+  so an old row keeps its ordinary exit).
+
+  ⚠️ **THIS IS A FIX, NOT A FIT** — nameable without reference to P&L: entry and
+  exit disagreed about the same label. ⚠️ It also means **every
+  `trend_continuation_breakout` row since 2026-08-07 is a one-tick artefact** and
+  must be excluded from any study of continuation's edge.
 
 - **🔴 v4.64 — 2026-08-14 — TC.6 LIVE HOTFIX. IT RAPID-FIRED THE WHOLE FLEET AND
   STOPPED OUT ON EVERY LEG.** `exit_engine` v4.18 · `trend_credit_spread` v1.1 ·

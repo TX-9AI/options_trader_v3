@@ -1,5 +1,17 @@
 """
-execution/exit_engine.py — v4.18 — Strategy-aware exit logic for all options positions.
+execution/exit_engine.py — v4.19 — Strategy-aware exit logic for all options positions.
+v4.19 — 2026-08-14 — 🔴 CNT.1 SHIPPED HALF A FEATURE AND THIS IS THE OTHER HALF.
+        The entry branch (continuation_strategy, CNT.1, 2026-08-07) lets
+        continuation OPEN on BREAKOUT_VOLATILE, taking direction from the trend
+        vote and gating on ADX. `still_trending` here only ever accepted
+        TRENDING_BULL / TRENDING_BEAR. So every `trend_continuation_breakout`
+        trade was **BORN ALREADY FAILING ITS OWN EXIT TEST** — opened on tick N,
+        closed on tick N+1 by reading the SAME UNCHANGED LABEL. THE LABEL NEVER
+        FLIPPED, and `regime_flip` was a lie in the exit reason.
+        Measured live 2026-08-14: 15-second holds, exactly one tick, repeating
+        while the setup held. P&L symmetric noise — one tick of random walk minus
+        the spread. **This has been true for every breakout continuation since
+        2026-08-07.** Sits BEFORE bos_exit, so nothing else got a look.
 v4.18 — 2026-08-14 — 🔴 LIVE FIX: THE TC.6 BRANCH HAD NO TERMINAL RETURN.
         When NEITHER breach NOR nickel fired it fell straight through to the
         ratchet and the 25% condor stop. `_execute_condor_leg` writes
@@ -1743,9 +1755,29 @@ class ExitEngine:
         #    the trend; if regime is no longer trending in our direction, the
         #    thesis is dead regardless of P&L. (regime is a string here.)
         rgm = (regime or "").upper()
+        # ⚠️ CNT.1 SHIPPED HALF A FEATURE (2026-08-07) AND THIS IS THE OTHER
+        # HALF. The entry branch lets continuation OPEN on BREAKOUT_VOLATILE —
+        # taking direction from the trend vote instead of the label, gated on
+        # ADX — and produces setup_type `trend_continuation_breakout`. This test
+        # never learned about it, so such a trade was **BORN ALREADY FAILING ITS
+        # OWN EXIT CONDITION**: it opens on tick N with the label at
+        # BREAKOUT_VOLATILE, and on tick N+1 this reads the SAME UNCHANGED label,
+        # finds it is not TRENDING_BULL/BEAR, and closes as `regime_flip`.
+        # THE LABEL NEVER FLIPPED.
+        # Measured live 2026-08-14: 15-SECOND holds — exactly one tick —
+        # repeating for as long as the setup stayed valid. SMH 14:24:19->14:24:34,
+        # re-enter 14:24:49->14:25:04, eight times. P&L was symmetric noise
+        # because the hold is one tick of random walk minus the spread (SMH's
+        # eight netted -$29; GS's eight netted +$331 on the same mechanism).
+        # This block sits BEFORE `bos_exit`, so it fired first and nothing else
+        # ever got a look.
+        # A breakout continuation must live or die on the TREND VOTE it was born
+        # from, not on a label test it was never able to pass.
+        _is_breakout_cont = str(record.get("setup_type") or "").endswith("_breakout")
         still_trending = (
             (direction == "long"  and "TRENDING_BULL" in rgm) or
-            (direction == "short" and "TRENDING_BEAR" in rgm)
+            (direction == "short" and "TRENDING_BEAR" in rgm) or
+            (_is_breakout_cont and "BREAKOUT_VOLATILE" in rgm)
         )
         if regime is not None and not still_trending:
             decision.should_exit = True
