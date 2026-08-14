@@ -149,8 +149,20 @@ def load_chain_series(date, symbol):
     """{minute: SimChain} from the archive. 5-minute cadence, so a tick between
     snapshots reuses the most recent one — stated because intra-window quote
     movement is invisible to this replay."""
-    path = os.path.join(CHAINS, date, f"{symbol}.jsonl.gz")
-    if not os.path.isfile(path):
+    # CASE-INSENSITIVE, same as the OHLC loader. A human types "spx" and the
+    # archive holds SPX.jsonl.gz; a case-sensitive match reported "0 chain
+    # snapshots" for a chain that was sitting right there. Second occurrence of
+    # this bug in one module — the fix belongs at every archive read, not just
+    # the one that bit first.
+    d = os.path.join(CHAINS, date)
+    path = None
+    if os.path.isdir(d):
+        want = f"{(symbol or '').upper()}.JSONL.GZ"
+        for fn in os.listdir(d):
+            if fn.upper() == want:
+                path = os.path.join(d, fn)
+                break
+    if not path or not os.path.isfile(path):
         return {}
     out = {}
     try:
@@ -310,6 +322,13 @@ def main(argv):
                          "frame; 55 hourly bars is ~9 sessions. Too few and "
                          "every trend vote is STARVED and the run reports a "
                          "quiet day that never happened.")
+    ap.add_argument("--pad", action="store_true",
+                    help="SYNTHETIC prime: pad backward from the session's "
+                         "FIRST bar instead of loading real prior sessions. "
+                         "Works for ANY symbol on ANY harvested date regardless "
+                         "of archive depth. Carries no lookahead, but is FLAT — "
+                         "the trend vote starts NEUTRAL and the run UNDER-FIRES "
+                         "early in the session.")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args(argv[1:])
 
@@ -317,7 +336,7 @@ def main(argv):
     # definition of "primed", read from the trend engine's own constants, so no
     # tool can soften the wording of a starved run.
     from data.hot_book import prime as hb_prime, verify_prime, describe
-    df, hb = hb_prime(a.symbol, a.date, a.warmup)
+    df, hb = hb_prime(a.symbol, a.date, a.warmup, pad=a.pad)
     if df is None or df.empty:
         for line in describe(hb):
             print(f"  {line}")

@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.70
+# docs/BACKLOG.md — v4.71
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5074,6 +5074,51 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.71 — 2026-08-14 — SIM.3: THE SYNTHETIC PAD.** `data/hot_book.py` ·
+  `replay_sim --pad` · `devtools` v1.29 option 58 prompts for it.
+  Operator: *"What if you duplicate the current session x10 just for the sake of
+  warming the trend engine?"* then *"Synthetic please. It will go further."*
+
+  **⚠️ DUPLICATING THE SESSION WOULD HAVE PUT THE FUTURE IN THE WARMUP.** At
+  09:35 the EMAs would already encode the 15:45 close, nine times over, and
+  every trend read for the whole replay would be contaminated by the day's
+  outcome — **the easiest way to manufacture a beautiful, meaningless backtest,
+  and INVISIBLE IN THE OUTPUT.** So the pad runs BACKWARD FROM THE SESSION'S
+  FIRST BAR instead: that bar is known at 09:30, so it carries NO LOOKAHEAD,
+  and it sits at the right price level with no cross-symbol contamination.
+
+  **IT PRIMES 100%% OF THE VOTE FROM ZERO ARCHIVE DEPTH** — 1d=57, 1h=399,
+  15m=1540, 5m=4504 — which real history cannot do near the start of the
+  archive (2026-07-23 has only 8 prior dirs, leaving 1h at ~52 of the 55
+  needed).
+  **AND THE ENGINE DEMONSTRABLY READS STATE OFF IT:** 09:31 NEUTRAL/ADX 0.0 →
+  09:45 BULLISH/ADX 34.9 → 10:30 BEARISH/20.7 → 13:00 BULLISH/10.4.
+
+  **TWO DESIGN DETAILS THAT ARE NOT COSMETIC:**
+  · **NOT FLAT-CLOSED.** A perfectly flat series gives true range ZERO and
+    ADX/ATR divide by it — **NaN, not zero.** Each pad bar reuses the first real
+    bar's high/low, so TR is non-zero while directional movement is nil.
+  · **ONE SESSION PER PRIOR CALENDAR DAY, not N*390 consecutive minutes.**
+    Walking back continuously spans ~15 days for 57 sessions, so the DAILY
+    resample saw 16 bars and `1d` stayed starved — **the pad looked generous and
+    primed nothing.** Caught only because `verify_prime` counts bars per frame.
+
+  **⚠️ THE STATED COST, printed on every padded run:** the pad is flat, so the
+  trend vote starts NEUTRAL and becomes real only as genuine bars accumulate.
+  **A padded replay UNDER-FIRES early in the session** — live, the engine has
+  real prior-day history and can read a trend at 09:31. Conservative and
+  directionally known, which is the right way to be wrong. **Do not read an
+  early-session absence as a result.**
+
+  **🔴 CASE SENSITIVITY, TWICE IN ONE MODULE.** The operator typed `spx`; the
+  archive holds `SPX_ohlc_*.csv` and `SPX.jsonl.gz`. The OHLC loader reported
+  "tape is not harvested yet" and the chain loader reported "0 chain snapshots"
+  — **both for data sitting right there.** Fixed at every archive read, not just
+  the one that bit first.
+  ⚠️ Also: `git checkout devtools.sh` in the sandbox reverted BELOW the pushed
+  option 58, because the sandbox clone trails origin. Restoring a file is not
+  the same as restoring the repo.
 
 - **v4.70 — 2026-08-14 — SIM.2: THE HOT BOOK IS A GENERIC MODULE.**
   `data/hot_book.py` v1.0 · `devtools` v1.29 (option **58**) · replay delegates.

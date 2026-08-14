@@ -120,8 +120,12 @@ def _load_day(date: str, symbol: str) -> Optional[pd.DataFrame]:
         d = os.path.join(os.path.expanduser(root), date)
         if not os.path.isdir(d):
             continue
+        pre = (symbol or "").upper() + "_"
         for fn in os.listdir(d):
-            if not fn.startswith(symbol + "_") or not fn.endswith(".csv"):
+            # CASE-INSENSITIVE. Files are written SPX_ohlc_*.csv but a human
+            # types "spx" at a prompt, and a case-sensitive match reported
+            # "tape not harvested" for a tape that was sitting right there.
+            if not fn.upper().startswith(pre) or not fn.lower().endswith(".csv"):
                 continue
             rows = []
             try:
@@ -158,8 +162,55 @@ def available_sessions(before: str) -> List[str]:
     return sorted(seen)
 
 
+def synth_pad(first: pd.Series, first_ts: datetime, sessions: int
+              ) -> pd.DataFrame:
+    """Synthetic prior bars, padded BACKWARD from the session's FIRST bar.
+
+    ⚠️ WHY BACKWARD FROM THE FIRST BAR AND NOT A DUPLICATED SESSION.
+    Repeating the whole session would put THE FUTURE IN THE WARMUP: at 09:35 the
+    EMAs would already encode the 15:45 close, nine times over, and every trend
+    read for the entire replay would be contaminated by the day's outcome. That
+    is the easiest way to manufacture a beautiful, meaningless backtest, and it
+    is INVISIBLE IN THE OUTPUT. The 09:30 bar is known at 09:30, so padding from
+    it carries no lookahead.
+
+    ⚠️ WHY THE PAD IS NOT FLAT-CLOSED. A perfectly flat series gives true range
+    zero, and ADX/ATR divide by it — NaN, not zero. Each pad bar reuses the
+    first REAL bar's high/low, so true range is non-zero while directional
+    movement is nil: **ADX ~0 and every EMA equal.**
+
+    ⚠️ THE COST, STATED SO IT CANNOT SURPRISE ANYONE. The trend vote starts
+    NEUTRAL and only becomes real as genuine bars accumulate, so a padded replay
+    **UNDER-FIRES early in the session** — live, the engine has real prior-day
+    history and can read a trend at 09:31. Conservative and directionally known,
+    which is the right way to be wrong.
+    """
+    rows = []
+    o = float(first.get("open", first["close"]))
+    hi, lo, cl = float(first["high"]), float(first["low"]), float(first["close"])
+    # ⚠️ ONE SYNTHETIC SESSION PER PRIOR CALENDAR DAY, not N*390 consecutive
+    # minutes. Walking back continuously spans only ~15 days for 57 sessions,
+    # so the DAILY resample sees 16 bars and the `1d` frame stays starved —
+    # the pad looks generous and primes nothing. Each session is placed on its
+    # own date so every frame gets the bar count it needs.
+    for k in range(1, max(0, sessions) + 1):
+        day = (first_ts - pd.Timedelta(days=k)).normalize()
+        for m in range(390):
+            rows.append((day + pd.Timedelta(minutes=9 * 60 + 30 + m),
+                         o, hi, lo, cl))
+    if not rows:
+        return pd.DataFrame()
+    rows.reverse()
+    out = pd.DataFrame(
+        {"open": [r[1] for r in rows], "high": [r[2] for r in rows],
+         "low": [r[3] for r in rows], "close": [r[4] for r in rows]},
+        index=pd.DatetimeIndex([r[0] for r in rows]))
+    out["volume"] = 0.0
+    return out
+
+
 def prime(symbol: str, date: str, warmup: int = 12
-          ) -> Tuple[Optional[pd.DataFrame], Dict]:
+, pad: bool = False) -> Tuple[Optional[pd.DataFrame], Dict]:
     """(book, report). `book` is 1m bars: `warmup` prior sessions + `date`.
 
     The report always states ASKED vs LOADED and names what was missing, so a
@@ -182,6 +233,18 @@ def prime(symbol: str, date: str, warmup: int = 12
                            f"harvested yet. A session is replayable only after "
                            f"the EOD conductor pulls it to control.")
         return None, report
+    if pad:
+        # SYNTHETIC MODE — no real history is used at all, so the prime is
+        # available for ANY symbol on ANY harvested date regardless of archive
+        # depth. Sized to satisfy the SLOWEST voting frame: `1d` needs
+        # EMA_SLOW+5 daily bars, so that many synthetic sessions.
+        need_sessions = _min_bars() + 2
+        p = synth_pad(today.iloc[0], today.index[0], need_sessions)
+        frames = [p] if not p.empty else []
+        report["synthetic"] = True
+        report["pad_sessions"] = need_sessions
+        report["loaded"] = 0
+        report["missing"] = []
     frames.append(today)
     book = pd.concat(frames).sort_index()
     book = book[~book.index.duplicated(keep="last")]
@@ -227,6 +290,16 @@ def verify_prime(book: pd.DataFrame, at: datetime) -> Dict:
 def describe(report: Dict, check: Optional[Dict] = None) -> List[str]:
     """Human-readable lines. Any caller can print these; the wording of a
     failed prime lives in ONE place so no tool can soften it."""
+    if report.get("synthetic"):
+        return [f"HOT BOOK {report['symbol']} {report['date']}: "
+                f"🧪 SYNTHETIC PAD — {report.get('pad_sessions', 0)} session(s) "
+                f"generated from the FIRST REAL BAR, {report.get('bars', 0)} bars",
+                "   NO REAL HISTORY IS USED. The pad carries no lookahead (the "
+                "09:30 bar is known at 09:30) and sits at the right price "
+                "level, but it is FLAT: ADX ~0 and every EMA equal.",
+                "   ⇒ The trend vote starts NEUTRAL and becomes real only as "
+                "genuine bars accumulate, so this run UNDER-FIRES early in the "
+                "session. Do not read an early-session absence as a result."]
     out = [f"HOT BOOK {report['symbol']} {report['date']}: "
            f"asked {report['asked']} · dirs {report['dirs']} · "
            f"LOADED {report['loaded']} · bars {report.get('bars', 0)}"]
