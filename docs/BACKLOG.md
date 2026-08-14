@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.68
+# docs/BACKLOG.md — v4.69
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -5074,6 +5074,63 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.69 — 2026-08-14 — SIM.1: A REPLAY SIMULATOR. `tests/replay_sim.py` v1.0
+  + `utils/time_utils` injectable clock.** Operator: *"With the inert trading
+  bot on control, why don't we exercise the trading engines on real saved tapes
+  after a change?"* **We should have, and the blocker was one function.**
+
+  **`now_et()` IS THE ONE CHOKE POINT** every time-based gate funnels through —
+  14 call sites across main, exit_engine, orb_engine, sweep and readiness.
+  `set_sim_clock(dt)` makes it injectable. **Production is byte-identical when
+  unset**: `_SIM_NOW` is None in every live process and the function returns
+  `datetime.now(ET)` exactly as before.
+
+  **THE DESIGN IS ONE LIST.** REAL, imported and called unmodified:
+  VolatilityEngine, TrendEngine, StructureAnalyzer, LiquidityMapper, ORBEngine,
+  the regime classifier, every strategy, SetupScorer, ExitEngine, RiskManager.
+  FAKED, exactly three: **the cache** (a shim serving resampled 1m/5m/15m/1h
+  truncated at the replay tick), **the clock**, and **the chain** (archived
+  snapshots adapted to the `OptionsChain` shape). `run_analysis` takes
+  everything from `get_cache()` and then calls the real engines, which is why
+  faking one dependency reaches all of them.
+  ⚠️ **NO LOOKAHEAD** — `df[df.index <= now]` on every call, asserted not
+  assumed. A replay that can see the next bar is the easiest way to manufacture
+  a result.
+
+  **THE HOT BOOK (operator's requirement).** The trend engine needs EMA_SLOW+5 =
+  **55 bars on its slowest frame** — 55 hourly bars is ~9 sessions. Starting at
+  09:30 on the target date hands every trend-gated strategy a STARVED vote, so
+  nothing fires and **the run reports a quiet day that never happened — the most
+  dangerous failure a simulator can have: silence that looks like a result.**
+  `--warmup` (default 10) preloads prior sessions; verified 3,931 1m bars and
+  797 5m bars at 10:00 with a live BULLISH vote and ADX 21.8.
+
+  **VIX FROM THE ARCHIVE, NOT THE FEED.** The operator was right that every box
+  pulls VIX live, and `signal_journal` records `macro.vix` on every scored event
+  — so it is already archived AND timestamped. The replay reads it from there.
+  **Replaying August tape against today's VIX is not a replay.**
+
+  **WHY IT MATTERS MORE THAN ANY TOOL BUILT THIS WEEK.** Every defect found on
+  2026-08-14 was an INTERACTION defect that passed unit tests on both sides:
+  TC.6 firing 40x in an hour, breakout continuations exiting in 15 seconds,
+  AFD.1 consuming the slot and trading nothing, TC.6's identity never reaching
+  the record. **All four are visible in a replay and none needed P&L to spot.**
+  ⚠️ It also **REPLACES** `spread_counterfactual`, `slippage_audit` and
+  `tcs_v21_backtest` rather than joining them — each re-implements a slice of an
+  engine we already own, which is the second-lineage failure WORKING_AGREEMENT 7
+  forbids.
+
+  **STAGE 1 (this delivery) drives ANALYSIS end to end.** STAGE 2 wires dispatch
+  and an execution sink so the trade list is produced and can be **diffed
+  against what the fleet actually did on the same date — any divergence is a bug
+  in one of them.**
+  ⚠️ KNOWN LIMITS, printed in the output: **volume is synthetic** (constant 0 —
+  the archive carries none, so any volume-derived signal is INERT here, not
+  measured); fills come from a 5-minute snapshot, so no queue position and no
+  intra-window quote movement; and a startup STARVED-vote warning is cosmetic
+  (it fires from a caller during module import, before the shim installs —
+  check `ctx`, not the log).
 
 - **🔴 v4.68 — 2026-08-14 — THE HANDOFF DROPPED EVERY FLAG. TC.6's IDENTITY
   NEVER REACHED THE RECORD.** `main` v6.8 · 12 tests (149 total).

@@ -42,7 +42,30 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# ── REPLAY CLOCK (SIM.1, 2026-08-14) ─────────────────────────────────────────
+# `now_et()` is the ONE choke point every time-based gate funnels through — 14
+# call sites across main, exit_engine, orb_engine, sweep and readiness. Making
+# it injectable is the single change that lets the REAL engines run over saved
+# tape instead of the wall clock.
+# ⚠️ PRODUCTION IS BYTE-IDENTICAL WHEN UNSET: `_SIM_NOW` is None in every live
+# process and the function returns `datetime.now(ET)` exactly as before. Only a
+# replay driver ever calls `set_sim_clock`.
+_SIM_NOW: Optional[datetime] = None
+
+
+def set_sim_clock(dt: Optional[datetime]) -> None:
+    """Freeze `now_et()` at `dt`, or pass None to restore the wall clock."""
+    global _SIM_NOW
+    _SIM_NOW = dt
+
+
+def is_simulated() -> bool:
+    return _SIM_NOW is not None
+
+
 def now_et() -> datetime:
+    if _SIM_NOW is not None:
+        return _SIM_NOW
     return datetime.now(ET)
 
 
