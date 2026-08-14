@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-# options_trader_v3/tests/test_s3_push.py — v1.3
+# options_trader_v3/tests/test_s3_push.py — v1.4
 """
 Behavioural proof for warehouse/s3_push.py against planted archives.
 
 CHANGELOG
+    v1.4 — 2026-08-13 — WH.5: pins the STAGE ORDER. The fault it guards against
+           is not a crash — every stream worked — it was that the bulk journal
+           ran early and starved the small perishable streams behind it for a
+           whole evening. Order is a correctness property here, so it is
+           asserted rather than left to reading the source.
     v1.3 — 2026-08-13 — WH.4: prefix counters, incremental flush, and verify.
            The flush test is the important one — it asserts that a drain KILLED
            partway leaves progress behind, which is the failure v1.0-v1.2 would
@@ -425,6 +430,23 @@ on_disk = s3_push.load_ledger(lp)
 check("ledger persisted MID-drain, not only at the end",
       on_disk.get(pf, {}).get("n", 0) >= 2, on_disk)
 s3_push.FLUSH_EVERY = 200
+
+
+# 26 — stage order: perishable-and-small first, bulk last
+import inspect as _insp
+_src = _insp.getsource(s3_push.main)
+_order = [n for n in ("trades", "eod", "orb", "ohlc", "candles",
+                      "chain_snapshots", "shadow", "signal_journal")
+          if '("%s"' % n in _src]
+_pos = {n: _src.index('("%s"' % n) for n in _order}
+check("stage order is declared for all 8 streams", len(_order) == 8, _order)
+check("trades runs before signal_journal", _pos["trades"] < _pos["signal_journal"])
+check("eod runs before signal_journal", _pos["eod"] < _pos["signal_journal"])
+check("orb runs before signal_journal", _pos["orb"] < _pos["signal_journal"])
+check("ohlc runs before signal_journal (the starvation that happened)",
+      _pos["ohlc"] < _pos["signal_journal"])
+check("candles runs before signal_journal", _pos["candles"] < _pos["signal_journal"])
+check("signal_journal is LAST", _pos["signal_journal"] == max(_pos.values()))
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("ALL CHECKS PASSED" if not FAILS else "FAILURES: " + ", ".join(FAILS)))

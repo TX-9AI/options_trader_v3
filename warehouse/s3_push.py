@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
-# options_trader_v3/warehouse/s3_push.py — v1.3
+# options_trader_v3/warehouse/s3_push.py — v1.4
 """
 Box-side warehouse pusher — ships locally-written archives to S3.
 
 CHANGELOG
+    v1.4 — 2026-08-13 — WH.5: STREAM ORDER. The first full fleet count exposed
+           an ordering fault of mine: the streams ran chains -> trades ->
+           journal -> shadow -> ohlc -> eod -> orb -> candles, so the 110,639
+           object signal-journal backlog consumed the entire run and everything
+           BEHIND it starved. ohlc sat at 108 against an expected ~783, eod at
+           8 against ~58, candles at 20 — not corruption, just never reached.
+           A timeout must truncate the TAIL, not the head, so the order is now
+           smallest-and-most-perishable first and the bulk streams last.
+           TimeoutStartSec also went 240s -> 1800s: 240 was a guess made before
+           any volume was known. systemd skips a timer trigger while the
+           oneshot is still running, so a long drain is safe.
     v1.3 — 2026-08-13 — WH.4: survivable drains and box-side verification.
            (a) INCREMENTAL LEDGER SAVES. v1.0-v1.2 saved the ledger ONCE at the
                end of main(). The unit sets TimeoutStartSec=240, so a backlog
@@ -663,6 +674,16 @@ def push_orb(s3, bucket, ledger, me, counters=None):
     return pushed, failed
 
 
+def _push_chain_tree(s3, ledger, counters, files):
+    """Chain snapshots across every day-file, as one stage."""
+    pushed = failed = 0
+    for path, day, sym in files:
+        a, b = push_file(s3, BUCKET, path, day, sym, ledger, counters)
+        pushed += a
+        failed += b
+    return pushed, failed
+
+
 def verify(s3, bucket: str, counters: dict):
     """Reconcile this box's confirmations against what S3 actually holds.
 
@@ -718,36 +739,13 @@ def main(argv=None) -> int:
         s3 = boto3.client("s3", region_name=REGION)
         counters = load_ledger(COUNTERS_PATH)
         ledger = load_ledger()
+        t_ledger = load_ledger(TRADES_LEDGER)
+        misc = load_ledger(MISC_LEDGER)
+        c_ledger = load_ledger(CANDLE_LEDGER)
+        me = own_symbol()
         total_pushed = 0
         total_failed = 0
 
-        for path, day, sym in files:
-            p, f = push_file(s3, BUCKET, path, day, sym, ledger, counters)
-            total_pushed += p
-            total_failed += f
-
-        if total_pushed or total_failed:
-            flush_all()
-
-        # ── trades (WH.2) — independent ledger, independent failure ─────────
-        t_ledger = load_ledger(TRADES_LEDGER)
-        t_pushed, t_failed = push_trades(s3, BUCKET, TRADES_DB, t_ledger, counters)
-        if t_pushed or t_failed:
-            flush_all()
-        total_pushed += t_pushed
-        total_failed += t_failed
-
-        # ── WH.3 streams — each with its own ledger and its own failure ─────
-        me = own_symbol()
-        misc = load_ledger(MISC_LEDGER)
-        m_p = m_f = 0
-        for root, dtype in ((JOURNAL_ROOT, "signal_journal"), (SHADOW_ROOT, "shadow")):
-            a, b = push_jsonl_tree(s3, BUCKET, root, dtype, misc, counters)
-            m_p += a
-            m_f += b
-        a, b = push_whole_files(s3, BUCKET, discover(OHLC_ROOT, ".csv"), "ohlc", misc, counters)
-        m_p += a
-        m_f += b
         eod_items = []
         try:
             for n in sorted(os.listdir(EOD_DIR)):
@@ -755,22 +753,42 @@ def main(argv=None) -> int:
                     eod_items.append((os.path.join(EOD_DIR, n), _eod_day(EOD_DIR), me))
         except Exception:
             pass
-        a, b = push_whole_files(s3, BUCKET, eod_items, "eod", misc, counters)
-        m_p += a
-        m_f += b
-        a, b = push_orb(s3, BUCKET, misc, me, counters)
-        m_p += a
-        m_f += b
-        if m_p or m_f:
-            flush_all()
 
-        c_ledger = load_ledger(CANDLE_LEDGER)
-        c_p, c_f = push_candles(s3, BUCKET, FEED_DB, c_ledger, me, counters)
-        if c_p or c_f:
-            flush_all()
+        # ── ORDER MATTERS, AND THIS IS THE ORDER ────────────────────────────
+        # Smallest and most perishable first; bulk last. A run that runs out of
+        # time then loses the TAIL, not the head. Before v1.4 the journal sat
+        # third and starved everything behind it for a full evening.
+        #   trades  — feeds reports 40/41, small, mutates
+        #   eod     — one day only, overwritten per session, silent loss
+        #   orb     — ephemeral, rewritten every tick, no log anywhere
+        #   ohlc    — one object per day-file, bounded
+        #   candles — high-water mark, small batches
+        #   chains  — large, but already drained and unreconstructable
+        #   shadow  — moderate
+        #   journal — largest by far, and the most tolerant of lag
+        stages = [
+            ("trades", lambda: push_trades(s3, BUCKET, TRADES_DB, t_ledger, counters)),
+            ("eod", lambda: push_whole_files(s3, BUCKET, eod_items, "eod", misc, counters)),
+            ("orb", lambda: push_orb(s3, BUCKET, misc, me, counters)),
+            ("ohlc", lambda: push_whole_files(
+                s3, BUCKET, discover(OHLC_ROOT, ".csv"), "ohlc", misc, counters)),
+            ("candles", lambda: push_candles(s3, BUCKET, FEED_DB, c_ledger, me, counters)),
+            ("chain_snapshots", lambda: _push_chain_tree(s3, ledger, counters, files)),
+            ("shadow", lambda: push_jsonl_tree(
+                s3, BUCKET, SHADOW_ROOT, "shadow", misc, counters)),
+            ("signal_journal", lambda: push_jsonl_tree(
+                s3, BUCKET, JOURNAL_ROOT, "signal_journal", misc, counters)),
+        ]
 
-        total_pushed += m_p + c_p
-        total_failed += m_f + c_f
+        for name, fn in stages:
+            try:
+                p_, f_ = fn()
+            except Exception:
+                p_, f_ = 0, 1          # rule 1: a stream may fail, never raise
+            total_pushed += p_
+            total_failed += f_
+            if p_ or f_:
+                flush_all()            # a stage's progress survives the next one
 
         flush_all()      # always: a run that pushed nothing may still have
                          # nothing to save, and one that did must not lose it

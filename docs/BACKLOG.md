@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.35
+# docs/BACKLOG.md — v4.36
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -114,6 +114,7 @@ BAKED is changing nothing about today's data.
 | **CV.1 — two canary reds at clean HEAD** | ⬜ **OPEN** | ⬜ | n/a (offline) | **Confirmed present on a PRISTINE clone, NOT introduced by any 08-08 delivery.** `check_versions.sh` pins `v5.4 main header current` while `main.py` is at **v5.8**, and one canary expects `tests/condor_plan_lifetime.py`, which **does not exist in the repo**. Consequence is the reason this is an item and not a footnote: the sweep now ends `DONE — 2 CANARY/PARITY FAILURE(S)` on a perfectly clean checkout, so **its own DONE banner has stopped being usable as a gate** — the cried-wolf failure this repo has already paid for once (WORKING_AGREEMENT §17: an alarm that spams is an alarm that gets filtered). Either update the pin to v5.8 and re-point or delete the orphaned canary; both are one-line edits. Left for the operator's call rather than folded silently into another delivery. |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
+| **WH.5 — stream ordering** | ✅ 08-13 | ⬜ | ⬜ **needs bake + installer** | bulk journal starved ohlc/eod/candles; order now perishable-first, TimeoutStartSec 240->1800, per-stage isolation; 74 checks incl. 6 pinning the order |
 | **WH.4 — pre-stop drain + box-side verify** | ✅ 08-13 | ⬜ | ⬜ **built, not deployed** | s3_push v1.3 (incremental flush, prefix counters, `--verify`); eod_backfill v1.2 + eod_report v0.2 gate the stop; **livelock fixed**: ledger was saved only at end vs TimeoutStartSec=240; 67 checks |
 | **WH.3 — remaining six streams -> warehouse** | ✅ 08-13 | ⬜ | ⬜ **built, not baked** | journal/shadow/OHLC/candles/eod/orb; VIX single-writer; ORB capture-on-state; 59 checks pass. WH.2 reconciled 1197/1197 |
 | **WH.2 — trades -> warehouse** | ✅ 08-13 | ⬜ | ⬜ **built, not deployed** | s3_push v1.1; per-`trade_id` content-hash ledger = change-data-capture; ET-day bucketing; **v1.0 duplicate-key bug found and fixed**, new test proven to FAIL on the old basis; 39 checks pass |
@@ -5000,6 +5001,37 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.36 — 2026-08-13 — WH.5: STREAM ORDER. THE BULK JOURNAL WAS STARVING EVERY STREAM BEHIND IT.**
+  `warehouse/s3_push.py` v1.4, `deploy/s3-push.service` v1.1.
+  - **THE FIRST FULL FLEET COUNT IS WHAT EXPOSED IT.** chain_snapshots 16782 ·
+    trades 1197 · **signal_journal 110639** · shadow 8046 · ohlc 108 · candles 20
+    · eod 8 · orb 0/0. Nothing was corrupt — ohlc should be ~783 (29 boxes x 27
+    day-files) and eod ~58; they were simply **never reached**. My order ran
+    chains -> trades -> journal -> shadow -> ohlc -> eod -> orb -> candles, and
+    with `TimeoutStartSec=240` the 110k journal backlog consumed the whole run.
+  - **A TIMEOUT MUST TRUNCATE THE TAIL, NOT THE HEAD.** New order: trades, eod,
+    orb, ohlc, candles, chains, shadow, journal — smallest and most perishable
+    first. eod is one day only and overwritten per session; orb is rewritten
+    every tick with no log anywhere. Those are the streams that must never wait
+    behind three weeks of journal history.
+  - **`TimeoutStartSec` 240 -> 1800.** 240 was a guess made before any volume
+    was known. systemd skips a timer trigger while the oneshot is still running,
+    so a long drain cannot pile up overlapping instances.
+  - **EACH STAGE IS ISOLATED** — its own try, its own flush. A stream that fails
+    cannot take the others with it, and a stage's progress survives the next
+    stage's failure.
+  - **A PROPOSAL WITHDRAWN.** I first suggested batching signal_journal per
+    file-day to shrink 110k. Wrong: one object per event is decision #2, the
+    journal genuinely IS an event stream, and the 110k was a one-time backfill
+    of three weeks. Ongoing it is ~11k/day fleet-wide. I had reacted to the size
+    of the number rather than to what it meant.
+  - **NOTHING IN THE BUCKET IS WRONG.** Every object was read back and
+    byte-compared before its ledger entry. No re-push, no cleanup, no reset.
+  - `tests/test_s3_push.py` v1.4 — **74 checks**, including six that pin the
+    stage order itself. Order is a correctness property here, not a style
+    choice, so it is asserted rather than left to reading the source.
+  - **⚠️ REQUIRES THE INSTALLER, NOT JUST A BAKE** — the unit file changed.
 
 - **v4.35 — 2026-08-13 — WH.4: BOXES PROVE THEY FILLED THE BUCKET BEFORE THEY GO DARK — AND A LIVELOCK OF MINE IS FIXED.**
   `warehouse/s3_push.py` v1.3, `day_trader_pro/eod_backfill.py` v1.2,
