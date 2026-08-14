@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-# options_trader_v3/tests/test_s3_push.py — v1.0
+# options_trader_v3/tests/test_s3_push.py — v1.1
 """
 Behavioural proof for warehouse/s3_push.py against planted archives.
 
 CHANGELOG
+    v1.1 — 2026-08-13 — trades coverage, and a REAL idempotency test. The v1.0
+           "lost ledger -> no duplicates" check passed by accident: both pushes
+           ran inside the same second, so the envelope's `pushed_at_utc` — which
+           v1.0 folded into the key hash — happened to match. It now forces the
+           clock forward between pushes, which fails against v1.0 and passes
+           against v1.1's content-only hash.
     v1.0 — 2026-08-12 — initial release, alongside s3_push v1.0.
 
 No AWS, no moto: a stub client records every put and serves gets back, so the
@@ -207,6 +213,59 @@ check("ledger reloads identically", s3_push.load_ledger(s3_push.LEDGER_PATH) == 
 s3_push.SRC_ROOT = "/nonexistent/nope"
 check("missing root -> empty discover, no raise", s3_push.discover("/nonexistent/nope") == [])
 check("main() with missing root returns 0", s3_push.main([]) == 0)
+
+
+# 13 — IDEMPOTENCY ACROSS A CLOCK CHANGE (this is the v1.0 bug, made visible)
+reset()
+p4 = write_archive("2026-08-12", "AAPL", [snap("2026-08-12T12:00:00-04:00", "AAPL")])
+s3h = StubS3()
+led_h = {}
+s3_push._now_utc = lambda: "2026-08-12T16:00:00+00:00"
+s3_push.push_file(s3h, "B", p4, "2026-08-12", "AAPL", led_h)
+keys_first = set(s3h.store)
+led_h.clear()                                   # ledger lost
+s3_push._now_utc = lambda: "2026-08-12T16:05:11+00:00"   # clock has MOVED
+s3_push.push_file(s3h, "B", p4, "2026-08-12", "AAPL", led_h)
+check("re-push at a DIFFERENT second reuses the same key (no duplicate)",
+      set(s3h.store) == keys_first and len(s3h.store) == 1, sorted(s3h.store))
+
+# 14 — trades: mutation lands as a second object, unchanged rows cost nothing
+import sqlite3 as _sq
+dbp = os.path.join(TMP, "trades.db")
+con = _sq.connect(dbp)
+con.execute("CREATE TABLE trades (trade_id INTEGER PRIMARY KEY, symbol TEXT,"
+            " entry_time TEXT, status TEXT, pnl_usd REAL, entry_snapshot TEXT)")
+con.execute("INSERT INTO trades VALUES (1,'SPX','2026-08-12T14:23:16+00:00',"
+            "'open',NULL,'{\"fvg\": []}')")
+con.commit(); con.close()
+s3t = StubS3()
+led_t = {}
+pt, ft = s3_push.push_trades(s3t, "B", dbp, led_t)
+check("open trade pushed", pt == 1 and ft == 0, (pt, ft))
+k = sorted(s3t.store)[0]
+check("trade key buckets by ET trading day, not UTC date", "/dt=2026-08-12/" in k, k)
+check("trade key partitions by symbol", "/sym=SPX/" in k, k)
+body = json.loads(s3t.store[k])
+check("all columns survive verbatim", body["record"]["entry_snapshot"] == '{"fvg": []}')
+check("trade_id + status surfaced into envelope",
+      body["trade_id"] == 1 and body["status"] == "open")
+
+pt2, _ = s3_push.push_trades(s3t, "B", dbp, led_t)
+check("unchanged trade re-push costs 0 objects", pt2 == 0 and len(s3t.store) == 1,
+      (pt2, len(s3t.store)))
+
+con = _sq.connect(dbp)
+con.execute("UPDATE trades SET status='closed', pnl_usd=412.5 WHERE trade_id=1")
+con.commit(); con.close()
+pt3, _ = s3_push.push_trades(s3t, "B", dbp, led_t)
+check("CLOSING the trade lands a SECOND object (change-data-capture)",
+      pt3 == 1 and len(s3t.store) == 2, (pt3, len(s3t.store)))
+states = sorted(json.loads(v)["status"] for v in s3t.store.values())
+check("both states retrievable: open AND closed", states == ["closed", "open"], states)
+
+# 15 — a missing/locked trades.db degrades to nothing, never raises
+pn, fn = s3_push.push_trades(StubS3(), "B", "/nonexistent/trades.db", {})
+check("missing trades.db -> 0/0, no raise", (pn, fn) == (0, 0), (pn, fn))
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("ALL CHECKS PASSED" if not FAILS else "FAILURES: " + ", ".join(FAILS)))

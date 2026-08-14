@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
-# options_trader_v3/warehouse/s3_push.py — v1.0
+# options_trader_v3/warehouse/s3_push.py — v1.1
 """
 Box-side warehouse pusher — ships locally-written archives to S3.
 
 CHANGELOG
+    v1.1 — 2026-08-13 — WH.2: trades. Plus a LATENT DUPLICATE BUG FIXED in the
+           v1.0 key derivation. v1.0 hashed the whole ENVELOPE, which contains
+           `pushed_at_utc` — so the same source line pushed at two different
+           seconds produced two different keys, i.e. a duplicate. The v1.0 test
+           that claimed to prove idempotency passed only because both pushes
+           happened inside the same second. The hash is now taken over the
+           RECORD alone, which is genuinely stable, and the test now forces a
+           clock change between pushes. The 16,782 chain objects already in the
+           bucket carry v1.0-basis keys; their ledgers prevent re-push, so they
+           are unaffected in place.
     v1.0 — 2026-08-12 — initial release. Chain snapshots only; other streams
            (trades.db, signal journal, feed_store) land in later versions
            behind the same ledger + verify machinery.
@@ -68,8 +78,10 @@ import hashlib
 import json
 import os
 import socket
+import sqlite3
 import sys
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 SCHEMA_VERSION = 1
 DATATYPE = "chain_snapshot"
@@ -96,6 +108,35 @@ def _now_utc() -> str:
 
 def _sha256(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
+
+
+def _canon(rec) -> bytes:
+    """Canonical bytes for the SOURCE RECORD ONLY — the basis for every key.
+
+    Deliberately excludes the envelope. The envelope carries `pushed_at_utc`,
+    which changes every run, so hashing it made the key a function of WHEN the
+    push happened rather than WHAT was pushed: the same line pushed twice in
+    different seconds landed as two objects. Keys must be a pure function of
+    content or idempotency is a coincidence.
+    """
+    return json.dumps(rec, sort_keys=True, separators=(",", ":"),
+                      default=str).encode("utf-8")
+
+
+def _et_day(iso_ts: str) -> str:
+    """Trading day (ET) from any ISO timestamp carrying an offset.
+
+    `dt=` MUST mean the same thing in every stream or joins silently return
+    nothing. Chain snapshots, the journal and OHLC all bucket by ET date, so
+    trades — whose timestamps are UTC — are converted rather than truncated.
+    """
+    try:
+        dt = datetime.fromisoformat(str(iso_ts))
+        if dt.tzinfo is None:
+            return str(iso_ts)[:10]
+        return dt.astimezone(ZoneInfo("America/New_York")).date().isoformat()
+    except Exception:
+        return str(iso_ts)[:10]
 
 
 def _epoch_ms(rec: dict, fallback_ms: int) -> int:
@@ -214,8 +255,8 @@ def push_file(s3, bucket, path, day, sym, ledger):
             # Not valid JSON yet. Stop here rather than skipping: skipping
             # would advance the offset past a line that never got pushed.
             break
+        sha = _sha256(_canon(rec))       # content only — never the envelope
         body = envelope(rec, sym, day, idx, os.path.basename(path))
-        sha = _sha256(body)
         key = "{}/{}s/dt={}/sym={}/{}-{}.json".format(
             PREFIX, DATATYPE, day, sym, _epoch_ms(rec, mtime_ms), sha[:16]
         )
@@ -250,6 +291,76 @@ def discover(root: str = SRC_ROOT):
     return found
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# TRADES  (WH.2)
+# ─────────────────────────────────────────────────────────────────────────────
+TRADES_DB = os.environ.get(
+    "OT_TRADES_DB", os.path.join(_HOME, "options-trader", "trades.db"))
+TRADES_LEDGER = os.path.join(STATE_DIR, "trades_ledger.json")
+
+
+def trade_envelope(rec: dict, sym: str, day: str) -> bytes:
+    env = {
+        "schema_version": SCHEMA_VERSION,
+        "datatype": "trade",
+        "symbol": sym,
+        "dt": day,
+        "trade_id": rec.get("trade_id"),
+        "status": rec.get("status"),
+        "src_host": HOST,
+        "src_file": "trades.db",
+        "pushed_at_utc": _now_utc(),
+        "record": rec,
+    }
+    return json.dumps(env, separators=(",", ":"), default=str).encode("utf-8")
+
+
+def push_trades(s3, bucket: str, db_path: str, ledger: dict):
+    """Push every trade row whose CONTENT has changed since last push.
+
+    Trade rows MUTATE — written at entry, rewritten at exit. So this is not
+    append-only like the chain archive, and a line-offset resume would be
+    wrong. Instead the ledger holds one content hash per trade_id: an
+    unchanged row costs a hash and nothing else, and each distinct STATE of a
+    row lands as its own immutable object. That is change-data-capture for
+    free, and it preserves more than `fleet_trades_<date>.json` does today —
+    that file only ever sees the end state.
+
+    SELECT * deliberately: the schema is 84 columns and has grown before
+    (consolidate_trades.py's docstring still says ~55). Enumerating columns
+    here would silently drop any future ALTER TABLE ADD COLUMN.
+    """
+    pushed = failed = 0
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True, timeout=5)
+        con.row_factory = sqlite3.Row
+        rows = con.execute("SELECT * FROM trades").fetchall()
+        con.close()
+    except Exception:
+        return 0, 0          # no db, locked, or no table — nothing to push
+
+    for row in rows:
+        rec = dict(row)
+        tid = str(rec.get("trade_id", ""))
+        sha = _sha256(_canon(rec))
+        if ledger.get(tid) == sha:
+            continue                      # unchanged since last push
+        sym = str(rec.get("symbol") or "UNKNOWN")
+        ts = rec.get("entry_time") or ""
+        day = _et_day(ts)
+        try:
+            ems = int(datetime.fromisoformat(str(ts)).timestamp() * 1000)
+        except Exception:
+            ems = 0
+        key = "%s/trades/dt=%s/sym=%s/%d-%s.json" % (PREFIX, day, sym, ems, sha[:16])
+        if not put_and_verify(s3, bucket, key, trade_envelope(rec, sym, day)):
+            failed += 1
+            break
+        ledger[tid] = sha
+        pushed += 1
+    return pushed, failed
+
+
 def main(argv=None) -> int:
     argv = argv or sys.argv[1:]
     report = "--report" in argv
@@ -261,8 +372,8 @@ def main(argv=None) -> int:
             return 0
 
         files = discover()
-        if not files and not report:
-            return 0  # idle box, the normal case. Say nothing.
+        if not files and not report and not os.path.exists(TRADES_DB):
+            return 0  # idle box with nothing at all. Say nothing.
 
         import boto3  # imported late so a missing SDK cannot break --report
 
@@ -278,6 +389,14 @@ def main(argv=None) -> int:
 
         if total_pushed or total_failed:
             save_ledger(ledger)
+
+        # ── trades (WH.2) — independent ledger, independent failure ─────────
+        t_ledger = load_ledger(TRADES_LEDGER)
+        t_pushed, t_failed = push_trades(s3, BUCKET, TRADES_DB, t_ledger)
+        if t_pushed or t_failed:
+            save_ledger(t_ledger, TRADES_LEDGER)
+        total_pushed += t_pushed
+        total_failed += t_failed
 
         if total_pushed or total_failed or report:
             print(

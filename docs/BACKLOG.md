@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.32
+# docs/BACKLOG.md — v4.33
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -114,6 +114,7 @@ BAKED is changing nothing about today's data.
 | **CV.1 — two canary reds at clean HEAD** | ⬜ **OPEN** | ⬜ | n/a (offline) | **Confirmed present on a PRISTINE clone, NOT introduced by any 08-08 delivery.** `check_versions.sh` pins `v5.4 main header current` while `main.py` is at **v5.8**, and one canary expects `tests/condor_plan_lifetime.py`, which **does not exist in the repo**. Consequence is the reason this is an item and not a footnote: the sweep now ends `DONE — 2 CANARY/PARITY FAILURE(S)` on a perfectly clean checkout, so **its own DONE banner has stopped being usable as a gate** — the cried-wolf failure this repo has already paid for once (WORKING_AGREEMENT §17: an alarm that spams is an alarm that gets filtered). Either update the pin to v5.8 and re-point or delete the orphaned canary; both are one-line edits. Left for the operator's call rather than folded silently into another delivery. |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
+| **WH.2 — trades -> warehouse** | ✅ 08-13 | ⬜ | ⬜ **built, not deployed** | s3_push v1.1; per-`trade_id` content-hash ledger = change-data-capture; ET-day bucketing; **v1.0 duplicate-key bug found and fixed**, new test proven to FAIL on the old basis; 39 checks pass |
 | **WH.1b — warehouse layout specification** | ✅ 08-13 | ⬜ | ⬜ **doc only, nothing migrated by it** | `docs/WAREHOUSE_LAYOUT.md` v1.0; all 29 boxes probed for every artifact; `ruleset` code-fingerprint found; no naive-local timestamps fleet-wide; SPX 91% explained as a 2 GB swapfile |
 | **WH.1 — S3 warehouse: bucket, box role, chain pusher** | ✅ 08-12 | ⬜ | ⬜ **needs the timer installed** | bucket+role live, **29/29 boxes carry `day-trader-box`**, canary `READBACK=ok` **15/15**; `tests/test_s3_push.py` **30 checks pass** incl. tampered-read-back and rejected-put deliberate failures. **NOT YET RUN AGAINST REAL S3.** |
 | **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
@@ -4997,6 +4998,41 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.33 — 2026-08-13 — WH.2: TRADES MIGRATE, AND A LATENT DUPLICATE BUG IN MY OWN v1.0 IS FIXED.**
+  `warehouse/s3_push.py` v1.1. Trades feed reports 40/41, the named benchmarks.
+  - **THE BUG, AND WHY THE v1.0 TEST DID NOT CATCH IT.** v1.0 derived the object
+    key from a hash of the whole ENVELOPE, and the envelope carries
+    `pushed_at_utc`. So the same source line pushed at two different seconds
+    produced two different keys — a duplicate. The v1.0 check that claimed to
+    prove idempotency ran both pushes inside the same second, so the timestamp
+    matched by luck and it passed. **A test that can only pass is not a test.**
+    v1.1 hashes the RECORD alone; the new check forces the clock forward between
+    pushes and was run against the v1.0 basis to confirm it FAILS there (two keys
+    for one snapshot) before being accepted as passing on v1.1.
+  - **THE 16,782 CHAIN OBJECTS ARE UNAFFECTED IN PLACE.** They carry v1.0-basis
+    keys and their ledgers prevent re-push. The exposure was only ever a lost
+    ledger plus a re-push, which has not happened — the reconcile matched exactly.
+  - **TRADES MUTATE, SO THIS IS NOT THE CHAIN PATTERN.** A row is written at entry
+    and rewritten at exit, so a line-offset resume would be wrong. The ledger
+    holds one content hash per `trade_id`: unchanged rows cost a hash and nothing
+    else, and each distinct STATE lands as its own immutable object. That is
+    change-data-capture for free and preserves MORE than
+    `fleet_trades_<date>.json`, which only ever sees the end state. Proven: open
+    -> closed yields two objects, both retrievable.
+  - **`dt=` MEANS THE ET TRADING DAY IN EVERY STREAM.** Trades timestamps are UTC
+    while chains/journal/OHLC bucket by ET date, so trades are CONVERTED, not
+    truncated. A mismatch here would silently return nothing on a join.
+  - **`SELECT *`, deliberately.** 84 columns today; `consolidate_trades.py` still
+    documents ~55. Enumerating columns would silently drop any future
+    `ALTER TABLE ADD COLUMN`. `entry_snapshot` rides along verbatim.
+  - **OPEN ITEM CLOSED FROM HEAD:** `trades.entry_snapshot` does NOT carry chain
+    state — `analysis/entry_snapshot.py` captures FVG zones and structural
+    context. So the chain-trade join must be BUILT, not merely verified.
+  - `tests/test_s3_push.py` v1.1 — **39 checks, all passing**, including the
+    deliberate-failure gate above.
+  - **⚠️ BUILT, NOT DEPLOYED.** No box runs this yet; nothing changes until the
+    archive lands and the fleet pulls.
 
 - **v4.32 — 2026-08-13 — `.gitignore` REPAIRED (three defects, one of them live).**
   Found while inventorying what each box generates; the operator used the ignore
