@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-# options_trader_v3/warehouse/s3_push.py — v1.1
+# options_trader_v3/warehouse/s3_push.py — v1.2
 """
 Box-side warehouse pusher — ships locally-written archives to S3.
 
 CHANGELOG
+    v1.2 — 2026-08-13 — WH.3: the remaining six streams. signal_journal and
+           shadow (append-only jsonl, same offset ledger as chains, with
+           `ruleset` and `event` lifted into the envelope); OHLC day-CSVs
+           (whole-file objects, not one per candle); feed_store candles (all
+           intervals, high-water mark per symbol+interval, VIX only from the
+           SPX box); the EOD json pair; and ORB state captured on
+           state==ESTABLISHED rather than on a clock time.
     v1.1 — 2026-08-13 — WH.2: trades. Plus a LATENT DUPLICATE BUG FIXED in the
            v1.0 key derivation. v1.0 hashed the whole ENVELOPE, which contains
            `pushed_at_utc` — so the same source line pushed at two different
@@ -273,8 +280,13 @@ def push_file(s3, bucket, path, day, sym, ledger):
     return pushed, failed
 
 
-def discover(root: str = SRC_ROOT):
-    """(path, day, symbol) for every archive file on this box."""
+def discover(root: str = SRC_ROOT, suffix: str = ".jsonl.gz"):
+    """(path, day, symbol) for every <date>/<SYM><suffix> file under root.
+
+    All four date-partitioned trees on a box share this shape — chain
+    snapshots, the signal journal, shadow and OHLC — so one walker serves them
+    all rather than four near-identical copies drifting apart.
+    """
     found = []
     try:
         for day in sorted(os.listdir(root)):
@@ -282,10 +294,9 @@ def discover(root: str = SRC_ROOT):
             if not os.path.isdir(day_dir):
                 continue
             for name in sorted(os.listdir(day_dir)):
-                if not name.endswith(".jsonl.gz"):
+                if not name.endswith(suffix):
                     continue
-                sym = name[: -len(".jsonl.gz")]
-                found.append((os.path.join(day_dir, name), day, sym))
+                found.append((os.path.join(day_dir, name), day, name[: -len(suffix)]))
     except Exception:
         pass
     return found
@@ -361,6 +372,236 @@ def push_trades(s3, bucket: str, db_path: str, ledger: dict):
     return pushed, failed
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# WH.3 — the remaining streams
+# ─────────────────────────────────────────────────────────────────────────────
+_OT = os.path.join(_HOME, "options-trader")
+JOURNAL_ROOT = os.path.join(_OT, "data", "signal_journal")
+SHADOW_ROOT  = os.path.join(_OT, "data", "shadow")
+OHLC_ROOT    = os.path.join(_OT, "data", "OHLC")
+FEED_DB      = os.path.join(_OT, "data", "feed_store.db")
+EOD_DIR      = os.path.join(_HOME, "eod")
+ORB_STATE    = os.path.join(_OT, "orb_state.json")
+ORB_RANGE    = os.path.join(_OT, "orb_range.json")
+
+MISC_LEDGER   = os.path.join(STATE_DIR, "misc_ledger.json")
+CANDLE_LEDGER = os.path.join(STATE_DIR, "candle_ledger.json")
+
+
+def _eod_day(eod_dir):
+    """Trading day for the EOD pair, taken from pnl_today.json's own date_et.
+
+    The filenames carry no date and are overwritten each SESSION, so a box idle
+    since July still holds July's file. Bucketing by today would file it under
+    the wrong day; the file states its own.
+    """
+    try:
+        with open(os.path.join(eod_dir, "pnl_today.json"), encoding="utf-8") as fh:
+            d = json.load(fh).get("date_et")
+        if d:
+            return str(d)[:10]
+    except Exception:
+        pass
+    return datetime.now(tz=timezone.utc).astimezone(
+        ZoneInfo("America/New_York")).date().isoformat()
+
+
+def own_symbol():
+    """This box's instrument, read off disk.
+
+    `data/OHLC/<date>/<SYM>.csv` is written for every box every session, so the
+    basename IS the instrument. Preferred over OT_INSTRUMENT because this
+    process does not inherit the bot unit's environment, and over an EC2 tag
+    lookup because the box role deliberately carries no ec2:Describe.
+    """
+    try:
+        days = sorted(d for d in os.listdir(OHLC_ROOT)
+                      if os.path.isdir(os.path.join(OHLC_ROOT, d)))
+        for day in reversed(days):
+            for n in os.listdir(os.path.join(OHLC_ROOT, day)):
+                if n.endswith(".csv"):
+                    return n[:-4]
+    except Exception:
+        pass
+    return os.environ.get("OT_INSTRUMENT", "")
+
+
+def _wrap(datatype, rec, sym, day, extra=None):
+    env = {
+        "schema_version": SCHEMA_VERSION,
+        "datatype": datatype,
+        "symbol": sym,
+        "dt": day,
+        "src_host": HOST,
+        "pushed_at_utc": _now_utc(),
+        "record": rec,
+    }
+    if extra:
+        env.update(extra)
+    return json.dumps(env, separators=(",", ":"), default=str).encode("utf-8")
+
+
+def push_jsonl_tree(s3, bucket, root, datatype, ledger):
+    """signal_journal and shadow: <date>/<SYM>.jsonl, append-only, plain text.
+
+    Same offset-resume contract as the chain archive. `ruleset` and `event` are
+    lifted into the envelope: ruleset fingerprints the DEPLOYED LOGIC that
+    produced the event, and pooling journal events across a deploy boundary
+    without grouping by it blends incompatible decision-making.
+    """
+    pushed = failed = 0
+    for path, day, sym in discover(root, ".jsonl"):
+        entry = ledger.get(path) or {}
+        start = int(entry.get("n", 0) or 0)
+        try:
+            with open(path, "rb") as fh:
+                lines = fh.readlines()
+        except Exception:
+            continue
+        if lines and not lines[-1].endswith(b"\n"):
+            lines.pop()                      # writer mid-line
+        if start > len(lines):
+            start = 0
+        for idx in range(start, len(lines)):
+            try:
+                rec = json.loads(lines[idx])
+            except Exception:
+                break
+            sha = _sha256(_canon(rec))
+            extra = {"src_line": idx}
+            for f in ("ruleset", "event"):
+                if isinstance(rec, dict) and rec.get(f) is not None:
+                    extra[f] = rec[f]
+            body = _wrap(datatype, rec, sym, day, extra)
+            ems = _epoch_ms(rec, 0) if isinstance(rec, dict) else 0
+            key = "%s/%s/dt=%s/sym=%s/%d-%s.json" % (PREFIX, datatype, day, sym, ems, sha[:16])
+            if not put_and_verify(s3, bucket, key, body):
+                failed += 1
+                break
+            ledger[path] = {"n": idx + 1, "last_sha": sha, "confirmed_utc": _now_utc()}
+            pushed += 1
+    return pushed, failed
+
+
+def push_whole_files(s3, bucket, items, datatype, ledger):
+    """One object per FILE, not per row. For OHLC day-CSVs and the EOD pair.
+
+    A day-CSV holds ~390 candles; one object per candle would be 390x the
+    request count for data that is only ever read as a day. The file is pushed
+    as a unit and re-pushed only when its CONTENT hash changes, so a day still
+    filling produces one object per distinct state and a finished day settles.
+    """
+    pushed = failed = 0
+    for path, day, sym in items:
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read()
+        except Exception:
+            continue
+        if not raw:
+            continue
+        sha = _sha256(raw)
+        if ledger.get(path) == sha:
+            continue
+        body = _wrap(datatype, raw.decode("utf-8", "replace"), sym, day,
+                     {"src_file": os.path.basename(path), "content_sha256": sha})
+        key = "%s/%s/dt=%s/sym=%s/%s-%s.json" % (PREFIX, datatype, day, sym,
+                                                 os.path.basename(path), sha[:16])
+        if not put_and_verify(s3, bucket, key, body):
+            failed += 1
+            continue
+        ledger[path] = sha
+        pushed += 1
+    return pushed, failed
+
+
+def push_candles(s3, bucket, db_path, ledger, me):
+    """feed_store candles — ALL intervals, high-water mark per symbol+interval.
+
+    The store is a rolling window (pruned), not an archive, so re-reading it
+    every run would re-push the same bars. A high-water mark pushes only bars
+    newer than the last confirmed one, batched into a single object per
+    symbol+interval per run.
+
+    VIX is logged by EVERY box. Operator's decision: SPX owns it, the other 28
+    skip it — otherwise the warehouse takes 29 identical copies. Safe because
+    SPX trades every day without exception.
+    """
+    pushed = failed = 0
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True, timeout=5)
+        con.row_factory = sqlite3.Row
+        pairs = [(r["symbol"], r["interval"]) for r in
+                 con.execute("SELECT DISTINCT symbol, interval FROM candles")]
+    except Exception:
+        return 0, 0
+    for sym, iv in pairs:
+        if str(sym).upper() in ("VIX", "^VIX") and me != "SPX":
+            continue                                  # SPX owns VIX
+        lk = "%s|%s" % (sym, iv)
+        hwm = int(ledger.get(lk, 0) or 0)
+        try:
+            rows = [dict(r) for r in con.execute(
+                "SELECT * FROM candles WHERE symbol=? AND interval=? AND ts_epoch_ms>?"
+                " ORDER BY ts_epoch_ms", (sym, iv, hwm))]
+        except Exception:
+            continue
+        if not rows:
+            continue
+        top = int(rows[-1]["ts_epoch_ms"])
+        day = datetime.fromtimestamp(top / 1000, tz=timezone.utc).astimezone(
+            ZoneInfo("America/New_York")).date().isoformat()
+        sha = _sha256(_canon(rows))
+        body = _wrap("candles", rows, sym, day,
+                     {"interval": iv, "n_bars": len(rows),
+                      "ts_from": int(rows[0]["ts_epoch_ms"]), "ts_to": top})
+        key = "%s/candles/dt=%s/sym=%s/interval=%s/%d-%s.json" % (
+            PREFIX, day, sym, iv, top, sha[:16])
+        if put_and_verify(s3, bucket, key, body):
+            ledger[lk] = top
+            pushed += 1
+        else:
+            failed += 1
+    con.close()
+    return pushed, failed
+
+
+def push_orb(s3, bucket, ledger, me):
+    """ORB state, captured ON STATE rather than on a clock time.
+
+    orb_state.json is rewritten EVERY TICK with no log, so every historical ORB
+    state the fleet ever produced is already gone. Operator's instruction was a
+    snapshot after the range is ESTABLISHED and before it expires; capturing on
+    `state == ESTABLISHED` means no window to miss if a timer runs late, and
+    each distinct `attempt` lands as its own object, so re-establishment
+    history survives instead of one arbitrary sample.
+    """
+    pushed = failed = 0
+    for path, kind in ((ORB_STATE, "orb_state"), (ORB_RANGE, "orb_range")):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                rec = json.load(fh)
+        except Exception:
+            continue
+        state = str(rec.get("state") or rec.get("status") or "")
+        if state.upper() != "ESTABLISHED":
+            continue
+        sha = _sha256(_canon(rec))
+        if ledger.get(path) == sha:
+            continue
+        day = datetime.now(tz=timezone.utc).astimezone(
+            ZoneInfo("America/New_York")).date().isoformat()
+        body = _wrap(kind, rec, me or "UNKNOWN", day,
+                     {"orb_state": state, "attempt": rec.get("attempt")})
+        key = "%s/%s/dt=%s/sym=%s/%s.json" % (PREFIX, kind, day, me or "UNKNOWN", sha[:16])
+        if put_and_verify(s3, bucket, key, body):
+            ledger[path] = sha
+            pushed += 1
+        else:
+            failed += 1
+    return pushed, failed
+
+
 def main(argv=None) -> int:
     argv = argv or sys.argv[1:]
     report = "--report" in argv
@@ -372,7 +613,8 @@ def main(argv=None) -> int:
             return 0
 
         files = discover()
-        if not files and not report and not os.path.exists(TRADES_DB):
+        if (not files and not report and not os.path.exists(TRADES_DB)
+                and not os.path.isdir(OHLC_ROOT)):
             return 0  # idle box with nothing at all. Say nothing.
 
         import boto3  # imported late so a missing SDK cannot break --report
@@ -397,6 +639,41 @@ def main(argv=None) -> int:
             save_ledger(t_ledger, TRADES_LEDGER)
         total_pushed += t_pushed
         total_failed += t_failed
+
+        # ── WH.3 streams — each with its own ledger and its own failure ─────
+        me = own_symbol()
+        misc = load_ledger(MISC_LEDGER)
+        m_p = m_f = 0
+        for root, dtype in ((JOURNAL_ROOT, "signal_journal"), (SHADOW_ROOT, "shadow")):
+            a, b = push_jsonl_tree(s3, BUCKET, root, dtype, misc)
+            m_p += a
+            m_f += b
+        a, b = push_whole_files(s3, BUCKET, discover(OHLC_ROOT, ".csv"), "ohlc", misc)
+        m_p += a
+        m_f += b
+        eod_items = []
+        try:
+            for n in sorted(os.listdir(EOD_DIR)):
+                if n.endswith(".json"):
+                    eod_items.append((os.path.join(EOD_DIR, n), _eod_day(EOD_DIR), me))
+        except Exception:
+            pass
+        a, b = push_whole_files(s3, BUCKET, eod_items, "eod", misc)
+        m_p += a
+        m_f += b
+        a, b = push_orb(s3, BUCKET, misc, me)
+        m_p += a
+        m_f += b
+        if m_p or m_f:
+            save_ledger(misc, MISC_LEDGER)
+
+        c_ledger = load_ledger(CANDLE_LEDGER)
+        c_p, c_f = push_candles(s3, BUCKET, FEED_DB, c_ledger, me)
+        if c_p or c_f:
+            save_ledger(c_ledger, CANDLE_LEDGER)
+
+        total_pushed += m_p + c_p
+        total_failed += m_f + c_f
 
         if total_pushed or total_failed or report:
             print(

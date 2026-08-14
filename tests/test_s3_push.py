@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-# options_trader_v3/tests/test_s3_push.py — v1.1
+# options_trader_v3/tests/test_s3_push.py — v1.2
 """
 Behavioural proof for warehouse/s3_push.py against planted archives.
 
 CHANGELOG
+    v1.2 — 2026-08-13 — WH.3 coverage: journal/shadow jsonl trees, OHLC and EOD
+           whole-file pushes, candle high-water marks, the VIX single-writer
+           rule, and ORB capture-on-state. Includes the negative cases that
+           matter — a non-ESTABLISHED ORB must NOT be captured, and a non-SPX
+           box must NOT push VIX.
     v1.1 — 2026-08-13 — trades coverage, and a REAL idempotency test. The v1.0
            "lost ledger -> no duplicates" check passed by accident: both pushes
            ran inside the same second, so the envelope's `pushed_at_utc` — which
@@ -266,6 +271,97 @@ check("both states retrievable: open AND closed", states == ["closed", "open"], 
 # 15 — a missing/locked trades.db degrades to nothing, never raises
 pn, fn = s3_push.push_trades(StubS3(), "B", "/nonexistent/trades.db", {})
 check("missing trades.db -> 0/0, no raise", (pn, fn) == (0, 0), (pn, fn))
+
+
+# ── WH.3 ────────────────────────────────────────────────────────────────────
+import sqlite3 as _s3q
+W = os.path.join(TMP, "wh3")
+os.makedirs(W, exist_ok=True)
+s3_push.JOURNAL_ROOT = os.path.join(W, "signal_journal")
+s3_push.SHADOW_ROOT = os.path.join(W, "shadow")
+s3_push.OHLC_ROOT = os.path.join(W, "OHLC")
+s3_push.ORB_STATE = os.path.join(W, "orb_state.json")
+s3_push.ORB_RANGE = os.path.join(W, "orb_range.json")
+
+def _mk(root, day, sym, lines, ext=".jsonl"):
+    d = os.path.join(root, day); os.makedirs(d, exist_ok=True)
+    p_ = os.path.join(d, sym + ext)
+    with open(p_, "a") as f:
+        for l in lines:
+            f.write(l + "\n")
+    return p_
+
+# 16 — journal: ruleset and event lifted into the envelope
+jp = _mk(s3_push.JOURNAL_ROOT, "2026-08-13", "SPX", [
+    json.dumps({"ts_et": "2026-08-13T09:45:00-04:00", "symbol": "SPX",
+                "event": "readiness", "ruleset": "0d70673", "readiness": {"x": 1}})])
+s3j = StubS3(); ledj = {}
+pj, fj = s3_push.push_jsonl_tree(s3j, "B", s3_push.JOURNAL_ROOT, "signal_journal", ledj)
+check("journal line pushed", pj == 1 and fj == 0, (pj, fj))
+kj = sorted(s3j.store)[0]
+bj = json.loads(s3j.store[kj])
+check("journal key: raw/signal_journal/dt=/sym=",
+      kj.startswith("raw/signal_journal/dt=2026-08-13/sym=SPX/"), kj)
+check("ruleset lifted into envelope", bj["ruleset"] == "0d70673", bj.get("ruleset"))
+check("event lifted into envelope", bj["event"] == "readiness", bj.get("event"))
+check("journal re-run pushes 0",
+      s3_push.push_jsonl_tree(s3j, "B", s3_push.JOURNAL_ROOT, "signal_journal", ledj)[0] == 0)
+
+# 17 — OHLC: ONE object per file, not per candle
+_mk(s3_push.OHLC_ROOT, "2026-08-13", "SPX",
+    ["timestamp,open,high,low,close,volume"] +
+    ["2026-08-13T09:3%d:00-04:00,1,2,0,1,100" % i for i in range(9)], ext=".csv")
+s3o = StubS3(); ledo = {}
+po, fo = s3_push.push_whole_files(s3o, "B", s3_push.discover(s3_push.OHLC_ROOT, ".csv"), "ohlc", ledo)
+check("OHLC day-file -> exactly 1 object (not 1/candle)", po == 1 and len(s3o.store) == 1, (po, len(s3o.store)))
+check("OHLC content preserved verbatim",
+      "timestamp,open,high,low,close,volume" in json.loads(list(s3o.store.values())[0])["record"])
+check("OHLC unchanged re-run pushes 0",
+      s3_push.push_whole_files(s3o, "B", s3_push.discover(s3_push.OHLC_ROOT, ".csv"), "ohlc", ledo)[0] == 0)
+
+# 18 — candles: high-water mark, all intervals, VIX single-writer
+fdb = os.path.join(W, "feed_store.db")
+con = _s3q.connect(fdb)
+con.execute("CREATE TABLE candles (symbol TEXT, interval TEXT, ts_epoch_ms INTEGER,"
+            " open REAL, high REAL, low REAL, close REAL, volume REAL)")
+for iv in ("1m", "5m"):
+    for i in range(3):
+        con.execute("INSERT INTO candles VALUES ('SPX',?,?,1,2,0,1,10)", (iv, 1786651740000 + i * 60000))
+con.execute("INSERT INTO candles VALUES ('VIX','1m',1786651740000,1,2,0,1,10)")
+con.commit(); con.close()
+
+s3c = StubS3(); ledc = {}
+pc, fc = s3_push.push_candles(s3c, "B", fdb, ledc, "NVDA")
+check("non-SPX box does NOT push VIX",
+      all("sym=VIX" not in k for k in s3c.store), sorted(s3c.store))
+check("both intervals pushed as separate objects", pc == 2, pc)
+check("interval= is a partition level",
+      any("/interval=5m/" in k for k in s3c.store), sorted(s3c.store))
+check("candles re-run pushes 0 (high-water mark)",
+      s3_push.push_candles(s3c, "B", fdb, ledc, "NVDA")[0] == 0)
+
+s3v = StubS3()
+pv, _ = s3_push.push_candles(s3v, "B", fdb, {}, "SPX")
+check("SPX box DOES push VIX", any("sym=VIX" in k for k in s3v.store), sorted(s3v.store))
+
+# 19 — ORB: captured ONLY when ESTABLISHED
+json.dump({"high": 7777.3, "low": 7763.1, "state": "EXPIRED", "attempt": 1},
+          open(s3_push.ORB_STATE, "w"))
+s3r = StubS3(); ledr = {}
+pr, _ = s3_push.push_orb(s3r, "B", ledr, "SPX")
+check("EXPIRED ORB is NOT captured", pr == 0 and len(s3r.store) == 0, (pr, len(s3r.store)))
+json.dump({"high": 7777.3, "low": 7763.1, "state": "ESTABLISHED", "attempt": 1},
+          open(s3_push.ORB_STATE, "w"))
+pr2, _ = s3_push.push_orb(s3r, "B", ledr, "SPX")
+check("ESTABLISHED ORB IS captured", pr2 == 1, pr2)
+check("ORB re-run at same state pushes 0", s3_push.push_orb(s3r, "B", ledr, "SPX")[0] == 0)
+json.dump({"high": 7780.0, "low": 7760.0, "state": "ESTABLISHED", "attempt": 2},
+          open(s3_push.ORB_STATE, "w"))
+pr3, _ = s3_push.push_orb(s3r, "B", ledr, "SPX")
+check("a NEW attempt lands as its own object", pr3 == 1 and len(s3r.store) == 2, len(s3r.store))
+
+# 20 — own_symbol reads the instrument off the OHLC tree
+check("own_symbol() derives instrument from OHLC dir", s3_push.own_symbol() == "SPX", s3_push.own_symbol())
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("ALL CHECKS PASSED" if not FAILS else "FAILURES: " + ", ".join(FAILS)))

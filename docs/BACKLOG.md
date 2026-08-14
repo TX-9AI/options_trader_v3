@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.33
+# docs/BACKLOG.md — v4.34
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -114,6 +114,7 @@ BAKED is changing nothing about today's data.
 | **CV.1 — two canary reds at clean HEAD** | ⬜ **OPEN** | ⬜ | n/a (offline) | **Confirmed present on a PRISTINE clone, NOT introduced by any 08-08 delivery.** `check_versions.sh` pins `v5.4 main header current` while `main.py` is at **v5.8**, and one canary expects `tests/condor_plan_lifetime.py`, which **does not exist in the repo**. Consequence is the reason this is an item and not a footnote: the sweep now ends `DONE — 2 CANARY/PARITY FAILURE(S)` on a perfectly clean checkout, so **its own DONE banner has stopped being usable as a gate** — the cried-wolf failure this repo has already paid for once (WORKING_AGREEMENT §17: an alarm that spams is an alarm that gets filtered). Either update the pin to v5.8 and re-point or delete the orphaned canary; both are one-line edits. Left for the operator's call rather than folded silently into another delivery. |
 | **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
 | **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
+| **WH.3 — remaining six streams -> warehouse** | ✅ 08-13 | ⬜ | ⬜ **built, not baked** | journal/shadow/OHLC/candles/eod/orb; VIX single-writer; ORB capture-on-state; 59 checks pass. WH.2 reconciled 1197/1197 |
 | **WH.2 — trades -> warehouse** | ✅ 08-13 | ⬜ | ⬜ **built, not deployed** | s3_push v1.1; per-`trade_id` content-hash ledger = change-data-capture; ET-day bucketing; **v1.0 duplicate-key bug found and fixed**, new test proven to FAIL on the old basis; 39 checks pass |
 | **WH.1b — warehouse layout specification** | ✅ 08-13 | ⬜ | ⬜ **doc only, nothing migrated by it** | `docs/WAREHOUSE_LAYOUT.md` v1.0; all 29 boxes probed for every artifact; `ruleset` code-fingerprint found; no naive-local timestamps fleet-wide; SPX 91% explained as a 2 GB swapfile |
 | **WH.1 — S3 warehouse: bucket, box role, chain pusher** | ✅ 08-12 | ⬜ | ⬜ **needs the timer installed** | bucket+role live, **29/29 boxes carry `day-trader-box`**, canary `READBACK=ok` **15/15**; `tests/test_s3_push.py` **30 checks pass** incl. tampered-read-back and rejected-put deliberate failures. **NOT YET RUN AGAINST REAL S3.** |
@@ -4998,6 +4999,38 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.34 — 2026-08-13 — WH.3: THE REMAINING SIX STREAMS. EVERY BOX ARTIFACT NOW HAS A PATH TO THE WAREHOUSE.**
+  `warehouse/s3_push.py` v1.2. WH.2 reconciled first: **`TRADE_OBJECTS=1197`
+  against a predicted 1,197** — exact, zero duplicates.
+  - **signal_journal + shadow** — append-only jsonl, same offset-resume contract
+    as the chain archive, one walker shared with chains and OHLC rather than four
+    near-identical copies drifting apart. **`ruleset` and `event` are lifted into
+    the envelope**: ruleset fingerprints the DEPLOYED LOGIC behind each event, and
+    pooling journal events across a deploy boundary without grouping by it blends
+    incompatible decision-making.
+  - **OHLC day-CSVs — ONE object per FILE.** A day holds ~390 candles; one object
+    each would be 390x the request count for data only ever read as a day.
+  - **feed_store candles — all intervals, high-water mark per symbol+interval.**
+    The store is a rolling pruned window, not an archive, so re-reading it every
+    run would re-push the same bars. `interval=` is the one sanctioned fourth
+    partition level: tiny cardinality, and queries always pin one.
+  - **VIX single-writer.** Every box logs VIX, so a naive push writes 29 identical
+    copies. Operator's decision: SPX owns it. Safe because SPX trades every day
+    without exception. The box identifies itself from `data/OHLC/<date>/<SYM>.csv`
+    — the bot unit's env is not inherited by this process and the box role
+    deliberately carries no `ec2:Describe`.
+  - **ORB captured ON STATE, not on a clock.** `orb_state.json` is rewritten every
+    tick with no log, so every historical ORB state the fleet produced is already
+    gone. Capturing on `state == ESTABLISHED` means no window to miss if a timer
+    runs late, and each distinct `attempt` lands separately.
+  - **EOD pair bucketed by its OWN `date_et`,** not by today — the files carry no
+    date and are overwritten per session, so an idle box still holds July's.
+  - `tests/test_s3_push.py` v1.2 — **59 checks, all passing**, including the
+    negative cases that matter: a non-ESTABLISHED ORB must NOT be captured, and a
+    non-SPX box must NOT push VIX.
+  - **⚠️ BUILT, NOT BAKED.** Deploy via devtools **option 25 (Bake only)** — the
+    timer runs the file as a fresh process, so no restart is involved.
 
 - **v4.33 — 2026-08-13 — WH.2: TRADES MIGRATE, AND A LATENT DUPLICATE BUG IN MY OWN v1.0 IS FIXED.**
   `warehouse/s3_push.py` v1.1. Trades feed reports 40/41, the named benchmarks.
