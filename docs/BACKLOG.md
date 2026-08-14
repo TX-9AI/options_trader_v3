@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.31
+# docs/BACKLOG.md — v4.32
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -4997,6 +4997,20 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
+
+- **v4.32 — 2026-08-13 — `.gitignore` REPAIRED (three defects, one of them live).**
+  Found while inventorying what each box generates; the operator used the ignore
+  file as the starting point for that inventory, which is what surfaced them.
+  - `*.ziptrades.db-shm` was a **missing newline** — so `*.zip` was never actually
+    ignored by this repo. Archives are delivered as `.tar.gz`, so nothing has been
+    committed by accident, but the guard was not there.
+  - `orb_range.json echo analysis/orb_range.json` captured a stray `echo` from a
+    bad `>>` append and matched a filename that will never exist.
+  - **`data/feed_store.db` was not ignored while `trades.db` was.** A `git add -A`
+    on a box would have committed a multi-MB binary SQLite DB. This is the one
+    with live exposure.
+  A dated comment header now records the repair; `.gitignore` carries no version
+  line, so the header is the record.
 
 - **v4.31 — 2026-08-13 — WH.1b: THE WAREHOUSE LAYOUT IS SPECIFIED (`docs/WAREHOUSE_LAYOUT.md` v1.0).**
   Written after probing all 29 boxes for every artifact they produce, because
