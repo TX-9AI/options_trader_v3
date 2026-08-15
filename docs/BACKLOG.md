@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.78
+# docs/BACKLOG.md — v4.79
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,6 +217,57 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **🔴 v4.79 — 2026-08-15 — LIQ.6: A WHOLESALE CHANGE TO WHAT A NAMED POOL IS.**
+  `analysis/liquidity_mapper.py`. **Everything prior was correct FOR ITS TIME
+  and is incorrect under the clearer rules** (operator).
+
+  **1. SECTIONS ARE NON-OVERLAPPING AND CONTIGUOUS** in UTC — Asia 00-08,
+  London 08-13, NY 13-20. A bar belongs to exactly one. The old windows
+  OVERLAPPED (Asia 00-08, London 07-16, NY 13-22), which is how "London High"
+  could be set by a price RTH traded seconds ago — and why LIQ.1 removed London
+  wholesale. **Only the overlapping TAIL was ever the problem**, so the pre-RTH
+  London extreme is a real level and is back.
+
+  **2. A SECTION IS A POOL ONCE IT IS CLOSED.** Operator: *"The current day's
+  levels must be excluded BY DEFINITION because they are still forming.
+  Exception: overnight low/high are still today, but an EARLIER session &
+  therefore valid."* The test is COMPLETED vs STILL FORMING, never the calendar
+  date. **Today's RTH is never a pool** — it is `session_high`/`session_low`,
+  already tracked by the not-exceeded filter. The old code named today's forming
+  RTH extreme "NY High": a level that rewrote itself on every print.
+
+  **3. `NY High/Low` IS SESSION-TYPE, NOT DATE-RELATIVE.** Operator: *"If one of
+  the last extremes was NY H/L but it was 5 days ago, then it's not PDH/PDL — it
+  accurately IS NY H/L."* PDH/PDL means literally yesterday; an untouched RTH
+  extreme is where the stops are regardless of when it formed.
+
+  **4. A LADDER THREE DEEP, AND A BROKEN LEVEL IS NOT A POOL.** Operator: *"More
+  extreme means the less extreme level was already invalidated"* and *"the
+  mapper should run 3 levels deep: most recent h/l, next most, 3rd most."* If a
+  later section printed a higher high, price went THROUGH the earlier one and
+  those stops are gone. Rung 1 is the next liquidity; rungs 2-3 are where price
+  runs if it takes rung 1.
+  ⚠️ THE RUNG IS ALWAYS IN THE NAME, and a collision MERGES it rather than
+  discarding it. PDH/PDL is added before the ladder and yesterday's full-day
+  extreme is usually the SAME PRINT as yesterday's RTH extreme, so the collision
+  is the norm — it now reads **`PDH (R2)`**, keeping both facts. Without the
+  merge the ladder read `London High (R1) / PDH / NY High (R3)` with rung 2
+  invisible.
+  Verified on planted tape: highs **105 (R1) -> 108 (R2) -> 110 (R3)**, lows
+  **95 -> 92 -> 90**, today's forming RTH excluded, and 08-13's broken Asia/
+  London extremes correctly absent.
+
+  **⚠️ THIS INVALIDATES TODAY'S EARLIER READS AS BASELINES.** Every sweep in the
+  archive was scored against the OLD pool definition, so the accept-veto rate
+  (64.5%), the retreat distribution and the SWEEP tape-gap conclusions describe
+  a mapper that no longer exists. **The archive is now a THIRD regime** (pre-
+  LIQ.1, post-LIQ.1, post-LIQ.6).
+  **SEQUENCING, agreed: ship the mapper, COLLECT, then revisit the sweep setup
+  for edge.** Changing what a level IS and when a sweep FIRES in the same window
+  would make neither attributable. The retreat probe (LIQ.5) must be re-run
+  after collection — its NY figures measured a moving target, and rungs 2-3 did
+  not previously exist.
+
 - **v4.78 — 2026-08-15 (Sat) — L1.7's "TAPE GAPS" WERE REPORTING GAPS, AND THE
   SWEEP SETUP IS CONFIRMED TOO LATE TO TRADE.** `replay_confluence` v2.7 ·
   `sweep_veto_probe` · `sweep_accept_probe`.

@@ -82,10 +82,47 @@ v1.1 additions:
 - Previous Day High/Low (PDH/PDL) as named high-value liquidity pools
 - Previous Session High/Low (Asia, London, NY) as named pools
 - Named pools carry higher confluence weight in sweep reversal strategy
+
+
+LIQ.6 (2026-08-15) — A WHOLESALE CHANGE TO WHAT A NAMED POOL IS.
+    Everything before this was correct FOR ITS TIME and is incorrect under the
+    clearer rules. Four changes, all from the operator:
+
+    1. SECTIONS ARE NON-OVERLAPPING AND CONTIGUOUS in UTC — Asia 00-08,
+       London 08-13, NY 13-20. A bar belongs to exactly one. The old windows
+       overlapped (Asia 00-08, London 07-16, NY 13-22), which is how
+       "London High" could be set by a price RTH traded seconds ago and why
+       LIQ.1 had to remove London wholesale. Only the OVERLAPPING TAIL was ever
+       the problem; the pre-RTH London extreme is a real level and is back.
+
+    2. A SECTION IS A POOL ONCE IT IS CLOSED. The test is COMPLETED vs STILL
+       FORMING, never the calendar date. Today's Asia and pre-RTH London are
+       valid from the open. **TODAY'S RTH IS NEVER A POOL** — it is
+       `session_high`/`session_low`, already tracked by the not-exceeded filter.
+       The old code named today's forming RTH extreme "NY High", a level that
+       rewrote itself on every new print.
+
+    3. `NY High/Low` IS SESSION-TYPE, NOT DATE-RELATIVE. PDH/PDL means literally
+       yesterday. An RTH extreme from five days ago that nothing has taken is
+       still "NY High" and is still where the stops are.
+
+    4. A LADDER THREE DEEP, AND A BROKEN LEVEL IS NOT A POOL. "More extreme
+       means the less extreme level was already invalidated" — if a later
+       section printed a higher high, price went THROUGH the earlier one to get
+       there and those stops are gone. Rung 1 is the next liquidity; rungs 2-3
+       are where price runs if it takes rung 1. The rung is always in the name.
+
+    ⚠️ CONSEQUENCE FOR ANALYSIS: every sweep in the archive was scored against
+    the OLD definition. The 2026-08-15 reads (accept-veto at 64.5%, the retreat
+    distribution, the SWEEP tape gap) describe a mapper that no longer exists —
+    correct then, NOT a baseline now. The archive is a third regime from this
+    bake. **The retreat probe must be re-run, and the sweep TIMING change waits
+    until this has collected**, or neither can be attributed.
 """
 
 import logging
 import os as _os
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 from datetime import datetime, timezone, timedelta
@@ -186,6 +223,41 @@ class LiquidityMapper:
     LONDON_END    = 16   # 16:00 UTC
     NY_START      = 13   # 13:00 UTC
     NY_END        = 22   # 22:00 UTC
+    RTH_OPEN_UTC  = 13   # 13:30 UTC; hour-granularity mask uses 13
+
+    # ── LIQ.6 (2026-08-15) — A POOL IS A CLOSED SESSION'S EXTREME ────────────
+    # Operator: "The current day's levels must be excluded BY DEFINITION because
+    # they are still forming. Exception: overnight low/high are still today, but
+    # an EARLIER session and therefore valid."
+    #
+    # The test is COMPLETED vs STILL FORMING, not the calendar date:
+    #   · Asia (00:00-08:00 UTC) is closed before RTH opens -> VALID, today.
+    #   · London BEFORE RTH open is closed -> VALID. London AFTER 13:30 is the
+    #     moving target LIQ.1 removed. **LIQ.1 removed the WHOLE session when
+    #     only the overlapping tail was the problem** — the pre-RTH London
+    #     extreme is exactly the kind of level worth naming, so the window is
+    #     now CLIPPED rather than gated off.
+    #   · TODAY'S RTH high/low is NEVER a pool. It is `session_high`/
+    #     `session_low`, which the not-exceeded filter already tracks.
+    #
+    # ⚠️ AND `NY High/Low` MEANS SOMETHING DIFFERENT FROM `PDH/PDL`.
+    # PDH/PDL is DATE-RELATIVE — literally yesterday. NY High/Low is
+    # SESSION-TYPE: the last UNBROKEN RTH extreme, whenever it formed. Operator:
+    # "If one of the last extremes was NY H/L but it was 5 days ago, then it's
+    # not PDH/PDL — it accurately is NY H/L." An untouched extreme is where the
+    # stops are REGARDLESS of when it formed, which is what makes it liquidity.
+    # The old code named TODAY'S FORMING RTH extreme "NY High/Low" — neither
+    # yesterday's nor the last unbroken one — so it was a self-rewriting level.
+    # MEASURED (LIQ.5 retreat probe): NY levels showed a retreat mean of 4.1-4.2
+    # against PDH/PDL's 1.1-1.2. **That gap was the artefact of a moving target,
+    # not evidence of a better level.**
+    # Contiguous, NON-OVERLAPPING sections in UTC. A bar belongs to exactly
+    # one. RTH is 13:30-20:00 UTC; hour-granularity masks use 13 and 20.
+    SECTIONS = (("Asia",   0,  8),
+                ("London", 8,  13),
+                ("NY",     13, 20))
+    SECTION_LOOKBACK_DAYS = 10
+    LADDER_DEPTH = 3         # most recent unbroken H/L, next, 3rd
 
     def analyze(self, df_5m: pd.DataFrame, df_15m: pd.DataFrame,
                 current_price: float) -> LiquidityMap:
@@ -375,40 +447,82 @@ class LiquidityMapper:
             # Today's sessions
             today_mask = idx.date == today
 
-            # Asia session (00:00-08:00 UTC)
-            asia_mask = today_mask & (idx.hour >= self.ASIA_START) & (idx.hour < self.ASIA_END)
-            if asia_mask.any():
-                asia_data = df[asia_mask]
-                ash = float(asia_data["high"].max())
-                asl = float(asia_data["low"].min())
-                lmap.asia_session_high = ash
-                lmap.asia_session_low  = asl
-                if NAMED_POOLS_INCLUDE_SESSIONS:
-                    self._add_named_pool(lmap, ash, "high", "Asia High")
-                    self._add_named_pool(lmap, asl, "low",  "Asia Low")
+            # ── LIQ.6 — SECTIONS IN TIME, THEN A LADDER 3 DEEP ──────────────
+            # Operator: "Just use the UTC day/times to record the extremes in
+            # each section & treat every session as a section in time" and
+            # "the mapper should run 3 levels deep: most recent h/l, next most,
+            # 3rd most."
+            #
+            # SECTIONS ARE NON-OVERLAPPING AND CONTIGUOUS, so a bar belongs to
+            # exactly one and no extreme is double-counted. The old windows
+            # overlapped (Asia 00-08 vs London 07-16 vs NY 13-22), which is how
+            # "London High" could be set by a price RTH traded seconds ago.
+            #
+            # A SECTION IS A POOL ONCE IT IS CLOSED — completed vs still
+            # forming, never the calendar date. Today's Asia and pre-RTH London
+            # are valid from the open; **today's RTH is never a pool** (it is
+            # `session_high`/`session_low`, already tracked by the not-exceeded
+            # filter).
+            #
+            # ⚠️ AND A BROKEN LEVEL IS NOT A POOL. Operator: "more extreme means
+            # the less extreme level was already invalidated." If a later
+            # section printed a higher high, price went THROUGH the earlier one
+            # to get there — those stops are gone. So the ladder keeps only
+            # UNBROKEN extremes, newest first, three deep. Rung 1 is the next
+            # liquidity above/below; rungs 2 and 3 are where price runs if it
+            # takes rung 1.
+            sections = []
+            for d in sorted({dt for dt in idx.date})[-self.SECTION_LOOKBACK_DAYS:]:
+                for label, h0, h1 in self.SECTIONS:
+                    m = (idx.date == d) & (idx.hour >= h0) & (idx.hour < h1)
+                    if not m.any():
+                        continue
+                    if d == today and int(idx[-1].hour) < h1:
+                        continue          # STILL FORMING - not a pool
+                    sd = df[m]
+                    sections.append((d, label, float(sd["high"].max()),
+                                     float(sd["low"].min())))
+            sections.sort(key=lambda x: (x[0], [l for l, _, _ in self.SECTIONS].index(x[1])))
 
-            # London session (07:00-16:00 UTC)
-            london_mask = today_mask & (idx.hour >= self.LONDON_START) & (idx.hour < self.LONDON_END)
-            if london_mask.any():
-                london_data = df[london_mask]
-                lsh = float(london_data["high"].max())
-                lsl = float(london_data["low"].min())
-                lmap.london_session_high = lsh
-                lmap.london_session_low  = lsl
-                if NAMED_POOLS_INCLUDE_SESSIONS:
-                    self._add_named_pool(lmap, lsh, "high", "London High")
-                    self._add_named_pool(lmap, lsl, "low",  "London Low")
+            # canonical single-value fields, unchanged consumers (shadow reads them)
+            for d, label, hi, lo in reversed(sections):
+                if label == "NY" and lmap.ny_session_high is None:
+                    lmap.ny_session_high, lmap.ny_session_low = hi, lo
+                if label == "Asia" and d == today and lmap.asia_session_high is None:
+                    lmap.asia_session_high, lmap.asia_session_low = hi, lo
+                if label == "London" and d == today and lmap.london_session_high is None:
+                    lmap.london_session_high, lmap.london_session_low = hi, lo
 
-            # NY session (13:00-22:00 UTC)
-            ny_mask = today_mask & (idx.hour >= self.NY_START) & (idx.hour < self.NY_END)
-            if ny_mask.any():
-                ny_data = df[ny_mask]
-                nyh = float(ny_data["high"].max())
-                nyl = float(ny_data["low"].min())
-                lmap.ny_session_high = nyh
-                lmap.ny_session_low  = nyl
-                self._add_named_pool(lmap, nyh, "high", "NY High")
-                self._add_named_pool(lmap, nyl, "low",  "NY Low")
+            # THE LADDER: newest first, keep only what nothing later exceeded.
+            hi_rungs, lo_rungs, seen_hi, seen_lo = [], [], None, None
+            for d, label, hi, lo in reversed(sections):
+                if len(hi_rungs) < self.LADDER_DEPTH and (seen_hi is None or hi > seen_hi):
+                    hi_rungs.append((d, label, hi))
+                    seen_hi = hi if seen_hi is None else max(seen_hi, hi)
+                elif seen_hi is None:
+                    seen_hi = hi
+                else:
+                    seen_hi = max(seen_hi, hi)
+                if len(lo_rungs) < self.LADDER_DEPTH and (seen_lo is None or lo < seen_lo):
+                    lo_rungs.append((d, label, lo))
+                    seen_lo = lo if seen_lo is None else min(seen_lo, lo)
+                elif seen_lo is None:
+                    seen_lo = lo
+                else:
+                    seen_lo = min(seen_lo, lo)
+
+            # ⚠️ THE RUNG IS ALWAYS IN THE NAME. A consumer sizing off "how deep
+            # is this level" must not have to infer position from which producer
+            # happened to win a collision. Without the suffix the ladder read
+            # `London High / PDH / NY High #3` and rung 2 was invisible.
+            for n, (d, label, px) in enumerate(hi_rungs, 1):
+                self._add_named_pool(lmap, px, "high", f"{label} High (R{n})")
+            for n, (d, label, px) in enumerate(lo_rungs, 1):
+                self._add_named_pool(lmap, px, "low", f"{label} Low (R{n})")
+            if hi_rungs or lo_rungs:
+                logger.debug("LIQ.6 ladder highs=%s lows=%s",
+                             [(str(d), l, round(p, 2)) for d, l, p in hi_rungs],
+                             [(str(d), l, round(p, 2)) for d, l, p in lo_rungs])
 
         except Exception as e:
             logger.debug(f"Named level extraction failed: {e}")
@@ -449,11 +563,46 @@ class LiquidityMapper:
 
     def _add_named_pool(self, lmap: LiquidityMap, price: float,
                          kind: str, name: str):
-        """Add a named liquidity pool, avoiding duplicates."""
-        # Don't add if too close to existing named pool
+        """Add a named liquidity pool. On a collision, THE MORE EXTREME WINS.
+
+        ⚠️ LIQ.6 (2026-08-15) — this used to return on ANY named pool within
+        0.2%, so FIRST-ADDED WON and the more extreme level was silently
+        discarded. PDH/PDL is computed before the sections, so a more extreme
+        NY High could never replace it.
+
+        Operator's rule: **whichever is more extreme wins** — the outermost
+        level is where the resting stops actually are, regardless of which
+        producer found it. For a high that is the LARGER price; for a low, the
+        SMALLER.
+
+        This matters because the collision is the NORM, not the exception:
+        yesterday's full-day extreme and yesterday's RTH extreme are usually the
+        same print. LIQ.1(b) hit the same coincidence — "a PDH almost always
+        ALSO sits on an equal-high cluster; that coincidence is WHY it is
+        liquidity" — and it produced a real dedupe bug then.
+        """
         for pool in lmap.pools:
-            if pool.is_named and within_pct(pool.price, price, 0.002):
+            if not (pool.is_named and within_pct(pool.price, price, 0.002)):
+                continue
+            if pool.kind != kind:
+                continue
+            more_extreme = (price > pool.price if kind == "high"
+                            else price < pool.price)
+            if more_extreme:
+                # take the outer price, and the name that produced it
+                pool.price = price
+                pool.name = name
                 return
+            # ⚠️ MERGE THE RUNG RATHER THAN DISCARD IT. PDH/PDL is added BEFORE
+            # the ladder, so a rung landing on the same price used to be dropped
+            # entirely and the ladder read "London High (R1) / PDH / NY High
+            # (R3)" — rung 2 invisible. Yesterday's full-day extreme and
+            # yesterday's RTH extreme are usually the SAME PRINT, so this
+            # collision is the norm. Keep both facts: it is PDH, and it is R2.
+            m = re.search(r"\(R\d\)$", name or "")
+            if m and "(R" not in (pool.name or ""):
+                pool.name = f"{pool.name} {m.group(0)}"
+            return
 
         lmap.pools.append(LiquidityPool(
             price=price,
