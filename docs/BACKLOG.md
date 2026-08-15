@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.90
+# docs/BACKLOG.md — v4.91
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,6 +217,68 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.91 — 2026-08-15 — THE DAY'S ACCOUNTING, AND A SCRUB OF WHAT IT CLAIMS.**
+  Operator: *"I shouldn't be able to go behind you and find something you missed
+  because you just glossed over it."* Every entry from v4.76-v4.90 was re-read
+  against the code rather than against memory. **Three superseded claims and one
+  misleading convention were found and corrected in place.**
+
+  **🔴 CORRECTION 1 — v4.87's CENTRAL CONCLUSION WAS WRONG.** It states *"there
+  is no overnight tape, so Asia and London sections can never build"* and *"the
+  data simply does not exist."* FEED.2 proved the opposite hours later: the data
+  was always there and the feed was asking DXFeed to exclude it. The entry is
+  kept VERBATIM with a correction block, because the reasoning error is the
+  lesson — **`ext=0` was read as a property of the DATA when it was a property
+  of the REQUEST**, and two further wrong diagnoses followed from it before the
+  SDK signature was read.
+
+  **🔴 CORRECTION 2 — v4.88's SCHEDULE WAS CANCELLED, NOT DEFERRED.** The 08:15
+  wake / groups-of-five / verify / stop plan is unnecessary: DXFeed streams
+  history from `fromTime`, so overnight bars arrive on the 09:10 warm-lead
+  connection that already happens. Marked superseded rather than left as
+  planned work someone would later try to build.
+
+  **🔴 CORRECTION 3 — the ON-tier item's PREMISE.** *"No overnight tape exists
+  historically"* was true only because of `tho=true`. Forward of the FEED.2 bake
+  it exists and the tier can be validated on collected data; **nothing before
+  that bake can be retro-validated**, since DXFeed history is same-evening only.
+
+  **⚠️ CONVENTION FIXED — THE TEST COUNTS IN TODAY'S ENTRIES ARE NOT
+  COMPARABLE.** BFLY.3 records "177 total" and FEED.3 records "141 total" — a
+  LATER, SMALLER number, which reads as tests having been lost. They were not:
+  each entry counted whatever file subset was run at that moment, and the
+  subsets differed. **Verified now on the full named suite: 175 passing.**
+  Going forward an entry states the count AND the scope, or states neither.
+
+  **WHAT LANDED TODAY — 24 commits, nothing baked.** Grouped by what it does:
+  · **Reporting/tooling (read-only):** `replay_confluence` v2.3→v2.7 (per-symbol
+    view, regime grid, named-pool sweeps, streaming, date-range file selection),
+    `butterfly_wing_sweep`, `sweep_veto_probe`, `sweep_accept_probe`,
+    `retreat_probe`.
+  · **Live behaviour:** BFLY.3 flat 0.50 ceiling · LIQ.6 pool redefinition ·
+    SWP.8 refusal logs to INFO · F7 breakout exemption · F8 refusal journal ·
+    F5 orphan occupancy · LIQ.4 wiring + LIQ.7 zone · the audit-2 fix set
+    (mapper v4.1, ledger v1.1, main v6.11, pm v3.3) · FEED.1 maintenance mode ·
+    FEED.2 extended hours · FEED.3 pruning off.
+  · **`day_trader_pro`:** devtools v1.31 (option 58).
+
+  **THE THREE FINDINGS THAT MATTER MOST, IN ORDER:**
+  **1.** L1.7's "tape gaps" were REPORTING gaps — 251 symbol-sessions already
+  cleared the TRENDING bar; the row needs LABELING, not calendar time.
+  **2.** The overnight tape was excluded by one SDK default (`tho=true`), which
+  is why the sections were inert. One parameter closed a question that consumed
+  the afternoon.
+  **3.** Pruning was never buying anything — a full year is 54 MB per box — and
+  it had silently capped an analytical consumer TWICE (PF.2, then LIQ.6).
+
+  **⬜ STILL OPEN, NOT GLOSSED:** A2.10 (today's tape cannot break a ladder
+  rung) · CND.8 (the condor has no structural exit; needs the double-stop rate
+  re-measured under condor v2 AFTER collection under LIQ.6) · F3 (live-only
+  double-close on mid-ladder restart) · the winter section gap at UTC hour 13 ·
+  boxes still PULL-only, conductor still requests their data until the S3 PUSH
+  and the non-trader wake are automated · retention now unbounded, so disk
+  should be watched even though a year is 54 MB.
+
 - **v4.90 — 2026-08-15 — FEED.3: PRUNING IS OFF, AND THE LOCAL STORE STOPS
   PRETENDING TO BE AN ARCHIVE.** `candle_feed` v3.14 · `check_versions` · 4 tests
   (141 total).
@@ -338,7 +400,17 @@ would otherwise surface as unexplained numbers on Monday.
   SILENTLY at INFO — `Feed idle - outside RTH`, four times, then `0 bars`, then
   fourteen 38-byte header-only CSVs, and nothing raised.
 
-  **⬜ THE SCHEDULE THIS SERVES (agreed, not yet built).** 08:15 wake in groups
+  🔴 **THE SCHEDULE BELOW WAS CANCELLED BY FEED.2 (v4.89) HOURS AFTER IT WAS
+  AGREED.** DXFeed streams HISTORY from `fromTime`, so with `tho=true` removed
+  the overnight bars arrive on the 09:10 warm-lead connection that already
+  happens — **no wake, no batches, no conductor change.** Kept for the record
+  because the reasoning about session boundaries stands and would apply again if
+  a capture pass is ever needed for another reason.
+  ⚠️ AND IT LEAVES FEED.1 (the maintenance flag, devtools 58) INERT: it guards
+  against `--once` firing at an awkward hour, and with no capture pass there is
+  no such caller. Operator's call: kept for possible repurposing.
+
+  **⬜ THE SCHEDULE THIS SERVES (SUPERSEDED — see above).** 08:15 wake in groups
   of 5 → pull overnight → verify → stop, capturing **Asia complete** (closed by
   08:15) and London through 08:15; **09:15** the 15 traders wake into the warm
   lead and cover 08:15-09:30 as ordinary history; **EOD** the existing pass.
@@ -365,11 +437,20 @@ would otherwise surface as unexplained numbers on Monday.
   is a real level and is back"* — there are no pre-RTH bars to build it from.
   **In practice the ladder is three prior NY sessions**, and the section
   machinery reduces to one section on 28 boxes.
-  ⚠️ NOT A DEFECT IN THE FIX — the data simply does not exist. But **the
-  doctrine we wrote and what the fleet can do have diverged**, and that is worth
-  a decision rather than a rediscovery: either source overnight tape, or state
-  plainly that sections are an SPX-only concept and the ladder is NY-only
-  elsewhere.
+  🔴 **SUPERSEDED THE SAME EVENING BY FEED.2 (v4.89) — THIS DIAGNOSIS WAS
+  WRONG.** The measurement above is accurate; the CONCLUSION drawn from it was
+  not. "The data simply does not exist" is false: `subscribe_candle` takes
+  `extended_trading_hours=False` by DEFAULT and the SDK then appends `tho=true`
+  to the symbol, so **the feed was explicitly asking DXFeed to exclude the
+  overnight bars.** They were always available.
+  ⚠️ KEPT VERBATIM RATHER THAN REWRITTEN, because the reasoning error is the
+  lesson: `ext=0` was read as a property of the DATA when it was a property of
+  the REQUEST. Two further wrong diagnoses followed the same evening — that the
+  session guard was responsible, then that it was a warehouse gap — before the
+  SDK signature was actually read. **Measure, then check what you are measuring,
+  before concluding what it means.**
+  ⬜ The "source overnight tape or declare sections SPX-only" decision it poses
+  is therefore MOOT — FEED.2 sources it with one parameter.
 
   **🔵 DEPTH CONFIRMED — A2.1'S FIX IS SUFFICIENT.** 1h reads 238-252 rows
   across ~49-50 days (XOM 238, SPX 241 sit right on the 240 prune ceiling,
@@ -4063,6 +4144,12 @@ calibration-epoch start). The day is not "closed"; it is closed *except W.1*.
   mapper (compat shim: `is_named = strength >= session-tier`); ON H/L computed at
   boot from **raw feed_store bars outside RTH** for the prior Asia+London span —
   pending N.6's verdict on whether those bars exist per symbol.
+  🔴 **PREMISE CORRECTED 2026-08-15 (FEED.2, v4.89):** "no overnight tape exists
+  historically" was true only because the feed requested `tho=true`. FORWARD of
+  the FEED.2 bake the tape exists, so the ON tier can be validated on collected
+  data rather than shipping purely as a prior — but **nothing before that bake
+  can be retro-validated**: DXFeed history is same-evening only and those nights
+  were never captured.
   **VALIDATE (forward-only — stated honestly):** no overnight tape exists
   historically, so the ON tier's *potency claim* (≈ PDH/PDL) cannot be
   retro-validated; it ships as a PRIOR and is judged forward by the existing
@@ -8348,7 +8435,9 @@ opening the file showed history before it showed anything still to do.*
   `logger.debug` against `LOG_LEVEL="INFO"`.** Every investigation this evening
   was elimination-by-reading because those lines do not exist. Promoting them is
   one file, log-only, and would make the next drought one grep.
-- **v4.25 — 2026-08-11 — UNSHACKLING THE SWEEP: FOUR DEFECTS, ALL FOUND BY
+- **v4.25b — 2026-08-11 — UNSHACKLING THE SWEEP: FOUR DEFECTS, ALL FOUND BY
+  ⬜ RENUMBERED v4.25 -> v4.25b during the 2026-08-15 scrub: TWO UNRELATED
+  ENTRIES SHARED v4.25, which breaks any lookup by version. Content untouched.
   RUNNING THE REAL CODE RATHER THAN READING IT.** Operator: "that trade has been
   good to us. We need to get it firing again." None of these was visible in
   production, because 9 of 11 refusal paths in the strategy log at DEBUG against
