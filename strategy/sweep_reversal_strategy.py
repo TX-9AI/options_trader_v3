@@ -124,6 +124,26 @@ Ported from crypto_trader SweepReversalStrategy and adapted for 0DTE options:
 - Naked long call (low sweep → long) or naked long put (high sweep → short)
 - Stop: 25% of premium paid
 - TP: 100% of premium at first target; trailing stop at 50%
+
+
+SWP.8 (2026-08-15) — REFUSAL PATHS PROMOTED TO INFO.
+    All 10 `logger.debug` calls in this file are REASONS A TRADE DID NOT HAPPEN,
+    and the fleet runs at `LOG_LEVEL="INFO"` — so **none of them existed in any
+    log anyone could read.**
+
+    ⚠️ THIS COST A WHOLE MORNING. The 2026-08-15 sweep investigation had to
+    proceed by elimination-by-reading the source, because the strategy never
+    said why it declined. Meanwhile the BUTTERFLY logs its gates at INFO, and
+    that same morning its blocker was found in a single grep: `GEX not PINNING`
+    dominating 20-50x, then the discount gate rejecting 39/26. Same class of
+    question, two very different costs.
+
+    Log-only. No gate, threshold or behaviour changes. Freeze-safe.
+    ⚠️ Volume: these fire per-tick on a refused sweep, so a symbol that never
+    qualifies will print steadily. That is the POINT — a silent refusal is
+    indistinguishable from a strategy that was never evaluated, which is exactly
+    the ambiguity that made VEL.1, the AFD.1 slot bug and this one all cost
+    hours to diagnose.
 """
 # v-obs2 (2026-07-24) — stamps swept_level_name + level_strength (0..1, named+touch_count) onto the sweep signal so the trade record captures level conviction.
 
@@ -261,7 +281,7 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         # (timeout), price ran past the 50% level (runaway), or past the 11:00 ET
         # cutoff. See _orb_released_price.
         if not self._orb_released_price(sweep):
-            logger.debug(
+            logger.info(
                 f"Sweep blocked: {sweep.kind} @ {sweep.sweep_price:.2f} — ORB still "
                 f"owns price (state={get_orb_engine().data.state}); deferring to ORB"
             )
@@ -285,7 +305,7 @@ class SweepReversalStrategy(BaseOptionsStrategy):
             # DISABLES shorts rather than trimming them. Deliberate at
             # −$233/trade, and named as such so nobody reads it as a dial.
             if conv < SWEEP_SETUP_FLOOR_SHORT:
-                logger.debug(
+                logger.info(
                     "Sweep SHORT blocked: setup %.3f < short floor %.2f "
                     "(longs use %.2f)", conv, SWEEP_SETUP_FLOOR_SHORT,
                     SWEEP_SETUP_FLOOR)
@@ -310,7 +330,7 @@ class SweepReversalStrategy(BaseOptionsStrategy):
 
         # Price must have recovered above the swept level
         if current_price <= sweep.pool_price:
-            logger.debug("Sweep long: price not recovered above swept level")
+            logger.info("Sweep long: price not recovered above swept level")
             return None
 
         # Don't enter too far from the sweep. Window is ATR-aware: the LARGER
@@ -335,12 +355,12 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         max_recovery = max(SWEEP_MAX_RECOVERY_PCT,
                            SWEEP_RECOVERY_ATR_MULT * vol_state.atr_normalized)
         if recovery_pct > max_recovery:
-            logger.debug(f"Sweep long: too far from sweep ({recovery_pct:.1%} > {max_recovery:.1%})")
+            logger.info(f"Sweep long: too far from sweep ({recovery_pct:.1%} > {max_recovery:.1%})")
             return None
 
         # BOS confirmation: 1m candle structure shows bullish shift
         if not self._confirm_bos(df_1m, "long", current_price):
-            logger.debug("Sweep long: no 1m BOS confirmation")
+            logger.info("Sweep long: no 1m BOS confirmation")
             return None
 
         signal = OptionsSignal(
@@ -400,7 +420,7 @@ class SweepReversalStrategy(BaseOptionsStrategy):
             self._add_confluence(signal, f"High setup score ({conv:.0%})")
 
         if len(signal.confluence_factors) < 2:
-            logger.debug("Sweep long: insufficient confluence")
+            logger.info("Sweep long: insufficient confluence")
             return None
 
         signal.conviction = conv
@@ -442,7 +462,7 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         """High swept → buy OTM put."""
 
         if current_price >= sweep.pool_price:
-            logger.debug("Sweep short: price not rejected below swept level")
+            logger.info("Sweep short: price not rejected below swept level")
             return None
 
         _anchor = (sweep.pool_price if (SWEEP_RECOVERY_FROM_POOL
@@ -452,11 +472,11 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         max_recovery = max(SWEEP_MAX_RECOVERY_PCT,
                            SWEEP_RECOVERY_ATR_MULT * vol_state.atr_normalized)
         if recovery_pct > max_recovery:
-            logger.debug(f"Sweep short: too far from sweep ({recovery_pct:.1%} > {max_recovery:.1%})")
+            logger.info(f"Sweep short: too far from sweep ({recovery_pct:.1%} > {max_recovery:.1%})")
             return None
 
         if not self._confirm_bos(df_1m, "short", current_price):
-            logger.debug("Sweep short: no 1m BOS confirmation")
+            logger.info("Sweep short: no 1m BOS confirmation")
             return None
 
         signal = OptionsSignal(
@@ -505,7 +525,7 @@ class SweepReversalStrategy(BaseOptionsStrategy):
             self._add_confluence(signal, f"High setup score ({conv:.0%})")
 
         if len(signal.confluence_factors) < 2:
-            logger.debug("Sweep short: insufficient confluence")
+            logger.info("Sweep short: insufficient confluence")
             return None
 
         signal.conviction = conv

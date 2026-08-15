@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.79
+# docs/BACKLOG.md — v4.80
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,6 +217,27 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.80 — 2026-08-15 — SWP.8: SWEEP REFUSAL PATHS PROMOTED TO INFO.**
+  `strategy/sweep_reversal_strategy.py`. Log-only, no gate or threshold change,
+  freeze-safe. Closes a `[DESK]` item that had been open since 08-11.
+
+  **ALL 10 `logger.debug` CALLS WERE REASONS A TRADE DID NOT HAPPEN**, and the
+  fleet runs at `LOG_LEVEL="INFO"` — so **none of them existed in any log anyone
+  could read.** Verified by AST after the change: debug=0, info=15, warning=2.
+
+  **⚠️ IT COST A WHOLE MORNING TO PROVE THE POINT.** The 2026-08-15 sweep
+  investigation had to proceed by ELIMINATION-BY-READING THE SOURCE, because the
+  strategy never said why it declined. The BUTTERFLY logs its gates at INFO, and
+  that same morning its blocker was found in ONE GREP — `GEX not PINNING`
+  dominating 20-50x, then the discount gate rejecting 39/26. **Same class of
+  question, two very different costs.**
+
+  ⚠️ VOLUME IS THE POINT, NOT A SIDE EFFECT: these fire per-tick on a refused
+  sweep, so a symbol that never qualifies prints steadily. **A silent refusal is
+  indistinguishable from a strategy that was never evaluated** — the exact
+  ambiguity that made VEL.1 (a mechanism inert for five weeks), the AFD.1 slot
+  bug (a gate consuming a slot it could not use) and this one all cost hours.
+
 - **🔴 v4.79 — 2026-08-15 — LIQ.6: A WHOLESALE CHANGE TO WHAT A NAMED POOL IS.**
   `analysis/liquidity_mapper.py`. **Everything prior was correct FOR ITS TIME
   and is incorrect under the clearer rules** (operator).
