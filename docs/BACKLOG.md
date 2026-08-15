@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.76
+# docs/BACKLOG.md — v4.77
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,6 +217,49 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.77 — 2026-08-15 — BFLY.3: THE BUTTERFLY DEBIT CEILING IS FLAT AT 0.50.
+  CONVICTION NO LONGER GATES IT.** `butterfly_strategy` v3.5 · `config` ·
+  6 tests (177 total).
+
+  **THE MEASUREMENT REFUTED BOTH CANDIDATE DESIGNS.** The ceiling scaled with
+  `regime.conviction` (0.33 at conv<=0.30 rising to 0.50 at conv>=0.55). The
+  operator proposed INVERTING it, reasoning that low conviction should mean the
+  best payoff asymmetry. Fleet-wide across 29 boxes:
+  **THE conv->ratio SLOPE IS POSITIVE ON 5 OF 7 SAMPLED SYMBOLS** — AVGO +0.103,
+  GS +2.550, NVDA +0.109, PLTR +0.038, QQQ +0.211; only SMH −0.048 and
+  TLT −0.031 negative. **Higher conviction travels with MORE EXPENSIVE tents.**
+  So the original design paid more exactly where the trade was worse, and
+  inverting would have been worse still. Likely mechanism: a strong pin CREATES
+  the low-ADX tight-range state L2 reads as high-conviction RANGING, so
+  conviction and tent price move together — conviction is a weak proxy for pin
+  quality, not an inverse of it.
+
+  **AND IT COST REAL TRADES. SMH: 46 setups at a mean ratio of 0.379 —
+  comfortably positive asymmetry — and only 3 fired**, because conviction
+  averaged 0.033 so the ceiling sat on its 0.33 floor. **43 cheap tents refused
+  by a score that does not measure the thesis.** AVGO 1 of 5, QQQ 1 of 27,
+  MSFT 1 of 2.
+
+  **WHY 0.50 AND WHY IT NEEDS NO HOLDOUT.** Max profit is `wing − debit`, so at
+  ratio 0.50 you risk exactly what you can win. **0.50 IS THE STRUCTURE'S OWN
+  BREAK-EVEN** — it is arithmetic, not an argmax, and cannot be overfit. Above
+  it a butterfly pays less than it costs.
+
+  **THE REJECTS STILL DO THE HEAVY LIFTING**, which is what makes a flat ceiling
+  safe (operator: *"the rejects are already doing the heavy lifting for us"*):
+  NVDA 0.718, PLTR 0.799, NFLX 0.941 and TLT 1.029 stay refused **on PRICE**.
+  `_conv` is still journaled so the relationship remains measurable and this is
+  revisitable; the old constants stay in config unread, so a revert is one line.
+
+  ⚠️ **BFLY.2's WING SWEEP CAME BACK AGAINST THE THEORY AND WAS NOT ACTED ON.**
+  On real chains the ratio rises MONOTONICALLY with width — 0.33 / 0.52 / 0.69 /
+  0.79 / 0.86 / 0.89 at 2x-16x — the opposite of the U-curve a synthetic convex
+  chain predicted. Only 2x clears 0.50. **But n=15 pin observations across 5
+  sessions**, every cell under the n>=40 floor, and there is a known measurement
+  gap: far wings may be priced off wide or stale quotes, which would produce
+  exactly this inversion. **No wing change shipped.** The bid/ask-width-by-wing
+  column has to be added before that curve is trusted.
+
 - **v4.76 — 2026-08-15 — OBSERVER DEBT CLOSED: ALL THREE READS ANSWERED, NONE
   DELETED.** Every criterion was written to force a delete decision; none was met
   for the reason the criterion anticipated.

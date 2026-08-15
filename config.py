@@ -442,6 +442,16 @@ BUTTERFLY_MAX_DEBIT_PCT_WIDTH = 0.33
 # Bounds are set against the OBSERVED conviction range (0.000-0.582), NOT 0-1.
 # ALL PRIOR -- refit from the debit-ratio ledger, which logs every evaluation.
 BUTTERFLY_MAX_DEBIT_PCT_WIDTH_HICONV = float(os.environ.get("OT_BFLY_DEBIT_HICONV", "0.50"))
+
+# ── BFLY.3 (2026-08-15) — THE FLAT DEBIT CEILING ─────────────────────────────
+# Max profit is `wing - debit`, so at ratio 0.50 you risk exactly what you can
+# win. **0.50 IS THE STRUCTURE'S OWN BREAK-EVEN**, not a fitted threshold — it
+# needs no holdout and cannot be overfit. Above it the payoff is upside-down.
+# Replaces the conviction-scaled ceiling: measured fleet-wide across 29 boxes,
+# the conv->ratio slope is POSITIVE on 5 of 7 sampled symbols, so scaling up
+# with conviction paid MORE exactly where the trade was WORSE. It also cost real
+# trades — SMH had 46 setups at mean ratio 0.379 and fired 3.
+BUTTERFLY_DEBIT_CEILING = float(os.environ.get("OT_BFLY_DEBIT_CEILING", "0.50"))
 BUTTERFLY_DISC_CONV_LO = float(os.environ.get("OT_BFLY_DISC_CONV_LO", "0.30"))
 BUTTERFLY_DISC_CONV_HI = float(os.environ.get("OT_BFLY_DISC_CONV_HI", "0.55"))
 DIRECTIONAL_ONLY_INSTRUMENTS = set(STRIKE_INCREMENTS) - FULL_STRATEGY_INSTRUMENTS

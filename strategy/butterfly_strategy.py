@@ -1,5 +1,22 @@
 """
-strategy/butterfly_strategy.py — Debit butterfly for RANGING/COMPRESSION regimes. v3.4
+strategy/butterfly_strategy.py — Debit butterfly for RANGING/COMPRESSION regimes. v3.5
+v3.5  2026-08-15  BFLY.3: THE DEBIT CEILING IS FLAT AT 0.50. CONVICTION IS OUT.
+        Max profit is `wing - debit`, so 0.50 is the STRUCTURE'S OWN BREAK-EVEN
+        - risk equals reward there, above it the payoff is upside-down. Not a
+        fitted number: no holdout needed, cannot be overfit.
+        MEASURED FLEET-WIDE (29 boxes) AND IT REFUTED BOTH CANDIDATE DESIGNS.
+        conv->ratio slope is POSITIVE on 5 of 7 sampled symbols (AVGO +0.103,
+        GS +2.550, NVDA +0.109, PLTR +0.038, QQQ +0.211; only SMH -0.048 and
+        TLT -0.031 negative) - higher conviction travels with MORE EXPENSIVE
+        tents, so scaling the ceiling up with conviction paid more exactly where
+        the trade was WORSE, and INVERTING it would have been worse still.
+        AND IT COST TRADES: SMH had 46 setups at mean ratio 0.379 and fired 3,
+        because conviction averaged 0.033 and pinned the ceiling to its 0.33
+        floor. AVGO 1 of 5, QQQ 1 of 27, MSFT 1 of 2.
+        THE REJECTS STILL DO THE WORK - NVDA 0.718, PLTR 0.799, NFLX 0.941 and
+        TLT 1.029 stay refused on PRICE. `_conv` is still journaled so the
+        relationship stays measurable; it simply no longer gates. The old
+        constants remain in config unread, so a revert is one line.
 v3.4 — 2026-07-31 — AC: find_strike's "no liquid contract" path was a SILENT
         return, killing a butterfly that had already cleared the GEX-pin and
         regime gates. It now logs the target strike, how many contracts were
@@ -84,6 +101,7 @@ from data.options_chain import get_chain_fetcher
 from data.macro_data import MacroSnapshot
 from config import (
     BUTTERFLY_TP_PCT, BUTTERFLY_WING_SPX, BUTTERFLY_WING_QQQ,
+    BUTTERFLY_DEBIT_CEILING,
     BUTTERFLY_GEX_PIN_PROXIMITY_MULT,
     BUTTERFLY_ENTRY_START_ET, BUTTERFLY_ENTRY_CUTOFF_ET,
     STRIKE_INCREMENT, INSTRUMENT, VIX_BUTTERFLY_DISABLE,
@@ -285,25 +303,46 @@ class ButterflyStrategy(BaseOptionsStrategy):
             f"(debit={net_debit:.2f} / wing={wing_width:.0f}, "
             f"gate ≤ {BUTTERFLY_MAX_DEBIT_PCT_WIDTH:.2f})"
         )
-        # v-convdiscount 2026-07-28: the ceiling is EARNED BY CONVICTION.
-        # MEASURED: observed ratios 0.41-0.64 (min 0.41) against a flat 0.33 gate
-        # -> 100% rejection, 3 butterflies in the entire fleet archive. Proximity
-        # was NOT the binding gate (zero "too far from pin" rejections ever).
-        # The tent is expensive because price sits near the pin; with high
-        # conviction that it STAYS pinned, paying more is justified. With low
-        # conviction, demand the cheap tent.
-        _span = max(BUTTERFLY_DISC_CONV_HI - BUTTERFLY_DISC_CONV_LO, 1e-9)
-        _t    = min(max((_conv - BUTTERFLY_DISC_CONV_LO) / _span, 0.0), 1.0)
-        _gate = BUTTERFLY_MAX_DEBIT_PCT_WIDTH + (
-                    BUTTERFLY_MAX_DEBIT_PCT_WIDTH_HICONV
-                    - BUTTERFLY_MAX_DEBIT_PCT_WIDTH) * _t
+        # ── BFLY.3 (2026-08-15) — THE CEILING IS FLAT. CONVICTION IS OUT. ────
+        # ⚠️ MEASURED FLEET-WIDE, 29 boxes, and it refuted BOTH the original
+        # design and the operator's proposed inversion:
+        #   · **THE SLOPE IS POSITIVE ON 5 OF 7 SYMBOLS** that had samples
+        #     (AVGO +0.103, GS +2.550, NVDA +0.109, PLTR +0.038, QQQ +0.211;
+        #     only SMH -0.048 and TLT -0.031 negative). Higher regime conviction
+        #     travels with MORE EXPENSIVE tents, not cheaper — the pin's own
+        #     gravity compresses conditions and prices TOGETHER. So scaling the
+        #     ceiling UP with conviction paid more exactly where the trade was
+        #     already worse, and INVERTING would have been worse still.
+        #   · **AND IT COST REAL TRADES.** SMH: 46 setups at a mean ratio of
+        #     **0.379** — comfortably positive asymmetry — and only **3 fired**,
+        #     because conviction averaged 0.033 so the ceiling sat on its 0.33
+        #     floor. 43 cheap tents refused by a score that does not measure the
+        #     thesis. AVGO 1 of 5, QQQ 1 of 27, MSFT 1 of 2.
+        #
+        # WHY 0.50 AND NOT HIGHER. Max profit is `wing - debit`, so at ratio 0.50
+        # you risk exactly what you can win. **0.50 IS WHERE THE ASYMMETRY
+        # INVERTS**, and above it a butterfly pays less than it costs. That is
+        # not a fitted number — it is the structure's own break-even, which is
+        # why it needs no holdout and cannot be overfit.
+        #
+        # THE REJECTS STILL DO THE WORK, which is the point: NFLX (0.941),
+        # TLT (1.029), PLTR (0.799) and NVDA (0.718) remain refused at any sane
+        # ceiling. Those tents are genuinely overpriced and the gate says so on
+        # PRICE rather than on a regime score.
+        #
+        # `_conv` is still LOGGED so the relationship stays measurable and this
+        # decision can be revisited against more sessions — it simply no longer
+        # GATES. (BUTTERFLY_DISC_CONV_LO/HI and _HICONV remain in config,
+        # unread by this path, so a revert is a one-line change.)
+        _gate = BUTTERFLY_DEBIT_CEILING
         logger.info(
             f"Butterfly discount gate: conv={_conv:.3f} ratio={debit_ratio:.2f} "
-            f"gate={_gate:.2f} (floor={BUTTERFLY_MAX_DEBIT_PCT_WIDTH:.2f} "
-            f"ceil={BUTTERFLY_MAX_DEBIT_PCT_WIDTH_HICONV:.2f}) "
+            f"gate={_gate:.2f} (FLAT — conviction no longer scales it) "
             f"{'PASS' if debit_ratio <= _gate else 'REJECT'}")
         if debit_ratio > _gate:
-            logger.info("Butterfly: tent too expensive for this conviction — skip")
+            logger.info(
+                f"Butterfly: tent too expensive — ratio {debit_ratio:.2f} > "
+                f"{_gate:.2f}; above {_gate:.2f} the payoff is upside-down. skip")
             return None
 
         max_profit = wing_width - net_debit
