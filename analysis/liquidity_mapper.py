@@ -1,5 +1,37 @@
 """
-analysis/liquidity_mapper.py — v3.3 — 2026-08-11 — LIQ.1 + LIQ.3.
+analysis/liquidity_mapper.py — v4.1 — 2026-08-15 — AUDIT A2: THE INPUT COULD NOT
+        CARRY LIQ.6, AND FOUR SMALLER DEFECTS.
+v4.1 — 2026-08-15 — audit #2 fixes:
+        (A2.1) SECTION_LOOKBACK_DAYS=10 read df_5m, which the cache caps at
+        100 bars (~8.3h of 24h tape). Truncated sections were admitted as
+        closed pools at WRONG prices (reproduced: true Asia High 101.10
+        emitted as 97.10), and rung prices MUTATED intraday as the window
+        slid — the self-rewriting level, back through the input. Fixes:
+        `analyze()` takes `named_df` (a deep store frame main now supplies;
+        1h bars, hour granularity is all the section masks use), and a
+        section is admitted ONLY if the frame reaches its start instant —
+        a left-truncated section is skipped, on ANY input depth.
+        (A2.5) the NY section was fixed at 13-20 UTC while RTH is defined
+        in ET: from 2026-11-01 (EST) the mask would have admitted TODAY'S
+        FORMING RTH extreme as a pool from 3:00pm ET. NY hours now derive
+        from the date's ET offset via ZoneInfo (13-20 EDT / 14-21 EST) —
+        never a hardcoded offset. Still-forming is now an INSTANT test
+        (tape must reach the section's end), not an hour comparison.
+        (A2.6) NAMED_POOLS_INCLUDE_SESSIONS removed: the LIQ.6 ladder never
+        consulted it, so the knob was dead and its test asserted the
+        opposite of production. Session rungs are ON by doctrine; the
+        invariant the tests now pin is "no still-forming section is a pool".
+        (A2.7) `_add_named_pool` more-extreme-wins REPLACED the name
+        wholesale, so PDH could vanish from the map when a rung within the
+        0.2% zone out-priced it (reproduced). The merge is now symmetric:
+        a collision never deletes a fact in either direction.
+        (A2.8) the candle-count fallback still built OLD-definition session
+        pools, and any exception in the LIQ.6 path silently reverted a tick
+        to it at debug level — a per-tick regime coin toss. The fallback now
+        emits PDH/PDL only, and the exception path warns ONCE per process.
+        Hygiene: dead ASIA/LONDON/NY_START/END constants (values
+        contradicted SECTIONS) and the never-read RTH_OPEN_UTC deleted.
+v3.3 — 2026-08-11 — LIQ.1 + LIQ.3.
         Two changes, both found by running the REAL code over real tape and a
         fabricated tape rather than by reading it.
 
@@ -126,6 +158,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 import pandas as pd
 
 from config import (
@@ -206,7 +239,11 @@ class LiquidityMap:
 
 
 _ACCEPT_CLOSES = 2      # LIQ.3 — mirrors SWEEP_ACCEPT_CLOSES
-NAMED_POOLS_INCLUDE_SESSIONS = _os.environ.get("OT_LIQ_SESSION_POOLS", "0") == "1"
+# A2.6 (2026-08-15): NAMED_POOLS_INCLUDE_SESSIONS removed. The LIQ.6 ladder
+# never consulted it — the knob was dead while a green test asserted sessions
+# were off. Session rungs are ON by LIQ.6 doctrine (rule 1); the protection
+# LIQ.1 actually needs — no still-forming section is ever a pool — is a
+# structural rule below, not a switch.
 
 
 class LiquidityMapper:
@@ -217,14 +254,6 @@ class LiquidityMapper:
     """
 
     # Session hours in UTC
-    ASIA_START    = 0    # 00:00 UTC
-    ASIA_END      = 8    # 08:00 UTC
-    LONDON_START  = 7    # 07:00 UTC (overlap with Asia close)
-    LONDON_END    = 16   # 16:00 UTC
-    NY_START      = 13   # 13:00 UTC
-    NY_END        = 22   # 22:00 UTC
-    RTH_OPEN_UTC  = 13   # 13:30 UTC; hour-granularity mask uses 13
-
     # ── LIQ.6 (2026-08-15) — A POOL IS A CLOSED SESSION'S EXTREME ────────────
     # Operator: "The current day's levels must be excluded BY DEFINITION because
     # they are still forming. Exception: overnight low/high are still today, but
@@ -253,14 +282,39 @@ class LiquidityMapper:
     # not evidence of a better level.**
     # Contiguous, NON-OVERLAPPING sections in UTC. A bar belongs to exactly
     # one. RTH is 13:30-20:00 UTC; hour-granularity masks use 13 and 20.
-    SECTIONS = (("Asia",   0,  8),
-                ("London", 8,  13),
-                ("NY",     13, 20))
+    # Asia and London are fixed-UTC sections BY THE OPERATOR'S DEFINITION
+    # ("just use the UTC day/times"). The NY section is the RTH session and
+    # RTH is defined in ET — its UTC hours therefore depend on the DATE.
+    # A2.5 (2026-08-15): hardcoded (13,20) admitted today's FORMING RTH
+    # extreme as a pool from 3:00pm ET all winter, and left 20-21 UTC winter
+    # bars (3-4pm ET) in no section at all. Never a fixed offset — the repo
+    # already paid for one of those once (would have broken 2026-11-01).
+    SECTIONS_FIXED = (("Asia",   0,  8),
+                      ("London", 8,  13))
+
+    @staticmethod
+    def _ny_utc_hours(d) -> tuple:
+        """RTH (09:30-16:00 ET) at hour granularity, in UTC, for date d."""
+        off = datetime(d.year, d.month, d.day, 12,
+                       tzinfo=ZoneInfo("America/New_York")).utcoffset()
+        return (13, 20) if off == timedelta(hours=-4) else (14, 21)
+
+    def _sections_for(self, d) -> tuple:
+        h0, h1 = self._ny_utc_hours(d)
+        return self.SECTIONS_FIXED + (("NY", h0, h1),)
     SECTION_LOOKBACK_DAYS = 10
     LADDER_DEPTH = 3         # most recent unbroken H/L, next, 3rd
 
     def analyze(self, df_5m: pd.DataFrame, df_15m: pd.DataFrame,
-                current_price: float) -> LiquidityMap:
+                current_price: float,
+                named_df: pd.DataFrame = None) -> LiquidityMap:
+        """`named_df` (A2.1): a DEEP frame for named levels only. The cached
+        5m frame is 100 bars (~8.3h) — it cannot carry a 10-day section
+        lookback, and a section truncated by the frame edge was being
+        admitted at a WRONG price. main supplies a store-read 1h frame;
+        replay/tests that pass nothing keep their own tape (the truncation
+        guard below protects both paths). Sweeps/pools still scan the live
+        frames — only NAMED level extraction reads the deep one."""
         lmap = LiquidityMap()
 
         primary = df_15m if (df_15m is not None and not df_15m.empty) else df_5m
@@ -272,8 +326,14 @@ class LiquidityMapper:
         if df_5m is not None and not df_5m.empty:
             self._find_pools(lmap, df_5m, "5m")
 
-        # Named key levels (PDH/PDL, session H/L)
-        if df_5m is not None and not df_5m.empty:
+        # Named key levels (PDH/PDL, session ladder). Deep frame when the
+        # caller has one (A2.1); otherwise the live frame, guarded.
+        _ndf = named_df if (named_df is not None and
+                            not getattr(named_df, "empty", True) and
+                            len(named_df) >= 50) else None
+        if _ndf is not None:
+            self._find_named_levels(lmap, _ndf)
+        elif df_5m is not None and not df_5m.empty:
             self._find_named_levels(lmap, df_5m)
         elif primary is not None:
             self._find_named_levels(lmap, primary)
@@ -472,17 +532,34 @@ class LiquidityMapper:
             # liquidity above/below; rungs 2 and 3 are where price runs if it
             # takes rung 1.
             sections = []
+            frame_start, frame_end = idx[0], idx[-1]
+            _order = ("Asia", "London", "NY")
             for d in sorted({dt for dt in idx.date})[-self.SECTION_LOOKBACK_DAYS:]:
-                for label, h0, h1 in self.SECTIONS:
+                for label, h0, h1 in self._sections_for(d):
                     m = (idx.date == d) & (idx.hour >= h0) & (idx.hour < h1)
                     if not m.any():
                         continue
-                    if d == today and int(idx[-1].hour) < h1:
-                        continue          # STILL FORMING - not a pool
+                    start = pd.Timestamp(datetime(d.year, d.month, d.day, h0,
+                                                  tzinfo=timezone.utc))
+                    end = pd.Timestamp(datetime(d.year, d.month, d.day, h1,
+                                                tzinfo=timezone.utc))
+                    # A2.1 — LEFT-TRUNCATED: the frame does not reach the
+                    # section's start, so its extreme CANNOT be proven. A rolling
+                    # 100-bar frame was admitting partial sections at wrong
+                    # prices (m.any() passes on ONE surviving bar).
+                    if frame_start > start:
+                        continue
+                    # A2.5 — STILL FORMING is an INSTANT test: the tape must
+                    # reach the section's end. Bar stamps are bar STARTS, so a
+                    # bar stamped >= end proves every in-section bar has closed.
+                    # (The old `idx[-1].hour < h1` read today's NY as closed at
+                    # 3:00pm ET every winter afternoon.)
+                    if frame_end < end:
+                        continue
                     sd = df[m]
                     sections.append((d, label, float(sd["high"].max()),
                                      float(sd["low"].min())))
-            sections.sort(key=lambda x: (x[0], [l for l, _, _ in self.SECTIONS].index(x[1])))
+            sections.sort(key=lambda x: (x[0], _order.index(x[1])))
 
             # canonical single-value fields, unchanged consumers (shadow reads them)
             for d, label, hi, lo in reversed(sections):
@@ -525,7 +602,17 @@ class LiquidityMapper:
                              [(str(d), l, round(p, 2)) for d, l, p in lo_rungs])
 
         except Exception as e:
-            logger.debug(f"Named level extraction failed: {e}")
+            # A2.8 — this fallback used to be SILENT (debug) and the fallback
+            # built OLD-definition pools: any exception here reverted the tick
+            # to the pre-LIQ.6 regime with nothing visible at fleet INFO — a
+            # per-tick coin toss over what a named pool IS. Warn ONCE.
+            if not getattr(self, "_fallback_warned", False):
+                self._fallback_warned = True
+                logger.warning("Named level extraction failed (%s) — falling "
+                               "back to PDH/PDL-only estimates. LIQ.6 sections "
+                               "are OFF on the affected ticks.", e)
+            else:
+                logger.debug(f"Named level extraction failed: {e}")
             self._find_named_levels_from_candle_count(lmap, df)
 
     def _find_named_levels_from_candle_count(self, lmap: LiquidityMap, df: pd.DataFrame):
@@ -550,16 +637,11 @@ class LiquidityMapper:
                 self._add_named_pool(lmap, pdh, "high", "PDH")
                 self._add_named_pool(lmap, pdl, "low",  "PDL")
 
-        # Asia session estimate = 96 candles ago (8hrs of 5m)
-        asia_candles = min(96, n // 3)
-        asia_data = df.iloc[n - asia_candles * 2 : n - asia_candles]
-        if len(asia_data) > 0:
-            ash = float(asia_data["high"].max())
-            asl = float(asia_data["low"].min())
-            lmap.asia_session_high = ash
-            lmap.asia_session_low  = asl
-            self._add_named_pool(lmap, ash, "high", "Asia High")
-            self._add_named_pool(lmap, asl, "low",  "Asia Low")
+        # A2.8 — the session estimate is GONE. Without timestamps this path
+        # cannot express LIQ.6 sections (closed-only, ladder, rung names), and
+        # what it produced was the pre-LIQ.6 definition wearing current names —
+        # two definitions of a pool in one file, chosen by an exception. PDH/PDL
+        # estimates above are retained; sessions require the timestamped path.
 
     def _add_named_pool(self, lmap: LiquidityMap, price: float,
                          kind: str, name: str):
@@ -589,9 +671,22 @@ class LiquidityMapper:
             more_extreme = (price > pool.price if kind == "high"
                             else price < pool.price)
             if more_extreme:
-                # take the outer price, and the name that produced it
+                # A2.7 — take the outer price, but a collision NEVER deletes a
+                # fact in EITHER direction. Wholesale name replacement made PDH
+                # vanish from the map when a rung within the 0.2% zone
+                # out-priced it (reproduced: rungs at 100.05/100.15 absorbed
+                # PDH=100.00 twice). Mirror the merge below: when exactly one
+                # party carries a rung suffix, the composed name keeps both
+                # facts, same shape as the shipped direction.
+                m_new = re.search(r"\(R\d\)$", name or "")
+                m_old = re.search(r"\(R\d\)$", pool.name or "")
+                if m_new and not m_old:
+                    pool.name = f"{pool.name} {m_new.group(0)}"
+                elif m_old and not m_new:
+                    pool.name = f"{name} {m_old.group(0)}"
+                else:
+                    pool.name = name
                 pool.price = price
-                pool.name = name
                 return
             # ⚠️ MERGE THE RUNG RATHER THAN DISCARD IT. PDH/PDL is added BEFORE
             # the ladder, so a rung landing on the same price used to be dropped

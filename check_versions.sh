@@ -1,4 +1,12 @@
 #!/bin/bash
+# v4.53 — 2026-08-15 — AUDIT A2 (mapper v4.1, ledger v1.1, main v6.11,
+#         position_manager v3.3): behavior canaries for the audit-2 fix set —
+#         section truncation guard + DST-derived NY hours, the deep named
+#         frame wired into analyze, the gap-safe ledger feed + restart
+#         hydrate, the orphan announcement in the MANAGE branch (the only
+#         branch that runs with a leg open), and an ABSENCE canary on the
+#         dead session-pool knob (assignment pattern, so changelog mentions
+#         of the bare name stay legal — the SWP.1 lesson).
 # v4.52 — 2026-08-14 — AUDIT F1/F2/F4/F6 (exit_engine v4.21, main v6.9,
 #         position_manager v3.2). Five canaries, every one guarding a defect
 #         that was REPRODUCED AT RUNTIME while 162 text-based tests stayed
@@ -607,7 +615,13 @@ check "config.py"                        "OT_CONT_CONFIRM_TOL_ATR"     "v1.6 kil
 check "tests/test_continuation_confirmation.py" "test_a_too_small_tolerance_would_be_a_no_op" "v1.6 guards against a fix in name only"
 check "strategy/continuation_strategy.py" "CONTINUATION_REQUIRE_CONFIRM" "v1.5 the tag is the SETUP, the next bar is the TRIGGER"
 check "strategy/continuation_strategy.py" "confirmation UNDECIDABLE"    "v1.5 thin tape REFUSES — an absent confirmation is not a passed one"
-check "strategy/continuation_strategy.py" "continuation_strategy.py — Trend-continuation on pullback. — v1.6" "v1.6 header current"
+# CV.2 (2026-08-15) — CANARY REMOVED, NOT SILENTLY DROPPED (CV.1 precedent).
+# "v1.6 header current" pinned the VERSION STRING in continuation_strategy's
+# title, so it went red the moment the file legitimately moved to v1.7 — on a
+# perfectly clean sync. Version-string pins are exactly what the canary rules
+# forbid: they alarm on progress, not on regression. The v1.6 BEHAVIOR
+# canaries (CNT.7 ATR-scaled tolerance, above) remain and still guard the
+# change itself. Found red at HEAD 89cbaf6 during audit #2 packaging.
 check "config.py"                        "OT_CONT_REQUIRE_CONFIRM"     "v1.5 kill switch AND A/B control"
 check "tests/test_continuation_confirmation.py" "test_undecidable_refuses_rather_than_passes" "v1.0 the guard that matters"
 check "analysis/regime_confluence.py"    "soft_necessary=.trend_opp, age_decay." "v1.4 PLTR GUARD — trend_opp stays multiplicative; ambient must never rescue an opposed sweep"
@@ -888,6 +902,37 @@ check "config.py"                        "BUTTERFLY_ENTRY_START_ET"     "Butterf
 check "push.sh"                          "Detected malformed remote"    "Self-healing remote URL"
 check "push.sh"                          "diverged"                    "Diverged history handling"
 check "setup_ec2.sh"                     'GITHUB_REPO#https://'         "GitHub URL normalization"
+
+# ── AUDIT A2 (2026-08-15) — the six unbaked-queue fixes ──────────────────────
+check "analysis/liquidity_mapper.py"     "frame_start > start"          "A2.1 left-truncated section guard (wrong-price pools)"
+check "analysis/liquidity_mapper.py"     "_ny_utc_hours"                "A2.5 NY section hours derived from ET offset (2026-11-01)"
+check "main.py"                          "named_df=_named_level_frame()" "A2.1 deep 1h store frame feeds named levels"
+check "main.py"                          ".feed_frame(df_1m)"           "A2.4 gap-safe ledger feed (no closed bar skipped)"
+check "analysis/liquidity_ledger.py"     "_hydrate_same_date"           "A2.3 ledger survives the bake (restart hydrate)"
+check "analysis/liquidity_ledger.py"     '"last_bar_ts": self.last_bar_ts' "A2.3/A2.4 high-water mark persisted for gap recovery"
+check "execution/position_manager.py"    "def open_condor_leg_count"    "A2.2 leg count the announcement reads"
+check "tests/test_audit2_fixes.py"       "test_a22_why_the_old_site_was_dead" "A2 executing suite present (born-red verified vs 89cbaf6)"
+# A2.2 — the announcement must live in the MANAGE branch: the checker's old
+# call site sits behind has_open_position() and cannot run with a leg open.
+_n_orph=$(grep -c "report_orphaned_plan(" main.py 2>/dev/null || echo 0)
+if grep -q "pos_mgr.open_condor_leg_count())" main.py 2>/dev/null && [ "$_n_orph" -ge 1 ]; then
+    echo "  ✓ PRESENT: A2.2 orphan announcement fires from the manage branch"
+else
+    echo "  ✗ MISSING: A2.2 orphan announcement not wired where a leg is visible — the F5 warning is dead code again"
+    MISS=$((MISS+1))
+fi
+# A2.6 — ABSENCE canary: the dead session-pool knob must stay gone. Grep the
+# ASSIGNMENT pattern, not the bare name — changelogs legitimately mention it.
+# grep -c exits 1 when the count IS zero — the expected result here — so the
+# usual `|| echo 0` fallback would print a second 0. Capture, then default.
+_n_knob=$(grep -c "NAMED_POOLS_INCLUDE_SESSIONS =" analysis/liquidity_mapper.py 2>/dev/null)
+_n_knob=${_n_knob:-0}
+if [ "$_n_knob" = "0" ]; then
+    echo "  ✓ ABSENT:  A2.6 dead session-pool knob stays deleted (ladder never read it)"
+else
+    echo "  ✗ STALE:   NAMED_POOLS_INCLUDE_SESSIONS assigned again ($_n_knob) — a switch that gates nothing plus a green test is the renders-cleanly class"
+    MISS=$((MISS+1))
+fi
 
 echo ""
 echo "============================================================"

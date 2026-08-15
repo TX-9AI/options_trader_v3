@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.84
+# docs/BACKLOG.md — v4.86
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,7 +217,164 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
-<<<<<<< Updated upstream
+- **v4.86 — 2026-08-15 — THE A2.3 HYDRATE MADE THE LEDGER TESTS STATEFUL, AND
+  THE LEDGER WAS WRITING INTO THE REPO.** Caught reviewing the audit-2 fix set
+  before landing it; the fix set itself is otherwise verified and taken as-is.
+
+  **🔴 `data/liquidity_ledger/` WAS NOT IN `.gitignore`.** The ledger writes
+  `<root>/<date>/<sym>.json` on **every closed bar** once live, and the delivery's
+  own deploy line runs `git add -A`. **Live fleet output would have been
+  committed into the repo** — the MANIFEST.txt / trades.db precedent exactly,
+  and the standing rule that delivery scaffolding must clean itself up. Now
+  ignored.
+
+  **🔴 AND THE TESTS SHARED STATE WITH THEIR OWN HISTORY.** A2.3's fix makes
+  `reset_for_session` READ BACK that file — correct in production, that is the
+  whole point of the restart fix — but the tests wrote to the real path, so runs
+  ACCUMULATED: `test_the_zone_cuts_BOTH_ways` reported **`holds == 3` from a
+  single bar** after three invocations stacked up. A test that inherits its own
+  previous run proves nothing.
+  **FIX:** `_OUT_ROOT` is now env-overridable (`OT_LEDGER_ROOT`), and an autouse
+  fixture points every ledger test at a FRESH `tmp_path`. Production path
+  unchanged. Verified: the suite passes twice consecutively with identical
+  counts, and a clean run writes nothing under `data/`.
+
+  ⚠️ **DESIGN NOTE, HELD NOT BLOCKED — a winter coverage gap.** A2.5's DST fix
+  derives NY hours per date (EDT 13-20, EST 14-21) and is correct. But
+  `SECTIONS_FIXED` keeps London at 8-13, so in EST **UTC hour 13 (08:00-09:00
+  ET) belongs to NO section** — the "contiguous" property in LIQ.6 rule 1 holds
+  in summer only. No pool is lost (that hour is pre-market and is not a session
+  extreme by any definition), but a bar in an unassigned hour **cannot
+  contribute to the ladder's break-exclusion**, so price trading through a rung
+  during it cannot invalidate that rung. Related to A2.10, already parked.
+  Recorded so it is a decision rather than a discovery in November.
+
+  ⬜ r1 of the fix set was WITHDRAWN by its author and must never be extracted;
+  r2 differs only in a `main.py` comment and a BACKLOG depth claim. The
+  correction: `BACKFILL_DAYS` requests 16 days of 1h ONCE, but `candle_feed`'s
+  pruner trims 1h to `max(50,60)*PRUNE_FACTOR = 240` rows every 300s, so steady
+  state is ~240h — **~10 days of 24h tape.** The lookback is satisfied, for a
+  different reason than r1 stated.
+
+- **🔴 v4.85 — 2026-08-15 — ADVERSARIAL AUDIT #2: THE UNBAKED QUEUE, AUDITED
+  AND FIXED BEFORE IT COULD BAKE.** `liquidity_mapper` v4.1 · `liquidity_ledger`
+  v1.1 · `main` v6.11 · `position_manager` v3.3 · `iron_condor_strategy` v-a2 ·
+  `check_versions` v4.53 · 17 executing tests (suite 625 green).
+
+  Same treatment as audit #1, applied to `dad8662..89cbaf6` before Monday's
+  bake. Full report + repros shipped separately
+  (`ADVERSARIAL_AUDIT_2_FINDINGS_2026-08-15.md`, `repro_liq.py`). Verdicts:
+  **LIQ.6 and LIQ.4 carried the serious defects; one of the three audit fixes
+  (F5) never reached runtime; F7, F8, SWP.8 clean, traced end to end.**
+
+  **🔴 A2.1 — LIQ.6's 10-DAY LOOKBACK RAN ON AN 8-HOUR FRAME (reproduced).**
+  `df_5m` is capped at 100 bars; truncated sections were admitted as closed
+  pools at WRONG prices (true Asia High 101.10 emitted as 97.10) and rung
+  prices MUTATED intraday as the window slid — the self-rewriting level, back
+  through the input. **Fix, two independent layers:** (a) `analyze()` takes
+  `named_df` — a deep 1h store frame `main._named_level_frame()` supplies
+  (300s TTL, PF.2 precedent: the history was never missing, the frame was;
+  fails soft to the live frame). **DEPTH TRUTH, corrected in r2 while
+  building the census command:** BACKFILL_DAYS requests 16 days of 1h ONCE,
+  but candle_feed's pruner trims 1h to max(50,60)×PRUNE_FACTOR = **240 rows
+  every 300s** — steady state is ~10 days of 24h tape / ~34 RTH sessions, so
+  the 16-day backfill is deleted down to 240 within five minutes of arriving
+  (⬜ operator call whether to align BACKFILL_DAYS or raise the prune
+  ceiling; the lookback itself is satisfied). The constant asks for 264 —
+  harmless headroom, fetch returns what exists — and with the earliest
+  partial day skipped by the truncation guard the ladder effectively sees
+  ~9 complete days + today; (b) a section
+  whose START the frame does not reach is **LEFT-TRUNCATED and skipped** — on
+  ANY input depth, so replay/tests passing their own tape are equally honest.
+
+  **🔴 A2.2 — THE F5 FIX WAS DEAD CODE.** Its only call site sits inside
+  `attempt_new_entry`, which only runs when `has_open_position()` is False —
+  and that falls back to the SAME `get_open_trades()`. With a leg open the
+  site was unreachable; when reached, the count was by construction zero, so
+  the occupancy OR could never fire and **the orphan WARNING could never
+  fire.** The v4.83 danger model (TC.6 second spread) was impossible for the
+  same reason — corrected in place above. **Fix: the announcement moved to the
+  manage branch** — the only code that RUNS with a leg open — via
+  `pos_mgr.open_condor_leg_count()` (new, counts records already in hand);
+  the checker is now side-effect-free belt-and-braces; the once-latch re-arms
+  daily. **§21 hop-0, repeated within 24h of being written: the F5 tests
+  asserted source text and called the announcer directly — reachability was
+  never executed. The new suite executes it.**
+
+  **🔴 A2.3 — EVERY BAKE WIPED THE LEDGER'S DAY (reproduced).** `write()` had
+  NO READER: a restart reseeded the same date from zero and the next write
+  overwrote the good file with zeros — §22 verbatim, in the commit whose
+  purpose is "the running record cannot be recovered later." **Fix:
+  `reset_for_session` hydrates the same-date JSON first** (schema and
+  touch-tol guarded — counts taken under a different zone start clean,
+  loudly), then merges seeds through `add_level`.
+
+  **🔴 A2.4 — THE LEDGER SILENTLY SKIPPED BARS (reproduced).** `iloc[-2]`
+  behind a one-stamp guard drops closed bars on any tick slower than ~75s —
+  and slow ticks correlate with busy tape, so the undercount landed on the
+  bars most likely to test levels. **Fix: bar selection moved INTO the ledger
+  — `feed_frame(df_1m)`** walks every closed session bar (≥09:30 ET, session
+  date) newer than `last_bar_ts`, which is persisted, so the A2.3 hydrate
+  also recovers the bake gap from the 60-bar frame.
+
+  **🟠 A2.5 — WINTER DST (reproduced):** fixed 13-20 UTC NY section would have
+  admitted TODAY'S FORMING RTH extreme as a pool from 3:00pm ET every EST day
+  starting 2026-11-01, and left 20-21 UTC winter bars in no section. NY hours
+  now derive from the date's ET offset via ZoneInfo (13-20 EDT / 14-21 EST) —
+  same lesson as the hardcoded −4 offset, caught before Nov 1 this time.
+  Still-forming is now an instant test (tape must reach the section's end).
+
+  **🟠 A2.6:** `NAMED_POOLS_INCLUDE_SESSIONS` was a DEAD KNOB — the ladder
+  never read it, while `test_session_pools_are_off_by_default` stayed green
+  asserting the opposite of production. Removed; the two flag tests replaced
+  by behavior asserts (rungs on by doctrine; the LIQ.1 protection — no
+  still-forming section is ever a pool — is executed against the real mapper).
+  **🟠 A2.7 (reproduced):** more-extreme-wins REPLACED the colliding name, so
+  PDH could vanish when a rung inside the 0.2% zone out-priced it. The merge
+  is now symmetric: a collision never deletes a fact in either direction.
+  **🟡 A2.8:** the candle-count fallback built OLD-definition session pools and
+  exceptions routed to it at debug — a per-tick regime coin toss. Fallback is
+  PDH/PDL-only now; the exception warns once per process.
+  **🟡 A2.9:** an empty first-tick seed latched a zero-level ledger all day —
+  seeding now retries until the mapper produces named pools; wiring routes
+  through `get_ledger()` (one singleton, not two).
+
+  **BORN-RED, VERIFIED:** the new suite `tests/test_audit2_fixes.py` runs
+  **17/17 on the fixed tree and 12-failed against pristine `89cbaf6`** (the 5
+  HEAD-passes are deliberate pins of unchanged behavior and say so). Full
+  suite: **625 passed** on every collecting test file, failures identical to
+  HEAD's pre-existing sandbox-env set; `test_no_undefined_names` green with
+  real pyflakes.
+
+  **HYGIENE FOUND WHILE PACKAGING, fixed in this delivery:**
+  · **committed merge-conflict markers in THIS FILE** (`<<<<<<<`/`>>>>>>>`
+    around v4.84-v4.82, the collision v4.83 itself describes) — resolved,
+    upstream side kept, the stashed duplicate F5 entry dropped;
+  · **CV.2**: check_versions' "v1.6 header current" canary pinned a VERSION
+    STRING and went red at HEAD when continuation_strategy legitimately moved
+    to v1.7 — removed, not silently (CV.1 precedent); its behavior canaries
+    remain;
+  · mapper title had drifted (v3.3 while LIQ.6-era) — the exact failure class
+    of the 07-23 sweep; now v4.1 with both entries;
+  · new A2 canaries are BEHAVIOR greps incl. an ABSENCE check on the dead
+    knob (assignment pattern, so changelog mentions stay legal — SWP.1).
+
+  **⬜ OPERATOR CALLS, deliberately NOT fixed:** A2.10 — today's tape cannot
+  BREAK a ladder rung (forming sections are excluded from break detection),
+  so an accepted-through level stays named all day; interacts with "an
+  untouched extreme is where the stops are." UNKNOWNS worth one option-14
+  each: per-symbol overnight-bar presence (sets the old frame's wall-clock
+  reach; mechanism unaffected), live tick-latency distribution (A2.4's real
+  leak rate), whether any box ticks past 20:00 UTC in summer.
+
+  **ARCHIVE REGIME:** A2.1/A2.5 change what a pool IS **again** — shipped in
+  the SAME pre-collection window as LIQ.6, so the archive gains ONE new
+  regime, not two. A2.3/A2.4 land before the ledger's first collecting
+  session, so week one is not restart-truncated in ways indistinguishable
+  from market structure. Boxes need nothing installed: stdlib `zoneinfo`
+  reads the system tz database (sandbox needed `tzdata` from pip; Ubuntu
+  boxes carry `/usr/share/zoneinfo`).
+
 - **v4.84 — 2026-08-15 — LIQ.4 WIRED AT LAST, AND LIQ.7 ALIGNS ITS ZONE.**
   `main` · `analysis/liquidity_ledger.py` · 5 tests.
 
@@ -272,6 +429,11 @@ would otherwise surface as unexplained numbers on Monday.
   standing down and can open a SECOND credit spread on the same underlying**
   while the orphan is open — two credit verticals on one symbol, sized and
   managed as neither.
+  **⚠️ CORRECTED v4.85 (audit A2.2): this scenario was ALREADY IMPOSSIBLE** —
+  TC.6 only dispatches inside `attempt_new_entry`, which only runs when
+  `has_open_position()` is False, and that reads the SAME `get_open_trades()`.
+  The guard below is retained as belt-and-braces but it guarded a closed door,
+  and the orphan WARNING wired here could never fire. See v4.85.
   **FIX: the symbol stays OCCUPIED while any condor leg is open**, derived from
   the persisted fields `_condor_sibling_open` already trusts (`is_condor_leg`,
   `status='open'`) rather than from a plan that did not survive. **Same
@@ -314,42 +476,6 @@ would otherwise surface as unexplained numbers on Monday.
   The post-selection journal is **RETAINED as defence in depth** for any future
   strategy added to `DEBIT_DIRECTIONAL_STRATEGIES` without a pre-gate — that one
   still gets the full record.
-=======
-- **🔴 v4.82 — 2026-08-15 — AUDIT F5 FIXED: A RESTART ORPHANS THE CONDOR
-  STRUCTURE.** `main` · `iron_condor_strategy` · 3 tests (126 total).
-
-  **`IronCondorStrategy._plan` IS PROCESS-LOCAL.** Restart with leg 1 filled and
-  leg 2 pending and the plan is GONE — **and with it leg 2's TRIGGER PRICE,
-  which is in no column.** The structure can never complete. **A restart happens
-  on every bake**, so this is not an edge case.
-
-  **WHAT IS *NOT* BROKEN, and matters for the fix:** the orphaned leg itself is
-  fine. `_condor_sibling_open()` reads the DB, returns False, and CND.7 correctly
-  manages it as a STANDALONE vertical with the ratchet it earns.
-
-  **WHAT WAS BROKEN IS DEFERRAL.** `has_active_plan` goes False, so **TC.6 stops
-  standing down and can open a SECOND credit spread on the same underlying**
-  while the orphan is still open — two credit verticals on one symbol, sized and
-  managed as neither.
-  **FIX: the symbol stays OCCUPIED while any condor leg is open**, derived from
-  the same persisted fields `_condor_sibling_open` already trusts
-  (`is_condor_leg`, `status='open'`) rather than from a plan that did not
-  survive. **Same principle as `structure.py`: derive from what persists.**
-  ⚠️ FAILS CLOSED — on any error the symbol is treated as occupied. A missed
-  trade costs less than an unmanaged pair.
-
-  **AND THE ORPHAN NOW ANNOUNCES ITSELF, ONCE.** Previously the leg simply sat
-  there looking like a standalone vertical and the only signal was a condor that
-  never got its second side. **Silence here is the same failure as VEL.1 (inert
-  five weeks) and the AFD.1 slot bug — a state nobody could distinguish from
-  normal.** One warning per process, not per tick.
-
-  ⚠️ A TEST OF MINE TARGETED THE WRONG `except`. `_condor_leg_open_without_plan`
-  has two — an inner guard around the warning (harmless if it fails) and the
-  outer one that decides the return. A substring search found the inner one and
-  proved nothing; it now walks the AST to the outer handler. Same class as
-  WORKING_AGREEMENT 21.
->>>>>>> Stashed changes
 
 - **🔴 v4.81 — 2026-08-15 — AUDIT F7 FIXED: THE BREAKOUT EXEMPTION WAS
   ASYMMETRIC AND DIRECTION-BLIND.** `exit_engine` v4.22 · 6 tests (112 total).

@@ -62,6 +62,10 @@ ohlc/
 # Shadow observer output — generated at runtime (in-project data dir)
 data/shadow/
 data/signal_journal/
+# LIQ.4 output - written every closed bar once the ledger is live.
+# NOT scaffolding to clean up: it is the running record. It must never be
+# committed, and `git add -A` in a deploy line would sweep it in.
+data/liquidity_ledger/
 *.patch
 data/chain_snapshots/
 MANIFEST.txt

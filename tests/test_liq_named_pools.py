@@ -1,5 +1,10 @@
 """
-tests/test_liq_named_pools.py — v1.0 — 2026-08-11
+tests/test_liq_named_pools.py — v1.1 — 2026-08-15
+v1.1 — 2026-08-15 — A2.6: the two session-pool FLAG tests replaced by a
+        BEHAVIOR test. The old ones asserted a knob the LIQ.6 ladder never
+        read and stayed green while production emitted session rungs — a
+        test describing a world that no longer existed.
+v1.0 — 2026-08-11
 
 Pins LIQ.1 + SWP.4 — the three defects that zeroed the SWEEP setup score on
 textbook raids. All three were found by running the REAL code over a fabricated
@@ -66,14 +71,22 @@ def test_a_genuinely_fresher_sweep_still_wins():
         "TIEBREAK, not an override"
 
 
-def test_session_pools_are_off_by_default():
-    assert LM.NAMED_POOLS_INCLUDE_SESSIONS is False, \
-        "London overlaps RTH by 2.5h, so its 'level' is set by the price being " \
-        "traded — a self-referential target that must not be sweepable"
-
-
-def test_the_session_pool_knob_can_restore_them():
-    assert os.environ.get("OT_LIQ_SESSION_POOLS") in (None, "", "0", "1")
+def test_session_pools_are_governed_by_structure_not_a_knob():
+    """A2.6 (2026-08-15) — this test used to assert NAMED_POOLS_INCLUDE_SESSIONS
+    is False, and it stayed GREEN while the LIQ.6 ladder emitted session rungs
+    unconditionally: the knob was dead and the test described a world that no
+    longer existed. Sessions are ON by LIQ.6 doctrine (rule 1). The protection
+    LIQ.1 actually needs — a still-forming section is NEVER a pool, so a level
+    cannot be set by the price currently being traded — is a STRUCTURAL rule,
+    executed against the real mapper in tests/test_audit2_fixes.py
+    (test_a21_left_truncated_section_is_not_admitted,
+    test_a25_winter_forming_rth_is_never_a_pool)."""
+    assert not hasattr(LM, "NAMED_POOLS_INCLUDE_SESSIONS"), \
+        "the dead knob is back — remove it or WIRE it; a switch that gates " \
+        "nothing plus a green test is the renders-cleanly failure class"
+    assert 'environ.get("OT_LIQ_SESSION_POOLS"' not in open(LM.__file__).read(), \
+        "the env knob is being READ again — changelog mentions are history " \
+        "and stay; a live read is the dead switch coming back"
 
 
 def test_recovery_is_anchored_to_the_level():

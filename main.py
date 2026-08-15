@@ -1,5 +1,32 @@
 """
-main.py — options_trader v6.10
+main.py — options_trader v6.11
+v6.11  2026-08-15  AUDIT A2: four fixes from adversarial audit #2.
+        (A2.1) named levels get a DEEP frame: `_named_level_frame()` reads the
+        candle store directly (1h bars, NAMED_FRAME_1H_BARS, 300s TTL) and is
+        passed to the mapper as `named_df` - the cached 5m frame is 100 bars
+        (~8.3h) and was feeding the 10-day section lookback truncated tape:
+        wrong pool prices, rungs mutating intraday. Store precedent is PF.2
+        ("the history was never missing - the frame was"). Fails soft to the
+        old behavior (mapper guards truncation on any input).
+        (A2.2) the F5 orphan announcement MOVED to the manage branch. Its old
+        home, `_condor_leg_open_without_plan`, is only called inside
+        attempt_new_entry, which only runs when has_open_position() is False -
+        and that falls back to the SAME get_open_trades(). While an orphan leg
+        was open the call site was unreachable; when reachable, the count was
+        by construction zero. The v6.10/v4.83 danger model (TC.6 opening a
+        second spread against an orphan) was impossible for the same reason -
+        the fix guarded a scenario the gate already forbids, with a guard the
+        gate made unreachable, and the once-per-restart WARNING could never
+        fire. It now fires from the has_open_position branch, where an open
+        leg can actually be seen. The checker itself is now side-effect-free
+        and stays as belt-and-braces on the TC.6 dispatch.
+        (A2.4) ledger bar selection moved into the ledger: feed_frame() walks
+        every closed session bar newer than the persisted last_bar_ts - the
+        old iloc[-2] + one-stamp guard silently DROPPED bars on any tick
+        slower than ~75s, undercounting exactly the busy tape.
+        (A2.9) an empty first-tick seed no longer latches the date - the
+        ledger retries seeding until the mapper produces named pools; and the
+        wiring routes through get_ledger() so there is ONE singleton, not two.
 v6.9 — 2026-08-14 — AUDIT F6: A TC.6 RECORD IS NOT A CONDOR LEG.
         `_execute_condor_leg` still stamped is_condor_leg=1 and
         condor_leg_num=2 onto every trend credit spread, called
@@ -759,7 +786,42 @@ class BotState:
 
 _LEDGER = None
 _LEDGER_DATE = None
-_LEDGER_LAST_BAR = None
+
+
+# ── A2.1 — a deep frame for NAMED levels only ────────────────────────────────
+# The mapper's section lookback is 10 days; the cached 5m frame is 100 bars.
+# 1h bars carry hour granularity (all the section masks use). Read directly
+# from the store with a local TTL - the shared cache stays capped for every
+# other consumer (raising it would re-seed EMAs across the engines).
+# DEPTH TRUTH (corrected r2): BACKFILL_DAYS requests 16 days of 1h ONCE, but
+# candle_feed's pruner trims 1h to max(50,60)*PRUNE_FACTOR = 240 rows every
+# 300s - so steady state is ~240h: ~10 days of 24h tape, ~34 RTH-only
+# sessions. Asking for 264 is harmless headroom (fetch returns what exists);
+# with the earliest partial day skipped by the truncation guard, the ladder
+# effectively sees ~9 complete days + today on 24h symbols.
+NAMED_FRAME_1H_BARS = 264      # >= prune ceiling (240); fetch caps at reality
+_NLF_TTL_S = 300               # sections only change on an hour boundary
+_NLF_CACHE = (0.0, None)
+
+
+def _named_level_frame():
+    """The deep 1h frame for the mapper's named levels, or None (fail soft).
+    None simply means the mapper falls back to the live frame - where its
+    truncation guard (A2.1) keeps partial sections out."""
+    global _NLF_CACHE
+    try:
+        ts, df = _NLF_CACHE
+        if df is not None and (time.time() - ts) < _NLF_TTL_S:
+            return df
+        from data.market_data import fetch_candles
+        df = fetch_candles(INSTRUMENT, "1h", NAMED_FRAME_1H_BARS)
+        if df is not None and not df.empty:
+            _NLF_CACHE = (time.time(), df)
+            return df
+        return None
+    except Exception as exc:                                   # noqa: BLE001
+        logger.debug("named-level frame unavailable: %s", exc)
+        return None
 
 
 def _feed_liquidity_ledger(liq_map, df_1m) -> None:
@@ -785,29 +847,33 @@ def _feed_liquidity_ledger(liq_map, df_1m) -> None:
     whatever the mapper currently names — including the `(R1)`/`(R2)`/`(R3)`
     rung suffixes — rather than holding a second opinion about levels.
     """
-    global _LEDGER, _LEDGER_DATE, _LEDGER_LAST_BAR
+    global _LEDGER, _LEDGER_DATE
     try:
         if df_1m is None or getattr(df_1m, "empty", True) or len(df_1m) < 2:
             return
-        from analysis.liquidity_ledger import LiquidityLedger
+        from analysis.liquidity_ledger import get_ledger
         today = str(df_1m.index[-1].date())
         if _LEDGER is None or _LEDGER_DATE != today:
             seeds = [(p.price, p.kind, p.name, True)
                      for p in (getattr(liq_map, "pools", None) or [])
                      if getattr(p, "is_named", False)]
-            _LEDGER = LiquidityLedger(INSTRUMENT)
+            # A2.9 — an EMPTY first-tick seed must not latch the date: a mapper
+            # warm-up hiccup used to lock a zero-level ledger for the whole
+            # session. Retry every tick until the mapper produces named pools.
+            if not seeds:
+                logger.debug("[ledger] no named pools yet — seeding deferred")
+                return
+            # ONE singleton (A2.9): route through get_ledger so any future
+            # consumer sees the same instance, not a second empty book.
+            _LEDGER = get_ledger(INSTRUMENT)
             _LEDGER.reset_for_session(today, seeds=seeds)
-            _LEDGER_DATE, _LEDGER_LAST_BAR = today, None
+            _LEDGER_DATE = today
             logger.info("[ledger] session %s seeded with %d named level(s)",
                         today, len(seeds))
-        # the LAST row is still forming; the one before it has closed.
-        closed = df_1m.iloc[-2]
-        stamp = str(df_1m.index[-2])
-        if stamp == _LEDGER_LAST_BAR:
-            return
-        _LEDGER_LAST_BAR = stamp
-        _LEDGER.on_closed_bar(float(closed["high"]), float(closed["low"]),
-                              float(closed["close"]), ts=stamp)
+        # A2.4 — bar selection lives in the ledger now: every closed session
+        # bar newer than the persisted last_bar_ts, forming row excluded. The
+        # old iloc[-2] + one-stamp guard dropped bars on any tick > ~75s.
+        _LEDGER.feed_frame(df_1m)
         _LEDGER.write()
     except Exception as exc:                                   # noqa: BLE001
         logger.debug("[ledger] skipped: %s", exc)
@@ -834,7 +900,8 @@ def run_analysis(state: BotState) -> dict:
     vol_state = get_volatility_engine().analyze(df_5m, df_1h_safe, price)
     trend     = get_trend_engine().analyze(data)
     structure = get_structure_analyzer().analyze(df_5m, df_15m, df_1h, price)
-    liq_map   = get_liquidity_mapper().analyze(df_5m, df_15m, price)
+    liq_map   = get_liquidity_mapper().analyze(df_5m, df_15m, price,
+                                               named_df=_named_level_frame())
     _feed_liquidity_ledger(liq_map, df_1m)      # LIQ.4 wiring
     macro     = get_macro_manager().get()
 
@@ -1665,12 +1732,13 @@ def _condor_leg_open_without_plan() -> bool:
         from database.trade_logger import get_trade_logger
         n = sum(1 for t in get_trade_logger().get_open_trades()
                 if t.get("is_condor_leg") and t.get("symbol") == INSTRUMENT)
-        # say it ONCE if there is no plan behind them - a restart mid-structure
-        # is otherwise indistinguishable from a normal standalone leg.
-        try:
-            _iron_condor_strategy.report_orphaned_plan(n)
-        except Exception:                                      # noqa: BLE001
-            pass
+        # A2.2 - the orphan ANNOUNCEMENT no longer lives here: this function is
+        # only called inside attempt_new_entry, which only runs when
+        # has_open_position() is False - and that falls back to the SAME
+        # get_open_trades(). With a leg open this site is unreachable; when
+        # reached, n is by construction 0. The warning now fires from the
+        # manage branch, where an open leg can actually be seen. This checker
+        # stays, side-effect-free, as belt-and-braces on the TC.6 dispatch.
         return n > 0
     except Exception as exc:                                   # noqa: BLE001
         logger.warning("[F5] could not check for an orphaned condor leg (%s) - "
@@ -2529,6 +2597,17 @@ def main_loop(state: BotState):
                     vol_state=ctx.get("vol"),
                     trend=ctx.get("trend"),   # continuation exhaustion exit
                 )
+                # ── A2.2 — the orphan announces itself HERE, once ─────────
+                # This branch is the only code that runs while a condor leg is
+                # open, so it is the only place the "plan did not survive the
+                # restart" warning can actually fire. report_orphaned_plan
+                # keeps its own once-latch.
+                try:
+                    _iron_condor_strategy.report_orphaned_plan(
+                        pos_mgr.open_condor_leg_count())
+                except Exception:                              # noqa: BLE001
+                    pass
+
                 # ── Condor Leg 2 check ────────────────────────────────────
                 # If Leg 1 is the open position and Leg 2 is still queued,
                 # check_leg_triggers() must run here — not in attempt_new_entry()

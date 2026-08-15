@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-tests/test_liquidity_ledger.py — v1.0 — 2026-08-13
+tests/test_liquidity_ledger.py — v1.1 — 2026-08-15
+v1.1 — 2026-08-15 — A2.4: the wiring pins moved to the NEW truth — bar
+        selection lives in the ledger (`feed_frame`, forming row excluded,
+        `last_bar_ts` guard) and main calls it; the old pins asserted the
+        gap-dropping `iloc[-2]` feed and would have held the defect in place.
+v1.0 — 2026-08-13
 
 The operator's rule is the whole specification: *"the wick counts as a touch,
 but only a close counts as acceptance or rejection."* Every test below exists
@@ -24,6 +29,27 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from analysis import liquidity_ledger as LL                    # noqa: E402
+import pytest                                                  # noqa: E402
+import tempfile                                                # noqa: E402
+
+# ── TEST ISOLATION (2026-08-15) ──────────────────────────────────────────────
+# ⚠️ THE A2.3 HYDRATE MADE THESE TESTS STATEFUL. `reset_for_session` now READS
+# BACK `<root>/<date>/<sym>.json`, so a test that writes it inherits its own
+# previous run - `test_the_zone_cuts_BOTH_ways` reported `holds == 3` from a
+# SINGLE bar because three invocations had stacked up. The hydrate is correct
+# in production (it is the whole point of the restart fix); a test that shares
+# state with its own history is not.
+# ⚠️ AND IT WAS WRITING INTO THE REPO. `data/liquidity_ledger/` was not
+# gitignored, so the deploy line's `git add -A` would have swept live fleet
+# output into a commit - the MANIFEST.txt / trades.db precedent exactly. Now
+# ignored, and the root is env-overridable so tests never touch it.
+os.environ.setdefault("OT_LEDGER_ROOT", tempfile.mkdtemp(prefix="ledger_test_"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ledger_root(monkeypatch, tmp_path):
+    """A FRESH root per test, so no test can see another's file."""
+    monkeypatch.setattr(LL, "_OUT_ROOT", str(tmp_path / "ledger"))
 
 
 def fresh(tmp_root=None):
@@ -236,15 +262,25 @@ def test_the_ledger_is_actually_wired_into_run_analysis():
 
 
 def test_only_CLOSED_bars_are_fed_and_only_once():
-    """`df_1m`'s last row is the FORMING bar on most ticks. Feeding it would
-    count a wick that has not finished printing and a close that is not a close
-    — and would re-count the same bar on every tick as it forms."""
+    """`df_1m`'s last row is the FORMING bar on most ticks. A2.4 moved bar
+    selection INTO the ledger: `feed_frame` excludes the forming row and
+    guards with the persisted `last_bar_ts` — the old iloc[-2] + one-stamp
+    guard silently DROPPED closed bars on any tick slower than ~75s. The
+    behavior itself is executed in tests/test_audit2_fixes.py; this pins the
+    wiring's assembly."""
     src = open(os.path.join(os.path.dirname(__file__), "..", "main.py"),
                encoding="utf-8").read()
     i = src.index("def _feed_liquidity_ledger(")
-    seg = src[i:i + 2600]
-    assert "df_1m.iloc[-2]" in seg, "the forming bar is being fed"
-    assert "_LEDGER_LAST_BAR" in seg, "no guard against re-feeding one bar"
+    seg = src[i:i + 3600]
+    assert ".feed_frame(df_1m)" in seg, "the gap-safe feed is not wired"
+    assert "df_1m.iloc[-2]" not in seg, "the gap-dropping single-bar feed is back"
+    lsrc = open(os.path.join(os.path.dirname(__file__), "..",
+                             "analysis", "liquidity_ledger.py"),
+                encoding="utf-8").read()
+    j = lsrc.index("def feed_frame(")
+    lseg = lsrc[j:j + 2600]
+    assert "iloc[:-1]" in lseg, "the forming last row is being fed"
+    assert "last_bar_ts" in lseg, "no guard against re-feeding or gaps"
 
 
 def test_seeds_come_from_the_mapper_not_re_derived():

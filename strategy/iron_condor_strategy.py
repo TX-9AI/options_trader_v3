@@ -1,4 +1,7 @@
 """
+v-a2 — 2026-08-15 — AUDIT A2.2: the orphan once-latch re-arms daily —
+    _orphan_said only reset on process start, so a second orphan on a later
+    day of the same process would have stayed silent.
 v-pfanchor — 2026-08-13 — PF.5: THE PITCHFORK BECOMES THE CONDOR'S ANCHOR, and
   this is the overlay's FIRST CONSUMER. It has been live as a weight-0 observer
   since 2026-08-12 with one call site and nothing reading the rails back.
@@ -282,6 +285,7 @@ class IronCondorStrategy(BaseOptionsStrategy):
         if self._last_reset_date != today:
             self._plan            = None
             self._last_reset_date = today
+            self._orphan_said     = False   # A2.2: a NEW day's orphan announces too
 
     def report_orphaned_plan(self, open_condor_legs: int) -> None:
         """Say so ONCE when a condor leg is open with no plan behind it.

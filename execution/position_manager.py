@@ -1,5 +1,11 @@
 """
-execution/position_manager.py — v3.2 — AUDIT F6 pairing: price a spread by
+execution/position_manager.py — v3.3 — AUDIT A2.2: expose the open condor-leg
+        count for the orphan announcement. The F5 warning was wired to a call
+        site that cannot run while a leg is open (attempt_new_entry sits
+        behind has_open_position, which reads the same DB), so it could never
+        fire. The manage branch announces instead, counting from the records
+        this manager already holds - no second DB read on the hot path.
+v3.2 — AUDIT F6 pairing: price a spread by
         STRUCTURE, not by is_condor_leg. main v6.9 stops stamping
         is_condor_leg=1 onto TC.6 records, and this module's premium fetch
         keyed on exactly that flag (or strategy=="IronCondorStrategy") — so
@@ -100,6 +106,20 @@ class PositionManager:
         self.paper_trading = paper_trading
         self._open_records: List[TradeRecord] = []
         self._trade_logger = get_trade_logger()
+
+    def open_condor_leg_count(self) -> int:
+        """Open condor legs among the records this manager holds (A2.2).
+
+        Counts from `_open_records` when loaded (the manage branch runs right
+        after they are), falling back to the DB on a cold call. Returns 0 on
+        any error: this feeds an ANNOUNCEMENT, and the occupancy guards
+        elsewhere already fail closed - a missed log line costs less than a
+        crashed tick."""
+        try:
+            recs = self._open_records or self._trade_logger.get_open_trades()
+            return sum(1 for r in recs if r.get("is_condor_leg"))
+        except Exception:                                      # noqa: BLE001
+            return 0
 
     def has_open_position(self) -> bool:
         if self._open_records:
