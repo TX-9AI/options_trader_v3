@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.75
+# docs/BACKLOG.md — v4.76
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,6 +217,88 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.76 — 2026-08-15 — OBSERVER DEBT CLOSED: ALL THREE READS ANSWERED, NONE
+  DELETED.** Every criterion was written to force a delete decision; none was met
+  for the reason the criterion anticipated.
+
+  **VEL.1 — PARKED, CAUSE IDENTIFIED. Not deleted (operator's call: "I'm not
+  gonna delete anything").** Zero firings in FIVE WEEKS of logs (Jul 10 -> Aug 15,
+  47MB) — zero occurrences of the string VELOCITY at all, on SPX and QQQ.
+  Verified the grep matched the code's actual emission and that
+  `VELOCITY_STALL_ENABLED` defaults ON, so the null is real.
+  **THE CAUSE IS A HORIZON MISMATCH, NOT BROKEN LOGIC.** `VELOCITY_GRACE_MIN=10`
+  plus 3 confirm ticks means a position must live ~10.75 min before the check can
+  emit. **ORB's killers die at 3.0 min** (`orb_structure_stop`, n=93, 23 sessions)
+  **while its winners live 7.2 and 13.3 min.** So hold duration is nearly an
+  INVERSE discriminator: any grace short enough to catch a staller sits inside the
+  window where a winner is still developing. **No grace value separates them.**
+  Greeks were NOT the blocker (`chain_marks` shows theta 100%% populated, delta
+  60-83%%), and the floor curve `{10: 3.9, 15: 18.0, 20: 29.8}` was fitted at
+  n=22 on 10-20 minute horizons ORB never reaches.
+  ⚠️ Also banked: `theta_bleed` IS live and firing — **107 trades, 100%% win,
+  +$2,159** — it protects gains rather than cutting stallers, exactly as its
+  docstring says. And `orb_structure_stop` at **−$21,958 / 93 trades** is the
+  PRICE OF A CORRECT INVALIDATION RULE, not a defect: ORB is **+$25,081 net
+  including it**. Whether some of those were dead before structure confirmed is
+  a real question, TABLED at the operator's direction.
+
+  **PF.2 — CONTINUE. Criterion not met.** 15/15 boxes, three sessions, ~22.1k
+  fork records each. Real geometry: AMD daily `modified_schiff`, 45 bars,
+  511.93/454.33/396.73, `pos_pct` 79.84.
+  **⚠️ AND THE OBJECT IS A CONTAINMENT ENVELOPE, NOT AN ANDREWS PITCHFORK.**
+  `pivot_built {"1d": false}` on **22,159 of 22,159** records — the §4.3 pivot
+  arm has NEVER built on a real frame. Every daily fork in the system is a
+  containment fit (spans 0.95-1.00). Operator: that is still useful, and for
+  anchoring a credit spread it is arguably BETTER — a rail price has
+  demonstrably respected beats a three-pivot construction.
+  ⚠️ Anything reasoning about *pitchfork* mechanics (median-line reversion, tine
+  touch) is reasoning about geometry we do not have — the whitepaper's 17
+  applications need re-reading with that in mind. §4.3 to be parked with a
+  one-line report if it ever fires, so it cannot stay silently false for another
+  month. The `pos_pct` × continuation join waits for a clean session (22 of
+  08-14's continuation fires are one-tick CNT.1 artifacts).
+
+  **BFLY.1 — DO NOT MOVE THE WINDOW YET. The blocker is the DISCOUNT GATE, and
+  the gate is right.** Fleet logs: `GEX not PINNING` dominates 20-50x, but after
+  a pin is found the rejections are `tent too expensive for this conviction`
+  (39 NVDA / 26 QQQ) and `discount gate REJECT` — with exactly **one PASS** on
+  QQQ, which closed **two butterflies, both winners**.
+  **⚠️ QQQ's CONVICTION IS ALREADY MAXED AND IT STILL REJECTS:** p50 conviction
+  **0.647** (above `DISC_CONV_HI` 0.55, so the ceiling is pinned at 0.50) while
+  tents cost p50 **0.54**, closest miss **0.01**. NVDA is the opposite: conviction
+  p50 **0.014** (gate stuck at the 0.33 floor), tents **0.62-0.82**.
+  **AND 0.50 IS EXACTLY WHERE THE ASYMMETRY INVERTS** — max profit is
+  `wing − debit`, so at ratio 0.54 you risk 0.54 to win 0.46. Those rejections
+  are CORRECT. Raising the ceiling would buy trades whose payoff is upside-down.
+  ⚠️ The code comment claiming gate 6 is *"MEASURED never-binding: zero 'too far
+  from pin' rejections in the entire QQQ log"* is **FALSE** — it fires **91 times
+  on NVDA**. Measured on one symbol, generalised to all.
+
+- **v4.76 (cont) — BFLY.2: THE WING IS FIXED, AND THAT IS THE REAL CONSTRAINT.**
+  `tests/butterfly_wing_sweep.py` v1.0.
+  `config` defines only `BUTTERFLY_WING_SPX = 25` and `BUTTERFLY_WING_QQQ = 5`;
+  **every other symbol takes the QQQ default of 5 STRIKE INCREMENTS** regardless
+  of price, expected move or volatility. A pin on a quiet day and a violent day
+  get identical wings — when the question is how much of the distribution lands
+  inside them. That plausibly explains NVDA at 0.62-0.82 vs QQQ at 0.41-0.57 for
+  the same thesis.
+  **THE RATIO IS A U-CURVE, NOT MONOTONE.** Verified on a convex synthetic chain:
+  0.76 at 2x, **0.64 at 5x**, then RISING to 0.71 / 0.80 / 0.85 at 8x/12x/16x,
+  with max profit and zone width plateauing after 8x. **So there IS a sweet spot
+  and widening past it is strictly worse** — more capital at risk for the same
+  payoff. Today's default of 5x sits at the minimum on the idealised curve;
+  whether it does on real chains, and whether the minimum SHIFTS PER SYMBOL, is
+  what the tool answers.
+  Measures per width: debit/wing (what the gate reads), max profit in dollars,
+  **zone/EM** (the honest POP stand-in — a butterfly wins anywhere between its
+  breakevens), and **REALIZED** settled on the tape.
+  ⚠️ Priced at MID, no slippage (FRC.1 says the real spread is material, so
+  dollars are OPTIMISTIC — the RANKING survives, the magnitudes do not); 5-minute
+  chain cadence; held to 15:45. **NO BEST WIDTH IS NAMED** — the in-sample argmax
+  is overfit by construction, same discipline as the floor sweep.
+  Reads the PIN the engine identified rather than re-deriving GEX, so there is no
+  second lineage of that logic (§7).
+
 - **v4.75 — 2026-08-14 — WORKING_AGREEMENT 21-25: THE FIVE FAILURE MODES OF
   2026-08-14, WRITTEN DOWN.** At the operator's instruction, so a future thread
   inherits the lessons rather than the mistakes.
