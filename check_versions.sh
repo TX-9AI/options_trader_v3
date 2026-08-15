@@ -552,7 +552,12 @@ check "pull_today_ohlc.sh"               'BOT=$(systemctl is-active optionsbot' 
 check "main.py"                          "DIRECTIONAL_ONLY is EMPTY fleet-wide"  "stale single-names comment corrected"
 
 # ── candle_feed v3.10 (2026-08-04) — the gate that ate the backfill ───────
-check "data/candle_feed.py"              "addendum v3.11"               "v3.11 header present"
+# CV.1 PRECEDENT (2026-08-15): a canary pinning a LITERAL VERSION STRING goes
+# red on every legitimate bump and teaches the operator to ignore a red run.
+# `addendum v3.11` did exactly that at v3.13. Replaced with BEHAVIOUR canaries
+# on the two things that must not silently revert.
+check "data/candle_feed.py"              "extended_trading_hours=ext"   "FEED.2 extended-hours sub"
+check "data/candle_feed.py"              "_maintenance_now()"           "FEED.1 maintenance gate"
 check "data/candle_feed.py"              "def _idle_outside_session"    "v3.11 ONE predicate for both RTH checks"
 
 # ── condor approach telemetry (2026-08-04) — item AI's measurement ────────

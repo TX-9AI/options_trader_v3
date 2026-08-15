@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.89
+# docs/BACKLOG.md — v4.90
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,6 +217,48 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.90 — 2026-08-15 — FEED.3: PRUNING IS OFF, AND THE LOCAL STORE STOPS
+  PRETENDING TO BE AN ARCHIVE.** `candle_feed` v3.14 · `check_versions` · 4 tests
+  (141 total).
+
+  **THE BOUND WAS SIZED FOR THE LIVE LOOP AND KEPT SILENTLY CONSTRAINING
+  ANALYTICAL CONSUMERS THAT ARRIVED LATER — twice now.** PF.2 found the boxes
+  held 84 daily bars while the engine was handed 10 (*"the history was never
+  missing — the frame was"*), and LIQ.6's 10-day section lookback landed on
+  **exactly** the 240-row 1h ceiling with zero margin.
+
+  **AND IT WAS NEVER BUYING ANYTHING.** Measured: a FULL YEAR of every interval
+  with extended hours is **54 MB per box**, on an 8 GB root. Ten days is 1.5 MB.
+  **The pruner was tidiness, not capacity.**
+
+  **THE DIVISION OF LABOUR (operator's):** boxes retain what they collect —
+  enough to keep the engines warm — **S3 is the archive**, the conductor fans
+  out in groups of 5, and **weekend reporting reads the bucket** rather than
+  requiring any box to be awake. That is strictly better than today, where
+  reports depend on the fleet having pushed to control first.
+  ⚠️ RECOMMENDATION HELD: keep the CONTINUOUS push and make the Friday fan-out a
+  VERIFY-AND-BACKFILL sweep. If the push moves to Friday-only, a box that dies
+  on Wednesday takes the week with it and the local store is the only copy.
+
+  ⚠️ `OT_PRUNE_KEEP_ROWS=<n>` re-enables a flat cap — kept as a mechanism rather
+  than deleted so reversing it is one env var, not a code change.
+  ⚠️ **THE POISON PURGE IS UNTOUCHED.** It deletes BAD rows (non-positive
+  prices, 2038-stamped DXFeed rollover junk that would sort to the top of a DESC
+  window and masquerade as the newest bar), not OLD ones.
+
+  **🔴 AND IT CAUGHT A LIVE BUG IN FEED.2.** The prune loop still unpacked a
+  **3-tuple** after `self.subs` widened to four. It would have raised at runtime
+  after `PRUNE_EVERY_S` inside the flush path, **on a box in production** —
+  `--once` exits before the first prune and no test touched it. **Found by
+  accident while reading the call site, not by looking.** A test now asserts
+  every consumer matches the declared arity, so widening it again cannot leave a
+  straggler.
+
+  ⬜ CV.1 PRECEDENT APPLIED: `check_versions` pinned the literal string
+  `addendum v3.11`, which went red on a legitimate bump. **A canary that fails on
+  every version change teaches the operator to ignore a red run.** Replaced with
+  BEHAVIOUR canaries on the extended-hours sub and the maintenance gate.
+
 - **🔴 v4.89 — 2026-08-15 — FEED.2: THE OVERNIGHT TAPE WAS NEVER UNAVAILABLE.
   WE WERE ASKING DXFEED TO EXCLUDE IT.** `candle_feed` v3.13 · `main` · 7 tests.
   **THIS CLOSES THE OFF-HOURS LIQUIDITY QUESTION.**

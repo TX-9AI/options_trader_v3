@@ -100,3 +100,43 @@ def test_retention_covers_the_section_lookback():
     from analysis.liquidity_mapper import LiquidityMapper
     keep_rows = 240
     assert keep_rows / 24.0 >= LiquidityMapper.SECTION_LOOKBACK_DAYS
+
+
+# ── FEED.3 — no pruning, and the tuple-shape trap ──────────────────────────
+
+def test_every_subs_consumer_unpacks_the_SAME_arity():
+    """⚠️ I FOUND ONE OF THESE BY ACCIDENT, NOT BY LOOKING.
+
+    FEED.2 widened `self.subs` from a 3-tuple to a 4-tuple. The prune loop still
+    unpacked THREE and would have raised at runtime — but only after
+    `PRUNE_EVERY_S`, inside the flush path, on a box in production. Nothing in
+    the test suite touched it and `--once` exits before the first prune.
+
+    This asserts every consumer matches the declared arity, so widening the
+    tuple again can never leave a straggler."""
+    import re
+    decl = re.search(r"self\.subs:\s*List\[Tuple\[([^\]]+)\]\]", FEED_SRC)
+    arity = len(decl.group(1).split(","))
+    unpacks = re.findall(r"for \(([^)]+)\) in self\.subs", FEED_SRC)
+    assert unpacks, "no consumers found - did the loop shape change?"
+    for u in unpacks:
+        assert len(u.split(",")) == arity, \
+            f"unpack '{u}' has {len(u.split(','))} names, declared arity is {arity}"
+
+
+def test_pruning_is_off_by_default():
+    """Measured: a FULL YEAR of every interval with extended hours is ~54 MB per
+    box, on an 8 GB root. Ten days is 1.5 MB. **The pruner was tidiness, not
+    capacity** — and the bound, sized for the live loop, silently constrained
+    analytical consumers TWICE: PF.2 (84 daily bars held, 10 handed to the
+    engine) and LIQ.6's 10-day lookback landing on the 240-row ceiling."""
+    import data.candle_feed as cf
+    assert cf.PRUNE_KEEP_ROWS == 0
+
+
+def test_the_POISON_purge_is_untouched():
+    """It deletes BAD rows — non-positive prices, 2038-stamped DXFeed rollover
+    junk that would sort to the top of a DESC window and masquerade as the
+    newest bar — not OLD ones. Disabling age-pruning must not disable it."""
+    assert "DELETE FROM candles WHERE open <= 0" in FEED_SRC
+    assert "purged %d poison candle row(s)" in FEED_SRC

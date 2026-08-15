@@ -1,5 +1,25 @@
 """
-data/candle_feed.py  addendum v3.13 (see below); original header follows.
+data/candle_feed.py  addendum v3.14 (see below); original header follows.
+v3.14  2026-08-15  FEED.3: PRUNING IS OFF. `PRUNE_KEEP_ROWS=0` by default.
+        THE BOUND WAS SIZED FOR THE LIVE LOOP and kept silently constraining
+        analytical consumers that arrived later. Twice now: PF.2 found the boxes
+        held 84 daily bars while the engine was handed 10 ("the history was
+        never missing - the frame was"), and LIQ.6's 10-day section lookback
+        landed on exactly the 240-row 1h ceiling with ZERO margin.
+        AND IT WAS NEVER BUYING ANYTHING. Measured: a FULL YEAR of every
+        interval with extended hours is **54 MB per box**, on an 8 GB root. Ten
+        days is 1.5 MB. The pruner was tidiness, not capacity.
+        The local store keeps what it collects; S3 is the archive and weekend
+        reporting reads the bucket, so the box is no longer the deep copy of
+        anything. OT_PRUNE_KEEP_ROWS=<n> re-enables a flat cap - kept as a
+        mechanism rather than deleted so reversing it is one env var.
+        THE POISON PURGE IS UNTOUCHED and must stay: it deletes BAD rows
+        (non-positive prices, 2038-stamped DXFeed rollover junk), not OLD ones.
+        ALSO FIXED HERE: the prune loop still unpacked a 3-TUPLE after FEED.2
+        widened `self.subs` to four. It would have raised at runtime after
+        PRUNE_EVERY_S inside the flush path, on a box in production - `--once`
+        exits before the first prune and no test touched it. A test now asserts
+        every consumer matches the declared arity.
 v3.13  2026-08-15  FEED.2: THE OVERNIGHT TAPE WAS NEVER UNAVAILABLE - WE WERE
         ASKING DXFEED TO EXCLUDE IT. `subscribe_candle` takes
         `extended_trading_hours: bool = False`, and on False the SDK appends
@@ -266,7 +286,11 @@ def feed_db_path() -> str:
 
 SESSION_OPEN_HM   = (9, 30)          # ET
 FLUSH_INTERVAL_S  = 2.0              # buffer -> SQLite cadence (also heartbeat)
-PRUNE_FACTOR      = 4                # keep count*FACTOR rows per interval
+PRUNE_FACTOR      = 4                # legacy; unused while PRUNE_KEEP_ROWS is 0
+# FEED.3: 0 = NO PRUNING (default). Set OT_PRUNE_KEEP_ROWS to a positive row
+# count to re-enable a flat per-(symbol,interval) cap. Kept as a mechanism
+# rather than deleted so it is one env var to reverse, not a code change.
+PRUNE_KEEP_ROWS   = int(os.environ.get("OT_PRUNE_KEEP_ROWS", "0"))
 PRUNE_EVERY_S     = 300
 RECONNECT_MIN_S   = 3
 
@@ -976,11 +1000,32 @@ class CandleFeed:
                             if once and quiet_since is not None and (now - quiet_since) > 8.0:
                                 logger.info("--once: backfill drained, exiting")
                                 return
-                        if _time.time() - last_prune >= PRUNE_EVERY_S:
-                            for (dx_sym, tf, _s) in self.subs:
+                        # ── FEED.3 (2026-08-15) — PRUNING IS OFF BY DEFAULT ──
+                        # ⚠️ THE BOUND WAS SIZED FOR THE LIVE LOOP AND KEPT
+                        # SILENTLY CONSTRAINING ANALYTICAL CONSUMERS THAT
+                        # ARRIVED LATER. It has now bitten twice: PF.2 found the
+                        # boxes held 84 daily bars while the engine was handed
+                        # 10 ("the history was never missing - the frame was"),
+                        # and LIQ.6's 10-day section lookback landed on exactly
+                        # the 240-row 1h ceiling with ZERO margin.
+                        #
+                        # AND IT WAS NEVER BUYING ANYTHING. Measured: a FULL
+                        # YEAR of every interval, extended hours, is **54 MB per
+                        # box** - on an 8 GB root. Ten days is 1.5 MB. The
+                        # pruner was tidiness, not capacity.
+                        #
+                        # Operator's call: no pruning. The local store keeps
+                        # what it collects; S3 is the archive and the weekend
+                        # reporting reads the bucket, so the box no longer has
+                        # to be the deep copy of anything.
+                        # ⚠️ THE POISON PURGE IS UNTOUCHED AND MUST STAY - it
+                        # deletes BAD rows (non-positive prices, 2038-stamped
+                        # DXFeed rollover junk), not OLD ones. Different method,
+                        # different purpose.
+                        if PRUNE_KEEP_ROWS and _time.time() - last_prune >= PRUNE_EVERY_S:
+                            for (dx_sym, tf, _s, _e) in self.subs:
                                 sym = self.symbol_map[(dx_sym, tf)]
-                                need = TIMEFRAMES.get(tf, {}).get("candles", 60)
-                                self.store.prune(sym, tf, max(need, 60) * PRUNE_FACTOR)
+                                self.store.prune(sym, tf, PRUNE_KEEP_ROWS)
                             self.store.commit()
                             last_prune = _time.time()
             except asyncio.CancelledError:
