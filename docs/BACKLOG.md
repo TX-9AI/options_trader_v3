@@ -217,6 +217,49 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.75 — 2026-08-14 — WORKING_AGREEMENT 21-25: THE FIVE FAILURE MODES OF
+  2026-08-14, WRITTEN DOWN.** At the operator's instruction, so a future thread
+  inherits the lessons rather than the mistakes.
+
+  **21 — A TEST THAT READS SOURCE TEXT PROVES NOTHING ABOUT RUNTIME.** 162 tests
+  passed over a `NameError` that crash-looped every box opening a condor leg
+  ~7.5 min later. Twelve tests covered that path; every one asserted the SOURCE
+  contained `is_trend_participation(record)` — which it did. **The name was never
+  bound.** Rule 20 one level up. Now: at least one test per exit path CALLS
+  `evaluate()` with a real record, in BOTH fresh and rehydrated shape, and a
+  chain test must include HOP 0 — the dispatch. **The proof a test is real is
+  that it FAILS against the broken version.**
+
+  **22 — A FIELD READ OFF `record` MUST BE A COLUMN.** `is_trend_credit` is not
+  one of the 69; `SELECT *` dropped it on every restart, and a restart happens on
+  every bake. **Prefer DERIVING over adding a column** — a column fixes tomorrow
+  and leaves today's open rows reading `None` as `False`. Derivation must FAIL
+  CLOSED. Same rule for in-memory engine state: the condor ratchet's earned tier
+  was reset by every bake.
+
+  **23 — FIX THE HOP UPSTREAM.** Five of the nine audit findings were introduced
+  the same day, each while fixing the previous one, and the pattern was identical
+  every time: repaired where found, feeding hop never checked. Changed the
+  record's `strategy` field without checking what DISPATCHES on it; added a call
+  without checking the IMPORT. **grep every READER, not just the writer. Ship
+  coupled changes in ONE commit.**
+
+  **24 — VERIFY THE EDIT LANDED.** The `NameError` came from a scripted
+  `.replace()` whose anchor appears ZERO times in the target — it succeeded,
+  changed nothing, reported nothing. Assert the anchor matched; read back the
+  result; `python -c "import <module>"` catches an unbound name in one second and
+  was not run. **Canaries check BEHAVIOUR, never a version string** — four were
+  failing at HEAD purely because those files legitimately advanced, training the
+  reader to skim past failures while a real one looks identical.
+
+  **25 — READ EVERY `.md` BEFORE WRITING CODE.** The thread's opening instruction.
+  Reading on demand instead cost a **774-line duplicate** of
+  `tests/replay_confluence.py` (which has done as-of replay since 2026-07-21) that
+  **reintroduced the exact bug its v2.2 prevents**, a live module modified for a
+  test artifact without consulting `FILE_MAP.md`, a doc file created against
+  `docs/README.md`, and two days of priority ranking done without `ROADMAP.md`.
+  All reverted.
+
 - **ALL 29 WILL TRADE MONDAY, NOT THE USUAL ~15.** Read from source rather than
   assumed: `orchestrator.run()` starts only its `wake_list` and never STOPS a
   box outside it, and `main.py` has NO selection gate — a running bot trades
@@ -438,55 +481,6 @@ The DESK pile is the only part of this list under our direct control; DESK·DATA
 unblocks itself on the calendar. Drive DESK to zero and the freeze waits on data
 alone, not on us.
 
-
-### AUD — 2026-08-14 ADVERSARIAL AUDIT (all ten trade pathways; findings runtime-proven)
-
-Full report: `HANDOFF_ADVERSARIAL_AUDIT` deliverable, ADVERSARIAL_AUDIT_FINDINGS_2026-08-14.md.
-Every 🔴 was reproduced by EXECUTING the engine against `3d9e82e`, not read off the source.
-
-- ◐ **AUD.F1/F2 [DESK→DEPLOY] — 🔴 exit_engine v4.21: the v4.20 fix never bound, the dispatch never routed.**
-  `is_trend_participation` was called and never imported (NameError on every condor
-  tick → 30-error crash loop ~7.5 min after any condor leg opens), and new TC.6
-  records (strategy="TrendCreditSpread") fell to `_evaluate_sweep` — KeyError on
-  the first fresh tick, then sign-inverted post-target-trail management after the
-  restart, TypeError below the nickel. BUILT + proven (9/9 executing tests, suite
-  born red 9/9 against 3d9e82e). ✅ when BAKED.
-- ◐ **AUD.F4 [DESK→DEPLOY] — condor ratchet survives restarts** (exit_engine
-  v4.21): earned tier now emitted via new_trail_stop → trail_stop column, seeded
-  back on restart with the 0<persisted<base_stop guard. ✅ when BAKED.
-- ◐ **AUD.F6 [DESK→DEPLOY] — TC.6 rows stop claiming condor identity** (main
-  v6.9 + position_manager v3.2, PAIRED COMMIT): is_condor_leg=0/condor_leg_num=0
-  for TC.6, notify_leg_filled and the Telegram stop line gated on _is_tcs,
-  premium fetch keyed on structure. ✅ when BAKED. ⚠️ analysis note: rows written
-  BEFORE this bake carry is_condor_leg=1 with setup_type trend_credit_* — filter
-  by setup_type, not the flag, when splitting condor vs TC.6 populations.
-- ⬜ **AUD.F3 [GO-LIVE GATE] — live exit ladder loses idempotency across a
-  restart.** `_live_exit_order_id`/`_live_exit_fills` are in-memory; a restart
-  mid-ladder can double-close a live position (naked short). Zero risk in paper.
-  Fix before ANY live capital: persist the working order id, or adopt working
-  close orders from broker open-orders at startup before the first exit submits.
-- ⬜ **AUD.F5 [DESK] — condor plan state is in-memory; a restart between Leg 1
-  and Leg 2 orphans the structure permanently and silently.** Design choice
-  needed: persist plan JSON (integrator_state.json pattern) vs reconstruct
-  LEG1_FILLED from the open leg row at startup. Either way, log the resurrection.
-- ⬜ **AUD.F7 [DECISION → then DESK] — entry and exit still disagree about
-  BREAKOUT_VOLATILE, split by setup_type.** A standalone/handoff continuation is
-  regime_flip'd by favorable acceleration into BREAKOUT_VOLATILE (candidate
-  contributor to the n=135 regime_flip family); a breakout continuation survives
-  on the directionless label even when the trend vote flips. Operator call:
-  should direction-consistent BREAKOUT_VOLATILE keep a continuation alive? If
-  yes, `still_trending` should read the trend VOTE (already passed in, unused).
-- ⬜ **AUD.F8 [DESK] — AFD.1 pre-dispatch stopped journaling afternoon debit
-  refusals** (gate_block:afternoon_debit population ended 08-14). If AFD.1's
-  cost is ever to be measured from its own rejections, journal a minimal refusal
-  from the pre-dispatch block.
-- ⬜ **AUD.F9 [RULE] — WORKING_AGREEMENT candidate §21: a chain test must
-  include hop 0 (the dispatch), and every exit path needs at least one test
-  that EXECUTES evaluate() with fresh-shape AND rehydrated-shape records.**
-  All four runtime failures above passed 162 source-text tests.
-- Matrix verdicts recorded in the audit report: ORB / Sweep / Butterfly /
-  rolled-condor-leg CLEAN on the audited axes; roll reachability is gate math
-  (both legs open + risk-free credit), not unreachability.
 
 ### EPOCH 1 — SCRUB & INSTRUMENT — Wed Jul 29 → Sun Aug 9
 
@@ -5123,36 +5117,6 @@ before BB was computable) recorded above. Worth knowing before reading either.*
 
 *Moved here 2026-07-30. It had grown to ~295 lines sitting ABOVE the work, so
 opening the file showed history before it showed anything still to do.*
-
-- **🔴 v4.75 — 2026-08-14 — ADVERSARIAL AUDIT: v4.74'S FIX NEVER RAN, AND THE
-  IDENTITY FIX RE-CUT THE WIRE AT THE DISPATCH.** exit_engine **v4.21** · main
-  **v6.9** · position_manager **v3.2** · check_versions **v4.52** ·
-  tests/test_exit_dispatch_runtime.py **v1.0** (9 tests; born red 9/9 against
-  3d9e82e). Full report ADVERSARIAL_AUDIT_FINDINGS_2026-08-14.md; items filed
-  as AUD.F1–F9 in PART 1.
-  **F1:** `is_trend_participation` was called at exit_engine:1463 and never
-  imported — NameError on every condor-leg tick and every legacy TC.6 row,
-  escaping into the tick loop's error counter: sys.exit(1) ~7.5 min after any
-  condor leg opens, systemd crash-loop until 15:45. **F2:** evaluate() only
-  routed strategy=="IronCondorStrategy" to the condor evaluator, so every NEW
-  TC.6 record (strategy="TrendCreditSpread" since v6.8) fell to the DEBIT
-  sweep evaluator — KeyError 'trail_activation' on the first fresh tick;
-  post-restart, the $0.05 nickel target read as a debit TP satisfied from tick
-  one, parking the position in the ORB post-target trail with SIGN-INVERTED
-  P&L labels and the 15:40 ladder it is supposed to be exempt from; TypeError
-  below the nickel. **Neither the 08-14 hotfix nor v4.20 ever executed in the
-  configuration that ships** — both repaired a branch the dispatch no longer
-  reached. All four failures REPRODUCED AT RUNTIME, and the fix verified the
-  same way. **F4:** the condor ratchet's earned tier now persists through the
-  trail_stop column and re-seeds on restart (standalone branch only — v4.17
-  scope preserved and pinned by test). **F6:** TC.6 rows stop claiming
-  is_condor_leg/condor_leg_num, notify_leg_filled and the Telegram stop line
-  gate on _is_tcs, and position_manager prices spreads by structure — a PAIRED
-  commit, because removing the flag alone would have dropped TC.6 pricing to
-  the single-leg path. **THE LESSON (AUD.F9):** every test on this chain was a
-  source-text assertion; a mention is not a binding, and hop 0 — the dispatch —
-  was never asserted. The new suite EXECUTES the evaluator with both record
-  shapes (fresh and rehydrated differ in exactly the keys that kept breaking).
 
 - **🔴 v4.74 — 2026-08-14 — TCS.2 STAGE 1: THE TC.6 EXIT DIED ON EVERY RESTART.**
   `strategy/structure.py` v1.0 (new) · `exit_engine` v4.20 · 8 tests (162 total).

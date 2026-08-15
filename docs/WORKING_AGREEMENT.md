@@ -309,6 +309,136 @@ carries a deliberate-failure check.
 
 ---
 
+## 21. A TEST THAT READS SOURCE TEXT PROVES NOTHING ABOUT RUNTIME.
+
+Added 2026-08-14, after **162 tests passed over a `NameError` that crash-looped
+every box that opened a condor leg.**
+
+`exit_engine` v4.20 called `is_trend_participation(record)` and **never imported
+it.** Twelve tests covered that path. Every one asserted the *source text*
+contained the string `is_trend_participation(record)` — which it did. **The bug
+was that the name was never bound.** The tests asserted the MENTION of the thing
+whose BINDING was missing. That is Rule 20 one level up: there, a canary matched
+a changelog describing a removal; here, a chain test matched a call it could not
+execute.
+
+The cost was not theoretical. The exception escaped into the tick loop's error
+counter — 30 errors at 15s ticks — so `sys.exit(1)` about **7.5 minutes after any
+condor leg opened**, then a systemd crash-loop.
+
+**THE RULE, in three parts:**
+
+1. **At least one test per exit path must CALL `evaluate()`** with a realistic
+   record and assert on the returned decision. Not the source, the decision.
+2. **In BOTH shapes: fresh and rehydrated.** A record built by `make_record`
+   carries in-memory keys; the same record after `SELECT *` carries only
+   columns. **The two differ in exactly the fields that keep breaking.**
+3. **A chain test must include HOP 0 — the dispatch.** "The exit gates on the key
+   the record sets" is vacuous if the record never reaches that gate. It did not:
+   `evaluate()` routed on `strategy == "IronCondorStrategy"`, and the fix three
+   hours earlier had changed that field to `"TrendCreditSpread"`.
+
+**The proof a test is real:** it FAILS against the broken version. Run it against
+HEAD before the fix. If it passes there, it is testing something else.
+
+---
+
+## 22. A FIELD READ OFF `record` MUST BE A COLUMN, OR IT DIES ON RESTART.
+
+Added 2026-08-14. `is_trend_credit` was written into the in-memory `TradeRecord`
+and is **not one of the 69 columns**. `get_open_trades_live()` does `SELECT *`,
+so **every restart rehydrated an open position without it** and the exit branch
+gated on it silently stopped firing. **A restart happens on every bake.**
+
+**Before adding any field that management or exit logic reads: check the
+`CREATE TABLE trades` column list.** If it is not there, either add the column or
+**derive the value from fields that are.**
+
+⚠️ **PREFER DERIVING.** A new column fixes tomorrow and not today: every position
+opened before the migration still rehydrates without it, `SELECT *` returns
+`None`, and `None` reads as `False` — **the exact failure, silently.** Deriving
+works on rows that already exist. See `strategy/structure.py`.
+
+⚠️ **AND DERIVATION MUST FAIL CLOSED.** An unrecognised record gets the most
+restrictive management, never the loosest. A misread must not hand a position a
+looser exit than it earned.
+
+The same applies to in-memory dicts on the engine: `self._condor_ratchet` held an
+earned stop tier that **every bake reset to the base stop**. If state must
+survive a restart, it rides a column.
+
+---
+
+## 23. FIX THE HOP UPSTREAM, NOT JUST THE ONE THAT BROKE.
+
+Added 2026-08-14, after an adversarial audit found nine defects — **five of them
+introduced the same day, each while fixing the previous one.** The pattern was
+identical every time: **the defect was repaired where it was found, and the hop
+that FEEDS it was never checked.**
+
+- Changed the record's `strategy` field. Did not check what DISPATCHES on it.
+  → every new record routed to the debit evaluator.
+- Added a call. Did not check the IMPORT. → `NameError`.
+- Stopped stamping `is_condor_leg` on one trade type. `position_manager` priced
+  spreads by exactly that flag. → the fix would have broken pricing had the
+  paired change not shipped in the same commit.
+
+**Before shipping a change to any field, flag or name: `grep` for every READER,
+not just the writer you are editing.** A patch that fixes the writer and not the
+reader is the bug being fixed, moved one file over.
+
+**And ship coupled changes in ONE commit.** If A breaks without B, they are one
+change wearing two filenames.
+
+---
+
+## 24. VERIFY THE EDIT LANDED. A SILENT NO-OP LOOKS EXACTLY LIKE SUCCESS.
+
+Added 2026-08-14. The `NameError` above came from a scripted `.replace()` whose
+anchor string **appears zero times in the target file.** The replace succeeded,
+changed nothing, reported nothing, and the call site landed without its import.
+
+**Any scripted edit must assert its anchor matched** — `assert s.count(old) == 1`
+before replacing — and **any edit must be verified by reading back the RESULT**,
+not by the absence of an error. `python -c "import <module>"` catches an unbound
+name in one second; it was not run.
+
+⚠️ Related: **a canary pinned to a VERSION STRING rots on the next legitimate
+bump.** Four canaries checking for `v6.1` and `v1.6` were failing at HEAD purely
+because those files had advanced — training the reader to skim past failures
+while a real one looks identical. **Canaries check BEHAVIOUR** — a dispatch
+clause, a conditional — **never a version number.**
+
+---
+
+## 25. READ EVERY `.md` IN BOTH REPOS BEFORE WRITING CODE. NOT ON DEMAND.
+
+Added 2026-08-14, at the operator's instruction, after the cost was paid.
+
+The thread's opening instruction was *"read all available md files in both
+repos."* `BACKLOG`, `WORKING_AGREEMENT` and `MECHANICS` were read on demand;
+`ROADMAP`, `VALIDATION`, `HISTORY`, `FILE_MAP` and the whitepaper were not read
+at all. Two days of work sat on that gap.
+
+**What it cost:**
+- A **774-line replay simulator** was built that duplicated
+  `tests/replay_confluence.py`, which had done as-of replay with
+  `--warm-sessions` **since 2026-07-21** — and the rebuild reintroduced the exact
+  bug that file's v2.2 shipped to prevent (uncapped frames, so the replay sees
+  more history than live). It reported *"100% of the trend vote live"* as an
+  achievement. **By this repo's own standard that is the defect.**
+- A **live module with 14 call sites across five files** was modified to serve
+  that test artifact, without consulting `FILE_MAP.md` as Rule 7 requires.
+- A **new doc file** was created against `docs/README.md`'s explicit rule.
+- Priorities were ranked for two days **without `ROADMAP.md`**, the document that
+  defines the critical path.
+
+All of it was reverted. **`docs/README.md` routes by question — read it first,
+then read the rest before writing anything.** The half hour costs less than one
+duplicate module.
+
+---
+
 ### Companion files
 - **OBSERVATIONS.md** — evidenced findings about the *system*, deferred fixes.
 - **ROADMAP.md** — the L1→L2→L3 build plan and where each piece stands.
