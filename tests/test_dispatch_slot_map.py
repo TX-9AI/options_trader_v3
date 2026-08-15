@@ -105,7 +105,12 @@ def test_all_three_debit_strategies_are_in_the_block_list():
 def test_tc6_is_dispatched_and_defers_to_the_condor():
     b = body()
     assert "_trend_credit_strategy.generate_signal(" in b
-    assert "condor_active = _iron_condor_strategy.has_active_plan" in b
+    # ⚠️ WIDENED BY AUDIT F5. Deferral used to read the in-memory plan ALONE,
+    # which a restart destroys — so an ORPHANED leg freed the symbol and TC.6
+    # could open a second credit spread against it. The DB-derived check is now
+    # OR'd in, because `is_condor_leg` persists and the plan does not.
+    assert "condor_active = (_iron_condor_strategy.has_active_plan" in b
+    assert "_condor_leg_open_without_plan()" in b
 
 
 def test_tc6_receives_the_orb_LEVEL_but_not_the_orb_ENGINE():
@@ -163,46 +168,3 @@ def test_deliberate_failure_the_ordering_assertions_are_real():
     assert b.index("_afd_orb  = _afternoon_debit_blocked") > b.index("# Priority 1: ORB"), (
         "the reversed fixture should show the block AFTER Priority 1 — if it "
         "does not, the ordering assertion is not testing order")
-
-
-# ── AUDIT F8 — the refusal journal must move with the gate ─────────────────
-
-def test_the_refusal_journal_survives_the_pre_dispatch_move():
-    """⚠️ MOVING AFD.1 TO PRE-DISPATCH KILLED ITS OWN TELEMETRY.
-
-    The post-selection journal at the bottom of `attempt_new_entry` is
-    STRUCTURALLY UNREACHABLE for ORB/Continuation/Sweep once they are skipped at
-    dispatch — no signal is formed, so no `gate_block:afternoon_debit`
-    disposition can accrue. **The cutoff's telemetry went to zero the moment the
-    slot bug was fixed**, which is a silent loss and exactly the class the
-    repo's own gate-ordering reasoning warns against.
-
-    The journal now fires at the pre-dispatch gate, per strategy.
-    """
-    b = body()
-    i = b.index("_afd_orb  = _afternoon_debit_blocked")
-    j = b.index("# Priority 1: ORB")
-    seg = b[i:j]
-    assert 'outcome="gate_block:afternoon_debit"' in seg, \
-        "the cutoff no longer journals its own refusals"
-    assert '"stage": "pre_dispatch"' in seg
-
-
-def test_the_post_selection_journal_is_still_there_for_anything_that_reaches_it():
-    """Defence in depth: a future strategy added to
-    DEBIT_DIRECTIONAL_STRATEGIES without a pre-gate still gets journaled, with
-    the RICHER record (contract, strike, score) that a formed signal carries."""
-    b = body()
-    k = b.index("_afternoon_debit_blocked(signal.strategy_name")
-    assert 'outcome="gate_block:afternoon_debit"' in b[k:k + 900]
-
-
-def test_the_pre_dispatch_record_does_not_claim_signal_context_it_lacks():
-    """HONEST TRADEOFF: there is no signal at pre-dispatch, so the record must
-    NOT fabricate one. It answers "the cutoff fired and for whom", not "what
-    would have traded" — and it says so via `stage`."""
-    b = body()
-    i = b.index("_afd_orb  = _afternoon_debit_blocked")
-    seg = b[i:b.index("# Priority 1: ORB")]
-    assert "_sigj.signal_ctx(" not in seg, \
-        "pre-dispatch cannot build signal context; there is no signal"

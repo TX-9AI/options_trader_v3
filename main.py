@@ -1,18 +1,5 @@
 """
 main.py — options_trader v6.10
-v6.10  2026-08-15  AUDIT F8: the AFD.1 refusal journal moved with the gate.
-        Putting the cutoff at PRE-DISPATCH (so a blocked debit strategy could
-        not consume the afternoon slot) made the POST-SELECTION journal
-        structurally unreachable for ORB/Continuation/Sweep - they are skipped,
-        so no signal is formed to carry a `gate_block:afternoon_debit`
-        disposition. **The cutoff's telemetry went to zero the moment the slot
-        bug was fixed.** Now journaled per strategy at the pre-dispatch gate.
-        HONEST TRADEOFF: no signal exists there, so the record carries no
-        contract, strike or score - it answers "the cutoff fired and for whom",
-        not "what would have traded", and marks itself `stage=pre_dispatch`.
-        The richer post-selection record is RETAINED as defence in depth for
-        any future strategy added to DEBIT_DIRECTIONAL_STRATEGIES without a
-        pre-gate.
 v6.9 — 2026-08-14 — AUDIT F6: A TC.6 RECORD IS NOT A CONDOR LEG.
         `_execute_condor_leg` still stamped is_condor_leg=1 and
         condor_leg_num=2 onto every trend credit spread, called
@@ -1593,6 +1580,47 @@ def _afternoon_debit_blocked(strategy_name: str, now) -> bool:
     return (now.hour, now.minute) >= tuple(DEBIT_DIRECTIONAL_CUTOFF_ET)
 
 
+def _condor_leg_open_without_plan() -> bool:
+    """True if a condor leg is OPEN but no in-memory plan owns it.
+
+    ⚠️ AUDIT F5 — THE PLAN IS PROCESS-LOCAL AND A RESTART ORPHANS THE
+    STRUCTURE. `IronCondorStrategy._plan` lives in memory only. On a restart
+    with leg 1 filled and leg 2 pending, the plan is GONE — and the plan is the
+    only thing that knew leg 2's TRIGGER PRICE, which is in no column, so the
+    structure can never complete. **A restart happens on every bake.**
+
+    THE ORPHANED LEG ITSELF IS FINE: `_condor_sibling_open()` reads the DB,
+    returns False, and CND.7 correctly manages it as a STANDALONE vertical with
+    the ratchet it earns. That part needs no fix.
+
+    WHAT BREAKS IS DEFERRAL. `has_active_plan` goes False, so **TC.6 stops
+    standing down and can open a SECOND credit spread on the same underlying**
+    while the orphan is still open — two credit verticals on one symbol, which
+    nothing sizes or manages as a pair.
+
+    So the symbol stays OCCUPIED as long as a condor leg is open, derived from
+    the same persisted fields `_condor_sibling_open` already trusts
+    (`is_condor_leg`, `status='open'`) rather than from a plan that did not
+    survive. FAILS CLOSED: on any error, treat the symbol as occupied — a
+    missed trade costs less than an unmanaged pair.
+    """
+    try:
+        from database.trade_logger import get_trade_logger
+        n = sum(1 for t in get_trade_logger().get_open_trades()
+                if t.get("is_condor_leg") and t.get("symbol") == INSTRUMENT)
+        # say it ONCE if there is no plan behind them - a restart mid-structure
+        # is otherwise indistinguishable from a normal standalone leg.
+        try:
+            _iron_condor_strategy.report_orphaned_plan(n)
+        except Exception:                                      # noqa: BLE001
+            pass
+        return n > 0
+    except Exception as exc:                                   # noqa: BLE001
+        logger.warning("[F5] could not check for an orphaned condor leg (%s) - "
+                       "treating the symbol as OCCUPIED", exc)
+        return True
+
+
 def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     """Try to generate and execute a trade signal."""
     session  = get_session_guard()
@@ -1715,7 +1743,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
         # bottom of this function STRUCTURALLY UNREACHABLE for these three
         # strategies: they are skipped, so no signal is ever formed to carry a
         # `gate_block:afternoon_debit` disposition. **The cutoff's telemetry
-        # went to zero the moment the slot bug was fixed** — a silent loss, and
+        # went to zero the moment the slot bug was fixed** - a silent loss, and
         # exactly the class the repo's own gate-ordering reasoning warns about.
         # ⚠️ HONEST TRADEOFF, STATED: there is no SIGNAL here, so this record
         # carries no contract, strike or score. It answers "the cutoff fired and
@@ -1975,7 +2003,8 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
                 orb_low       = _orb_lo,
                 session_high  = _tcs_hi,
                 session_low   = _tcs_lo,
-                condor_active = _iron_condor_strategy.has_active_plan)))
+                condor_active = (_iron_condor_strategy.has_active_plan
+                                 or _condor_leg_open_without_plan()))))
         if tcs_sig is not None:
             _execute_condor_leg(tcs_sig, state, ctx)
             return

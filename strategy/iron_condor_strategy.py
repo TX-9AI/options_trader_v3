@@ -270,6 +270,7 @@ class IronCondorStrategy(BaseOptionsStrategy):
 
     def __init__(self):
         self._plan: Optional[CondorPlan] = None
+        self._orphan_said: bool = False   # F5: warn once, not every tick
         self._last_reset_date: Optional[str] = None
 
     @property
@@ -281,6 +282,29 @@ class IronCondorStrategy(BaseOptionsStrategy):
         if self._last_reset_date != today:
             self._plan            = None
             self._last_reset_date = today
+
+    def report_orphaned_plan(self, open_condor_legs: int) -> None:
+        """Say so ONCE when a condor leg is open with no plan behind it.
+
+        ⚠️ AUDIT F5. The plan is process-local, so a restart mid-structure loses
+        it — and with it leg 2's TRIGGER PRICE, which is in no column. **The
+        structure can never complete**, and until now nothing said so: the leg
+        simply sat there looking like a standalone vertical, and the only signal
+        was a condor that never got its second side.
+
+        A restart happens on EVERY BAKE, so this is not an edge case. Silence
+        here is the same failure as VEL.1 and the AFD.1 slot bug — a state
+        nobody could distinguish from normal.
+        """
+        if open_condor_legs > 0 and self._plan is None and not self._orphan_said:
+            self._orphan_said = True
+            logger.warning(
+                "[F5] %d condor leg(s) OPEN with NO PLAN in memory - the plan "
+                "did not survive a restart and leg 2's trigger price is "
+                "unrecoverable. The structure CANNOT complete; the open leg is "
+                "now a STANDALONE vertical and is managed as one. The symbol "
+                "stays occupied so no second credit spread is opened against "
+                "it.", open_condor_legs)
 
     @property
     def has_active_plan(self) -> bool:

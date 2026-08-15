@@ -134,3 +134,64 @@ def test_mirror_matches_the_engine_source():
         "the ratchet scope branch is gone from exit_engine"
     assert "stop_level, tier = base_stop" in src, \
         "the formed-condor path no longer falls back to the base floor"
+
+
+# ── AUDIT F5 — a restart orphans the condor structure ──────────────────────
+
+def test_f5_an_orphaned_leg_keeps_the_symbol_occupied():
+    """⚠️ THE PLAN IS PROCESS-LOCAL AND A RESTART HAPPENS ON EVERY BAKE.
+
+    `IronCondorStrategy._plan` lives in memory only. Restart with leg 1 filled
+    and leg 2 pending and the plan is GONE — along with leg 2's TRIGGER PRICE,
+    which is in NO COLUMN, so the structure can never complete.
+
+    The orphaned leg itself is fine: `_condor_sibling_open()` reads the DB and
+    CND.7 manages it as a standalone vertical. **What broke is DEFERRAL** —
+    `has_active_plan` goes False, so TC.6 stops standing down and can open a
+    SECOND credit spread on the same underlying. Two credit verticals on one
+    symbol, sized and managed as neither.
+    """
+    src = open(os.path.join(os.path.dirname(__file__), "..", "main.py"),
+               encoding="utf-8").read()
+    assert "def _condor_leg_open_without_plan(" in src
+    i = src.index("condor_active = (_iron_condor_strategy.has_active_plan")
+    assert "_condor_leg_open_without_plan()" in src[i:i + 200], \
+        "TC.6 no longer defers to an orphaned condor leg"
+
+
+def test_f5_it_fails_CLOSED():
+    """A missing input must not free the symbol. On any error the symbol is
+    treated as OCCUPIED — a missed trade costs less than an unmanaged pair."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "main.py"),
+               encoding="utf-8").read()
+    # ⚠️ TARGET THE OUTER HANDLER BY AST, NOT THE FIRST `except` IN THE TEXT.
+    # There are two: an inner guard around the one-shot orphan warning (whose
+    # failure is harmless) and the outer one that decides the return value.
+    # A substring search finds the inner one and proves nothing.
+    import ast
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef)
+              and n.name == "_condor_leg_open_without_plan")
+    outer = next(n for n in fn.body if isinstance(n, ast.Try))
+    last = outer.handlers[-1].body[-1]
+    assert isinstance(last, ast.Return) and last.value.value is True, \
+        "the error path does not fail closed; it frees the symbol"
+
+
+def test_f5_the_orphan_announces_itself_once():
+    """Silence here is the same failure as VEL.1 and the AFD.1 slot bug: a
+    state nobody could distinguish from normal. But it must not print every
+    tick either."""
+    from strategy.iron_condor_strategy import IronCondorStrategy
+    o = IronCondorStrategy.__new__(IronCondorStrategy)
+    o._plan, o._orphan_said = None, False
+    o.report_orphaned_plan(1)
+    assert o._orphan_said is True
+    o.report_orphaned_plan(1)          # must not re-warn
+    assert o._orphan_said is True
+    # and it must NOT warn when a plan is present
+    o2 = IronCondorStrategy.__new__(IronCondorStrategy)
+    o2._plan, o2._orphan_said = object(), False
+    o2.report_orphaned_plan(1)
+    assert o2._orphan_said is False

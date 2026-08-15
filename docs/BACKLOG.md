@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.82
+# docs/BACKLOG.md — v4.83
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,6 +217,44 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+<<<<<<< Updated upstream
+- **🔴 v4.83 — 2026-08-15 — AUDIT F5 FIXED: A RESTART ORPHANS THE CONDOR
+  STRUCTURE.** `main` v6.10 · `iron_condor_strategy` · 3 tests (126 total).
+
+  **`IronCondorStrategy._plan` IS PROCESS-LOCAL.** Restart with leg 1 filled and
+  leg 2 pending and the plan is GONE — **and with it leg 2's TRIGGER PRICE,
+  which is in no column.** The structure can never complete. **A restart happens
+  on every bake**, so this is not an edge case.
+
+  **WHAT IS *NOT* BROKEN, and it shapes the fix:** the orphaned leg itself is
+  fine. `_condor_sibling_open()` reads the DB, returns False, and CND.7 manages
+  it correctly as a STANDALONE vertical with the ratchet it earns.
+
+  **WHAT WAS BROKEN IS DEFERRAL.** `has_active_plan` goes False, so **TC.6 stops
+  standing down and can open a SECOND credit spread on the same underlying**
+  while the orphan is open — two credit verticals on one symbol, sized and
+  managed as neither.
+  **FIX: the symbol stays OCCUPIED while any condor leg is open**, derived from
+  the persisted fields `_condor_sibling_open` already trusts (`is_condor_leg`,
+  `status='open'`) rather than from a plan that did not survive. **Same
+  principle as `structure.py`: derive from what persists.**
+  ⚠️ FAILS CLOSED — any error treats the symbol as occupied. A missed trade
+  costs less than an unmanaged pair.
+
+  **AND THE ORPHAN ANNOUNCES ITSELF, ONCE.** Previously it sat there looking
+  like a standalone vertical and the only signal was a condor that never got its
+  second side. **Silence here is the same failure as VEL.1 and the AFD.1 slot
+  bug — a state nobody could distinguish from normal.**
+
+  ⚠️ TWO PROCESS CATCHES. A test of mine targeted the WRONG `except` — the
+  function has an inner guard around the warning and an outer one that decides
+  the return; a substring search found the inner one and proved nothing. Now
+  walks the AST. **And this delivery nearly overwrote F8**: my sandbox pulled
+  BEFORE F8 landed, so restoring stashed work wiped the pre-dispatch journal
+  from `main.py` and the BACKLOG collided on v4.82. Caught by checking both
+  markers were present before packaging — **WORKING_AGREEMENT 24, verify the
+  edit landed, applied to a MERGE rather than an edit.**
+
 - **v4.82 — 2026-08-15 — AUDIT F8 FIXED: THE REFUSAL JOURNAL MOVED WITH THE
   GATE.** `main` v6.10 · 3 tests (126 total).
 
@@ -238,6 +276,42 @@ would otherwise surface as unexplained numbers on Monday.
   The post-selection journal is **RETAINED as defence in depth** for any future
   strategy added to `DEBIT_DIRECTIONAL_STRATEGIES` without a pre-gate — that one
   still gets the full record.
+=======
+- **🔴 v4.82 — 2026-08-15 — AUDIT F5 FIXED: A RESTART ORPHANS THE CONDOR
+  STRUCTURE.** `main` · `iron_condor_strategy` · 3 tests (126 total).
+
+  **`IronCondorStrategy._plan` IS PROCESS-LOCAL.** Restart with leg 1 filled and
+  leg 2 pending and the plan is GONE — **and with it leg 2's TRIGGER PRICE,
+  which is in no column.** The structure can never complete. **A restart happens
+  on every bake**, so this is not an edge case.
+
+  **WHAT IS *NOT* BROKEN, and matters for the fix:** the orphaned leg itself is
+  fine. `_condor_sibling_open()` reads the DB, returns False, and CND.7 correctly
+  manages it as a STANDALONE vertical with the ratchet it earns.
+
+  **WHAT WAS BROKEN IS DEFERRAL.** `has_active_plan` goes False, so **TC.6 stops
+  standing down and can open a SECOND credit spread on the same underlying**
+  while the orphan is still open — two credit verticals on one symbol, sized and
+  managed as neither.
+  **FIX: the symbol stays OCCUPIED while any condor leg is open**, derived from
+  the same persisted fields `_condor_sibling_open` already trusts
+  (`is_condor_leg`, `status='open'`) rather than from a plan that did not
+  survive. **Same principle as `structure.py`: derive from what persists.**
+  ⚠️ FAILS CLOSED — on any error the symbol is treated as occupied. A missed
+  trade costs less than an unmanaged pair.
+
+  **AND THE ORPHAN NOW ANNOUNCES ITSELF, ONCE.** Previously the leg simply sat
+  there looking like a standalone vertical and the only signal was a condor that
+  never got its second side. **Silence here is the same failure as VEL.1 (inert
+  five weeks) and the AFD.1 slot bug — a state nobody could distinguish from
+  normal.** One warning per process, not per tick.
+
+  ⚠️ A TEST OF MINE TARGETED THE WRONG `except`. `_condor_leg_open_without_plan`
+  has two — an inner guard around the warning (harmless if it fails) and the
+  outer one that decides the return. A substring search found the inner one and
+  proved nothing; it now walks the AST to the outer handler. Same class as
+  WORKING_AGREEMENT 21.
+>>>>>>> Stashed changes
 
 - **🔴 v4.81 — 2026-08-15 — AUDIT F7 FIXED: THE BREAKOUT EXEMPTION WAS
   ASYMMETRIC AND DIRECTION-BLIND.** `exit_engine` v4.22 · 6 tests (112 total).
