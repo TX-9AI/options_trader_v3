@@ -591,9 +591,12 @@ def by_symbol_table(all_recs: List[dict]):
 
 
 # Compact codes so a row stays readable across 20+ dates.
-REGIME_CODE = {"TRENDING_BULL": "TL", "TRENDING_BEAR": "TB", "RANGING": "RG",
-               "BREAKOUT_VOLATILE": "BO", "COMPRESSION": "CP",
-               "SWEEP_REVERSAL": "SW"}
+# 4-letter codes, matching the convention the L2 block already prints
+# ("BULL 31%  BEAR 25%  COMP 23%  BREA 12%  RANG 8%") rather than inventing a
+# second vocabulary for the same six regimes.
+REGIME_CODE = {"TRENDING_BULL": "BULL", "TRENDING_BEAR": "BEAR",
+               "RANGING": "RANG", "BREAKOUT_VOLATILE": "BREA",
+               "COMPRESSION": "COMP", "SWEEP_REVERSAL": "SWEE"}
 
 
 def _dominant(recs):
@@ -616,7 +619,7 @@ def _dominant(recs):
     return REGIME_CODE.get(top, top[:2]), 100.0 * tally[top] / scored
 
 
-def regime_grid(all_recs: List[dict]):
+def regime_grid(all_recs: List[dict], last: int = 0):
     """SYMBOLS down, DATES across, the dominant regime in each cell.
 
     The shape the operator asked for, and the one that makes a trend day
@@ -637,12 +640,14 @@ def regime_grid(all_recs: List[dict]):
         dates.add(d)
         syms.add(sy)
     dates = sorted(dates)
+    if last and last > 0:
+        dates = dates[-last:]          # widest useful view on a phone is ~8-10
     # rank symbols by how often they trended, so candidates float to the top
     def trendiness(sy):
         n = 0
         for d in dates:
             recs = cells[sy].get(d)
-            if recs and _dominant(recs)[0] in ("TL", "TB"):
+            if recs and _dominant(recs)[0] in ("BULL", "BEAR"):
                 n += 1
         return -n
     syms = sorted(syms, key=lambda sy: (trendiness(sy), sy))
@@ -650,7 +655,7 @@ def regime_grid(all_recs: List[dict]):
     head = "".join(f"{d[5:]:>7}" for d in dates)      # MM-DD
     print(f"\n{'='*(9 + 7*len(dates))}")
     print(f"REGIME GRID  {len(syms)} symbol(s) x {len(dates)} session(s)  "
-          f"TL=trend up  TB=trend down  RG=range  BO=breakout  CP=compress  SW=sweep")
+          f"BULL/BEAR=trending  RANG=range  BREA=breakout  COMP=compress  SWEE=sweep")
     print("=" * (9 + 7 * len(dates)))
     print(f"{'sym':9}{head}")
     for sy in syms:
@@ -662,7 +667,8 @@ def regime_grid(all_recs: List[dict]):
                 continue
             code, share = _dominant(recs)
             # a cell that clears L1.7's bar is marked, so the eye finds it
-            row += f"{code + ('*' if share >= 50 and code in ('TL', 'TB') else ''):>7}"
+            star = "*" if share >= 50 and code in ("BULL", "BEAR") else ""
+            row += f"{code + star:>7}"
         print(f"{sy:9}{row}")
     print("\n  * = TRENDING_* dominant >=50% for that symbol-session — L1.7's")
     print("      acceptance bar. Those are candidate Tier-B rows that need")
@@ -764,6 +770,10 @@ def main():
                          "that clear Tier B.")
     ap.add_argument("--grid", action="store_true",
                     help="SYMBOLS down, DATES across, dominant regime per cell.")
+    ap.add_argument("--last", type=int, default=0, metavar="N",
+                    help="grid: keep only the N most recent sessions. 25 dates "
+                         "is ~184 chars wide and wraps unreadably on a phone; "
+                         "8-10 fits.")
     ap.add_argument("--sweeps", action="store_true",
                     help="every session in which a NAMED pool was swept, with "
                          "the score's decay shape - L1.7's SWEEP acceptance.")
@@ -783,7 +793,21 @@ def main():
                          else [pat])
         files = [f for f in files if os.path.isfile(f)]
         if not files:
-            print(f"no tick log(s) matched {args.report_only}"); sys.exit(1)
+            # ⚠️ LOUD, WITH DIAGNOSIS. A quoted glob that matches nothing used to
+            # exit before printing anything at all, which looks identical to the
+            # command not running. Say what was tried and what is actually there.
+            print(f"no tick log(s) matched: {args.report_only}")
+            for pat in args.report_only:
+                d = os.path.dirname(pat) or "."
+                if os.path.isdir(d):
+                    near = sorted(x for x in os.listdir(d) if x.endswith(".jsonl"))
+                    print(f"  in {d}: {len(near)} .jsonl file(s)"
+                          + (f", e.g. {near[0]}" if near else ""))
+                else:
+                    print(f"  {d} is not a directory")
+            print("  ABSENT MEASUREMENT, not a null.")
+            sys.exit(1)
+        print(f"[files] {len(files)} tick log(s) matched")
         all_recs = []
         for fp in files:
             # ⚠️ THE DATE COMES FROM THE FILENAME. Saved records carry `ts` as
@@ -822,7 +846,7 @@ def main():
                   f"asks for and what the aggregate cannot show.")
 
         if args.grid:
-            regime_grid(all_recs)
+            regime_grid(all_recs, last=args.last)
             sys.exit(0)
         if args.sweeps:
             sweep_report(all_recs)
