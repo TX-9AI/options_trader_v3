@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.81
+# docs/BACKLOG.md — v4.82
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,6 +217,28 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.82 — 2026-08-15 — AUDIT F8 FIXED: THE REFUSAL JOURNAL MOVED WITH THE
+  GATE.** `main` v6.10 · 3 tests (126 total).
+
+  **FIXING THE SLOT BUG KILLED THE CUTOFF'S OWN TELEMETRY.** Moving AFD.1 to
+  PRE-DISPATCH — so a blocked debit strategy could no longer consume the
+  afternoon slot — made the POST-SELECTION journal structurally unreachable for
+  ORB/Continuation/Sweep. They are SKIPPED, so no signal is ever formed to carry
+  a `gate_block:afternoon_debit` disposition. **The telemetry went to zero the
+  moment the bug was fixed**, silently, and that is exactly the class the repo's
+  own gate-ordering reasoning warns about.
+
+  Now journaled PER STRATEGY at the pre-dispatch gate.
+  **⚠️ HONEST TRADEOFF, RECORDED RATHER THAN BURIED:** there is no SIGNAL at
+  pre-dispatch, so the record carries **no contract, strike or score**. It
+  answers *"the cutoff fired and for whom"*, not *"what would have traded"* —
+  and marks itself `stage=pre_dispatch` so nobody reads it as the richer thing.
+  A test asserts it does NOT call `signal_ctx()`, because fabricating signal
+  context it does not have would be worse than the gap.
+  The post-selection journal is **RETAINED as defence in depth** for any future
+  strategy added to `DEBIT_DIRECTIONAL_STRATEGIES` without a pre-gate — that one
+  still gets the full record.
+
 - **🔴 v4.81 — 2026-08-15 — AUDIT F7 FIXED: THE BREAKOUT EXEMPTION WAS
   ASYMMETRIC AND DIRECTION-BLIND.** `exit_engine` v4.22 · 6 tests (112 total).
 

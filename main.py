@@ -1,5 +1,18 @@
 """
-main.py — options_trader v6.9
+main.py — options_trader v6.10
+v6.10  2026-08-15  AUDIT F8: the AFD.1 refusal journal moved with the gate.
+        Putting the cutoff at PRE-DISPATCH (so a blocked debit strategy could
+        not consume the afternoon slot) made the POST-SELECTION journal
+        structurally unreachable for ORB/Continuation/Sweep - they are skipped,
+        so no signal is formed to carry a `gate_block:afternoon_debit`
+        disposition. **The cutoff's telemetry went to zero the moment the slot
+        bug was fixed.** Now journaled per strategy at the pre-dispatch gate.
+        HONEST TRADEOFF: no signal exists there, so the record carries no
+        contract, strike or score - it answers "the cutoff fired and for whom",
+        not "what would have traded", and marks itself `stage=pre_dispatch`.
+        The richer post-selection record is RETAINED as defence in depth for
+        any future strategy added to DEBIT_DIRECTIONAL_STRATEGIES without a
+        pre-gate.
 v6.9 — 2026-08-14 — AUDIT F6: A TC.6 RECORD IS NOT A CONDOR LEG.
         `_execute_condor_leg` still stamped is_condor_leg=1 and
         condor_leg_num=2 onto every trend credit spread, called
@@ -1697,6 +1710,30 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
                     "cutoff (orb=%s cont=%s sweep=%s) — the afternoon slot "
                     "belongs to the credit structures",
                     _afd_orb, _afd_cont, _afd_swp)
+        # ── AUDIT F8 (2026-08-15) — THE REFUSAL JOURNAL MOVED WITH THE GATE ──
+        # Moving AFD.1 to pre-dispatch made the POST-SELECTION journal at the
+        # bottom of this function STRUCTURALLY UNREACHABLE for these three
+        # strategies: they are skipped, so no signal is ever formed to carry a
+        # `gate_block:afternoon_debit` disposition. **The cutoff's telemetry
+        # went to zero the moment the slot bug was fixed** — a silent loss, and
+        # exactly the class the repo's own gate-ordering reasoning warns about.
+        # ⚠️ HONEST TRADEOFF, STATED: there is no SIGNAL here, so this record
+        # carries no contract, strike or score. It answers "the cutoff fired and
+        # for whom", not "what would have traded". The richer post-selection
+        # record is retained below for anything that still reaches it.
+        if _sigj is not None:
+            try:
+                for _nm, _hit in (("ORBStrategy", _afd_orb),
+                                  ("ContinuationStrategy", _afd_cont),
+                                  ("SweepReversal", _afd_swp)):
+                    if _hit:
+                        _sigj.journal("disposition",
+                                      outcome="gate_block:afternoon_debit",
+                                      signal={"strategy": _nm,
+                                              "stage": "pre_dispatch"},
+                                      regime=_sigj.regime_ctx(regime))
+            except Exception:                                  # noqa: BLE001
+                pass
 
     # Priority 1: ORB — only when the engine has a CONFIRMED break+retest.
     # With ORB_FIRES_REGARDLESS_OF_REGIME on, a confirmed ORB also fires under
