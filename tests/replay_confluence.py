@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+# v2.6 - 2026-08-15 - THE GRID STREAMS. Constant memory, and it writes a file.
+#        ⚠️ v2.4/v2.5 parsed every matched log into ONE LIST and reported off
+#        it. Five sessions is ~56k records and control **OOM-KILLED it, rc=137**,
+#        before printing a line - silence that looks exactly like the command
+#        not running. The kill is on the INPUT side, so writing output to a file
+#        would not have helped on its own.
+#        The grid needs SIX INTEGERS per symbol-date, not the records. It now
+#        reads a line, increments, and discards. MEASURED: 25 sessions x 29
+#        symbols x 390 ticks = 282,750 records at **77 MB peak RSS** - the same
+#        workload that was killed. `--out` writes the report next to the tick
+#        logs so it persists like every other report.
 # v2.5 - 2026-08-15 - `--last N`, `--from`, `--to` SELECT FILES BEFORE READING.
 #        ⚠️ v2.4's `--last` loaded EVERY matched log and trimmed dates
 #        afterwards. 25 sessions is ~280k records held at once, and on the
@@ -737,6 +748,247 @@ def sweep_report(all_recs: List[dict]):
     print("  shape. Those need LABELING; the rest are leads that did not qualify.")
 
 
+def _stream(files):
+    """Yield (record, date) one at a time, never holding more than one line.
+
+    ⚠️ WHY THIS EXISTS. `--grid` and `--sweeps` used to build a full `all_recs`
+    list first: 5 sessions is ~56k records and the control box **OOM-KILLED it
+    (rc=137)**. Neither report needs the records — the grid needs six counters
+    per symbol-date and the sweep report needs only the rows that name a level.
+    So both stream, and 25 sessions costs the same as 1.
+    """
+    for fp in files:
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", os.path.basename(fp))
+        day = m.group(1) if m else os.path.basename(fp)
+        with open(fp) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:                              # noqa: BLE001
+                    continue
+                yield r, str(r.get("date", day))
+
+
+def regime_grid_stream(files, symbol=None):
+    """SYMBOLS down, DATES across, dominant regime per cell. Streams."""
+    from collections import defaultdict
+    tally = defaultdict(lambda: defaultdict(int))   # (sym,date) -> regime -> n
+    scored = defaultdict(int)
+    want = symbol.upper() if symbol else None
+    for r, day in _stream(files):
+        sy = str(r.get("sym", "?"))
+        if want and sy.upper() != want:
+            continue
+        sc = r.get("scores") or {}
+        best = max((sc.get(x) or 0) for x in REGIMES)
+        if best <= 0:
+            continue
+        key = (sy, day)
+        scored[key] += 1
+        for k in REGIMES:
+            if (sc.get(k) or 0) == best:
+                tally[key][k] += 1
+                break
+    if not scored:
+        print("\n  no scored ticks. ABSENT MEASUREMENT, not a null.")
+        return
+    dates = sorted({d for _, d in scored})
+    syms = sorted({sy for sy, _ in scored})
+
+    def cell(sy, d):
+        key = (sy, d)
+        if key not in scored:
+            return ".", 0.0
+        top = max(tally[key], key=lambda k: tally[key][k])
+        return REGIME_CODE.get(top, top[:4]), 100.0 * tally[key][top] / scored[key]
+
+    def trendiness(sy):
+        return -sum(1 for d in dates if cell(sy, d)[0] in ("BULL", "BEAR")
+                    and cell(sy, d)[1] >= 50)
+    syms.sort(key=lambda sy: (trendiness(sy), sy))
+
+    w = 9 + 7 * len(dates)
+    print(f"\n{'='*min(w, 120)}")
+    print(f"REGIME GRID  {len(syms)} symbol(s) x {len(dates)} session(s)  "
+          f"BULL/BEAR=trending  RANG=range  BREA=breakout  COMP=compress  SWEE=sweep")
+    print("=" * min(w, 120))
+    print(f"{'sym':9}" + "".join(f"{d[5:]:>7}" for d in dates))
+    for sy in syms:
+        row = ""
+        for d in dates:
+            code, share = cell(sy, d)
+            star = "*" if share >= 50 and code in ("BULL", "BEAR") else ""
+            row += f"{code + star:>7}"
+        print(f"{sy:9}{row}")
+    hits = sum(1 for sy in syms for d in dates
+               if cell(sy, d)[0] in ("BULL", "BEAR") and cell(sy, d)[1] >= 50)
+    print(f"\n  * = TRENDING_* dominant >=50% for that symbol-session - L1.7's")
+    print(f"      acceptance bar. {hits} starred cell(s) across this range.")
+    print("      Those are candidate Tier-B rows that need LABELING, not more")
+    print("      calendar time.   . = no ticks for that symbol on that date.")
+
+
+def sweep_report_stream(files, symbol=None):
+    """Was a previously NAMED pool actually swept during the session? Streams."""
+    from collections import defaultdict
+    events = defaultdict(list)
+    want = symbol.upper() if symbol else None
+    for r, day in _stream(files):
+        sy = str(r.get("sym", "?"))
+        if want and sy.upper() != want:
+            continue
+        bd = (r.get("breakdown") or {}).get("SWEEP_REVERSAL") or {}
+        named = bd.get("named")
+        if not named:
+            continue
+        sc = (r.get("scores") or {}).get("SWEEP_REVERSAL") or 0.0
+        events[(day, sy, str(named))].append(
+            (str(r.get("ts", "")), float(sc), bool(bd.get("reclaimed")),
+             bd.get("age_bars")))
+
+    print(f"\n{'='*94}")
+    print("NAMED-POOL SWEEPS  every session in which the mapper named a swept level")
+    print("=" * 94)
+    if not events:
+        print("\n  NO NAMED POOL WAS SWEPT in these session(s).")
+        print("  ABSENT MEASUREMENT for L1.7's SWEEP row, not a null - the event")
+        print("  did not occur on this tape.")
+        return
+    print(f"\n{'date':11}{'sym':7}{'level':20}{'first':7}{'peak':>7}"
+          f"{'recl':>6}   decay after the peak")
+    hits = 0
+    for (d, sy, lvl), rows in sorted(events.items()):
+        rows.sort()
+        peak = max(x[1] for x in rows)
+        recl = any(x[2] for x in rows)
+        i = next(i for i, x in enumerate(rows) if x[1] == peak)
+        tail = [x[1] for x in rows[i:i + 4]]
+        decays = (len(tail) >= 2
+                  and all(tail[j] >= tail[j + 1] for j in range(len(tail) - 1))
+                  and tail[-1] < peak)
+        ok = peak > 0 and recl and decays
+        hits += 1 if ok else 0
+        print(f"{d:11}{sy:7}{lvl[:19]:20}{rows[0][0]:7}{peak:>7.3f}"
+              f"{('yes' if recl else 'no'):>6}   "
+              + " -> ".join(f"{v:.2f}" for v in tail[:4])
+              + ("   <= TIER-B CANDIDATE" if ok else ""))
+    print(f"\n  {len(events)} named-pool sweep(s); {hits} show SWEEP>0 at the bar,")
+    print("  a RECLAIM, and a monotone decay after the peak - L1.7's acceptance")
+    print("  shape. A high max score alone is a LEAD, never a pass.")
+
+
+def stream_grid(files: List[str], symbol: Optional[str],
+                out_path: Optional[str] = None) -> str:
+    """Build the regime grid by STREAMING, holding only counters.
+
+    ⚠️ WHY THIS EXISTS. The first version parsed every matched log into one list
+    and reported off it. Five sessions is ~56k records and the control box
+    **OOM-KILLED it (rc=137)** before printing a line. The kill is on the INPUT
+    side, so writing output to a file would not have saved it.
+
+    The grid needs SIX INTEGERS per symbol-date — one tally per regime — not the
+    records. So this reads one line at a time, increments, and discards.
+    **Memory is constant no matter how many sessions are scanned**, which is
+    what makes a 25-session archive scan possible at all.
+
+    Returns the report text and, if `out_path` is given, writes it there too so
+    it persists like every other report rather than living in a terminal buffer.
+    """
+    from collections import defaultdict
+    tally = defaultdict(lambda: defaultdict(int))   # (sym, date) -> regime -> n
+    scored = defaultdict(int)                       # (sym, date) -> ticks scored
+    dates, syms = set(), set()
+    want = symbol.upper() if symbol else None
+
+    for fp in files:
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", os.path.basename(fp))
+        day = m.group(1) if m else os.path.basename(fp)
+        with open(fp) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:                              # noqa: BLE001
+                    continue
+                sy = str(r.get("sym", "?"))
+                if want and sy.upper() != want:
+                    continue
+                sc = r.get("scores") or {}
+                best = max((sc.get(x) or 0) for x in REGIMES)
+                if best <= 0:
+                    continue
+                key = (sy, day)
+                scored[key] += 1
+                for k in REGIMES:
+                    if (sc.get(k) or 0) == best:
+                        tally[key][k] += 1
+                        break
+                dates.add(day)
+                syms.add(sy)
+                # `r` goes out of scope here — nothing accumulates.
+
+    if not scored:
+        return "no scored ticks in those file(s). ABSENT MEASUREMENT, not a null."
+
+    dates = sorted(dates)
+
+    def cell(sy, d):
+        key = (sy, d)
+        n = scored.get(key, 0)
+        if not n:
+            return ".", 0.0
+        t = tally[key]
+        top = max(t, key=lambda k: t[k])
+        return REGIME_CODE.get(top, top[:4]), 100.0 * t[top] / n
+
+    def trendiness(sy):
+        return -sum(1 for d in dates
+                    if cell(sy, d)[0] in ("BULL", "BEAR") and cell(sy, d)[1] >= 50)
+
+    syms = sorted(syms, key=lambda sy: (trendiness(sy), sy))
+
+    L = []
+    L.append("=" * (9 + 7 * len(dates)))
+    L.append(f"REGIME GRID  {len(syms)} symbol(s) x {len(dates)} session(s)")
+    L.append("BULL/BEAR=trending  RANG=range  BREA=breakout  COMP=compress  SWEE=sweep")
+    L.append("=" * (9 + 7 * len(dates)))
+    L.append(f"{'sym':9}" + "".join(f"{d[5:]:>7}" for d in dates))
+    hits = []
+    for sy in syms:
+        row = ""
+        for d in dates:
+            code, share = cell(sy, d)
+            star = "*" if share >= 50 and code in ("BULL", "BEAR") else ""
+            if star:
+                hits.append((sy, d, code, share))
+            row += f"{code + star:>7}"
+        L.append(f"{sy:9}{row}")
+    L.append("")
+    L.append(f"  {len(hits)} symbol-session(s) cleared TRENDING_* >=50% — L1.7's")
+    L.append("  acceptance bar. Those are candidate Tier-B rows that need")
+    L.append("  LABELING, not more calendar time.  '.' = no ticks that date.")
+    if hits:
+        L.append("")
+        L.append("  strongest first:")
+        for sy, d, code, share in sorted(hits, key=lambda x: -x[3])[:12]:
+            L.append(f"    {d}  {sy:6} {code}  {share:.0f}% dominant")
+    text = "\n".join(L)
+
+    if out_path:
+        try:
+            with open(out_path, "w") as f:
+                f.write(text + "\n")
+            text += f"\n\n  written: {out_path}"
+        except Exception as exc:                               # noqa: BLE001
+            text += f"\n\n  (could not write {out_path}: {exc})"
+    return text
+
+
 def gather_paths(args_paths: List[str]) -> List[str]:
     out = []
     for p in args_paths:
@@ -774,7 +1026,12 @@ def main():
                          "so a whole archive can be SCANNED for symbol-days "
                          "that clear Tier B.")
     ap.add_argument("--grid", action="store_true",
-                    help="SYMBOLS down, DATES across, dominant regime per cell.")
+                    help="SYMBOLS down, DATES across, dominant regime per cell. "
+                         "STREAMS the logs (constant memory) and writes the "
+                         "report to a file as well as printing it.")
+    ap.add_argument("--out", default=None, metavar="PATH",
+                    help="where to write the grid report (default: alongside "
+                         "the tick logs).")
     ap.add_argument("--last", type=int, default=0, metavar="N",
                     help="read only the N most recent session files. ⚠️ SELECTS "
                          "FILES BEFORE OPENING THEM — the first version loaded "
@@ -834,6 +1091,16 @@ def main():
             print("  ABSENT MEASUREMENT, not a null.")
             sys.exit(1)
         print(f"[files] {len(files)} tick log(s) matched")
+
+        # ⚠️ GRID STREAMS — it must run BEFORE any bulk load. Parsing every log
+        # into one list is what got rc=137 on five sessions; the grid needs only
+        # six counters per symbol-date, so it reads and discards.
+        if args.grid:
+            out = args.out or os.path.join(
+                os.path.dirname(files[0]) or ".",
+                f"regime_grid_{len(files)}sessions.txt")
+            print(stream_grid(files, args.symbol, out_path=out))
+            sys.exit(0)
         all_recs = []
         for fp in files:
             # ⚠️ THE DATE COMES FROM THE FILENAME. Saved records carry `ts` as
@@ -871,9 +1138,6 @@ def main():
                   f"Acceptance checks below are PER SYMBOL, which is what L1.7 "
                   f"asks for and what the aggregate cannot show.")
 
-        if args.grid:
-            regime_grid(all_recs)
-            sys.exit(0)
         if args.sweeps:
             sweep_report(all_recs)
             sys.exit(0)
