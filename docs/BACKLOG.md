@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.91
+# docs/BACKLOG.md — v4.92
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -36,7 +36,11 @@ unblock on the calendar. Earned value: `python3 tests/evm_status.py`.
 > 11:00 cutoff. Re-fitting them on the data that motivated them turns an
 > out-of-sample validation into an in-sample one. **The full account of what
 > changed, why, the expected benefit and every tuning knob is in
-> `docs/FLEET_STATE_2026-08-13.md`.**
+> **`docs/HISTORY.md`** (2026-08-13 section).
+> ⬜ POINTER CORRECTED 2026-08-15: this read `docs/FLEET_STATE_2026-08-13.md`,
+> which was DELETED on 08-14 — it violated `docs/README.md`'s rule against
+> per-date state files and its content was folded into HISTORY.md. The clock has
+> been directing readers at a missing file since then.
 
 
 | Anchor | Date | What |
@@ -217,6 +221,39 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **🔴 v4.92 — 2026-08-15 — TODAY'S BAKE RESETS THE MEASUREMENT WINDOW. THE
+  AUG 28 EVALUATION NEEDS A DECISION.**
+
+  **THE CONFLICT, STATED PLAINLY.** PART 0 says the two weeks to **Fri Aug 28**
+  are *"a MEASUREMENT WINDOW, not a tuning window"* — the point being to judge
+  the 08-13 changes on out-of-sample sessions. **Today baked eleven behavioural
+  changes to 29/29 boxes** (LIQ.6, SWP.8, F7, F8, F5, LIQ.4+LIQ.7, the audit-2
+  fix set, FEED.1/2/3, BFLY.3). Some are defect fixes that had to ship; some —
+  BFLY.3's flat ceiling, LIQ.6's pool redefinition, FEED.2's extended hours —
+  **change what the fleet trades and what it sees.**
+
+  **SO THE WINDOW THAT ENDS AUG 28 NOW MEASURES 08-15's FLEET, NOT 08-13's.**
+  Sessions before today and after today are not the same population. Three
+  honest options, operator's call:
+  1. **Move the anchor** to ~Sep 11 and measure a clean two weeks from Monday.
+  2. **Keep Aug 28** and read it as a first look at the CURRENT fleet, accepting
+     that it says nothing about the 08-13 changes in isolation.
+  3. **Split the read** at 08-18 and report both halves, naming the boundary.
+  ⚠️ WHAT IS NOT AN OPTION is reporting Aug 28 as *"the 08-13 evaluation"*. It
+  will not be that, and the two-week discipline exists precisely so a number
+  means what its label says.
+
+  ⚠️ **AND THE ARCHIVE IS NOW FOUR REGIMES** for anything touching levels or
+  sweeps: pre-LIQ.1 · post-LIQ.1 (08-12+) · post-LIQ.6 (08-15 bake) ·
+  post-FEED.2 (same bake, but the first session with overnight bars is Mon
+  08-17). **Name the window or the numbers are not comparable.**
+
+  ⬜ POINTER CORRECTED: PART 0 directed readers to
+  `docs/FLEET_STATE_2026-08-13.md` for "the full account of what changed" — that
+  file was DELETED on 08-14 (it violated `docs/README.md`) and folded into
+  `docs/HISTORY.md`. **The clock has been pointing at a missing file for two
+  days.** Found during the 08-15 scrub, not by anyone following the link.
+
 - **v4.91 — 2026-08-15 — THE DAY'S ACCOUNTING, AND A SCRUB OF WHAT IT CLAIMS.**
   Operator: *"I shouldn't be able to go behind you and find something you missed
   because you just glossed over it."* Every entry from v4.76-v4.90 was re-read
