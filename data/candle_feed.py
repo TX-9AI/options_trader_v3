@@ -1,5 +1,27 @@
 """
-data/candle_feed.py — addendum v3.11 (see below); original header follows.
+data/candle_feed.py  addendum v3.13 (see below); original header follows.
+v3.13  2026-08-15  FEED.2: THE OVERNIGHT TAPE WAS NEVER UNAVAILABLE - WE WERE
+        ASKING DXFEED TO EXCLUDE IT. `subscribe_candle` takes
+        `extended_trading_hours: bool = False`, and on False the SDK appends
+        **`tho=true`** (trading-hours-only) to the symbol: `QQQ{=1h,tho=true}`.
+        Every subscription this feed has ever made carried it, by default.
+        THAT ONE DEFAULT produced every symptom chased on 08-15: ext=0 on 28 of
+        29 boxes, a 1h store of 252 bars (36 sessions x 7 = RTH only), and
+        LIQ.6's Asia and London sections with nothing to build from. NOT the
+        session guard, NOT the warm lead, NOT S3, NOT an entitlement tier.
+        A SEPARATE STREAM, NOT A FLAG ON `1h`. Plain 1h is read by
+        structure_analyzer (swings + S/R), pitchfork + its observer, and
+        entry_snapshot; flipping it in place would rebuild all of them on 24h
+        bars with nothing announcing it. The extended stream lands under its own
+        store symbol `<SYM>_EXT`, so NO existing consumer moves.
+        NO SEPARATE COLLECTOR IS NEEDED. fromTime is now-16d and DXFeed streams
+        HISTORY from there, so last night arrives on the 09:10 warm-lead
+        connection that already happens - no 08:15 wake, no batches of five, no
+        conductor change, no extra instance-hours.
+        RETENTION IS EXACTLY AT THE EDGE: the pruner keeps 240 1h rows = 10.0
+        days of 24h tape against SECTION_LOOKBACK_DAYS=10. Zero margin - a
+        missed night eats straight into the ladder.
+        OT_EXT_1H=0 disables the stream.
 v3.12  2026-08-15  FEED.1: THE THIRD PURPOSE - a MAINTENANCE window.
         `_idle_outside_session` already said "THE DISTINCTION IS PURPOSE, NOT
         TIME" but had only TWO purposes, so `--once` was allowed at ANY hour.
@@ -328,6 +350,12 @@ VIX_INTERVALS     = ("1m", "1d")
 
 # Backfill depth per interval: calendar days back from now that comfortably
 # cover TIMEFRAMES count (RTH ~6.5h/day, ~78 5m bars, ~26 15m bars, ~7 1h bars).
+# ── FEED.2 — the overnight (extended-hours) 1h stream ────────────────────────
+# Stored under its OWN symbol so nothing that reads plain "1h" changes.
+EXT_INTERVAL     = os.environ.get("OT_EXT_INTERVAL", "1h").strip()
+EXT_STORE_SYMBOL = f"{INSTRUMENT}_EXT"
+EXT_1H_ENABLED   = os.environ.get("OT_EXT_1H", "1").strip() not in ("0", "false", "")
+
 BACKFILL_DAYS = {
     "1m":  1,      # today's session (plus yesterday if pre-open)
     "5m":  4,      # 100 bars ≈ 1.3 sessions -> 4 cal days covers weekends
@@ -554,13 +582,38 @@ class CandleFeed:
         self.dx_symbol = _dxfeed_symbol()
         # (dxfeed_symbol, interval) -> store symbol name
         self.symbol_map: Dict[Tuple[str, str], str] = {}
-        self.subs: List[Tuple[str, str, datetime]] = []   # (dx_sym, interval, start)
+        # (dx_sym, interval, start, extended_trading_hours)
+        self.subs: List[Tuple[str, str, datetime, bool]] = []
         for tf in TIMEFRAMES.keys():
-            self.subs.append((self.dx_symbol, tf, _backfill_start(tf)))
+            self.subs.append((self.dx_symbol, tf, _backfill_start(tf), False))
             self.symbol_map[(self.dx_symbol, tf)] = INSTRUMENT
         for tf in VIX_INTERVALS:
-            self.subs.append((VIX_SYMBOL, tf, _backfill_start(tf)))
+            self.subs.append((VIX_SYMBOL, tf, _backfill_start(tf), False))
             self.symbol_map[(VIX_SYMBOL, tf)] = "VIX"
+
+        # ── FEED.2 (2026-08-15) — THE OVERNIGHT STREAM ───────────────────────
+        # ⚠️ THE TAPE WAS NEVER UNAVAILABLE. WE WERE ASKING DXFEED TO EXCLUDE IT.
+        # `subscribe_candle(..., extended_trading_hours=False)` is the SDK
+        # DEFAULT, and when it is False the SDK appends **`tho=true`**
+        # (trading-hours-only) to the symbol: `QQQ{=1h,tho=true}`. Every
+        # subscription this feed has ever made carried it.
+        #
+        # That single default is what produced `ext=0` on 28 of 29 boxes, an
+        # RTH-only 1h store (252 bars = 36 sessions x 7), and LIQ.6's Asia and
+        # London sections having nothing to build from. It is NOT the session
+        # guard, NOT the warm lead, NOT S3, NOT an entitlement tier.
+        #
+        # ⚠️ A SEPARATE STREAM, NOT A FLAG ON THE EXISTING 1h. `1h` is read by
+        # structure_analyzer's swings and S/R, by the pitchfork and its observer,
+        # and by entry_snapshot. Flipping it in place would silently rebuild all
+        # of them on 24h bars — the pitchfork is a v4.0 milestone and its forks
+        # would change shape overnight with nothing announcing it. This lands
+        # under its OWN store symbol so **no existing consumer moves at all**;
+        # only the named-level frame reads it.
+        if EXT_1H_ENABLED:
+            self.subs.append((self.dx_symbol, EXT_INTERVAL,
+                              _backfill_start(EXT_INTERVAL), True))
+            self.symbol_map[(self.dx_symbol, EXT_INTERVAL)] = EXT_STORE_SYMBOL
         # buffer[(store_symbol, interval)][ts_ms] = row tuple
         self.buffer: Dict[Tuple[str, str], Dict[int, Tuple]] = {}
         self._unmapped_seen: set = set()   # v3.7: warn-once on unmapped candles
@@ -722,7 +775,7 @@ class CandleFeed:
     def _log_backfill_depth(self):
         """One-time per (symbol, interval): report depth vs required count so
         entitlement gaps surface in the journal (FIRST-RUN CHECKLIST #1)."""
-        for (dx_sym, tf, _start) in self.subs:
+        for (dx_sym, tf, _start, _ext) in self.subs:
             sym = self.symbol_map[(dx_sym, tf)]
             if self.backfill_logged.get((sym, tf)):
                 continue
@@ -846,10 +899,14 @@ class CandleFeed:
                     # in a TaskGroup" to show for it. Now a failure is logged with
                     # its REAL cause (see _explain_exc) and skipped.
                     ok_subs = 0
-                    for (dx_sym, tf, start) in self.subs:
+                    for (dx_sym, tf, start, ext) in self.subs:
                         try:
-                            await streamer.subscribe_candle([dx_sym], tf, start_time=start)
-                            logger.info("subscribed %s %s from %s", dx_sym, tf, start.isoformat())
+                            await streamer.subscribe_candle(
+                                [dx_sym], tf, start_time=start,
+                                extended_trading_hours=ext)
+                            logger.info("subscribed %s %s from %s%s", dx_sym, tf,
+                                        start.isoformat(),
+                                        "  [EXTENDED HOURS]" if ext else "")
                             ok_subs += 1
                         except Exception as sub_e:
                             logger.error("SUBSCRIBE FAILED %s %s: %s — continuing without it",

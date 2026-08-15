@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.88
+# docs/BACKLOG.md — v4.89
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,6 +217,50 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **🔴 v4.89 — 2026-08-15 — FEED.2: THE OVERNIGHT TAPE WAS NEVER UNAVAILABLE.
+  WE WERE ASKING DXFEED TO EXCLUDE IT.** `candle_feed` v3.13 · `main` · 7 tests.
+  **THIS CLOSES THE OFF-HOURS LIQUIDITY QUESTION.**
+
+  `TastytradeStreamer.subscribe_candle` takes **`extended_trading_hours: bool =
+  False`**, and when it is False the SDK appends **`tho=true`** —
+  trading-hours-only — to the DXFeed symbol: `QQQ{=1h,tho=true}`. **Every
+  subscription this feed has ever made carried it, by taking the default.**
+
+  **⚠️ ONE DEFAULT PRODUCED EVERY SYMPTOM CHASED TODAY:** `ext=0` on 28 of 29
+  boxes · a 1h store of 252 bars (36 sessions x 7 = RTH only) · LIQ.6's Asia and
+  London sections with nothing to build from · and three successive wrong
+  diagnoses of mine — that it was the session guard, then that it was a
+  warehouse gap, then that it was a feed-subscription tier. **It was none of
+  them.** A test now asserts the SDK's own default so a future version change
+  surfaces here rather than silently reshaping the fleet.
+
+  **A SEPARATE STREAM, NOT A FLAG ON `1h`.** Plain 1h is read by
+  `structure_analyzer` (swings + S/R), by `pitchfork` and its observer, and by
+  `entry_snapshot`. Flipping it in place would have rebuilt all of them on 24h
+  bars with nothing announcing it — **the pitchfork is a v4.0 milestone and its
+  forks would have changed shape overnight.** The extended stream lands under
+  its own store symbol `<SYM>_EXT`; no existing consumer moves.
+  The named-level frame prefers `_EXT` and **falls back LOUDLY** to RTH-only 1h
+  on a box that has not collected yet — which is exactly today's behaviour, not
+  a regression, but it says so rather than leaving "the sections are inert here"
+  invisible again.
+
+  **🔵 NO AM/PM COLLECTOR IS NEEDED — the 08:15 pass is cancelled.**
+  `fromTime` is `now - 16 days` and DXFeed streams HISTORY from there, so
+  without `tho=true` **last night's Asia and London arrive on the 09:10
+  warm-lead connection that already happens.** No wake in fives, no batches, no
+  conductor change, no extra instance-hours. The whole schedule designed earlier
+  today is unnecessary.
+
+  **⚠️ RETENTION IS EXACTLY AT THE EDGE.** The pruner keeps 240 1h rows =
+  **10.0 days** of 24h tape against `SECTION_LOOKBACK_DAYS = 10`. It fits with
+  **zero margin** — a missed night eats straight into the ladder's depth. Raise
+  the 1h prune ceiling before relying on the full lookback.
+
+  ⬜ FEED.1's maintenance flag (option 58) is **inert** given this: it guards
+  against `--once` at an awkward hour, and with no capture pass there is no such
+  caller. Kept for possible repurposing, per operator.
+
 - **v4.88 — 2026-08-15 — FEED.1: A MAINTENANCE WINDOW. `candle_feed` v3.12 ·
   10 tests (138 total).** Operator's requirement: *"a dedicated maintenance
   window where I can bring up all 29 and make fleet updates without involving

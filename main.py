@@ -804,6 +804,9 @@ _NLF_TTL_S = 300               # sections only change on an hour boundary
 _NLF_CACHE = (0.0, None)
 
 
+_NLF_SAID = {}
+
+
 def _named_level_frame():
     """The deep 1h frame for the mapper's named levels, or None (fail soft).
     None simply means the mapper falls back to the live frame - where its
@@ -814,7 +817,26 @@ def _named_level_frame():
         if df is not None and (time.time() - ts) < _NLF_TTL_S:
             return df
         from data.market_data import fetch_candles
-        df = fetch_candles(INSTRUMENT, "1h", NAMED_FRAME_1H_BARS)
+        # ── FEED.2 (2026-08-15) — PREFER THE EXTENDED-HOURS STREAM ───────────
+        # `<SYM>_EXT` is the same 1h interval subscribed WITHOUT `tho=true`, so
+        # it carries the overnight bars that Asia and London sections are built
+        # from. Plain "1h" is RTH-only and always will be — it is read by
+        # structure_analyzer, the pitchfork and entry_snapshot, and must not
+        # move under them.
+        # ⚠️ FALLS BACK, DELIBERATELY. A box baked before FEED.2, or one with
+        # OT_EXT_1H=0, has no _EXT rows. Falling back to RTH-only 1h means the
+        # named levels are exactly what they are today — the sections simply
+        # stay inert there, which is the CURRENT behaviour and not a regression.
+        df = fetch_candles(f"{INSTRUMENT}_EXT", "1h", NAMED_FRAME_1H_BARS)
+        if df is None or df.empty:
+            df = fetch_candles(INSTRUMENT, "1h", NAMED_FRAME_1H_BARS)
+            if df is not None and not df.empty and not _NLF_SAID.get("rth"):
+                _NLF_SAID["rth"] = True
+                logger.warning(
+                    "[named-levels] no %s_EXT rows - using RTH-ONLY 1h. Asia and "
+                    "London sections CANNOT build from this frame; the ladder is "
+                    "NY-only on this box until the extended stream collects.",
+                    INSTRUMENT)
         if df is not None and not df.empty:
             _NLF_CACHE = (time.time(), df)
             return df
