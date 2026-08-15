@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.86
+# docs/BACKLOG.md — v4.87
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,6 +217,47 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.87 — 2026-08-15 — THE THREE AUDIT-2 UNKNOWNS, MEASURED ON 29/29 BOXES.**
+  Read-only, via the two instruments from the audit handoff.
+
+  **🔴 `ext=0` ON 28 OF 29 SYMBOLS — THERE IS NO OVERNIGHT TAPE, SO ASIA AND
+  LONDON SECTIONS CAN NEVER BUILD.** Only SPX carries extended-hours 5m bars
+  (21 of 401). The 1h store is RTH-only too: **252 bars over a 50.2-day span =
+  36 trading days x 7 bars/day.**
+  **LIQ.6's London restoration is INERT everywhere except SPX.** Rule 1 said
+  *"only the overlapping tail was ever the problem; the pre-RTH London extreme
+  is a real level and is back"* — there are no pre-RTH bars to build it from.
+  **In practice the ladder is three prior NY sessions**, and the section
+  machinery reduces to one section on 28 boxes.
+  ⚠️ NOT A DEFECT IN THE FIX — the data simply does not exist. But **the
+  doctrine we wrote and what the fleet can do have diverged**, and that is worth
+  a decision rather than a rediscovery: either source overnight tape, or state
+  plainly that sections are an SPX-only concept and the ladder is NY-only
+  elsewhere.
+
+  **🔵 DEPTH CONFIRMED — A2.1'S FIX IS SUFFICIENT.** 1h reads 238-252 rows
+  across ~49-50 days (XOM 238, SPX 241 sit right on the 240 prune ceiling,
+  confirming the r2 correction). **~34-36 RTH sessions against a 10-day
+  lookback** — the truncation that made LIQ.6's ladder read a rolling 8.3-hour
+  window is genuinely gone.
+
+  **🔵 A2.4'S LEAK IS NOT CURRENTLY OCCURRING. `gt75=0` on all 29 boxes**,
+  `winmax` 15.0-17.1s (SPX worst). The mechanism needed ticks over ~75s so two
+  1m bars close between feeds; at a 15s cadence **four ticks fit inside every 1m
+  bar.** The gap-safe `feed_frame` fix is still correct and stays — it makes the
+  ledger robust to a stall — but **nothing should read its presence as evidence
+  of a problem.**
+  ⚠️ HONEST LIMIT, from the instrument's own author: heartbeats land every 20
+  ticks, so these are WINDOW MEANS and `gt75` is a LOWER BOUND. A single 75s
+  tick would still lift its window to ~18s, and nothing exceeds 17.1 — so the
+  bound is tight here, but per-tick precision only arrives after the bake, from
+  the ledger's own `last_bar_ts` against write cadence.
+
+  **🔵 `late16ET=0` EVERYWHERE — no box ticks past 16:00 ET.** So A2.5's
+  secondary finding (winter bars 20:00-21:00 UTC belonging to no section) has no
+  bars to lose. The winter gap at UTC hour 13 recorded in v4.86 is likewise
+  pre-market on tape that does not exist. **Both are latent, not live.**
+
 - **v4.86 — 2026-08-15 — THE A2.3 HYDRATE MADE THE LEDGER TESTS STATEFUL, AND
   THE LEDGER WAS WRITING INTO THE REPO.** Caught reviewing the audit-2 fix set
   before landing it; the fix set itself is otherwise verified and taken as-is.
