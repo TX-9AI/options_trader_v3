@@ -1,5 +1,29 @@
 """
 data/candle_feed.py — addendum v3.11 (see below); original header follows.
+v3.12  2026-08-15  FEED.1: THE THIRD PURPOSE - a MAINTENANCE window.
+        `_idle_outside_session` already said "THE DISTINCTION IS PURPOSE, NOT
+        TIME" but had only TWO purposes, so `--once` was allowed at ANY hour.
+        That is right for the EOD pull and wrong for what v3.9 actually
+        protects against: a maintenance wake putting all 29 boxes on the wire
+        for work needing no market data. **It cannot be a clock rule** - the
+        08:15 overnight capture pass and a maintenance window fall on the same
+        hours and want opposite behaviour.
+        MODES: service (default, unchanged) | capture (gates as service; the
+        name makes a capture wake distinguishable in the logs and gives a
+        future window argument somewhere to live) | maintenance (HARD OFF,
+        `--once` included).
+        A SENTINEL FILE, not only env: `Environment=` is read once at import,
+        so flipping a RUNNING feed would need a restart - and that restart
+        window is exactly when the box is on the wire during the maintenance it
+        should be excused from. `data/FEED_MAINTENANCE` is checked on every
+        gate evaluation; touch to enter, rm to leave, nothing restarts.
+        FAILS OPEN TO service on an unreadable flag - the one place in this
+        repo that deliberately does. A stray socket is recoverable in seconds;
+        a missed session is PERMANENT (DXFeed history is same-evening only,
+        which is how 08-03 and 08-04 were lost).
+        AND IT ANNOUNCES ITSELF AT WARNING, naming the mode and saying the tape
+        is NOT being collected - the 08-03 loss was this gate firing silently
+        at INFO and writing fourteen 38-byte header-only CSVs.
 v3.11 — 2026-08-04 — ONE PREDICATE, `_idle_outside_session(once)`, called from
         both the reconnect gate and the RTH-over break. v3.9 wrote the condition
         inline twice and v3.10 had to patch both; a fourth caller would have had
@@ -231,6 +255,73 @@ RECONNECT_MIN_S   = 3
 from utils.time_utils import is_rth, seconds_until_rth_open   # RTH gate, 2026-08-01
 
 FEED_WARM_LEAD_S = float(os.environ.get("OT_FEED_WARM_LEAD_S", "1200"))
+
+# ── FEED MODE (FEED.1, 2026-08-15) — THE THIRD PURPOSE ───────────────────────
+# `_idle_outside_session` already says the right thing: **"THE DISTINCTION IS
+# PURPOSE, NOT TIME."** It only had TWO purposes — service (hold a socket for a
+# live session) and one-shot (`--once`, pull history and exit). A `--once` run
+# is therefore allowed at ANY hour, which is correct for the EOD pull and wrong
+# for the thing v3.9 was actually protecting: **a maintenance wake that brings
+# all 29 boxes up for work needing no market data.**
+#
+# Operator's requirement: a dedicated MAINTENANCE window where the whole fleet
+# can be up for fleet updates "without involving the feed or using api
+# resources". That cannot be expressed as a clock rule — maintenance and the
+# overnight capture pass happen at the same hours and want opposite behaviour.
+#
+#   service      today's behaviour, unchanged. The default, so nothing moves.
+#   capture      a scoped one-shot pull. Same as service for gating; the name
+#                exists so a capture wake is DISTINGUISHABLE in the logs from a
+#                trader wake, and so a future window argument has somewhere to
+#                live.
+#   maintenance  HARD OFF. No socket, no subscription, not even `--once`.
+#
+# ⚠️ AND IT MUST ANNOUNCE ITSELF. On 2026-08-03/04 the gate silently blocked the
+# EOD pull: the log read `Feed idle — outside RTH` at INFO four times, then
+# `0 bars`, and fourteen 38-byte header-only CSVs were written. Nothing raised,
+# and DXFeed history is same-evening only, so BOTH SESSIONS ARE PERMANENTLY
+# LOST. A maintenance-suppressed run must never look like a failed fetch: it
+# logs at WARNING and says the mode by name.
+# ⚠️ A SENTINEL FILE, NOT ONLY AN ENV VAR. `Environment=` in the unit is read
+# ONCE AT IMPORT, so flipping the mode on a RUNNING feed would need a restart —
+# and the restart window is precisely when the box is on the wire during the
+# maintenance it is supposed to be excused from. The file is checked on every
+# gate evaluation, so `touch`/`rm` takes effect on the next loop with nothing
+# to restart and no race to lose.
+MAINT_FLAG = os.environ.get(
+    "OT_FEED_MAINT_FLAG",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 "data", "FEED_MAINTENANCE"))
+
+
+def _maintenance_now() -> bool:
+    """True if this box is in a maintenance window RIGHT NOW.
+
+    Sentinel file first (live, no restart), env second (set at wake time).
+    ⚠️ FAILS OPEN TO service ON AN UNREADABLE PATH: a box that cannot stat the
+    flag must keep FEEDING, because the alternative is a silent tape loss that
+    DXFeed's same-evening history makes permanent. A stray socket during
+    maintenance is recoverable; a missing session is not.
+    """
+    try:
+        if os.path.exists(MAINT_FLAG):
+            return True
+    except Exception:                                          # noqa: BLE001
+        pass
+    return FEED_MODE == "maintenance"
+
+
+FEED_MODE = os.environ.get("OT_FEED_MODE", "service").strip().lower()
+_VALID_FEED_MODES = ("service", "capture", "maintenance")
+if FEED_MODE not in _VALID_FEED_MODES:
+    # An unknown mode must not silently become "maintenance" (a box that never
+    # feeds) NOR silently become "service" (a box on the wire during
+    # maintenance). Fail to the DEFAULT and say so loudly.
+    logging.getLogger(__name__).warning(
+        "[feed-mode] OT_FEED_MODE=%r is not one of %s - falling back to "
+        "'service'. Fix the unit/env; do not rely on this default.",
+        FEED_MODE, ", ".join(_VALID_FEED_MODES))
+    FEED_MODE = "service"
 RECONNECT_MAX_S   = 60
 VIX_SYMBOL        = os.environ.get("OT_DXFEED_VIX", "VIX")
 VIX_INTERVALS     = ("1m", "1d")
@@ -661,7 +752,31 @@ class CandleFeed:
         retrieval has, silently, for two sessions.
 
         SERVICE MODE (once=False) is unchanged from v3.9 in every respect.
+
+        ── FEED.1 (2026-08-15) — THE THIRD PURPOSE ────────────────────────────
+        MAINTENANCE is HARD OFF and overrides everything, `--once` included.
+        It exists because the operator needs a window where all 29 boxes can be
+        up for fleet updates with nothing on the wire — and that CANNOT be a
+        clock rule, because the overnight capture pass runs at the same hours
+        and wants the opposite.
+
+        ⚠️ IT ANNOUNCES ITSELF AT WARNING. The 2026-08-03/04 loss was a silent
+        gate: `Feed idle — outside RTH` at INFO, then `0 bars`, then fourteen
+        38-byte header-only CSVs, and DXFeed history is same-evening only so
+        both sessions are gone. **A suppressed run must never be mistakable for
+        a failed fetch**, so this says the mode by name and says the data is
+        NOT being collected.
         """
+        if _maintenance_now():
+            if not getattr(CandleFeed, "_maint_said", False):
+                CandleFeed._maint_said = True
+                logger.warning(
+                    "[feed-mode] MAINTENANCE - standing down completely, "
+                    "%s. NO candles will be collected on this box until "
+                    "OT_FEED_MODE is cleared. This is DELIBERATE, not a fetch "
+                    "failure; if you expected tape, the mode is wrong.",
+                    "including this --once run" if once else "service mode")
+            return True
         return not is_rth() and not once
 
     async def run(self, once: bool = False):

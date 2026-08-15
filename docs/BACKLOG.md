@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.87
+# docs/BACKLOG.md — v4.88
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,6 +217,56 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.88 — 2026-08-15 — FEED.1: A MAINTENANCE WINDOW. `candle_feed` v3.12 ·
+  10 tests (138 total).** Operator's requirement: *"a dedicated maintenance
+  window where I can bring up all 29 and make fleet updates without involving
+  the feed or using api resources."*
+
+  **WHY IT COULD NOT BE A CLOCK RULE.** `_idle_outside_session` already said the
+  right thing — *"THE DISTINCTION IS PURPOSE, NOT TIME"* — but had only TWO
+  purposes: service and one-shot. `--once` was therefore allowed at ANY hour,
+  which is correct for the EOD pull and wrong for exactly what v3.9 protects
+  against. **And the 08:15 overnight capture pass falls on the same hours as a
+  maintenance window and wants the opposite behaviour**, so no time-based gate
+  can separate them.
+
+  **MODES:** `service` (default, byte-for-byte the old behaviour) · `capture`
+  (gates as service; the name makes a capture wake distinguishable in the logs
+  and gives a future window argument somewhere to live) · `maintenance` (HARD
+  OFF, `--once` included).
+
+  **⚠️ A SENTINEL FILE, NOT ONLY ENV.** `Environment=` in the unit is read ONCE
+  AT IMPORT, so flipping a RUNNING feed would need a restart — **and that
+  restart window is precisely when the box is on the wire during the
+  maintenance it should be excused from.** `data/FEED_MAINTENANCE` is checked on
+  every gate evaluation: touch to enter, rm to leave, nothing restarts, no race.
+
+  **⚠️ IT FAILS *OPEN* TO service — the one place in this repo that
+  deliberately does.** A box that cannot stat the flag keeps FEEDING, because
+  the costs are not symmetric: a stray socket during maintenance is recoverable
+  in seconds, while a missed session is **PERMANENT** (DXFeed history is
+  same-evening only — that is how 2026-08-03 and 08-04 were lost for good).
+
+  **⚠️ AND IT ANNOUNCES ITSELF AT WARNING**, naming the mode and stating the
+  tape is NOT being collected. The 08-03 loss was this same gate firing
+  SILENTLY at INFO — `Feed idle - outside RTH`, four times, then `0 bars`, then
+  fourteen 38-byte header-only CSVs, and nothing raised.
+
+  **⬜ THE SCHEDULE THIS SERVES (agreed, not yet built).** 08:15 wake in groups
+  of 5 → pull overnight → verify → stop, capturing **Asia complete** (closed by
+  08:15) and London through 08:15; **09:15** the 15 traders wake into the warm
+  lead and cover 08:15-09:30 as ordinary history; **EOD** the existing pass.
+  ⚠️ **BLOCKER FOR THE 08:15 PASS:** `pull_today_ohlc.sh` calls `candle_feed
+  --once`, which pulls history **from 09:30** by construction — a pre-open run
+  would ask for a window that has not started and return the same 38-byte
+  header-only files. `--once` must take an explicit window first.
+  ⚠️ AND `eod_backfill` v1.2 ALREADY IMPLEMENTS the wake→pull→verify→stop loop
+  at batch 5 with a capacity guard and `_drain_verify()` over SSH. **Do not
+  build a second one.** Note its deliberate choice: `_drain_verify` is
+  WARN-NEVER-STOP (a box left up blocks the batch loop against the stream cap),
+  so verification currently REPORTS rather than GATES — a decision to revisit
+  against the operator's "verified, then next box starts".
+
 - **v4.87 — 2026-08-15 — THE THREE AUDIT-2 UNKNOWNS, MEASURED ON 29/29 BOXES.**
   Read-only, via the two instruments from the audit handoff.
 
