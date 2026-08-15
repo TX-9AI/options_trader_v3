@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.77
+# docs/BACKLOG.md — v4.78
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,6 +217,96 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.78 — 2026-08-15 (Sat) — L1.7's "TAPE GAPS" WERE REPORTING GAPS, AND THE
+  SWEEP SETUP IS CONFIRMED TOO LATE TO TRADE.** `replay_confluence` v2.7 ·
+  `sweep_veto_probe` · `sweep_accept_probe`.
+
+  **🔵 TRENDING IS CLOSEABLE AND HAS BEEN ALL ALONG — 251 SYMBOL-SESSIONS
+  CLEARED THE BAR.** Every regime-validation report (42-47) aggregates ~29
+  symbol-sessions, but L1.7's acceptance is written PER SYMBOL-DAY — and
+  blending symbols GUARANTEES no regime dominates, because different symbols are
+  in different regimes on the same day. A perfect trend day on QQQ was averaged
+  against 28 others. **The qualifying days were on disk the whole time.**
+  Strongest: TSLA 08-04 **99%**, AVGO 08-14 97%, SPX 08-04 97%, ORCL 08-10 97%,
+  GLD 07-21 97%. **What remains is LABELING, not calendar time.**
+  Operator's simplification made it cheap: `gather_paths` already returns ONE
+  FILE PER SYMBOL, so `--symbol` filters the PATH LIST (~29x faster) instead of
+  post-filtering records.
+  ⚠️ SIDE FINDING: QQQ and SPX sit in RANG far more than the single names —
+  **the indices chop while individual stocks trend.** Bears on symbol selection
+  and was structurally invisible in an aggregate.
+
+  **🔴 THE SWEEP SETUP IS CONFIRMED 5-20 MINUTES AFTER THE MOVE.** The mapper
+  runs on **5m/15m — never 1m** (`main.py:781`). `SWEEP_REJECTION_CANDLES=3` on
+  5m is a **15-MINUTE** window, so a sweep at bar `i` cannot be confirmed until
+  `i+3` closes. The reversal has typically already travelled. Operator: *"After
+  the move is completely done??"* — effectively yes.
+  ⚠️ **AND THE CONFIRMATION WINDOW IS THE DISQUALIFICATION WINDOW.**
+  `closes_beyond` is counted over that SAME `i..i+3` span, and `veto_accept`
+  (`closes_beyond >= 2`) is a HARD veto. **Waiting for evidence actively
+  manufactures the acceptance count that then refuses the trade.** Measured: the
+  accept veto closes **64.5%** of all named-pool ticks.
+  **ONE CAUSE FOR THREE SYMPTOMS** previously investigated separately — 2%
+  fleet-wide SWEEP dominance, L1.7's "SWEEP tape gap", and SweepReversal's 0.4%
+  live win rate.
+
+  **⚠️ WICKS AND BODIES APPLY HERE TOO (operator's standing rule).** A wick is a
+  touch; a close is a decision. The mapper's DETECTION already honours it
+  (`highs[i] > pool.price` is the wick, `closes[k] <= pool.price` the body back
+  in). The VETO does not: it counts bodies **inside the rejection sequence the
+  mapper is still evaluating** and reads them as acceptance. Acceptance is a
+  RUNNING condition, and LIQ.3 already built `closes_beyond_live` and
+  `invalidated` for it — **the veto uses neither.**
+
+  **THE PROPOSED RULE (operator's, not fitted):** fire on the **first 15s tick
+  after the 5m candle that closes back inside the level.** At that instant the
+  wick beyond and the body back in both exist, on a frame where a body is a real
+  decision. Confirmation drops from 5-20 min to ~15 seconds, and **the veto
+  problem dissolves structurally** — with no forward window there is nothing to
+  accumulate closes in. Cost accepted: occasional re-breaches, caught by LIQ.3's
+  running invalidation instead of by waiting.
+  ⚠️ FRAME: **1m for the wick, 5m for the body** — *"the lowest timeframe that
+  isn't noise or a rounding error."* On 5m a fast raid-and-reclaim prints as ONE
+  candle with a wick and is invisible. Any threshold must move WITH the frame:
+  `closes_beyond >= 2` is 10 minutes on 5m and 2 minutes on 1m, and only one of
+  those is acceptance.
+
+  **🔴 `touch_count` IS A CONSTANT — 44,450 of 44,890 ticks read 1 (99%).** It
+  is NEVER INCREMENTED. Named pools hardcode `touch_count=1`
+  (`liquidity_mapper:461`); only equal-high/low CLUSTERS carry a real count
+  (`len(cluster)`, lines 489/508). A PDH reads 1 forever regardless of how many
+  times price returned to it. **Same failure shape as the condor's constant
+  conviction and SWP.3's approach weight: a score with no variation cannot drive
+  anything.**
+  **THE OPERATOR'S SIZING RULE — size scales with previous touches by a
+  consistent multiple — IS SOUND AND CANNOT RUN ON THIS FIELD.** It would be 1x
+  on every trade.
+  **DECISION: do NOT change the mapper.** It stays the level-finder; the RETREAT
+  COUNT is computed alongside it. *"A level is a zone, not a fixed number"* — a
+  retreat is a wick reaching **within 0.2%** (the tolerance the mapper's own
+  dedupe already uses, so there is ONE definition of a zone) with a body closing
+  back inside. **A retreat and a sweep are the same event at different depths** —
+  reach-and-reject vs breach-and-reject — so the count is the level's defence
+  record and the sweep inherits it as size.
+  ⚠️ On a 0.2% band the count runs HIGHER than intuition because near-misses
+  count. **The multiple must be modest** — six defences must not mean six times
+  the risk.
+
+  **🔵 LONDON IS CLEAN — LIQ.1 WORKED.** London-named sweeps: 08-11 **3,013**,
+  then **0 / 0 / 0** on 08-12/13/14. The gate (`NAMED_POOLS_INCLUDE_SESSIONS`,
+  default off) is correct and covers both the Asia and London sites; the FIELDS
+  stay populated by design because `shadow/primitives.py` reads them.
+  **SWP.7's 2,009 London ticks came entirely from 08-11** — the `--since` was
+  one day early.
+  ⚠️ **POST-LIQ.1 ANALYSIS STARTS 2026-08-12, NOT 08-11.** The archive is TWO
+  REGIMES: before 08-12 London/Asia were sweepable pools, after they were not.
+  **Mixing them makes sweep numbers incomparable.**
+
+  ⚠️ TOOLING: the grid and sweeps reports STREAM (constant memory) because the
+  first version loaded every log and was **silently OOM-killed, rc=137, on five
+  sessions** — printing nothing at all. Measured after: 282,750 records at
+  **77 MB** peak. Both write report files rather than relying on scrollback.
+
 - **v4.77 — 2026-08-15 — BFLY.3: THE BUTTERFLY DEBIT CEILING IS FLAT AT 0.50.
   CONVICTION NO LONGER GATES IT.** `butterfly_strategy` v3.5 · `config` ·
   6 tests (177 total).
