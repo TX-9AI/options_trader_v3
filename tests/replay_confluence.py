@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# v2.7 - 2026-08-15 - `--sweeps` STREAMS TOO. Same fix, before it could bite:
+#        a named-pool sweep is RARE, so only the handful of ticks carrying
+#        `breakdown.SWEEP_REVERSAL.named` are kept and memory scales with EVENTS
+#        rather than archive size. A cheap `'"named"' not in line` prefilter
+#        skips the full JSON parse on ~99.9% of lines. MEASURED: 282,750 records
+#        at 76 MB peak RSS. Writes a report file like the grid.
 # v2.6 - 2026-08-15 - THE GRID STREAMS. Constant memory, and it writes a file.
 #        ⚠️ v2.4/v2.5 parsed every matched log into ONE LIST and reported off
 #        it. Five sessions is ~56k records and control **OOM-KILLED it, rc=137**,
@@ -989,6 +995,105 @@ def stream_grid(files: List[str], symbol: Optional[str],
     return text
 
 
+def stream_sweeps(files: List[str], symbol: Optional[str],
+                  out_path: Optional[str] = None) -> str:
+    """WAS A PREVIOUSLY NAMED POOL ACTUALLY SWEPT DURING THE SESSION?
+
+    Streams, like the grid — a named-pool sweep is RARE, so the only thing worth
+    keeping is the handful of ticks where `breakdown.SWEEP_REVERSAL.named` is
+    set. Everything else is read and discarded, so memory scales with the number
+    of EVENTS rather than with the size of the archive.
+
+    L1.7's SWEEP row needs a mapper-confirmed NAMED-ZONE RECLAIM showing
+    SWEEP > 0 at the sweep bar and decaying over ~3 bars. A high max score alone
+    is a LEAD, never a pass — so a row is only marked TIER-B CANDIDATE when all
+    three hold, and the decay shape is printed so the "~3 bars" judgement stays
+    with the reader rather than with a threshold I chose.
+    """
+    from collections import defaultdict
+    events = defaultdict(list)
+    want = symbol.upper() if symbol else None
+    scanned = 0
+
+    for fp in files:
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", os.path.basename(fp))
+        day = m.group(1) if m else os.path.basename(fp)
+        with open(fp) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                # cheap prefilter: skip the ~99.9% of lines with no named pool
+                # before paying for a full JSON parse.
+                if '"named"' not in line:
+                    scanned += 1
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:                              # noqa: BLE001
+                    continue
+                scanned += 1
+                sy = str(r.get("sym", "?"))
+                if want and sy.upper() != want:
+                    continue
+                bd = (r.get("breakdown") or {}).get("SWEEP_REVERSAL") or {}
+                named = bd.get("named")
+                if not named:
+                    continue
+                sc = (r.get("scores") or {}).get("SWEEP_REVERSAL") or 0.0
+                events[(day, sy, str(named))].append(
+                    (str(r.get("ts", "")), float(sc), bool(bd.get("reclaimed")),
+                     bd.get("age_bars"), bd.get("kind")))
+
+    L = ["=" * 94,
+         "NAMED-POOL SWEEPS  every session in which the mapper named a swept level",
+         "=" * 94,
+         f"  scanned {scanned:,} tick(s) across {len(files)} session(s)"]
+
+    if not events:
+        L += ["",
+              "  NO NAMED POOL WAS SWEPT in these session(s).",
+              "  That is an ABSENT MEASUREMENT for L1.7's SWEEP row, not a null -",
+              "  either the event did not occur on this tape, or the mapper is not",
+              "  naming levels in the replay path. Those are different problems and",
+              "  the next step differs: the first waits for tape, the second is a bug."]
+        text = "\n".join(L)
+    else:
+        L += ["",
+              f"{'date':11}{'sym':7}{'level':20}{'first':7}{'peak':>7}"
+              f"{'recl':>6}{'bars':>6}   decay after the peak"]
+        hits = 0
+        for (d, sy, lvl), rows in sorted(events.items()):
+            rows.sort()
+            peak = max(x[1] for x in rows)
+            recl = any(x[2] for x in rows)
+            i = next(i for i, x in enumerate(rows) if x[1] == peak)
+            tail = [x[1] for x in rows[i:i + 4]]
+            decays = (len(tail) >= 2
+                      and all(tail[j] >= tail[j + 1] for j in range(len(tail) - 1))
+                      and tail[-1] < peak)
+            ok = peak > 0 and recl and decays
+            hits += 1 if ok else 0
+            L.append(f"{d:11}{sy:7}{lvl[:19]:20}{rows[0][0]:7}{peak:>7.3f}"
+                     f"{('yes' if recl else 'no'):>6}{str(rows[0][3] or '-'):>6}   "
+                     + " -> ".join(f"{v:.2f}" for v in tail[:4])
+                     + ("   <= TIER-B CANDIDATE" if ok else ""))
+        L += ["",
+              f"  {len(events)} named-pool sweep(s); {hits} show SWEEP>0 at the bar,",
+              "  a RECLAIM, and a monotone decay after the peak - L1.7's acceptance",
+              "  shape. Those need LABELING; the rest are leads that did not qualify."]
+        text = "\n".join(L)
+
+    if out_path:
+        try:
+            with open(out_path, "w") as f:
+                f.write(text + "\n")
+            text += f"\n\n  written: {out_path}"
+        except Exception as exc:                               # noqa: BLE001
+            text += f"\n\n  (could not write {out_path}: {exc})"
+    return text
+
+
 def gather_paths(args_paths: List[str]) -> List[str]:
     out = []
     for p in args_paths:
@@ -1095,6 +1200,13 @@ def main():
         # ⚠️ GRID STREAMS — it must run BEFORE any bulk load. Parsing every log
         # into one list is what got rc=137 on five sessions; the grid needs only
         # six counters per symbol-date, so it reads and discards.
+        if args.sweeps:
+            out = args.out or os.path.join(
+                os.path.dirname(files[0]) or ".",
+                f"named_sweeps_{len(files)}sessions.txt")
+            print(stream_sweeps(files, args.symbol, out_path=out))
+            sys.exit(0)
+
         if args.grid:
             out = args.out or os.path.join(
                 os.path.dirname(files[0]) or ".",
@@ -1138,9 +1250,6 @@ def main():
                   f"Acceptance checks below are PER SYMBOL, which is what L1.7 "
                   f"asks for and what the aggregate cannot show.")
 
-        if args.sweeps:
-            sweep_report(all_recs)
-            sys.exit(0)
         if args.by_symbol:
             by_symbol_table(all_recs)
             sys.exit(0)
