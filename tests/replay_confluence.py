@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+# v2.3 - 2026-08-15 - PER-SYMBOL VIEW. `--symbol SYM`, `--by-symbol`, and
+#        `--report-only` now takes MULTIPLE files (or a glob) for a date range.
+#        WHY: L1.7's acceptance criteria are written PER SYMBOL-DAY ("one
+#        genuine trend day showing TRENDING_* dominant ~50%"), but every report
+#        in this suite aggregated ~29 symbol-sessions - and blending them
+#        GUARANTEES no regime dominates, because different symbols are in
+#        different regimes on the same day. A perfect trend day on QQQ was
+#        averaged against 28 others. **So the four "tape gaps" were never
+#        testable, and the qualifying days may already be on disk.**
+#        Demonstrated: the same 400 ticks show nothing dominant in aggregate and
+#        TRENDING_BEAR at 70% dominance filtered to one symbol.
+#        `--symbol` filters at the PATH for a live replay (one file per symbol,
+#        so ~29x faster and the normal report comes out per-symbol with no
+#        special casing) and at the RECORD for `--report-only`, where saved tick
+#        logs are already merged and there are no paths left to filter.
+#        `--by-symbol` ranks every symbol by TRENDING_* dominance so a whole
+#        archive is SCANNED rather than checked one symbol at a time.
+#        Default behaviour with no flags is unchanged.
 # tests/replay_confluence.py — options_trader_v3 — v2.3
 # v2.3 — 2026-08-04 — the emitted-distribution line collapsed TRENDING_BULL and
 #         TRENDING_BEAR into one token ("TREND") — the same defect found in the
@@ -105,7 +123,7 @@
 #   writes only the report (+ optional --jsonl). Safe to run anytime.
 
 from __future__ import annotations
-import argparse, os, re, sys, json, math, warnings
+import argparse, os, re, sys, json, math, warnings, glob
 from typing import Dict, List, Optional, Tuple
 import pandas as pd
 # volume-less index tape (e.g. cash SPX logs volume=0) makes the engine VWAP a 0/0;
@@ -488,6 +506,75 @@ def report(all_recs: List[dict], jsonl: Optional[str]):
     return n_pass == len(checks)
 
 
+def by_symbol_table(all_recs: List[dict]):
+    """Per-symbol dominance, so a whole archive can be SCANNED at once.
+
+    ⚠️ WHY THIS EXISTS. L1.7 asks for "one genuine trend day on tape, labeled,
+    showing TRENDING_* dominant ~50%". Every report in this suite aggregates
+    every symbol-session together — and blending ~29 symbols GUARANTEES no
+    regime dominates, because on any given day different symbols are in
+    different regimes. A perfect trend day on QQQ is averaged against 28 others
+    doing something else.
+
+    So the four "tape gaps" may never have been TESTABLE, and the qualifying
+    days may already be on disk. This groups by symbol and ranks, so the answer
+    to "has it ever happened" is a scan rather than a wait.
+
+    TRENDING_* is summed BULL+BEAR, because the acceptance text uses the
+    wildcard — a bear trend day closes the row exactly as a bull one does.
+    """
+    from collections import defaultdict
+    by = defaultdict(list)
+    for r in all_recs:
+        by[str(r.get("sym", "?"))].append(r)
+
+    def dom_share(recs, keys):
+        hit = 0
+        for r in recs:
+            sc = r.get("scores") or {}
+            best = max((sc.get(x) or 0) for x in REGIMES)
+            if best <= 0:
+                continue
+            if any((sc.get(k) or 0) == best for k in keys):
+                hit += 1
+        return 100.0 * hit / max(1, len(recs))
+
+    rows = []
+    for sym, recs in by.items():
+        rows.append((
+            sym, len(recs),
+            dom_share(recs, ("TRENDING_BULL", "TRENDING_BEAR")),
+            dom_share(recs, ("RANGING",)),
+            dom_share(recs, ("BREAKOUT_VOLATILE",)),
+            dom_share(recs, ("COMPRESSION",)),
+            dom_share(recs, ("SWEEP_REVERSAL",)),
+            max((r.get("scores") or {}).get("SWEEP_REVERSAL") or 0 for r in recs),
+        ))
+    rows.sort(key=lambda x: -x[2])
+
+    print(f"\n{'='*86}\nPER-SYMBOL DOMINANCE  {len(rows)} symbol(s), "
+          f"{len(all_recs)} tick(s)\n{'='*86}")
+    print(f"{'sym':8}{'ticks':>7}{'TREND*':>8}{'RANGE':>7}{'BREAK':>7}"
+          f"{'COMP':>7}{'SWEEP':>7}{'swp_max':>9}   Tier-B")
+    for sym, n, tr, rg, bk, cp, sw, swmax in rows:
+        flags = []
+        if tr >= 50.0:
+            flags.append("TRENDING")
+        if swmax > 0:
+            flags.append("sweep>0")
+        print(f"{sym:8}{n:>7}{tr:>7.0f}%{rg:>6.0f}%{bk:>6.0f}%{cp:>6.0f}%"
+              f"{sw:>6.0f}%{swmax:>9.3f}   {' '.join(flags)}")
+
+    hits = [r for r in rows if r[2] >= 50.0]
+    print(f"\n  TRENDING_* dominant >=50%: {len(hits)} symbol-session(s)"
+          + (f" -> {', '.join(h[0] for h in hits)}" if hits else ""))
+    print("  ^ that is L1.7's TRENDING acceptance bar. A hit here is a candidate")
+    print("    Tier-B row that needs LABELING, not more calendar time.")
+    print("\n  swp_max is the highest SWEEP_REVERSAL score seen. L1.7's SWEEP row")
+    print("    needs a NAMED-ZONE reclaim with decay over ~3 bars, so a non-zero")
+    print("    max is a lead to inspect, NOT a pass on its own.")
+
+
 def gather_paths(args_paths: List[str]) -> List[str]:
     out = []
     for p in args_paths:
@@ -514,24 +601,66 @@ def main():
                          "matches the live feed store's 5m retention (~5 days).")
     ap.add_argument("--jsonl", default=None, help="dump per-tick records to this JSONL")
     ap.add_argument("--no-v13", action="store_true", help="skip the v1.3 comparison label")
-    ap.add_argument("--report-only", default=None, metavar="JSONL",
+    ap.add_argument("--symbol", default=None, metavar="SYM",
+                    help="restrict the report to ONE symbol. L1.7's acceptance "
+                         "criteria are written PER SYMBOL-DAY, but every report "
+                         "in this suite aggregates ~29 symbol-sessions, which "
+                         "guarantees no regime dominates because different "
+                         "symbols are in different regimes on the same day.")
+    ap.add_argument("--by-symbol", action="store_true", dest="by_symbol",
+                    help="per-SYMBOL dominance table instead of the aggregate, "
+                         "so a whole archive can be SCANNED for symbol-days "
+                         "that clear Tier B.")
+    ap.add_argument("--report-only", default=None, metavar="JSONL", nargs="+",
                     help="rebuild + reprint the full report from a saved tick-log JSONL "
                          "(no engines, no re-scoring — the report is deterministic from the log)")
     args = ap.parse_args()
 
     # --report-only: reload a saved per-tick log and reprint the identical report.
     if args.report_only:
-        if not os.path.isfile(args.report_only):
-            print(f"no tick log at {args.report_only}"); sys.exit(1)
+        # A DATE RANGE IS JUST N FILES. The tick logs are per-session and carry
+        # `sym` on every record, so scanning history needs no re-run and no new
+        # collection - only a different grouping of data already on disk.
+        files = []
+        for pat in args.report_only:
+            files.extend(sorted(glob.glob(pat)) if any(c in pat for c in "*?[")
+                         else [pat])
+        files = [f for f in files if os.path.isfile(f)]
+        if not files:
+            print(f"no tick log(s) matched {args.report_only}"); sys.exit(1)
         all_recs = []
-        with open(args.report_only) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    all_recs.append(json.loads(line))
+        for fp in files:
+            with open(fp) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        all_recs.append(json.loads(line))
+                    except Exception:                          # noqa: BLE001
+                        continue
         if not all_recs:
-            print(f"tick log is empty: {args.report_only}"); sys.exit(1)
-        print(f"[report-only] rebuilt from {len(all_recs)} saved ticks — {args.report_only}")
+            print("tick log(s) empty"); sys.exit(1)
+        span = f"{len(files)} file(s)" if len(files) > 1 else files[0]
+        print(f"[report-only] rebuilt from {len(all_recs)} saved ticks - {span}")
+
+        if args.symbol:
+            want = args.symbol.upper()
+            before = len(all_recs)
+            all_recs = [r for r in all_recs
+                        if str(r.get("sym", "")).upper() == want]
+            if not all_recs:
+                print(f"no ticks for {want} across those file(s); {before} tick(s) "
+                      f"were present for other symbols. ABSENT MEASUREMENT, not a null.")
+                sys.exit(1)
+            print(f"[symbol] {want} only - {len(all_recs)} of {before} tick(s). "
+                  f"Acceptance checks below are PER SYMBOL, which is what L1.7 "
+                  f"asks for and what the aggregate cannot show.")
+
+        if args.by_symbol:
+            by_symbol_table(all_recs)
+            sys.exit(0)
+
         ok = report(all_recs, jsonl=None)   # jsonl=None: don't re-dump, just print
         sys.exit(0 if ok else 2)
 
@@ -539,6 +668,26 @@ def main():
         ap.error("provide OHLC paths to replay, or --report-only <jsonl> to reprint a saved run")
 
     paths = gather_paths(args.paths)
+
+    # ── FILTER AT THE PATH, NOT AFTER THE FACT ───────────────────────────────
+    # `gather_paths` returns ONE OHLC FILE PER SYMBOL, so restricting the list
+    # here means we replay 1 symbol instead of 29 — roughly 29x faster, and the
+    # per-symbol acceptance checks come out of the normal report with no special
+    # casing. (`--report-only` still filters by RECORD, because saved tick logs
+    # are already merged across symbols and there are no paths left to filter.)
+    if args.symbol:
+        want = args.symbol.upper()
+        kept = [p for p in paths if sym_of(p).upper() == want]
+        if not kept:
+            found = sorted({sym_of(p).upper() for p in paths})
+            print(f"no OHLC file for {want} in those path(s). Present: "
+                  f"{', '.join(found) if found else '(none)'}. "
+                  f"ABSENT MEASUREMENT, not a null.")
+            sys.exit(1)
+        print(f"[symbol] {want} only — replaying {len(kept)} of {len(paths)} file(s). "
+              f"Acceptance checks are PER SYMBOL, which is what L1.7 asks for.")
+        paths = kept
+
     all_recs: List[dict] = []
     for p in paths:
         recs, sym = replay_symbol(p, args.warmup, use_v13=not args.no_v13,
@@ -549,6 +698,13 @@ def main():
     if not all_recs:
         print("no ticks replayed — check paths / warmup")
         sys.exit(1)
+    if args.by_symbol:
+        if args.jsonl:
+            with open(args.jsonl, "w") as f:
+                for r in all_recs:
+                    f.write(json.dumps(r) + "\n")
+        by_symbol_table(all_recs)
+        sys.exit(0)
     ok = report(all_recs, args.jsonl)
     sys.exit(0 if ok else 2)
 
