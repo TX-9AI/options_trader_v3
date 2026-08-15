@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.92
+# docs/BACKLOG.md — v4.94
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -21,7 +21,12 @@ unblock on the calendar. Earned value: `python3 tests/evm_status.py`.
 > boxes. **The row that is live is FRI 2026-08-28.** Everything dated Aug 17 or
 > Sep 8 below is HISTORICAL — do not act on it.
 >
-> **THE NEW SEQUENCE (operator, 2026-08-13):**
+> ⬜ **REBASED 2026-08-15:** the anchor's BASIS is now the 08-15 bake, not
+> 08-13. The DATE is unchanged — Mon 08-17 through Fri 08-28 is ten sessions,
+> exactly two trading weeks, all on the current fleet. Aug 28 evaluates **the
+> 08-15 fleet**; it is not an isolation test of the 08-13 changes.
+>
+> **THE SEQUENCE (operator, 2026-08-13; basis rebased 2026-08-15):**
 > 1. **Fri Aug 28** — evaluate the paper-P&L impact of the 08-13 changes, once
 >    the bugs are worked out. **The two weeks to that date are a MEASUREMENT
 >    WINDOW, not a tuning window.**
@@ -221,6 +226,52 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.94 — 2026-08-15 — MONDAY 08-17 AFTER RTH: THE ORDER OF WORK.**
+  Eleven behavioural changes baked to 29/29 with **zero live validation**. The
+  first session is a verification session, not a development one.
+
+  **TIER 1 — DID THE BAKE WORK? (do these before anything else, in order)**
+  1. **⚠️ FEED.2 — is overnight tape actually arriving?** One fleet command:
+     count `<SYM>_EXT` rows and their earliest ET hour. **If `ext` bars are
+     absent, LIQ.6's sections are still inert and everything downstream of them
+     is unchanged** — and a lost night is unrecoverable (DXFeed history is
+     same-evening only), so this is the ONLY item that gets worse by waiting.
+  2. **TC.6's first clean execution.** It has NEVER traded correctly — the
+     identity chain, the dispatch routing and the exit branch were each broken
+     in sequence. Check it fired, was labelled `TrendCreditSpread`, and exited
+     on breach or 15:45 rather than a condor ladder.
+  3. **BFLY.3 volume.** SMH went from 3 fires to a possible 46 on the 08-15
+     read. **A large jump on one symbol from one day's data is exactly what a
+     flat ceiling could get wrong** — count fires per symbol and check the
+     realized ratios sit under 0.50.
+  4. **F7/F5/F8 fired at all?** Each is a defect fix with no live proof yet.
+     Grep for `regime_flip` on continuations (F7's new vote gate), the F5 orphan
+     warning, and `gate_block:afternoon_debit` dispositions (F8's journal).
+  5. **LIQ.4 — is the ledger writing?** `data/liquidity_ledger/<date>/` should
+     exist with non-zero touch counts. It has collected nothing since 08-13.
+
+  **TIER 2 — CHEAP, NO MARKET NEEDED (any evening this week)**
+  6. **L1.7 TRENDING: LABEL IT.** 251 symbol-sessions already clear the bar;
+     TSLA 08-04 at 99% is the strongest. **This is the only item on the critical
+     path to the L2.6 freeze that needs no new data at all.**
+  7. **Re-run LIQ.5's retreat probe** once a few post-LIQ.6 sessions exist — its
+     NY figures measured a moving target and rungs 2-3 did not previously exist.
+
+  **TIER 3 — REAL DEFECTS, BUT THEY CAN WAIT A SESSION**
+  8. **F3** — live-only double-close on a mid-ladder restart. Must close before
+     cash; harmless on paper.
+  9. **A2.10** — today's tape cannot break a ladder rung.
+  10. **CND.8** — the condor has no structural exit. ⚠️ **BLOCKED until enough
+      post-LIQ.6 sessions exist**: the 5-of-14 double-stop rate predates condor
+      v2 and must be re-measured before anything is designed.
+
+  **⚠️ WHAT NOT TO DO MONDAY: re-tune on the first session.** PART 0's warning
+  applies with more force now, not less — most thresholds that shipped today are
+  STATED PRIORS (0.50 debit ceiling = the structure's break-even, 0.002 zone =
+  the mapper's own dedupe tolerance, 3-deep ladder). **Re-fitting them on the
+  first data they produce turns an out-of-sample test into an in-sample one**,
+  and restarts the two-week clock a third time.
+
 - **🔴 v4.92 — 2026-08-15 — TODAY'S BAKE RESETS THE MEASUREMENT WINDOW. THE
   AUG 28 EVALUATION NEEDS A DECISION.**
 
@@ -232,16 +283,25 @@ would otherwise surface as unexplained numbers on Monday.
   BFLY.3's flat ceiling, LIQ.6's pool redefinition, FEED.2's extended hours —
   **change what the fleet trades and what it sees.**
 
-  **SO THE WINDOW THAT ENDS AUG 28 NOW MEASURES 08-15's FLEET, NOT 08-13's.**
-  Sessions before today and after today are not the same population. Three
-  honest options, operator's call:
-  1. **Move the anchor** to ~Sep 11 and measure a clean two weeks from Monday.
-  2. **Keep Aug 28** and read it as a first look at the CURRENT fleet, accepting
-     that it says nothing about the 08-13 changes in isolation.
-  3. **Split the read** at 08-18 and report both halves, naming the boundary.
-  ⚠️ WHAT IS NOT AN OPTION is reporting Aug 28 as *"the 08-13 evaluation"*. It
-  will not be that, and the two-week discipline exists precisely so a number
-  means what its label says.
+  **✅ RESOLVED SAME DAY — REBASED, NOT MOVED (operator, 2026-08-15):**
+  *"8/13 and 8/15 moot, just normalize the marker to 8/15 — 2 weeks is still 2
+  weeks."*
+  **THE DATE DOES NOT CHANGE.** 2026-08-15 is a Saturday, so the first
+  post-bake session is **Mon 08-17** and ten sessions later is **Fri 08-28** —
+  exactly two clean trading weeks, entirely on the 08-15 fleet. The anchor was
+  already right; only its BASIS was wrong.
+  ⚠️ **THE LABEL IS WHAT CHANGES.** Aug 28 evaluates **the 08-15 fleet**, not
+  the 08-13 changes in isolation — reporting it as "the 08-13 evaluation" would
+  be false, and the two-week discipline exists precisely so a number means what
+  its label says.
+  ⚠️ AND SESSIONS BEFORE 08-17 ARE A DIFFERENT POPULATION. Do not pool them.
+
+  **WHY THE RESET IS ACCEPTABLE RATHER THAN A SETBACK** (operator): most of what
+  shipped were **structural limitations that were not to spec** — a pool
+  definition that named a still-forming extreme, an exemption that held a long
+  through a bear breakout, a refusal journal that had gone silent, a feed asking
+  DXFeed to exclude the tape it needed. Measuring a fleet that was not to spec
+  would have measured the defects.
 
   ⚠️ **AND THE ARCHIVE IS NOW FOUR REGIMES** for anything touching levels or
   sweeps: pre-LIQ.1 · post-LIQ.1 (08-12+) · post-LIQ.6 (08-15 bake) ·
