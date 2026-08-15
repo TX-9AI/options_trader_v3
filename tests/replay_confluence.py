@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# v2.5 - 2026-08-15 - `--last N`, `--from`, `--to` SELECT FILES BEFORE READING.
+#        ⚠️ v2.4's `--last` loaded EVERY matched log and trimmed dates
+#        afterwards. 25 sessions is ~280k records held at once, and on the
+#        control box that was SILENTLY OOM-KILLED - no output, no traceback, no
+#        non-zero message the operator could act on. A date range is a FILE
+#        SELECTION, not a post-filter. Also prints `[files] N matched` so a run
+#        that reads nothing says so.
 # v2.4 - 2026-08-15 - `--grid` and `--sweeps`, and records are DATE-TAGGED.
 #        THE GRID is symbols down / dates across, one dominant-regime code per
 #        cell (TL TB RG BO CP SW), with `*` marking a cell that clears L1.7's
@@ -619,7 +626,7 @@ def _dominant(recs):
     return REGIME_CODE.get(top, top[:2]), 100.0 * tally[top] / scored
 
 
-def regime_grid(all_recs: List[dict], last: int = 0):
+def regime_grid(all_recs: List[dict]):
     """SYMBOLS down, DATES across, the dominant regime in each cell.
 
     The shape the operator asked for, and the one that makes a trend day
@@ -640,8 +647,6 @@ def regime_grid(all_recs: List[dict], last: int = 0):
         dates.add(d)
         syms.add(sy)
     dates = sorted(dates)
-    if last and last > 0:
-        dates = dates[-last:]          # widest useful view on a phone is ~8-10
     # rank symbols by how often they trended, so candidates float to the top
     def trendiness(sy):
         n = 0
@@ -771,9 +776,14 @@ def main():
     ap.add_argument("--grid", action="store_true",
                     help="SYMBOLS down, DATES across, dominant regime per cell.")
     ap.add_argument("--last", type=int, default=0, metavar="N",
-                    help="grid: keep only the N most recent sessions. 25 dates "
-                         "is ~184 chars wide and wraps unreadably on a phone; "
-                         "8-10 fits.")
+                    help="read only the N most recent session files. ⚠️ SELECTS "
+                         "FILES BEFORE OPENING THEM — the first version loaded "
+                         "all 25 logs (~280k records) and trimmed dates "
+                         "afterwards, which was silently OOM-killed on control.")
+    ap.add_argument("--from", dest="date_from", default=None, metavar="YYYY-MM-DD",
+                    help="read only session files on/after this date.")
+    ap.add_argument("--to", dest="date_to", default=None, metavar="YYYY-MM-DD",
+                    help="read only session files on/before this date.")
     ap.add_argument("--sweeps", action="store_true",
                     help="every session in which a NAMED pool was swept, with "
                          "the score's decay shape - L1.7's SWEEP acceptance.")
@@ -792,6 +802,22 @@ def main():
             files.extend(sorted(glob.glob(pat)) if any(c in pat for c in "*?[")
                          else [pat])
         files = [f for f in files if os.path.isfile(f)]
+
+        # ⚠️ NARROW THE FILE LIST BEFORE READING ANY OF IT. Loading every log
+        # and filtering afterwards is what got this OOM-killed: 25 sessions is
+        # ~280k records held at once on a control box. A date range is a file
+        # selection, not a post-filter.
+        def _fdate(fp):
+            m = re.search(r"(\d{4}-\d{2}-\d{2})", os.path.basename(fp))
+            return m.group(1) if m else ""
+        if args.date_from:
+            files = [f for f in files if _fdate(f) >= args.date_from]
+        if args.date_to:
+            files = [f for f in files if _fdate(f) <= args.date_to]
+        files = sorted(files, key=_fdate)
+        if args.last and args.last > 0:
+            files = files[-args.last:]
+
         if not files:
             # ⚠️ LOUD, WITH DIAGNOSIS. A quoted glob that matches nothing used to
             # exit before printing anything at all, which looks identical to the
@@ -846,7 +872,7 @@ def main():
                   f"asks for and what the aggregate cannot show.")
 
         if args.grid:
-            regime_grid(all_recs, last=args.last)
+            regime_grid(all_recs)
             sys.exit(0)
         if args.sweeps:
             sweep_report(all_recs)
