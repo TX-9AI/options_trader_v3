@@ -1,4 +1,20 @@
 #!/bin/bash
+# v4.52 — 2026-08-14 — AUDIT F1/F2/F4/F6 (exit_engine v4.21, main v6.9,
+#         position_manager v3.2). Five canaries, every one guarding a defect
+#         that was REPRODUCED AT RUNTIME while 162 text-based tests stayed
+#         green: the structure IMPORT (without it, NameError on every condor
+#         tick and a ~7.5-min crash loop), the DISPATCH routing credit
+#         verticals by structure (without it, every new TC.6 record is managed
+#         by the DEBIT sweep evaluator with sign-inverted P&L), the F4 seed
+#         guard 0<persisted<base_stop (without the bound the restart seed
+#         would adopt stale/foreign trail values as a ratchet), the TC.6
+#         is_condor_leg=0 conditional (without it TC.6 rows spoof
+#         _condor_sibling_open and condor_roll), and position_manager pricing
+#         by structure (without it, main v6.9 makes TC.6 premium fetch fall to
+#         the single-leg path — the paired-commit hop).
+#         ⚠️ TITLE DRIFT FIXED: this file's title read v4.46 while its newest
+#         changelog entry was v4.51 — five bumps recorded below the line that
+#         claims the version. Same failure class as the devtools banner.
 # v4.46 — 2026-08-11 — LIQ.1 + SWP.4. Three canaries, all guarding SILENT
 #         failures: the dedupe tiebreak (losing it empties swept_named_level
 #         and the SWEEP score becomes exactly 0.000, with no error anywhere),
@@ -431,6 +447,11 @@ check "analysis/trend_engine.py"         'tf == "5m"'                   "ADX fro
 
 # ── v3.5-v3.8 remediation fingerprints (stale-sync canaries) ──────────────
 check "execution/exit_engine.py"         "_confirm_and_book_live_exit"  "v3.5 fill-confirmed live exits"
+check "execution/exit_engine.py"         "from strategy.structure import is_trend_participation" "v4.21 F1 — the binding v4.20 forgot; without it NameError on every condor tick"
+check "execution/exit_engine.py"         "or is_credit_vertical(record):" "v4.21 F2 — dispatch routes credit verticals by STRUCTURE, not one strategy string"
+check "execution/exit_engine.py"         "0.0 < _persisted < base_stop"  "v4.21 F4 — ratchet restart seed, bounded so stale/foreign values are never adopted"
+check "main.py"                          "is_condor_leg    = 0 if _is_tcs else 1," "v6.9 F6 — TC.6 rows no longer claim condor-leg identity"
+check "execution/position_manager.py"    "if _is_credit_vertical(record):" "v3.2 F6 pairing — spread pricing by structure (must land WITH main v6.9)"
 check "execution/order_confirm.py"       "confirm_order_fill"           "v3.7 entry fill-confirmation module"
 check "main.py"                          "confirm_order_fill"           "v3.7 condor legs book on confirmed fill"
 check "execution/broker_reconcile.py"    "phantom_pnl"                  "v3.6 phantom P&L recovery"

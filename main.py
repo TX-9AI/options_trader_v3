@@ -1,5 +1,22 @@
 """
-main.py — options_trader v6.8
+main.py — options_trader v6.9
+v6.9 — 2026-08-14 — AUDIT F6: A TC.6 RECORD IS NOT A CONDOR LEG.
+        `_execute_condor_leg` still stamped is_condor_leg=1 and
+        condor_leg_num=2 onto every trend credit spread, called
+        notify_leg_filled() on its fill (advancing a condor plan state machine
+        the trade has nothing to do with — a no-op today only because TC.6
+        defers whenever a plan is active: a gate, not a guarantee), and sent a
+        Telegram entry alert advertising a stop for a trade whose record
+        deliberately carries stop_premium=0.0 — a lie on the exact channel
+        that caught the last identity bug. All three now condition on _is_tcs.
+        The two persisted fields were spoofing `_condor_sibling_open` (an
+        opposite-side open TC.6 would make a standalone condor leg read
+        "formed": ratchet and TP suppressed) and `condor_roll`'s leg discovery
+        (could have closed a TC.6 leg as rolled_to_broken_wing).
+        ⚠️ position_manager v3.2 lands in the SAME commit: its premium fetch
+        keyed on is_condor_leg, which this change removes from TC.6 rows —
+        without v3.2 the spread pricing silently falls to the single-leg path.
+        That pairing is the hop this fix would have broken if shipped alone.
 v6.8 — 2026-08-14 — TC.6 IDENTITY THROUGH THE EXECUTION PATH.
         `_execute_condor_leg` hardcoded condor identity onto every record it
         built, so `is_trend_credit` and `underlying_stop` never reached the
@@ -1372,8 +1389,11 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState,
         regime_conviction = getattr(signal, "conviction", 0.0)
                             or (state.current_regime.conviction if state.current_regime else 0.0),
         flat_angle_deg    = getattr(signal, "flat_angle_deg", 0.0),
-        is_condor_leg    = 1,
-        condor_leg_num   = 1 if is_leg1 else 2,
+        # v6.9 (AUDIT F6): a TC.6 record must not claim condor-leg identity —
+        # is_condor_leg is what _condor_sibling_open and condor_roll key on,
+        # and condor_leg_num=2 on every TC.6 row was data pollution.
+        is_condor_leg    = 0 if _is_tcs else 1,
+        condor_leg_num   = 0 if _is_tcs else (1 if is_leg1 else 2),
         is_broken_wing   = 0,
         short_symbol     = getattr(short_contract, "symbol", ""),
         long_symbol      = getattr(long_contract, "symbol", ""),
@@ -1393,19 +1413,30 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState,
     get_position_manager(state.paper_trading).add_condor_leg(record)
 
     # Advance the plan (DECIDED -> LEG1_FILLED -> COMPLETE).
-    _iron_condor_strategy.notify_leg_filled(
-        is_leg1        = is_leg1,
-        credit         = fill_credit,
-        short_contract = short_contract,
-        long_contract  = long_contract,
-    )
+    # v6.9 (AUDIT F6): only a CONDOR fill advances the condor plan. A TC.6 fill
+    # reaching this call was a no-op only because TC.6 defers while a plan is
+    # active — a gate, not a guarantee.
+    if not _is_tcs:
+        _iron_condor_strategy.notify_leg_filled(
+            is_leg1        = is_leg1,
+            credit         = fill_credit,
+            short_contract = short_contract,
+            long_contract  = long_contract,
+        )
 
+    # v6.9 (AUDIT F6): the alert must describe THIS trade's exits. A TC.6 leg
+    # has NO premium stop and NO nickel close — breach of the bound or 15:45,
+    # nothing else — and advertising a stop here is a lie on the channel that
+    # caught the last identity bug.
+    _exit_desc = (f"exit=breach@{getattr(signal, 'underlying_stop', 0.0):.2f} or 15:45"
+                  if _is_tcs else
+                  f"stop=${fill_credit * (1 + CONDOR_STOP_LOSS_PCT):.2f} | "
+                  f"nickel=${CONDOR_NICKEL_CLOSE:.2f}")
     get_alert_manager()._send(
         f"\U0001F985 [{mode}] {INSTRUMENT} | {signal.setup_type} | "
         f"sell={short_contract.strike:.0f} buy={long_contract.strike:.0f} "
         f"x{contracts} credit=${fill_credit:.2f} | "
-        f"stop=${fill_credit * (1 + CONDOR_STOP_LOSS_PCT):.2f} | "
-        f"nickel=${CONDOR_NICKEL_CLOSE:.2f} | maxloss=${max_loss:.0f} | "
+        f"{_exit_desc} | maxloss=${max_loss:.0f} | "
         f"{fmt_et_short()}"
     )
 

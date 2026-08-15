@@ -1,5 +1,42 @@
 """
-execution/exit_engine.py — v4.20 — Strategy-aware exit logic for all options positions.
+execution/exit_engine.py — v4.21 — Strategy-aware exit logic for all options positions.
+v4.21 — 2026-08-14 — 🔴 AUDIT F1+F2+F4: THE v4.20 FIX NEVER BOUND, AND THE
+        DISPATCH NEVER ROUTED. Two defects of the exact species v4.20 fixed,
+        one hop away each, found by the adversarial audit and REPRODUCED AT
+        RUNTIME (every failure below executed against 3d9e82e, not inferred):
+        (F1) `is_trend_participation` was called at the top of
+        `_evaluate_condor_leg` and NEVER IMPORTED into this module — NameError
+        on every condor-leg tick and every legacy TC.6 row. The exception
+        escapes _manage_one into the tick loop's error counter: 30 errors at
+        15s ticks = sys.exit(1) about 7.5 min after any condor leg opens, then
+        a systemd crash-loop until the 15:45 branch (which sits ABOVE the
+        call) flattens it. The chain test asserted the STRING existed in this
+        file — a mention, not a binding (WORKING_AGREEMENT section 20, at the
+        import level). Import added, module level.
+        (F2) `_execute_condor_leg` now writes strategy="TrendCreditSpread"
+        (main v6.8) but evaluate() only routed "IronCondorStrategy" to the
+        condor evaluator — every NEW TC.6 record fell to `_evaluate_sweep`,
+        the DEBIT evaluator: KeyError 'trail_activation' on the first tick of
+        a fresh record; after the crash-restart, target_premium=$0.05 (the
+        nickel) read as a debit TP satisfied from tick one, so the position
+        lived in the ORB post-target trail with SIGN-INVERTED P&L labels and
+        lost the VERTICAL_HOLD_TO_ET exemption; TypeError once value decayed
+        below the nickel. The dispatch now routes any record structure.py
+        recognises as a credit vertical — both strategy names, legacy rows,
+        and the rolled broken wing — to `_evaluate_condor_leg`.
+        (F4) the ratchet high-water lived ONLY in self._condor_ratchet, so
+        every bake reset an earned breakeven/+20% lock to the base -25% and
+        re-opened the round-trip v4.1 exists to close. The earned level now
+        rides the SAME persistence the directional trails use: emitted via
+        decision.new_trail_stop (position_manager writes the trail_stop
+        column) on the STANDALONE branch only — v4.17's formed branch
+        deliberately neither applies nor updates it — and re-seeded from the
+        column on restart. Only a value below base_stop can be a real condor
+        ratchet; anything else is stale/foreign and ignored.
+        Ships with tests/test_exit_dispatch_runtime.py — the first suite on
+        this path that EXECUTES evaluate() with real record shapes (fresh AND
+        rehydrated) instead of grepping source. Verified to fail against
+        3d9e82e before this fix.
 v4.20 — 2026-08-14 — 🔴 THE TC.6 BRANCH DIED ON RESTART. `is_trend_credit` IS
         NOT A COLUMN in the trades table — it lives only in the in-memory
         record. `get_open_trades_live()` does SELECT *, so **any restart
@@ -443,6 +480,10 @@ from config import (
 from utils.time_utils import (is_hard_close_time, minutes_since, now_utc,
                               fmt_et_short, now_et, ts_for_db)
 from execution.limit_ladder import limit_at_mark, hard_close_order_mode
+# v4.21 (AUDIT F1): the binding v4.20 forgot. `is_trend_participation` was
+# called in _evaluate_condor_leg and never imported — NameError on every condor
+# leg evaluation. `is_credit_vertical` routes the dispatch (F2).
+from strategy.structure import is_trend_participation, is_credit_vertical
 
 logger = logging.getLogger(__name__)
 
@@ -749,7 +790,14 @@ class ExitEngine:
 
         if record.get("is_butterfly"):
             return self._evaluate_butterfly(record, current_premium, regime=regime)
-        elif strategy == "IronCondorStrategy":
+        elif strategy == "IronCondorStrategy" or is_credit_vertical(record):
+            # v4.21 (AUDIT F2): route on the STRUCTURE, not one strategy string.
+            # main v6.8 writes strategy="TrendCreditSpread"; the old test sent
+            # every new TC.6 record to _evaluate_sweep (the DEBIT evaluator) —
+            # the TC.6 branch inside the condor evaluator was unreachable for
+            # every record opened after the identity fix. is_credit_vertical()
+            # reads only persisted columns, so legacy rows and the rolled
+            # broken wing route here too.
             return self._evaluate_condor_leg(record, current_premium,
                                              regime=regime, df_1m=df_1m)
         elif strategy == "ADOPTED":
@@ -1566,9 +1614,28 @@ class ExitEngine:
             stop_level, tier = base_stop, " [formed: base only]"
         else:
             prev = self._condor_ratchet.get(trade_id)
+            if prev is None:
+                # v4.21 (AUDIT F4) — RESTART RECOVERY. The earned ratchet lived
+                # ONLY in this dict; every bake reset an earned breakeven/+20%
+                # lock to the base -25% stop. Seed from the trail_stop column
+                # (written via new_trail_stop below). Only a value BELOW
+                # base_stop can be a real condor ratchet — anything else is
+                # stale/foreign and ignored.
+                try:
+                    _persisted = float(record.get("trail_stop", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    _persisted = 0.0
+                if 0.0 < _persisted < base_stop:
+                    prev = _persisted
             if prev is not None:
                 stop_level = min(stop_level, prev)  # ratchet only ever tightens
             self._condor_ratchet[trade_id] = stop_level
+            if stop_level < base_stop and (prev is None or stop_level < prev):
+                # v4.21 (F4): persist the earned level through the SAME channel
+                # the directional trails use. Emitted only when it tightened,
+                # and only on this standalone branch — the formed branch above
+                # deliberately neither applies nor updates the stored value.
+                decision.new_trail_stop = stop_level
 
         if current_premium >= stop_level:
             decision.should_exit = True

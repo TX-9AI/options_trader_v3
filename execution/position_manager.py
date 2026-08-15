@@ -1,5 +1,14 @@
 """
-execution/position_manager.py — v3.1 — VEL.1 stashes current_delta
+execution/position_manager.py — v3.2 — AUDIT F6 pairing: price a spread by
+        STRUCTURE, not by is_condor_leg. main v6.9 stops stamping
+        is_condor_leg=1 onto TC.6 records, and this module's premium fetch
+        keyed on exactly that flag (or strategy=="IronCondorStrategy") — so
+        without this change a TC.6 record would silently fall to the
+        single-leg pricing path. is_credit_vertical() reads only persisted
+        columns (strategy / setup_type), so condor legs, both TC.6 row
+        generations, and the rolled broken wing all price as short-long.
+        Ships in the SAME commit as main v6.9, deliberately.
+v3.1 — VEL.1 stashes current_delta
         alongside current_theta: breakeven velocity is |theta|/(|delta|*1440),
         so theta alone cannot answer whether the position is gaining or
         bleeding. Manages the single open options position.
@@ -71,6 +80,7 @@ from typing import Optional, List
 import pandas as pd
 
 from database.trade_logger import TradeRecord, get_trade_logger
+from strategy.structure import is_credit_vertical as _is_credit_vertical
 from execution.exit_engine import get_exit_engine, ExitDecision
 from data.tasty_client import get_client, TastyClientError
 from risk.risk_manager import get_risk_manager
@@ -244,7 +254,10 @@ class PositionManager:
                 side           = record.get("option_side", "call")
                 contracts_list = chain.calls if side == "call" else chain.puts
 
-                if record.get("is_condor_leg") or record.get("strategy") == "IronCondorStrategy":
+                # v3.2 (AUDIT F6): structure-derived, matching exit_engine
+                # v4.21's dispatch — pricing and routing must never disagree
+                # about what a record IS.
+                if _is_credit_vertical(record):
                     short_s = record.get("short_strike", 0)
                     long_s  = record.get("long_strike",  0)
                     short_m = next((c.mark for c in contracts_list if c.strike == short_s and c.mark > 0), None)
