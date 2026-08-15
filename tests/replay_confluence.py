@@ -1,4 +1,19 @@
 #!/usr/bin/env python3
+# v2.4 - 2026-08-15 - `--grid` and `--sweeps`, and records are DATE-TAGGED.
+#        THE GRID is symbols down / dates across, one dominant-regime code per
+#        cell (TL TB RG BO CP SW), with `*` marking a cell that clears L1.7's
+#        TRENDING bar. A trend day is now a glance instead of a query.
+#        ⚠️ DATE TAGGING WAS REQUIRED FIRST: saved records carry `ts` as HH:MM
+#        only, so a multi-file scan would have BLENDED a symbol's trend day into
+#        its chop days and diluted exactly what is being looked for. The date
+#        comes from the filename.
+#        `--sweeps` answers "was a previously NAMED pool actually swept during
+#        the session" - the scorer already writes `named`, `reclaimed`,
+#        `pool_price`, `kind` and `age_bars` into `breakdown`, so this reads
+#        history rather than collecting anything. It prints the decay shape
+#        after the peak and marks a row TIER-B CANDIDATE only when all three of
+#        L1.7's conditions hold: SWEEP>0 at the bar, a reclaim, and a monotone
+#        decay. A high max score alone is a LEAD, never a pass.
 # v2.3 - 2026-08-15 - PER-SYMBOL VIEW. `--symbol SYM`, `--by-symbol`, and
 #        `--report-only` now takes MULTIPLE files (or a glob) for a date range.
 #        WHY: L1.7's acceptance criteria are written PER SYMBOL-DAY ("one
@@ -575,6 +590,142 @@ def by_symbol_table(all_recs: List[dict]):
     print("    max is a lead to inspect, NOT a pass on its own.")
 
 
+# Compact codes so a row stays readable across 20+ dates.
+REGIME_CODE = {"TRENDING_BULL": "TL", "TRENDING_BEAR": "TB", "RANGING": "RG",
+               "BREAKOUT_VOLATILE": "BO", "COMPRESSION": "CP",
+               "SWEEP_REVERSAL": "SW"}
+
+
+def _dominant(recs):
+    """(code, share%) for the regime that led the most ticks in a session."""
+    tally = {k: 0 for k in REGIMES}
+    scored = 0
+    for r in recs:
+        sc = r.get("scores") or {}
+        best = max((sc.get(x) or 0) for x in REGIMES)
+        if best <= 0:
+            continue
+        scored += 1
+        for k in REGIMES:
+            if (sc.get(k) or 0) == best:
+                tally[k] += 1
+                break
+    if not scored:
+        return "--", 0.0
+    top = max(tally, key=lambda k: tally[k])
+    return REGIME_CODE.get(top, top[:2]), 100.0 * tally[top] / scored
+
+
+def regime_grid(all_recs: List[dict]):
+    """SYMBOLS down, DATES across, the dominant regime in each cell.
+
+    The shape the operator asked for, and the one that makes a trend day
+    obvious: a run of TB/TL across a row is a trending symbol; a wall of RG is
+    chop. Reading 29 symbols x N dates as one aggregate number told us nothing
+    for weeks.
+
+    ⚠️ TL/TB SPLIT ON PURPOSE. L1.7's bar is `TRENDING_*` (either direction), so
+    a cell of TB counts toward the row exactly as TL does — but seeing WHICH
+    direction is what lets you match a cell against the chart.
+    """
+    from collections import defaultdict
+    cells = defaultdict(dict)
+    dates, syms = set(), set()
+    for r in all_recs:
+        d, sy = str(r.get("date", "?")), str(r.get("sym", "?"))
+        cells[sy].setdefault(d, []).append(r)
+        dates.add(d)
+        syms.add(sy)
+    dates = sorted(dates)
+    # rank symbols by how often they trended, so candidates float to the top
+    def trendiness(sy):
+        n = 0
+        for d in dates:
+            recs = cells[sy].get(d)
+            if recs and _dominant(recs)[0] in ("TL", "TB"):
+                n += 1
+        return -n
+    syms = sorted(syms, key=lambda sy: (trendiness(sy), sy))
+
+    head = "".join(f"{d[5:]:>7}" for d in dates)      # MM-DD
+    print(f"\n{'='*(9 + 7*len(dates))}")
+    print(f"REGIME GRID  {len(syms)} symbol(s) x {len(dates)} session(s)  "
+          f"TL=trend up  TB=trend down  RG=range  BO=breakout  CP=compress  SW=sweep")
+    print("=" * (9 + 7 * len(dates)))
+    print(f"{'sym':9}{head}")
+    for sy in syms:
+        row = ""
+        for d in dates:
+            recs = cells[sy].get(d)
+            if not recs:
+                row += f"{'.':>7}"
+                continue
+            code, share = _dominant(recs)
+            # a cell that clears L1.7's bar is marked, so the eye finds it
+            row += f"{code + ('*' if share >= 50 and code in ('TL', 'TB') else ''):>7}"
+        print(f"{sy:9}{row}")
+    print("\n  * = TRENDING_* dominant >=50% for that symbol-session — L1.7's")
+    print("      acceptance bar. Those are candidate Tier-B rows that need")
+    print("      LABELING, not more calendar time.")
+    print("  . = no ticks for that symbol on that date.")
+
+
+def sweep_report(all_recs: List[dict]):
+    """WAS A PREVIOUSLY NAMED POOL ACTUALLY SWEPT DURING THE SESSION?
+
+    L1.7's SWEEP row needs a mapper-confirmed NAMED-ZONE RECLAIM showing
+    SWEEP > 0 at the sweep bar and decaying over ~3 bars. A max score alone is
+    not a pass, which is why the per-symbol table only ever called it a lead.
+
+    Everything needed is already in the saved ticks: the scorer writes `named`,
+    `reclaimed`, `pool_price`, `kind` and `age_bars` into `breakdown`. So this
+    is a read of history, not a new collection.
+    """
+    from collections import defaultdict
+    events = defaultdict(list)
+    for r in all_recs:
+        bd = (r.get("breakdown") or {}).get("SWEEP_REVERSAL") or {}
+        named = bd.get("named")
+        if not named:
+            continue
+        sc = (r.get("scores") or {}).get("SWEEP_REVERSAL") or 0.0
+        events[(str(r.get("date", "?")), str(r.get("sym", "?")), str(named))].append(
+            (str(r.get("ts", "")), float(sc), bool(bd.get("reclaimed")),
+             bd.get("age_bars"), bd.get("kind"), bd.get("pool_price")))
+
+    print(f"\n{'='*94}")
+    print("NAMED-POOL SWEEPS  every session in which the mapper named a swept level")
+    print("=" * 94)
+    if not events:
+        print("\n  NO NAMED POOL WAS SWEPT in these session(s).")
+        print("  That is an ABSENT MEASUREMENT for L1.7's SWEEP row, not a null —")
+        print("  the event simply did not occur on this tape.")
+        return
+
+    print(f"\n{'date':11}{'sym':7}{'level':22}{'first':7}{'peak':>7}"
+          f"{'recl':>6}{'bars':>6}   decay over ~3 bars")
+    hits = 0
+    for (d, sy, lvl), rows in sorted(events.items()):
+        rows.sort()
+        peak = max(x[1] for x in rows)
+        recl = any(x[2] for x in rows)
+        i = next(i for i, x in enumerate(rows) if x[1] == peak)
+        tail = [x[1] for x in rows[i:i + 4]]
+        decays = len(tail) >= 2 and all(
+            tail[j] >= tail[j + 1] for j in range(len(tail) - 1)) and tail[-1] < peak
+        shape = " -> ".join(f"{v:.2f}" for v in tail[:4])
+        ok = peak > 0 and recl and decays
+        if ok:
+            hits += 1
+        print(f"{d:11}{sy:7}{lvl[:21]:22}{rows[0][0]:7}{peak:>7.3f}"
+              f"{('yes' if recl else 'no'):>6}{str(rows[0][3] or '-'):>6}   "
+              f"{shape}{'   <= TIER-B CANDIDATE' if ok else ''}")
+
+    print(f"\n  {len(events)} named-pool sweep(s); {hits} show SWEEP>0 at the bar,")
+    print("  a RECLAIM, and a monotone decay after the peak — L1.7's acceptance")
+    print("  shape. Those need LABELING; the rest are leads that did not qualify.")
+
+
 def gather_paths(args_paths: List[str]) -> List[str]:
     out = []
     for p in args_paths:
@@ -611,6 +762,11 @@ def main():
                     help="per-SYMBOL dominance table instead of the aggregate, "
                          "so a whole archive can be SCANNED for symbol-days "
                          "that clear Tier B.")
+    ap.add_argument("--grid", action="store_true",
+                    help="SYMBOLS down, DATES across, dominant regime per cell.")
+    ap.add_argument("--sweeps", action="store_true",
+                    help="every session in which a NAMED pool was swept, with "
+                         "the score's decay shape - L1.7's SWEEP acceptance.")
     ap.add_argument("--report-only", default=None, metavar="JSONL", nargs="+",
                     help="rebuild + reprint the full report from a saved tick-log JSONL "
                          "(no engines, no re-scoring — the report is deterministic from the log)")
@@ -630,15 +786,23 @@ def main():
             print(f"no tick log(s) matched {args.report_only}"); sys.exit(1)
         all_recs = []
         for fp in files:
+            # ⚠️ THE DATE COMES FROM THE FILENAME. Saved records carry `ts` as
+            # HH:MM only, so without this a multi-session scan would blend
+            # AVGO's trend day into AVGO's chop days and dilute the very thing
+            # being looked for. The acceptance criterion is per SYMBOL-SESSION.
+            m = re.search(r"(\d{4}-\d{2}-\d{2})", os.path.basename(fp))
+            day = m.group(1) if m else os.path.basename(fp)
             with open(fp) as f:
                 for line in f:
                     line = line.strip()
                     if not line:
                         continue
                     try:
-                        all_recs.append(json.loads(line))
+                        r = json.loads(line)
                     except Exception:                          # noqa: BLE001
                         continue
+                    r.setdefault("date", day)
+                    all_recs.append(r)
         if not all_recs:
             print("tick log(s) empty"); sys.exit(1)
         span = f"{len(files)} file(s)" if len(files) > 1 else files[0]
@@ -657,6 +821,12 @@ def main():
                   f"Acceptance checks below are PER SYMBOL, which is what L1.7 "
                   f"asks for and what the aggregate cannot show.")
 
+        if args.grid:
+            regime_grid(all_recs)
+            sys.exit(0)
+        if args.sweeps:
+            sweep_report(all_recs)
+            sys.exit(0)
         if args.by_symbol:
             by_symbol_table(all_recs)
             sys.exit(0)
