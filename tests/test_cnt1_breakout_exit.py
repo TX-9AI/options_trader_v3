@@ -43,15 +43,25 @@ SRC = open(os.path.join(os.path.dirname(__file__), "..", "execution",
                         "exit_engine.py"), encoding="utf-8").read()
 
 
-def still_trending(setup_type, direction, regime):
+def still_trending(setup_type, direction, regime, vote=None):
     """Mirrors the engine's test. Kept honest by
     `test_mirror_matches_the_engine_source` below."""
     rgm = (regime or "").upper()
-    is_breakout = str(setup_type or "").endswith("_breakout")
+    # F7: setup_type no longer decides; the TREND VOTE does. Default the vote to
+    # the trade's own direction so the original CNT.1 cases read unchanged.
+    # ⚠️ ONLY `None` (vote not supplied by an older test) defaults. An EMPTY or
+    # NEUTRAL vote must stay empty and FAIL CLOSED, matching the engine:
+    # `str(getattr(trend, "overall_direction", "") or "").upper()` yields "",
+    # which agrees with no direction. Defaulting "" here made the mirror MORE
+    # PERMISSIVE than the code it mirrors - caught by the fail-closed test.
+    v = (vote if vote is not None
+         else ("BULLISH" if direction == "long" else "BEARISH")).upper()
+    agrees = ((direction == "long" and v == "BULLISH")
+              or (direction == "short" and v == "BEARISH"))
     return (
         (direction == "long" and "TRENDING_BULL" in rgm) or
         (direction == "short" and "TRENDING_BEAR" in rgm) or
-        (is_breakout and "BREAKOUT_VOLATILE" in rgm)
+        ("BREAKOUT_VOLATILE" in rgm and agrees)
     )
 
 
@@ -74,12 +84,17 @@ def test_a_genuine_flip_still_exits_a_breakout_continuation():
         assert not still_trending("trend_continuation_breakout", "short", regime)
 
 
-def test_direction_still_matters_for_non_breakout_setups():
-    """Scope check: only `_breakout` gains the exemption."""
-    assert not still_trending("trend_continuation_standalone", "short",
-                              "BREAKOUT_VOLATILE")
-    assert not still_trending("trend_continuation_handoff", "long",
-                              "BREAKOUT_VOLATILE")
+def test_the_exemption_is_now_symmetric_across_setup_types():
+    """⚠️ REWRITTEN BY AUDIT F7. This used to assert that ONLY `_breakout`
+    gained the exemption — which was the defect, not the contract. A standalone
+    accelerating into a breakout IN ITS OWN DIRECTION was being closed while a
+    breakout record survived the identical tape.
+
+    The contract now: **setup_type is irrelevant; the trend vote decides.**"""
+    for setup in ("trend_continuation_standalone", "trend_continuation_handoff",
+                  "trend_continuation_breakout"):
+        assert still_trending(setup, "long", "BREAKOUT_VOLATILE", "BULLISH")
+        assert not still_trending(setup, "long", "BREAKOUT_VOLATILE", "BEARISH")
 
 
 def test_ordinary_continuation_behaviour_is_unchanged():
@@ -88,19 +103,36 @@ def test_ordinary_continuation_behaviour_is_unchanged():
     assert not still_trending("trend_continuation_standalone", "long", "TRENDING_BEAR")
 
 
-def test_a_missing_setup_type_does_not_grant_the_exemption():
-    """`record.get("setup_type")` can be None on an old row. None must NOT
-    read as a breakout trade — failing closed here means an ordinary trade
-    keeps its ordinary exit."""
-    assert not still_trending(None, "short", "BREAKOUT_VOLATILE")
-    assert not still_trending("", "long", "BREAKOUT_VOLATILE")
+def test_a_missing_trend_vote_fails_CLOSED():
+    """⚠️ REWRITTEN BY AUDIT F7. The old version guarded against a missing
+    setup_type; setup_type no longer gates anything. The field that matters now
+    is the TREND VOTE, and its absence must NOT hold a position open —
+    `getattr(trend, "overall_direction", "")` is "" when the vote is
+    unavailable, which cannot agree with any direction, so the trade exits.
+    A missing input is never evidence the thesis survives."""
+    assert not still_trending("trend_continuation_standalone", "long",
+                              "BREAKOUT_VOLATILE", "")
+    assert not still_trending("trend_continuation_breakout", "short",
+                              "BREAKOUT_VOLATILE", "NEUTRAL")
 
 
 # ── the mirror is only evidence if the engine still matches it ─────────────
 
 def test_mirror_matches_the_engine_source():
-    assert '_is_breakout_cont = str(record.get("setup_type") or "").endswith("_breakout")' in SRC
-    assert '(_is_breakout_cont and "BREAKOUT_VOLATILE" in rgm)' in SRC
+    """⚠️ SUPERSEDED BY AUDIT F7 (v4.22). This asserted the v4.19 clause
+    `(_is_breakout_cont and "BREAKOUT_VOLATILE" in rgm)` — the exemption scoped
+    to setup_type. That scoping WAS the F7 defect: a standalone accelerating
+    into its own breakout got closed while a breakout record survived the same
+    tape, and a long survived a breakout going AGAINST it because the label
+    carries no direction. The exemption is now gated on the TREND VOTE and
+    setup_type is irrelevant here — see `test_f7_setup_type_no_longer_decides`.
+
+    The CNT.1 behaviour this file was written for is unchanged: a breakout
+    continuation still survives BREAKOUT_VOLATILE. Only the reason changed,
+    from "because of its setup_type" to "because the vote still agrees"."""
+    assert '"BREAKOUT_VOLATILE" in rgm and _vote_agrees' in SRC
+    assert '_is_breakout_cont' not in SRC, \
+        "setup_type is back in the exemption; F7 has regressed"
 
 
 def test_the_flip_check_still_precedes_bos_exit():
@@ -137,3 +169,73 @@ def test_deliberate_failure_a_cooldown_would_not_have_fixed_this():
         "a hold time equal to the TICK INTERVAL, identical every time, is a "
         "structural exit firing immediately — not a market outcome")
     assert len(entries) == 4
+
+
+# ── AUDIT F7 — the exemption was asymmetric, and direction-blind ────────────
+
+def _still_trending(direction, rgm, vote):
+    """Mirrors v4.22. Kept honest by `test_f7_mirror_matches_source`."""
+    va = ((direction == "long" and vote == "BULLISH")
+          or (direction == "short" and vote == "BEARISH"))
+    return ((direction == "long" and "TRENDING_BULL" in rgm)
+            or (direction == "short" and "TRENDING_BEAR" in rgm)
+            or ("BREAKOUT_VOLATILE" in rgm and va))
+
+
+def test_f7_a_standalone_survives_acceleration_into_a_breakout():
+    """THE ASYMMETRY. v4.19 scoped the exemption to `_breakout` records, so a
+    STANDALONE riding TRENDING_BULL that accelerated into BREAKOUT_VOLATILE —
+    the strongest tape in its own direction — was closed as a regime_flip while
+    a breakout record survived the IDENTICAL TAPE. Same market, opposite
+    decision, on setup_type alone."""
+    assert _still_trending("long", "BREAKOUT_VOLATILE", "BULLISH") is True
+    assert _still_trending("short", "BREAKOUT_VOLATILE", "BEARISH") is True
+
+
+def test_f7_a_breakout_AGAINST_the_trade_now_exits():
+    """⚠️ THE OTHER HALF, AND THE MORE DANGEROUS ONE. BREAKOUT_VOLATILE carries
+    NO DIRECTION, so the old label-only test let a LONG survive a violent move
+    DOWN as long as the record was `_breakout`. The trend vote decides now."""
+    assert _still_trending("long", "BREAKOUT_VOLATILE", "BEARISH") is False
+    assert _still_trending("short", "BREAKOUT_VOLATILE", "BULLISH") is False
+
+
+def test_f7_ordinary_behaviour_is_untouched():
+    assert _still_trending("long", "TRENDING_BULL", "BULLISH") is True
+    assert _still_trending("long", "TRENDING_BEAR", "BEARISH") is False
+    assert _still_trending("long", "RANGING", "BULLISH") is False
+    assert _still_trending("short", "COMPRESSION", "BEARISH") is False
+
+
+def test_f7_setup_type_no_longer_decides():
+    """The fix is that setup_type is IRRELEVANT here. Two records on the same
+    tape with the same direction must get the same answer."""
+    import ast
+    tree = ast.parse(SRC)
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign) and any(
+                getattr(t, "id", "") == "still_trending" for t in n.targets):
+            seg = ast.get_source_segment(SRC, n) or ""
+            assert "_is_breakout_cont" not in seg, \
+                "setup_type still gates the breakout exemption"
+            return
+    raise AssertionError("still_trending is gone from exit_engine")
+
+
+def test_f7_mirror_matches_source():
+    assert '_vote_agrees = ((direction == "long" and _vote == "BULLISH")' in SRC
+    assert '("BREAKOUT_VOLATILE" in rgm and _vote_agrees)' in SRC
+
+
+def test_f7_deliberate_failure_the_old_logic_would_fail_these():
+    """Prove the change is load-bearing against the v4.19 predicate."""
+    def old(direction, rgm, is_breakout):
+        return ((direction == "long" and "TRENDING_BULL" in rgm)
+                or (direction == "short" and "TRENDING_BEAR" in rgm)
+                or (is_breakout and "BREAKOUT_VOLATILE" in rgm))
+    # standalone accelerating into its own breakout: old CLOSED it
+    assert old("long", "BREAKOUT_VOLATILE", False) is False
+    assert _still_trending("long", "BREAKOUT_VOLATILE", "BULLISH") is True
+    # breakout AGAINST a long: old HELD it
+    assert old("long", "BREAKOUT_VOLATILE", True) is True
+    assert _still_trending("long", "BREAKOUT_VOLATILE", "BEARISH") is False

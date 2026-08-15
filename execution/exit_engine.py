@@ -1,5 +1,13 @@
 """
-execution/exit_engine.py — v4.21 — Strategy-aware exit logic for all options positions.
+execution/exit_engine.py — v4.22  2026-08-15  AUDIT F7: the BREAKOUT_VOLATILE exemption was scoped to
+        `_breakout` records only, so a standalone/handoff continuation that
+        ACCELERATED into a breakout IN ITS OWN DIRECTION was closed as a
+        regime_flip while a breakout record survived the identical tape.
+        Now ANY continuation survives, gated on the TREND VOTE agreeing -
+        which is what v4.19's own comment already said should decide, and
+        which the label cannot supply because BREAKOUT_VOLATILE has no
+        direction. A long no longer survives a violent move DOWN.
+v4.21 — Strategy-aware exit logic for all options positions.
 v4.21 — 2026-08-14 — 🔴 AUDIT F1+F2+F4: THE v4.20 FIX NEVER BOUND, AND THE
         DISPATCH NEVER ROUTED. Two defects of the exact species v4.20 fixed,
         one hop away each, found by the adversarial audit and REPRODUCED AT
@@ -1857,11 +1865,27 @@ class ExitEngine:
         # ever got a look.
         # A breakout continuation must live or die on the TREND VOTE it was born
         # from, not on a label test it was never able to pass.
-        _is_breakout_cont = str(record.get("setup_type") or "").endswith("_breakout")
+        # ── AUDIT F7 (2026-08-15) — THE BREAKOUT EXEMPTION WAS ASYMMETRIC ────
+        # v4.19 scoped `BREAKOUT_VOLATILE` survival to `_breakout` records only,
+        # to avoid over-reaching. That created a worse problem: **a STANDALONE
+        # or HANDOFF continuation riding TRENDING_BULL that ACCELERATES into
+        # BREAKOUT_VOLATILE — the strongest tape in its own direction — was
+        # closed as a `regime_flip`, while a breakout record survived the
+        # IDENTICAL TAPE.** Same market, opposite decision, on setup_type alone.
+        #
+        # ⚠️ AND BREAKOUT_VOLATILE CARRIES NO DIRECTION. v4.19's own comment says
+        # a breakout continuation must live or die on the TREND VOTE — but the
+        # code tested the LABEL, so a long survived a violent move DOWN. The
+        # vote is already a parameter here and is the only directional evidence
+        # available, so it decides.
+        _vote = str(getattr(trend, "overall_direction", "") or "").upper()
+        _vote_agrees = ((direction == "long" and _vote == "BULLISH")
+                        or (direction == "short" and _vote == "BEARISH"))
         still_trending = (
             (direction == "long"  and "TRENDING_BULL" in rgm) or
             (direction == "short" and "TRENDING_BEAR" in rgm) or
-            (_is_breakout_cont and "BREAKOUT_VOLATILE" in rgm)
+            # ANY continuation survives a breakout that is still going ITS WAY.
+            ("BREAKOUT_VOLATILE" in rgm and _vote_agrees)
         )
         if regime is not None and not still_trending:
             decision.should_exit = True

@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.80
+# docs/BACKLOG.md — v4.81
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -217,6 +217,34 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **🔴 v4.81 — 2026-08-15 — AUDIT F7 FIXED: THE BREAKOUT EXEMPTION WAS
+  ASYMMETRIC AND DIRECTION-BLIND.** `exit_engine` v4.22 · 6 tests (112 total).
+
+  **v4.19 SCOPED THE EXEMPTION TO `_breakout` RECORDS TO AVOID OVER-REACHING,
+  AND CREATED A WORSE PROBLEM.** A STANDALONE or HANDOFF continuation riding
+  TRENDING_BULL that **accelerated into BREAKOUT_VOLATILE — the strongest tape
+  in its own direction — was closed as a `regime_flip`**, while a breakout
+  record survived the IDENTICAL TAPE. Same market, opposite decision, decided by
+  setup_type alone.
+
+  **⚠️ AND THE OTHER HALF IS WORSE: BREAKOUT_VOLATILE CARRIES NO DIRECTION.**
+  The label-only test meant **a LONG survived a violent move DOWN** as long as
+  the record was `_breakout`. v4.19's own comment already said a breakout
+  continuation must live or die on the TREND VOTE — but the code tested the
+  LABEL, which cannot supply direction.
+
+  **FIX: ANY continuation survives BREAKOUT_VOLATILE when the TREND VOTE
+  AGREES; none survives when it does not.** `trend` was already a parameter on
+  `_evaluate_continuation`. setup_type no longer gates anything here.
+  ⚠️ FAILS CLOSED: an absent vote yields `""`, which agrees with no direction,
+  so the trade exits. **A missing input is never evidence the thesis survives.**
+
+  ⚠️ THREE EXISTING TESTS ASSERTED THE DEFECT and had to be rewritten — they
+  pinned "only `_breakout` gains the exemption", which WAS the bug rather than
+  the contract. **And the rewritten mirror was caught being MORE PERMISSIVE than
+  the engine**: it defaulted an EMPTY vote to the trade's own direction, where
+  the engine leaves it empty and fails closed. Only `None` defaults now.
+
 - **v4.80 — 2026-08-15 — SWP.8: SWEEP REFUSAL PATHS PROMOTED TO INFO.**
   `strategy/sweep_reversal_strategy.py`. Log-only, no gate or threshold change,
   freeze-safe. Closes a `[DESK]` item that had been open since 08-11.
