@@ -66,7 +66,20 @@ _OUT_ROOT = os.path.join(_REPO_ROOT, "data", "liquidity_ledger")
 MIN_LEVELS_PER_SIDE = 3
 # A level is "touched" when a bar's wick reaches within this fraction of it.
 # Not zero: an exact float equality on a price never fires.
-TOUCH_TOL_PCT = float(os.environ.get("OT_LEDGER_TOUCH_TOL", "0.0002"))
+# ── LIQ.7 (2026-08-15) — ONE DEFINITION OF A ZONE ────────────────────────────
+# Was 0.0002 (2bp). Raised to 0.002 (20bp) to MATCH `within_pct(..., 0.002)`,
+# the tolerance `liquidity_mapper._add_named_pool` already uses to decide two
+# prices are the same level. Operator: *"Reach within a small margin of error is
+# good enough. A level is a ZONE, not a fixed number."*
+# ⚠️ THE OLD VALUE UNDERCOUNTED EXACTLY WHAT THE SIZING RULE REWARDS. On a $580
+# underlying 2bp is 12 CENTS — a clean approach that reversed just short of the
+# level did not register as a test at all, so the most-defended levels looked
+# untested. 20bp is $1.16 there, which is the zone the rest of the system
+# already treats as one level.
+# ⚠️ AND IT CHANGES WHAT EVERY LEDGER NUMBER MEANS. Counts before and after this
+# are not comparable; the ledger has collected nothing yet, so there is no
+# history to invalidate.
+TOUCH_TOL_PCT = float(os.environ.get("OT_LEDGER_TOUCH_TOL", "0.002"))
 
 
 class Level:

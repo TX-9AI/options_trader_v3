@@ -195,3 +195,66 @@ def test_deliberate_failure_close_decides_not_the_wick():
     assert (l.touches, l.holds, l.breaches) == (2, 1, 1), (
         "identical wicks with opposite closes scored the same — the CLOSE is "
         "not deciding acceptance")
+
+
+# ── LIQ.4 WIRING + LIQ.7 tolerance ─────────────────────────────────────────
+
+def test_liq7_tolerance_matches_the_mappers_zone():
+    """⚠️ ONE DEFINITION OF A ZONE. The ledger shipped at 0.0002 (2bp) while
+    `liquidity_mapper._add_named_pool` uses `within_pct(..., 0.002)` (20bp) to
+    decide two prices are the SAME LEVEL. On a $580 underlying 2bp is 12 CENTS —
+    a clean approach that reversed just short of the level did not register as a
+    test at all, so **the most-defended levels looked untested**, which is
+    exactly what the sizing rule is meant to reward."""
+    import analysis.liquidity_ledger as L
+    assert abs(L.TOUCH_TOL_PCT - 0.002) < 1e-9
+
+
+def test_the_zone_cuts_BOTH_ways():
+    """A close slightly beyond the nominal price is still INSIDE the zone, so it
+    is a HOLD, not a breach. A zone that only widened the touch test but not the
+    acceptance test would count defended levels as broken."""
+    from analysis.liquidity_ledger import LiquidityLedger
+    led = LiquidityLedger("QQQ")
+    led.reset_for_session("2026-08-17", seeds=[(580.0, "high", "PDH", True)])
+    lv = led.levels[0]
+    led.on_closed_bar(581.5, 580.2, 581.0)      # inside the +/-1.16 band
+    assert lv.holds == 1 and lv.breaches == 0
+    led.on_closed_bar(583.0, 580.5, 582.5)      # genuinely beyond
+    assert lv.breaches == 1
+
+
+def test_the_ledger_is_actually_wired_into_run_analysis():
+    """It was built, tested and COLLECTING NOTHING since 2026-08-13. Every
+    unwired session is level history that cannot be recovered later."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "main.py"),
+               encoding="utf-8").read()
+    assert "def _feed_liquidity_ledger(" in src
+    i = src.index("liq_map   = get_liquidity_mapper().analyze(")
+    assert "_feed_liquidity_ledger(" in src[i:i + 300], \
+        "the ledger is not fed from run_analysis"
+
+
+def test_only_CLOSED_bars_are_fed_and_only_once():
+    """`df_1m`'s last row is the FORMING bar on most ticks. Feeding it would
+    count a wick that has not finished printing and a close that is not a close
+    — and would re-count the same bar on every tick as it forms."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "main.py"),
+               encoding="utf-8").read()
+    i = src.index("def _feed_liquidity_ledger(")
+    seg = src[i:i + 2600]
+    assert "df_1m.iloc[-2]" in seg, "the forming bar is being fed"
+    assert "_LEDGER_LAST_BAR" in seg, "no guard against re-feeding one bar"
+
+
+def test_seeds_come_from_the_mapper_not_re_derived():
+    """LIQ.6 changed what a named pool IS. The ledger must take whatever the
+    mapper currently names — rung suffixes included — rather than holding a
+    second opinion about levels (WORKING_AGREEMENT 7)."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "main.py"),
+               encoding="utf-8").read()
+    i = src.index("def _feed_liquidity_ledger(")
+    seg = src[i:i + 2600]
+    assert 'getattr(liq_map, "pools"' in seg
+    assert "PDH" not in seg and "prev_day_high" not in seg, \
+        "the ledger is re-deriving level names instead of reading the mapper"

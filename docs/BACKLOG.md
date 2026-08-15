@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.83
+# docs/BACKLOG.md — v4.84
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -218,6 +218,44 @@ uppercase gate for weeks.
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
 <<<<<<< Updated upstream
+- **v4.84 — 2026-08-15 — LIQ.4 WIRED AT LAST, AND LIQ.7 ALIGNS ITS ZONE.**
+  `main` · `analysis/liquidity_ledger.py` · 5 tests.
+
+  **THE LEDGER HAS BEEN BUILT, TESTED AND COLLECTING NOTHING SINCE 08-13.**
+  Every unwired session is level history that CANNOT be recovered — the tape
+  survives, but the running touch/hold/breach record does not, and rebuilding it
+  later means re-deriving levels the mapper found live.
+
+  **🔵 AND IT ALREADY IMPLEMENTS THIS MORNING'S RETREAT RULE, VERBATIM** — wick
+  reaches = touch, close beyond = breach, close back on the origin side = hold,
+  a bar that never reaches does nothing. Written 08-13, before the conversation
+  that re-derived it. **Checking before building saved writing it twice.**
+
+  **🔴 LIQ.7 — THE TOLERANCE WAS OFF BY 10x.** The ledger shipped at **0.0002
+  (2bp)** while `liquidity_mapper._add_named_pool` uses **`within_pct(...,
+  0.002)` (20bp)** to decide two prices are the SAME LEVEL. On a $580
+  underlying 2bp is **12 CENTS** — a clean approach that reversed just short of
+  the level did not register as a test at all, so **the most-defended levels
+  looked untested**, which is exactly what the sizing rule exists to reward.
+  Operator: *"Reach within a small margin of error is good enough. A level is a
+  ZONE, not a fixed number."* Now 0.002 — **one definition of a zone.**
+  ⚠️ THE ZONE CUTS BOTH WAYS: a close slightly beyond the nominal price is still
+  INSIDE the band and counts as a HOLD. Widening only the touch test would have
+  counted defended levels as broken.
+
+  **WIRING DETAILS THAT MATTER:**
+  · **CLOSED BARS ONLY, ONCE EACH.** `df_1m`'s last row is the FORMING bar on
+    most ticks — feeding it counts a wick that has not finished printing and a
+    close that is not a close, and re-counts the same bar on every tick as it
+    forms. `df_1m.iloc[-2]` plus a `_LEDGER_LAST_BAR` guard.
+  · **SEEDS COME FROM THE MAPPER, never re-derived.** LIQ.6 changed what a named
+    pool IS (sections, closed-only, a 3-deep ladder), so the ledger takes
+    whatever the mapper currently names — rung suffixes included — rather than
+    holding a second opinion about levels (WORKING_AGREEMENT 7). A test asserts
+    it contains no level names of its own.
+  · Re-seeds per session date; fails silently to a debug line so a ledger fault
+    can never stop a tick.
+
 - **🔴 v4.83 — 2026-08-15 — AUDIT F5 FIXED: A RESTART ORPHANS THE CONDOR
   STRUCTURE.** `main` v6.10 · `iron_condor_strategy` · 3 tests (126 total).
 

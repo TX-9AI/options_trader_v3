@@ -757,6 +757,62 @@ class BotState:
         self.blind_latch = BlindnessLatch()
 
 
+_LEDGER = None
+_LEDGER_DATE = None
+_LEDGER_LAST_BAR = None
+
+
+def _feed_liquidity_ledger(liq_map, df_1m) -> None:
+    """LIQ.4 WIRING — seed the ledger at RTH open, feed it CLOSED 1m bars.
+
+    ⚠️ THE LEDGER HAS BEEN BUILT, TESTED AND COLLECTING NOTHING SINCE 08-13.
+    Every session it stays unwired is level history that CANNOT be recovered
+    later — the tape survives, but the running touch/hold/breach record does
+    not, and rebuilding it after the fact means re-deriving levels that the
+    mapper found live.
+
+    It implements the operator's retreat rule verbatim: a WICK reaching the
+    level is a touch, a CLOSE beyond is a breach, a CLOSE back on the origin
+    side is a hold, and a bar that never reaches does nothing.
+
+    ⚠️ CLOSED BARS ONLY, and exactly once each. `df_1m`'s last row is the
+    FORMING bar on most ticks — feeding it would count a wick that has not
+    finished printing and a close that is not a close, and would count the same
+    bar dozens of times as it forms. `_LEDGER_LAST_BAR` is the guard.
+
+    ⚠️ SEEDS COME FROM THE MAPPER, never re-derived here. LIQ.6 changed what a
+    named pool IS (sections, closed-only, a 3-deep ladder), so the ledger takes
+    whatever the mapper currently names — including the `(R1)`/`(R2)`/`(R3)`
+    rung suffixes — rather than holding a second opinion about levels.
+    """
+    global _LEDGER, _LEDGER_DATE, _LEDGER_LAST_BAR
+    try:
+        if df_1m is None or getattr(df_1m, "empty", True) or len(df_1m) < 2:
+            return
+        from analysis.liquidity_ledger import LiquidityLedger
+        today = str(df_1m.index[-1].date())
+        if _LEDGER is None or _LEDGER_DATE != today:
+            seeds = [(p.price, p.kind, p.name, True)
+                     for p in (getattr(liq_map, "pools", None) or [])
+                     if getattr(p, "is_named", False)]
+            _LEDGER = LiquidityLedger(INSTRUMENT)
+            _LEDGER.reset_for_session(today, seeds=seeds)
+            _LEDGER_DATE, _LEDGER_LAST_BAR = today, None
+            logger.info("[ledger] session %s seeded with %d named level(s)",
+                        today, len(seeds))
+        # the LAST row is still forming; the one before it has closed.
+        closed = df_1m.iloc[-2]
+        stamp = str(df_1m.index[-2])
+        if stamp == _LEDGER_LAST_BAR:
+            return
+        _LEDGER_LAST_BAR = stamp
+        _LEDGER.on_closed_bar(float(closed["high"]), float(closed["low"]),
+                              float(closed["close"]), ts=stamp)
+        _LEDGER.write()
+    except Exception as exc:                                   # noqa: BLE001
+        logger.debug("[ledger] skipped: %s", exc)
+
+
 def run_analysis(state: BotState) -> dict:
     """Fetch all market data and run analysis pipeline."""
     cache  = get_cache()
@@ -779,6 +835,7 @@ def run_analysis(state: BotState) -> dict:
     trend     = get_trend_engine().analyze(data)
     structure = get_structure_analyzer().analyze(df_5m, df_15m, df_1h, price)
     liq_map   = get_liquidity_mapper().analyze(df_5m, df_15m, price)
+    _feed_liquidity_ledger(liq_map, df_1m)      # LIQ.4 wiring
     macro     = get_macro_manager().get()
 
     # ORB engine update (every tick during RTH). Pass last-tick regime so the
