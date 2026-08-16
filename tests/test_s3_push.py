@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-# options_trader_v3/tests/test_s3_push.py — v1.6
+# options_trader_v3/tests/test_s3_push.py — v1.7
 """
 Behavioural proof for warehouse/s3_push.py against planted archives.
 
 CHANGELOG
+    v1.7 — 2026-08-16 — WH.8a: regime_log + circuit_breaker_events. The check
+           that matters is the ELEVEN-stage order assertion — it is only worth
+           having if it covers every stage, and two new streams would otherwise
+           slip in unordered.
     v1.6 — 2026-08-16 — WH.14: the liquidity ledger stream, and a re-assertion
            of the stage order now that a ninth stream exists — the ordering
            test is only worth having if it covers every stage, not the eight it
@@ -528,6 +532,57 @@ check("liquidity_ledger runs before the bulk streams",
       _pos2["liquidity_ledger"] < _pos2["signal_journal"]
       and _pos2["liquidity_ledger"] < _pos2["chain_snapshots"], _pos2)
 check("signal_journal is STILL last", _pos2["signal_journal"] == max(_pos2.values()))
+
+
+# 31 — regime_log + circuit_breaker: append-only tables reach the warehouse
+reset()
+dbp2 = os.path.join(TMP, "trades2.db")
+con = _s3q.connect(dbp2)
+con.execute("CREATE TABLE regime_log (id INTEGER PRIMARY KEY, logged_at TEXT,"
+            " regime TEXT, conviction REAL, macro_context TEXT, adx REAL,"
+            " trigger TEXT, engine TEXT)")
+con.execute("INSERT INTO regime_log VALUES (1,'2026-08-14T13:45:00+00:00',"
+            "'TRENDING_BULL',0.75,'RISK_ON',28.4,'breakout','L2')")
+con.execute("CREATE TABLE circuit_breaker_events (id INTEGER PRIMARY KEY,"
+            " event_time TEXT, reason TEXT)")
+con.execute("INSERT INTO circuit_breaker_events VALUES (1,"
+            "'2026-08-14T18:02:00+00:00','daily_loss')")
+con.commit(); con.close()
+
+s3rg = ListStub(); ledrg = {}; cntrg = {}
+pr_, fr_ = s3_push.push_table(s3rg, "B", dbp2, "regime_log", "logged_at",
+                              "regime_log", ledrg, "SPX", cntrg)
+check("regime_log row pushed", pr_ == 1 and fr_ == 0, (pr_, fr_))
+krg = sorted(s3rg.store)[0]
+check("regime_log key buckets by ET trading day",
+      krg.startswith("raw/regime_log/dt=2026-08-14/sym=SPX/"), krg)
+brg = json.loads(s3rg.store[krg])
+check("every regime_log column survives",
+      brg["record"]["conviction"] == 0.75 and brg["record"]["engine"] == "L2")
+check("regime_log re-push costs 0 (append-only, stable hash)",
+      s3_push.push_table(s3rg, "B", dbp2, "regime_log", "logged_at",
+                         "regime_log", ledrg, "SPX", cntrg)[0] == 0)
+
+pb_, _ = s3_push.push_table(s3rg, "B", dbp2, "circuit_breaker_events",
+                            "event_time", "circuit_breaker", ledrg, "SPX", cntrg)
+check("circuit_breaker row pushed to its own prefix",
+      pb_ == 1 and any("raw/circuit_breaker/" in k for k in s3rg.store), sorted(s3rg.store))
+
+# an older box without the table must degrade, not raise
+con = _s3q.connect(os.path.join(TMP, "bare.db")); con.execute("CREATE TABLE x (a)"); con.commit(); con.close()
+check("a missing table -> 0/0, no raise",
+      s3_push.push_table(ListStub(), "B", os.path.join(TMP, "bare.db"),
+                         "regime_log", "logged_at", "regime_log", {}, "SPX", {}) == (0, 0))
+
+# 32 — stage order with ELEVEN streams
+_src3 = _insp.getsource(s3_push.main)
+_n11 = ("trades", "regime_log", "circuit_breaker", "eod", "orb", "ohlc",
+        "candles", "liquidity_ledger", "chain_snapshots", "shadow", "signal_journal")
+_p11 = {n: _src3.index('("%s"' % n) for n in _n11 if '("%s"' % n in _src3}
+check("all ELEVEN stages are declared", len(_p11) == 11, sorted(_p11))
+check("the two new tables run before the bulk streams",
+      max(_p11["regime_log"], _p11["circuit_breaker"]) < _p11["chain_snapshots"], _p11)
+check("signal_journal is STILL last", _p11["signal_journal"] == max(_p11.values()))
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("ALL CHECKS PASSED" if not FAILS else "FAILURES: " + ", ".join(FAILS)))

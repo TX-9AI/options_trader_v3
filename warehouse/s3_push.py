@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
-# options_trader_v3/warehouse/s3_push.py — v1.6
+# options_trader_v3/warehouse/s3_push.py — v1.7
 """
 Box-side warehouse pusher — ships locally-written archives to S3.
 
 CHANGELOG
+    v1.7 — 2026-08-16 — WH.8a: `regime_log` and `circuit_breaker_events` join the
+           warehouse. FOUND WHILE BUILDING THE READER, NOT BY LOOKING: the
+           control-side bundle `fleet_trades_<date>.json` has a
+           `regime_timeline` and a `breaker_events` section, both sourced from
+           those two tables inside trades.db — and NOTHING WAS PUSHING THEM. WH.2
+           scoped itself to the `trades` table and said the other two would
+           follow; WH.3 covered six OTHER streams and they were never picked up.
+           A reader built on top would have reproduced two permanently empty
+           sections and the WH.11 diff would have shown a gap forever, blamed on
+           the reader rather than on the missing push.
+           Both are append-only (unlike `trades`, which mutates), so they use the
+           same per-row content hash with no CDC semantics needed.
     v1.6 — 2026-08-16 — WH.14: the LIQUIDITY LEDGER joins the warehouse, and
            `<SYM>_EXT` is documented as already handled. LIQ.4 wired
            `data/liquidity_ledger/<date>/<SYMBOL>.json` on 08-15 — the level
@@ -575,6 +587,49 @@ def _wrap(datatype, rec, sym, day, extra=None):
     return json.dumps(env, separators=(",", ":"), default=str).encode("utf-8")
 
 
+def push_table(s3, bucket, db_path, table, ts_col, datatype, ledger, me, counters=None):
+    """Push every row of an append-only table in trades.db, one object per row.
+
+    Used for `regime_log` and `circuit_breaker_events`. Unlike `trades` these
+    do not mutate, so there is no change-data-capture to reason about: a row's
+    content hash is stable for its lifetime and the ledger simply records which
+    hashes have landed.
+
+    `SELECT *` for the same reason as trades — a future ALTER TABLE ADD COLUMN
+    is carried automatically instead of silently dropped.
+    """
+    pushed = failed = 0
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True, timeout=5)
+        con.row_factory = sqlite3.Row
+        rows = [dict(r) for r in con.execute("SELECT * FROM %s" % table)]
+        con.close()
+    except Exception:
+        return 0, 0          # table absent on an older schema — not an error
+
+    seen = ledger.setdefault(table, {})
+    for rec in rows:
+        sha = _sha256(_canon(rec))
+        rid = str(rec.get("id") or sha[:16])
+        if seen.get(rid) == sha:
+            continue
+        ts = rec.get(ts_col) or ""
+        day = _et_day(ts)
+        try:
+            ems = int(datetime.fromisoformat(str(ts)).timestamp() * 1000)
+        except Exception:
+            ems = 0
+        sym = str(rec.get("symbol") or me or "UNKNOWN")
+        key = "%s/%s/dt=%s/sym=%s/%d-%s.json" % (PREFIX, datatype, day, sym, ems, sha[:16])
+        body = _wrap(datatype, rec, sym, day, {"row_id": rec.get("id")})
+        if not put_and_verify(s3, bucket, key, body, counters):
+            failed += 1
+            break
+        seen[rid] = sha
+        pushed += 1
+    return pushed, failed
+
+
 def push_jsonl_tree(s3, bucket, root, datatype, ledger, counters=None):
     """signal_journal and shadow: <date>/<SYM>.jsonl, append-only, plain text.
 
@@ -839,6 +894,12 @@ def main(argv=None) -> int:
         #   journal — largest by far, and the most tolerant of lag
         stages = [
             ("trades", lambda: push_trades(s3, BUCKET, TRADES_DB, t_ledger, counters)),
+            ("regime_log", lambda: push_table(
+                s3, BUCKET, TRADES_DB, "regime_log", "logged_at",
+                "regime_log", t_ledger, me, counters)),
+            ("circuit_breaker", lambda: push_table(
+                s3, BUCKET, TRADES_DB, "circuit_breaker_events", "event_time",
+                "circuit_breaker", t_ledger, me, counters)),
             ("eod", lambda: push_whole_files(s3, BUCKET, eod_items, "eod", misc, counters)),
             ("orb", lambda: push_orb(s3, BUCKET, misc, me, counters)),
             ("ohlc", lambda: push_whole_files(

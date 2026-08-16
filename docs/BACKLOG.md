@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.97
+# docs/BACKLOG.md — v4.98
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -102,6 +102,7 @@ BAKED is changing nothing about today's data.
 
 | item | built | pushed | baked | evidence |
 |---|---|---|---|---|
+| **WH.8 — warehouse reader + the two missing tables** | ✅ 08-16 | ⬜ | ⬜ **s3_push v1.7 needs option 25** | `warehouse_reader.py` v1.0 (23 checks) reproduces the fleet_trades bundle from S3, reusing consolidate_trades' own stats code; **found regime_log + circuit_breaker_events were never pushed**; `--compare` is WH.11's gate. NOT yet run against the real bucket |
 | **WH.14 eval — first EOD assessment** | n/a | n/a | 🗓️ **DUE TUE 08-18** | liquidity_ledger objects landed? `sym=<SYM>_EXT` present under raw/candles/? SHORT boxes repeat night-over-night? is 5s spacing right? **Tuesday not Monday: 08-17 belongs to v4.94 Tier-1, and a backfill anomaly in that window could be the conductor OR any of the eleven unvalidated changes — indistinguishable.** ⬜ DO NOT SEVER (gated on WH.11) |
 | **WH.14 — EOD fills the bucket + liquidity ledger** | ✅ 08-16 | ✅ 08-16 `e98aad8` / `901257e` | ⬜ **s3_push needs option 25** | s3_push v1.6 (88 checks) · eod_backfill v1.3 + suite (17 checks); Telegram on SHORT via existing notify; `OT_EOD_PULL` severable; batches stay sequential |
 | **WH.7 — devtools EMERGENCY STOP fixed** | ✅ 08-16 | ✅ 08-16 `6e4941d` | n/a (control-only) | **PROVEN LIVE 10:53 ET with 2/29 up: HALT → 29/29 stopped in seconds.** Was pinging 29 boxes over SSH first (~5 silent min). 15 checks, safety props pinned BY NAME |
@@ -229,6 +230,44 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.98 — 2026-08-16 — WH.8: THE WAREHOUSE HAS A READER. AND TWO STREAMS WERE MISSING THAT NOBODY WOULD HAVE NOTICED UNTIL THE DIFF.**
+  `day_trader_pro/warehouse_reader.py` v1.0 + suite (23 checks) ·
+  `warehouse/s3_push.py` v1.7 (97 checks).
+  - **🔴 `regime_log` AND `circuit_breaker_events` WERE NEVER BEING PUSHED.**
+    The bundle has a `regime_timeline` and a `breaker_events` section, both
+    sourced from those tables inside trades.db. WH.2 scoped itself to the
+    `trades` table and said the other two would follow; WH.3 covered six OTHER
+    streams and they were never picked up. **Found by building the reader, not
+    by looking** — and a reader built on top would have produced two
+    permanently empty sections, with the WH.11 diff showing a gap forever and
+    the reader taking the blame for a missing push. Both are append-only, so
+    they use a stable per-row content hash with no CDC semantics.
+  - **THE READER IMPORTS `_stats` AND `_load_selection` FROM
+    `consolidate_trades` RATHER THAN REIMPLEMENTING THEM.** If it computed its
+    own win-rate the WH.11 diff would compare two ARITHMETICS as well as two
+    SOURCES and a mismatch would be ambiguous. The only thing allowed to differ
+    between the bundles is where the rows came from.
+  - **LATEST-STATE-PER-TRADE, AND THE ORDER IS LOAD-BEARING.** The warehouse
+    holds every state a row passed through — more than the local bundle keeps —
+    so the reader groups by `trade_id` and keeps the newest `pushed_at_utc`.
+    **Collapse BEFORE filtering `status='closed'`, never after:** a trade open
+    at 10:00 and closed at 15:00 has objects in both states, and filter-first
+    would keep whichever survived the filter and could drop the trade entirely.
+    A test asserts the ordering rather than trusting the comment beside it.
+  - **`box` COMES FROM THE `sym=` PARTITION** — the warehouse's equivalent of
+    consolidate_trades' authoritative filename tag. The row's own `symbol` is
+    left untouched, so a mislabeled row keeps both values for audit. Same
+    contract, different source; proven with a deliberately mislabeled row.
+  - **`--compare` IS WH.11's GATE, SHIPPED EARLY.** It diffs the two bundles on
+    what matters — trade counts, the closed set, per-trade P&L and status — and
+    ignores cosmetic differences like `generated_utc`. It prints **MATCH** or
+    **DIVERGENCE — do NOT sever**.
+  - **⚠️ NOTHING IS SEVERED AND NOTHING IS PROVEN YET.** The reader has been
+    exercised against a stub, not against the real bucket. First real run needs
+    a date whose trades are fully drained. **`OT_EOD_PULL=0` stays gated on a
+    clean `--compare`.**
+  - **⚠️ s3_push v1.7 NEEDS A BAKE (option 25)** or the two new tables never push.
+
 - **v4.97 — 2026-08-16 — 🗓️ DUE TUE 08-18: WH.14's FIRST EVALUATION. AND A CORRECTION TO MY OWN SEQUENCING.**
 
   **⚠️ FIRST, THE CORRECTION.** I recommended *"Monday runs the CURRENT
