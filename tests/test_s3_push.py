@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-# options_trader_v3/tests/test_s3_push.py — v1.7
+# options_trader_v3/tests/test_s3_push.py — v1.8
 """
 Behavioural proof for warehouse/s3_push.py against planted archives.
 
 CHANGELOG
+    v1.8 — 2026-08-16 — ORB tests removed alongside the stage. They asserted
+           real behaviour and passed; they are deleted because the FEATURE went,
+           not because they failed. The stage-order assertions drop from eleven
+           names to ten — an order test is only worth having if it covers the
+           stages that actually exist.
     v1.7 — 2026-08-16 — WH.8a: regime_log + circuit_breaker_events. The check
            that matters is the ELEVEN-stage order assertion — it is only worth
            having if it covers every stage, and two new streams would otherwise
@@ -301,8 +306,6 @@ os.makedirs(W, exist_ok=True)
 s3_push.JOURNAL_ROOT = os.path.join(W, "signal_journal")
 s3_push.SHADOW_ROOT = os.path.join(W, "shadow")
 s3_push.OHLC_ROOT = os.path.join(W, "OHLC")
-s3_push.ORB_STATE = os.path.join(W, "orb_state.json")
-s3_push.ORB_RANGE = os.path.join(W, "orb_range.json")
 
 def _mk(root, day, sym, lines, ext=".jsonl"):
     d = os.path.join(root, day); os.makedirs(d, exist_ok=True)
@@ -364,22 +367,6 @@ check("candles re-run pushes 0 (high-water mark)",
 s3v = StubS3()
 pv, _ = s3_push.push_candles(s3v, "B", fdb, {}, "SPX")
 check("SPX box DOES push VIX", any("sym=VIX" in k for k in s3v.store), sorted(s3v.store))
-
-# 19 — ORB: captured ONLY when ESTABLISHED
-json.dump({"high": 7777.3, "low": 7763.1, "state": "EXPIRED", "attempt": 1},
-          open(s3_push.ORB_STATE, "w"))
-s3r = StubS3(); ledr = {}
-pr, _ = s3_push.push_orb(s3r, "B", ledr, "SPX")
-check("EXPIRED ORB is NOT captured", pr == 0 and len(s3r.store) == 0, (pr, len(s3r.store)))
-json.dump({"high": 7777.3, "low": 7763.1, "state": "ESTABLISHED", "attempt": 1},
-          open(s3_push.ORB_STATE, "w"))
-pr2, _ = s3_push.push_orb(s3r, "B", ledr, "SPX")
-check("ESTABLISHED ORB IS captured", pr2 == 1, pr2)
-check("ORB re-run at same state pushes 0", s3_push.push_orb(s3r, "B", ledr, "SPX")[0] == 0)
-json.dump({"high": 7780.0, "low": 7760.0, "state": "ESTABLISHED", "attempt": 2},
-          open(s3_push.ORB_STATE, "w"))
-pr3, _ = s3_push.push_orb(s3r, "B", ledr, "SPX")
-check("a NEW attempt lands as its own object", pr3 == 1 and len(s3r.store) == 2, len(s3r.store))
 
 # 20 — own_symbol reads the instrument off the OHLC tree
 check("own_symbol() derives instrument from OHLC dir", s3_push.own_symbol() == "SPX", s3_push.own_symbol())
@@ -446,14 +433,13 @@ s3_push.FLUSH_EVERY = 200
 # 26 — stage order: perishable-and-small first, bulk last
 import inspect as _insp
 _src = _insp.getsource(s3_push.main)
-_order = [n for n in ("trades", "eod", "orb", "ohlc", "candles",
+_order = [n for n in ("trades", "eod", "ohlc", "candles",
                       "chain_snapshots", "shadow", "signal_journal")
           if '("%s"' % n in _src]
 _pos = {n: _src.index('("%s"' % n) for n in _order}
-check("stage order is declared for all 8 streams", len(_order) == 8, _order)
+check("stage order is declared for all 7 streams", len(_order) == 7, _order)
 check("trades runs before signal_journal", _pos["trades"] < _pos["signal_journal"])
 check("eod runs before signal_journal", _pos["eod"] < _pos["signal_journal"])
-check("orb runs before signal_journal", _pos["orb"] < _pos["signal_journal"])
 check("ohlc runs before signal_journal (the starvation that happened)",
       _pos["ohlc"] < _pos["signal_journal"])
 check("candles runs before signal_journal", _pos["candles"] < _pos["signal_journal"])
@@ -524,10 +510,10 @@ check("a CHANGED level book lands as its own object (evolution survives)",
 
 # 30 — stage order still holds with NINE streams
 _src2 = _insp.getsource(s3_push.main)
-_names = ("trades", "eod", "orb", "ohlc", "candles", "liquidity_ledger",
+_names = ("trades", "eod", "ohlc", "candles", "liquidity_ledger",
           "chain_snapshots", "shadow", "signal_journal")
 _pos2 = {n: _src2.index('("%s"' % n) for n in _names if '("%s"' % n in _src2}
-check("all NINE stages are declared", len(_pos2) == 9, sorted(_pos2))
+check("all EIGHT stages are declared", len(_pos2) == 8, sorted(_pos2))
 check("liquidity_ledger runs before the bulk streams",
       _pos2["liquidity_ledger"] < _pos2["signal_journal"]
       and _pos2["liquidity_ledger"] < _pos2["chain_snapshots"], _pos2)
@@ -576,10 +562,10 @@ check("a missing table -> 0/0, no raise",
 
 # 32 — stage order with ELEVEN streams
 _src3 = _insp.getsource(s3_push.main)
-_n11 = ("trades", "regime_log", "circuit_breaker", "eod", "orb", "ohlc",
+_n11 = ("trades", "regime_log", "circuit_breaker", "eod", "ohlc",
         "candles", "liquidity_ledger", "chain_snapshots", "shadow", "signal_journal")
 _p11 = {n: _src3.index('("%s"' % n) for n in _n11 if '("%s"' % n in _src3}
-check("all ELEVEN stages are declared", len(_p11) == 11, sorted(_p11))
+check("all TEN stages are declared", len(_p11) == 10, sorted(_p11))
 check("the two new tables run before the bulk streams",
       max(_p11["regime_log"], _p11["circuit_breaker"]) < _p11["chain_snapshots"], _p11)
 check("signal_journal is STILL last", _p11["signal_journal"] == max(_p11.values()))

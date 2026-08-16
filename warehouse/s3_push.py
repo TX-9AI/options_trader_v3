@@ -1,9 +1,28 @@
 #!/usr/bin/env python3
-# options_trader_v3/warehouse/s3_push.py — v1.7
+# options_trader_v3/warehouse/s3_push.py — v1.8
 """
 Box-side warehouse pusher — ships locally-written archives to S3.
 
 CHANGELOG
+    v1.8 — 2026-08-16 — ORB REMOVED. It was ONE stage covering both files, so
+           eleven stages become TEN — I first wrote "nine", which was a
+           miscount of my own change. `raw/orb_state` had captured ZERO objects in thirty days and
+           `raw/orb_range` 81, and nothing consumed either. The operator asked
+           the right question — "do we even need it? the orb state could be
+           derived by the first 5-minute candle of the RTH" — and the answer is
+           that ALL of it is already available:
+             * the RANGE recomputes from candles, warehoused at 1m and 5m;
+             * the ATTEMPTS are logged individually in the signal journal, with
+               price and timestamp — `tests/orb_conversion.py` already derives
+               break-attempts from `retest_check` events keyed on
+               (symbol, date, direction, attempt) and never opens orb_state.json;
+             * the state machine is the only unique part and nothing has ever
+               asked for it.
+           I had argued the attempt counter was not derivable. That was wrong —
+           the attempt number rides on every journal event. **A stream nobody
+           consumes that captured nothing is not a capture bug to fix; it is a
+           stream to stop collecting.** The 81 existing orb_range objects stay
+           in raw/ (which never deletes) and simply stop growing.
     v1.7 — 2026-08-16 — WH.8a: `regime_log` and `circuit_breaker_events` join the
            warehouse. FOUND WHILE BUILDING THE READER, NOT BY LOOKING: the
            control-side bundle `fleet_trades_<date>.json` has a
@@ -517,8 +536,6 @@ OHLC_ROOT    = os.path.join(_OT, "data", "OHLC")
 LIQ_ROOT     = os.path.join(_OT, "data", "liquidity_ledger")
 FEED_DB      = os.path.join(_OT, "data", "feed_store.db")
 EOD_DIR      = os.path.join(_HOME, "eod")
-ORB_STATE    = os.path.join(_OT, "orb_state.json")
-ORB_RANGE    = os.path.join(_OT, "orb_range.json")
 
 LOCK_PATH     = os.path.join(STATE_DIR, "s3_push.lock")
 LOCK_WAIT     = int(os.environ.get("OT_S3_LOCK_WAIT", "120"))
@@ -755,40 +772,6 @@ def push_candles(s3, bucket, db_path, ledger, me, counters=None):
     return pushed, failed
 
 
-def push_orb(s3, bucket, ledger, me, counters=None):
-    """ORB state, captured ON STATE rather than on a clock time.
-
-    orb_state.json is rewritten EVERY TICK with no log, so every historical ORB
-    state the fleet ever produced is already gone. Operator's instruction was a
-    snapshot after the range is ESTABLISHED and before it expires; capturing on
-    `state == ESTABLISHED` means no window to miss if a timer runs late, and
-    each distinct `attempt` lands as its own object, so re-establishment
-    history survives instead of one arbitrary sample.
-    """
-    pushed = failed = 0
-    for path, kind in ((ORB_STATE, "orb_state"), (ORB_RANGE, "orb_range")):
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                rec = json.load(fh)
-        except Exception:
-            continue
-        state = str(rec.get("state") or rec.get("status") or "")
-        if state.upper() != "ESTABLISHED":
-            continue
-        sha = _sha256(_canon(rec))
-        if ledger.get(path) == sha:
-            continue
-        day = datetime.now(tz=timezone.utc).astimezone(
-            ZoneInfo("America/New_York")).date().isoformat()
-        body = _wrap(kind, rec, me or "UNKNOWN", day,
-                     {"orb_state": state, "attempt": rec.get("attempt")})
-        key = "%s/%s/dt=%s/sym=%s/%s.json" % (PREFIX, kind, day, me or "UNKNOWN", sha[:16])
-        if put_and_verify(s3, bucket, key, body, counters):
-            ledger[path] = sha
-            pushed += 1
-        else:
-            failed += 1
-    return pushed, failed
 
 
 def _push_chain_tree(s3, ledger, counters, files):
@@ -901,7 +884,6 @@ def main(argv=None) -> int:
                 s3, BUCKET, TRADES_DB, "circuit_breaker_events", "event_time",
                 "circuit_breaker", t_ledger, me, counters)),
             ("eod", lambda: push_whole_files(s3, BUCKET, eod_items, "eod", misc, counters)),
-            ("orb", lambda: push_orb(s3, BUCKET, misc, me, counters)),
             ("ohlc", lambda: push_whole_files(
                 s3, BUCKET, discover(OHLC_ROOT, ".csv"), "ohlc", misc, counters)),
             ("candles", lambda: push_candles(s3, BUCKET, FEED_DB, c_ledger, me, counters)),

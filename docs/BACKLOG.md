@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.02
+# docs/BACKLOG.md — v5.03
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -233,6 +233,32 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v5.03 — 2026-08-16 — ORB REMOVED FROM THE WAREHOUSE. A STREAM NOBODY CONSUMES THAT CAPTURED NOTHING IS NOT A CAPTURE BUG.**
+  `warehouse/s3_push.py` v1.8 · suite v1.8 (92 checks). Eleven stages → **ten**.
+  - **THE OPERATOR ASKED THE QUESTION THAT SETTLED IT:** *"Do we even need it?
+    The orb state could be derived by the first 5-minute candle of the RTH."*
+    `raw/orb_state` had captured **ZERO objects in thirty days** and
+    `raw/orb_range` 81, and nothing read either.
+  - **EVERYTHING IT HELD IS ALREADY AVAILABLE.** The RANGE recomputes from
+    candles, warehoused at 1m and 5m. The ATTEMPTS are logged individually in
+    the signal journal with price and timestamp — **`tests/orb_conversion.py`
+    already derives break-attempts from `retest_check` events keyed on
+    (symbol, date, direction, attempt) and never opens `orb_state.json`.** The
+    state machine is the only unique part and nothing has ever asked for it.
+  - **⚠️ I HAD ARGUED THE ATTEMPT COUNTER WAS NOT DERIVABLE. THAT WAS WRONG** —
+    the attempt number rides on every journal event. I was also treating "zero
+    objects in thirty days" as a defect to diagnose, when the correct reading
+    was the operator's: stop collecting it.
+  - **The 81 existing `orb_range` objects stay in `raw/`**, which never deletes.
+    They simply stop growing.
+  - **THE TESTS WERE DELETED, NOT FIXED.** They asserted real behaviour and
+    passed; the FEATURE went. The three stage-order assertions drop from
+    eleven/nine/eight names to ten/eight/seven — **an order test is only worth
+    having if it covers the stages that actually exist.**
+  - ⚠️ Also caught: I wrote "eleven stages become nine" in my own changelog. ORB
+    was ONE stage covering both files, so it is **ten**. Corrected in place.
+  - **⚠️ NEEDS A BAKE (option 25).** Removal only; no trading-loop effect.
+
 - **v5.02 — 2026-08-16 — 🎯 WH.11 GATE MET: A REPORT NOW RUNS FROM THE WAREHOUSE AND REPRODUCES THE LOCAL PIPELINE EXACTLY.**
   `tools/report_parity.py` v1.3 · `warehouse_reader.py` v1.6 ·
   `trade_report.py` v1.8 · `excursion_report.py` v3.4 · devtools item 67.
