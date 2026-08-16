@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.98
+# docs/BACKLOG.md — v4.99
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -102,6 +102,7 @@ BAKED is changing nothing about today's data.
 
 | item | built | pushed | baked | evidence |
 |---|---|---|---|---|
+| **WH.9a — warehouse cost/inventory script** | ✅ 08-16 | ⬜ | n/a (control, read-only) | `warehouse_cost.py` v1.0, 15 checks. **Recommendation: AGAINST compaction (est. <$2/mo total), AGAINST a Glue crawler, Athena gated behind a workgroup scan limit.** ⚠️ versioning with no lifecycle rule is the one line item that grows unbidden |
 | **WH.8 — warehouse reader + the two missing tables** | ✅ 08-16 | ⬜ | ⬜ **s3_push v1.7 needs option 25** | `warehouse_reader.py` v1.0 (23 checks) reproduces the fleet_trades bundle from S3, reusing consolidate_trades' own stats code; **found regime_log + circuit_breaker_events were never pushed**; `--compare` is WH.11's gate. NOT yet run against the real bucket |
 | **WH.14 eval — first EOD assessment** | n/a | n/a | 🗓️ **DUE TUE 08-18** | liquidity_ledger objects landed? `sym=<SYM>_EXT` present under raw/candles/? SHORT boxes repeat night-over-night? is 5s spacing right? **Tuesday not Monday: 08-17 belongs to v4.94 Tier-1, and a backfill anomaly in that window could be the conductor OR any of the eleven unvalidated changes — indistinguishable.** ⬜ DO NOT SEVER (gated on WH.11) |
 | **WH.14 — EOD fills the bucket + liquidity ledger** | ✅ 08-16 | ✅ 08-16 `e98aad8` / `901257e` | ⬜ **s3_push needs option 25** | s3_push v1.6 (88 checks) · eod_backfill v1.3 + suite (17 checks); Telegram on SHORT via existing notify; `OT_EOD_PULL` severable; batches stay sequential |
@@ -230,6 +231,48 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.99 — 2026-08-16 — WH.9a: MEASURE THE BILL BEFORE DECIDING ABOUT COMPACTION. RECOMMENDATION: DON'T — YET.**
+  `day_trader_pro/warehouse_cost.py` v1.0 + suite (15 checks). Read-only: LIST
+  only, no GET, no write, no delete.
+  - **THE RECOMMENDATION, STATED PLAINLY: AGAINST Parquet compaction for now,
+    and AGAINST a Glue crawler ever.** On estimated volumes the entire warehouse
+    runs **under ~$2/month** — ~14.6k objects/day, ~0.11 GB/day, ~28 GB/year;
+    PUT ~$1.53/mo, verify-GET ~$0.12, storage cents. **Compaction would save
+    money that does not exist.**
+  - **THE REAL ARGUMENT FOR COMPACTION IS LATENCY, NOT DOLLARS.** An Athena
+    query over a month of `signal_journal` reads ~230,000 objects and per-file
+    overhead dominates. No report has demonstrated that pain yet, and building
+    the tier before a consumer complains is the 07-23 chain-archive trap in a
+    new costume. **Trigger to revisit: a report that must scan >1 month of
+    journal or chains AND is measurably too slow.**
+  - **ATHENA: YES, BUT GATED.** Enable it when a specific report needs SQL;
+    create the workgroup with a **per-query data-scan limit** so a runaway query
+    cannot surprise the bill; use **partition projection, not a crawler** —
+    crawlers cost money on a schedule and add a moving part. The
+    sequential/stateful reports (replay integrator, MFE/MAE, run lengths,
+    pitchfork geometry) stay Python; forcing them into SQL is a downgrade.
+  - **⚠️ THE ONE REAL BILLING-SURPRISE VECTOR IS VERSIONING WITH NO LIFECYCLE
+    RULE.** Noncurrent versions accumulate with nobody deciding — it is the only
+    line item here that grows unbidden. Content-hash keys make overwrites rare
+    so it is slow, but it is unbounded. `--versions` accounts it separately and
+    warns. A billing alarm is the real protection and is independent of every
+    design choice above.
+  - **WHY A SCRIPT AND NOT A ONE-LINER:** the recommendation above rests on
+    ESTIMATES — object counts times typical sizes. Estimates are fine for a
+    recommendation and useless for a billing decision. This reads the real
+    bucket, splits BYTES from OBJECTS per prefix (they point at different
+    streams — journal dominates objects, chains dominate bytes), derives the
+    per-day rate from the distinct `dt=` partitions actually present, and
+    reports year-1 storage as the AVERAGE balance rather than the peak, because
+    that is how it is billed.
+  - **A TEST THAT FAILED FOR THE WRONG REASON, AGAIN CAUGHT:** the byte-total
+    assertion compared a 4-decimal ROUNDED figure at 1e-6 tolerance, and the
+    noncurrent-cost assertion used a 1 MB stub whose cost rounds to $0.000 — it
+    would have "passed" only by luck. Both fixed; the second stub is now sized
+    so the line item is visible at the printed precision, which is the point of
+    testing it at all.
+  - **⚠️ CONTROL-SIDE ONLY, read-only. No bake, no fleet change.**
+
 - **v4.98 — 2026-08-16 — WH.8: THE WAREHOUSE HAS A READER. AND TWO STREAMS WERE MISSING THAT NOBODY WOULD HAVE NOTICED UNTIL THE DIFF.**
   `day_trader_pro/warehouse_reader.py` v1.0 + suite (23 checks) ·
   `warehouse/s3_push.py` v1.7 (97 checks).
