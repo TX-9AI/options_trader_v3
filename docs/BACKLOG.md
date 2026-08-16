@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.04
+# docs/BACKLOG.md — v5.05
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -233,6 +233,162 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v5.05 — 2026-08-16 — WAREHOUSE THREAD: FULL ACCOUNTING, THE WEEK'S DUE DATES, AND WHAT THE MISTAKES TAUGHT.**
+
+  ## PART A — DUE THIS WEEK, EXPLICITLY
+
+  | when | item | gate / why that day |
+  |---|---|---|
+  | **Mon 08-17** | ⬜ **BAKE `s3_push` v1.8** (option 25) — the ORB removal | Pusher runs on its own timer, so it is **freeze-exempt**. Until it bakes, the fleet still pushes two dead streams |
+  | **Mon 08-17, after RTH** | ⬜ **v4.94 Tier-1 verification** — NOT warehouse work | Eleven behavioural changes baked 08-15 have zero live proof. **FEED.2's overnight tape check is the only item that gets worse by waiting** (DXFeed history is same-evening only) |
+  | **Tue 08-18** | ⬜ **WH.14 first evaluation** (registered v4.97) | Did `liquidity_ledger` objects land · did `sym=<SYM>_EXT` appear under `raw/candles/` (reasoned, never observed) · did the same boxes report SHORT twice · is 5s spacing right |
+  | **Wed 08-19** | ⬜ **THE SEVER.** `OT_EOD_PULL=0`, and point report 41 at `reports/fleet_trades/` | **Run `tools/report_parity.py --since 2026-08-13` FIRST — it must be green.** Wednesday because Mon/Tue are measurement windows and severing inside one makes any anomaly unattributable |
+  | **Wed 08-19** | ⬜ **Remove report 41's dedup shim** | Falls out of the repoint: every file in `reports/fleet_trades/` is exactly one day, so the pre-07-28 cumulative-bundle shim becomes dead code |
+  | **Thu 08-20** | ⬜ **Delete the root `fleet_trades_*.json`** — only after 41 is repointed and has run clean once | Deleting them earlier silently shortens 41's cumulative window. **This is the one irreversible step in the sequence** |
+  | **Fri 08-21** | ⬜ **Lifecycle rule for noncurrent versions + a billing alarm** | Versioning is ON with no lifecycle rule — the only line item that grows with nobody deciding. The alarm is the real protection and is independent of every design choice |
+  | **Fri 08-21** | ⬜ **Design (not build) the box-side scrub** | Gated on confirmed-in-S3. The last piece of "push INSTEAD of pull" |
+
+  ## PART B — WHAT WAS ACCOMPLISHED
+
+  **Against the stated goal — bucket, boxes push, conductor wakes-and-verifies,
+  devtools repointed, `/reports` cleaned, devtools fortified, redundancy
+  severed, audits pass — six of eight are done and the seventh is a decision
+  rather than a build.**
+
+  - **Bucket.** `vertigo-warehouse-tx9ai`, us-east-2, instance roles only, no
+    access keys, versioning on, SSE-S3. **No Delete permission anywhere in the
+    system** — cleanup requires the console, by design.
+  - **Boxes push.** Ten stages live on all 29: trades · regime_log ·
+    circuit_breaker · eod · ohlc · candles · liquidity_ledger · chains · shadow ·
+    signal_journal. **712,501 objects, 1.392 GB, ~$2.82/month.** Content-hash
+    keys and read-back-and-compare on every write.
+  - **Conductor.** WH.14 — per-box drain-verify, named Telegram alert on
+    failure, skip on, batches sequential, scp pull behind a flag.
+  - **Devtools fortified.** `devtools.sh` v1.35 is **declarative**: 541 → 184
+    lines, numbers generated at render time. **Renumbering is structurally
+    impossible rather than watched for.** The EMERGENCY STOP is fixed and
+    proven live — it had been pinging 29 boxes over SSH before stopping any of
+    them, ~5 silent minutes exactly when the fleet is partially up.
+  - **`/reports` cleaned.** 12 type folders, one-offs named rather than counted,
+    `fleet_trades/` rebuilt from S3.
+  - **Audits pass.** `tools/report_parity.py` — reports 40 and 41 both reproduce
+    exactly from the warehouse across the full collection window.
+  - **NOT DONE: the sever.** Everything shipped is ADDITIVE. `OT_EOD_PULL`
+    still defaults to 1, the S3 menu items sit alongside the local reports, and
+    41 still reads the root bundles. Evidence is sufficient; timing is not.
+
+  **TWO FINDINGS THAT WERE NOT ON THE LIST AND MATTER MORE THAN SOME THAT WERE:**
+
+  1. **🔴 THE WAREHOUSE HAS ALREADY PAID FOR ITSELF. 2026-07-15 holds 45 closed
+     trades in S3 — 20 boxes, net -722.50 — and control's own bundle for that
+     day holds ZERO.** Control can scavenge 12 from other cumulative bundles;
+     **33 closed trades exist nowhere else.** They survived only because a box
+     still had them in `trades.db` on 08-13 when the first push ran. Every
+     cumulative analysis has been seeing 12 of 45 for that day — a ~73%
+     understatement, silently biasing any per-day comparison that includes it.
+  2. **⚠️ CONTROL HAS NEVER HELD SHADOW DATA.** 18 dates, all S3-only, because
+     `backharvest()` pulls `artifacts=("ohlc","journal","chains")` and shadow is
+     not in the list. Not a failure — a scope decision nobody had written down.
+     **The warehouse is the only route to fleet-wide shadow analysis on control,
+     and the Layer-1 freeze that shadow exists to feed is imminent.**
+
+  ## PART C — WHY WE DID IT THIS WAY
+
+  - **Dual-write then sever, never sever on faith.** Bundle equivalence was
+    necessary and never sufficient: report 40 normally reads per-box DBs and had
+    never been exercised against the warehouse at all, and report 41's answer
+    depends on the SET of bundles present, not just their contents. So the gate
+    is **output parity**, not input parity.
+  - **S3 stays dumb storage. No compute, ever.** A Lambda or Glue job would be
+    code with no tests, no version control and no changelog — every discipline
+    this repo runs on would stop applying to it. Control pulls raw, aggregates
+    in memory, writes the report. Two files produced, both local, both
+    regenerable.
+  - **Content-hash keys, not uuid4.** A uuid duplicates on every retry. The hash
+    covers the RECORD ONLY — v1.0 hashed the envelope, which carries
+    `pushed_at_utc`, making the key a function of WHEN rather than WHAT.
+  - **One object per state, not per trade.** Rows mutate, so the warehouse holds
+    change-data-capture the box itself does not keep — 178 objects for 08-14's
+    153 trades. Collapsing at write time would discard history the box
+    overwrote.
+  - **The menu is data because the number is arbitrary.** Operator: *"as long as
+    it calls the correct script, it doesn't really matter what number you call
+    it."* So don't test that a renumber was safe — make renumbering a non-event.
+    The July 22 incident happened because numbers were hand-maintained in two
+    places that had to agree.
+  - **COPY, never move, in `/reports`.** It is BOTH an output directory and an
+    input directory; a move is a live edit to three readers' data sources.
+  - **Against Parquet compaction, against a Glue crawler, for Athena but gated.**
+    Compaction would save money that does not exist and **cannot refund PUTs
+    already made**; the real argument is query latency and no report has shown
+    that pain. Athena gets a workgroup scan limit and partition projection.
+  - **Two streams were REMOVED rather than fixed.** `orb_state` captured zero
+    objects in thirty days and nothing consumed it. **A stream nobody consumes
+    that captured nothing is not a capture bug to diagnose; it is a stream to
+    stop collecting.**
+
+  ## PART D — LESSONS FROM THE MISTAKES
+
+  **Every one of these was mine, and none was in the warehouse.**
+
+  - **🔴 FIVE COMPARISON-DESIGN ERRORS, ONE ROOT CAUSE: the two sides were not
+    asked the same question.** (a) The parity tool compared 25 local sessions
+    against 1 warehouse date. (b) It changed two variables at once —
+    DBs-vs-bundle *and* local-vs-warehouse — so no difference could be
+    attributed. (c) It picked a file **by mtime** and read a stale full-fleet
+    run. (d) A noise filter popped `generated` when the key is `generated_utc`.
+    (e) `--all` compared a pre-07-28 CUMULATIVE bundle date-for-date against
+    date-partitioned storage and reported six "divergent" dates that were never
+    gaps. **Before believing a red result, check whether both sides were asked
+    the same question.**
+  - **🔴 A TEST THAT MANUFACTURES ITS OWN FAILURE IS WORSE THAN NO TEST.** It
+    burns attention and makes a real divergence indistinguishable from noise —
+    the CV.1 lesson restated. I deleted a menu-integrity test of mine rather
+    than fix it: it produced eleven failures of which nearly all were its own
+    bugs, reporting four live menu items as missing and inventing a phantom one.
+  - **🔴 A "VALUE" DIFFERENCE THAT IS REALLY AN ORDERING DIFFERENCE GETS
+    MISDIAGNOSED AS DATA CORRUPTION.** Report 40 diverged at one figure in 421;
+    the located lines held the same rows in a different order.
+    `consolidate_trades:239` sorts by (box, entry_time), the reader sorted by
+    (entry_time, box). Trade-level equality was never affected — which is why
+    `--compare` always said 153/153.
+  - **🔴 CHECK WHAT AN ASSERTION ACTUALLY READS.** Four of my own tests passed or
+    failed for the wrong reason: a `_stop` match hitting the `def` not the call
+    site · a rounded value compared at 1e-6 · a stub too small for its cost to
+    register at printed precision · a fixture that fell out of coverage when a
+    filter landed and silently stopped testing anything.
+  - **🔴 THE TOOL BUILT TO COMPARE TWO SOURCES WAS QUIETLY MERGING THEM.** The
+    reader's default output path sat inside report 41's input glob. Caught
+    before a single file was written. Output now goes elsewhere and a write into
+    the glob namespace is **refused, not warned about**.
+  - **🔴 A PREVIEW THAT NAMES THE WRONG ACTION IS WORSE THAN NO PREVIEW.** The
+    organiser's dry run said "13 files copied" for a type where nothing gets
+    copied.
+  - **🔴 A TOOL MUST NOT THROW WHEN THE THING IT MEASURES HAS BEEN FIXED.**
+    `menu_extract.parse()` raised `StopIteration` the moment the heredoc it
+    parsed was replaced by the declarative registry — the proof tool broke at
+    exactly the moment it was needed.
+  - **🔴 IT COULD NOT TELL "DIVERGED" FROM "DID NOT RUN".** With no credentials
+    every step errored and it still printed "NOT AT PARITY — investigate the
+    diffs above" when there were no diffs. Three verdict states now, and **an
+    unrun date is not a passing date**.
+  - **⚠️ VERIFY A MENU ITEM BY DRIVING THE MENU.** The operator's call. It caught
+    three things the shell path could not: relative `--bundles-dir` paths, an
+    11-line botocore traceback where one sentence belonged, and the verdict
+    defect above.
+  - **⚠️ ANY MULTI-MINUTE OPERATION SHIPS WRAPPED IN `tmux`.** The fleet is run
+    from mobile; the session is the fragile part, not the tool. The `--apply`
+    that survived a dropped connection did so because it was **idempotent by
+    design** — copies skip identical files, rebuilds overwrite deterministically,
+    nothing moves or deletes.
+  - **⚠️ REFRESHING A BASELINE IS ONLY LEGITIMATE AFTER READING WHAT CHANGED.**
+    Doing it reflexively turns a proof tool into a rubber stamp.
+  - **⚠️ AND TWO PLAIN ERRORS OF FACT I HAD TO WITHDRAW:** I argued the ORB
+    attempt counter was not derivable (it rides on every journal event), and I
+    recorded that the L1 analysis reads local shadow files (control holds none).
+    **Both were stated confidently and both were wrong; the operator's question
+    was what surfaced each one.**
+
 - **v5.04 — 2026-08-16 — THE RECURRING REPORT REGISTER. EVERY NIGHTLY ARTIFACT NOW STATES WHY IT EXISTS.**
   Operator, on two report types found in `reports/`: *"They are recurring but I
   don't know why we are collecting them. It should state the reason in
