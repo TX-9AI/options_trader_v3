@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.01
+# docs/BACKLOG.md — v5.02
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -102,6 +102,7 @@ BAKED is changing nothing about today's data.
 
 | item | built | pushed | baked | evidence |
 |---|---|---|---|---|
+| **WH.11 — report parity** | ✅ 08-16 | ✅ 08-16 | n/a (control-only) | **40 and 41 both MATCH from the warehouse on 2026-08-14.** Three rounds of instrumentation defects first, none in the warehouse. ⚠️ ONE DATE — run `--since 2026-08-13` before severing; `OT_EOD_PULL=0` defensible, not justified |
 | **Menu is data — devtools.sh v1.32** | ✅ 08-16 | ✅ 08-16 | n/a (control-only) | 541→184 lines. Numbers generated at render; registry + functions hold no numbers. `--diff` across the swap: **all labels survive with identical commands.** 16 numbers moved (FIT REPORT 57→42); EMERGENCY STOP still 27. Renumbering is now structurally impossible |
 | **WH.9a — warehouse cost/inventory script** | ✅ 08-16 | ⬜ | n/a (control, read-only) | `warehouse_cost.py` v1.0, 15 checks. **Recommendation: AGAINST compaction (est. <$2/mo total), AGAINST a Glue crawler, Athena gated behind a workgroup scan limit.** ⚠️ versioning with no lifecycle rule is the one line item that grows unbidden |
 | **WH.8 — warehouse reader + the two missing tables** | ✅ 08-16 | ⬜ | ⬜ **s3_push v1.7 needs option 25** | `warehouse_reader.py` v1.0 (23 checks) reproduces the fleet_trades bundle from S3, reusing consolidate_trades' own stats code; **found regime_log + circuit_breaker_events were never pushed**; `--compare` is WH.11's gate. NOT yet run against the real bucket |
@@ -232,6 +233,49 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v5.02 — 2026-08-16 — 🎯 WH.11 GATE MET: A REPORT NOW RUNS FROM THE WAREHOUSE AND REPRODUCES THE LOCAL PIPELINE EXACTLY.**
+  `tools/report_parity.py` v1.3 · `warehouse_reader.py` v1.6 ·
+  `trade_report.py` v1.8 · `excursion_report.py` v3.4 · devtools item 67.
+  - **RESULT on 2026-08-14:** `40: DB-vs-localbundle same | localbundle-vs-WAREHOUSE MATCH` · `41: MATCH`.
+    **The 07-23 chain-archive trap is broken.** Since that date the standing
+    caution has been that a store makes collection cheap and analysis merely
+    *feel* imminent. Two reports now run end-to-end off S3 and produce output
+    identical to the local pipeline's.
+  - **⚠️ SCOPE: ONE DATE.** Parity is proven for 2026-08-14 only. `--since
+    2026-08-13` covers the whole collection window and must be clean before
+    anything is severed. Pre-08-13 dates are partial by construction (§6a) and
+    cannot pass. **`OT_EOD_PULL=0` is now DEFENSIBLE, not JUSTIFIED.**
+  - **IT TOOK THREE ROUNDS OF TOOL DEFECTS TO GET A TRUSTWORTHY RESULT, AND ALL
+    THREE WERE IN THE INSTRUMENTATION, NOT THE WAREHOUSE:**
+    1. **The tool manufactured its own failure.** Report 41 is cross-day; the
+       local side globbed ~25 bundles while the warehouse side had ONE rebuilt
+       date, so it compared 25 sessions against 1. Report 40 changed two
+       variables at once (DBs-vs-bundle *and* local-vs-warehouse), so no
+       difference could be attributed. And the noise filter popped `generated`
+       when the key is `generated_utc`.
+    2. **It read the wrong file.** `newest()` chose a `trade_report_<stamp>.json`
+       **by mtime** — a guess — and returned a stale full-fleet run (1,742 raw
+       rows, 1,315 trades) instead of the restricted run it had just produced.
+       **Identifying a file by "probably the newest" is not identifying it.**
+       Fixed with an explicit `--out`.
+    3. **The last "value" difference was an ORDERING difference.** Report 40
+       diverged at one figure in 421 — but the located lines held the same rows
+       in a different order (`max_loss_floor/Continuation` vs
+       `orb_structure_stop/ORBStrategy`). `consolidate_trades:239` sorts by
+       **(box, entry_time)**; the reader sorted by **(entry_time, box)**.
+       Trade-level equality was never affected — which is why `--compare` had
+       always said 153/153 — but downstream grouping breaks ties by input order.
+       **A value difference that is really an ordering difference is the kind of
+       thing that gets misdiagnosed as data corruption.**
+  - **WHAT MADE THE DIAGNOSIS POSSIBLE** was v1.2 printing the differing VALUES
+    and the source LINE holding the divergent figure, instead of naming the
+    section and leaving it there. A difference you cannot act on is half an
+    answer.
+  - **⚠️ DO NOT SEVER ON MON 08-17 OR AHEAD OF THE TUE 08-18 WH.14 EVALUATION.**
+    Monday is v4.94's Tier-1 verification session for eleven unvalidated
+    changes. The dual write costs almost nothing; severing inside a measurement
+    window would make any anomaly unattributable.
+
 - **v5.01 — 2026-08-16 — `docs/WAREHOUSE_LAYOUT.md` v2.0: THE SPEC CATCHES UP WITH WHAT IS ACTUALLY RUNNING.**
   v1.0 was written on 08-13 when one stream was migrated and nine were
   "planned". Every one is now migrated, three streams exist that v1.0 never
