@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.96
+# docs/BACKLOG.md — v4.97
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -102,6 +102,9 @@ BAKED is changing nothing about today's data.
 
 | item | built | pushed | baked | evidence |
 |---|---|---|---|---|
+| **WH.14 eval — first EOD assessment** | n/a | n/a | 🗓️ **DUE TUE 08-18** | liquidity_ledger objects landed? `sym=<SYM>_EXT` present under raw/candles/? SHORT boxes repeat night-over-night? is 5s spacing right? **Tuesday not Monday: 08-17 belongs to v4.94 Tier-1, and a backfill anomaly in that window could be the conductor OR any of the eleven unvalidated changes — indistinguishable.** ⬜ DO NOT SEVER (gated on WH.11) |
+| **WH.14 — EOD fills the bucket + liquidity ledger** | ✅ 08-16 | ✅ 08-16 `e98aad8` / `901257e` | ⬜ **s3_push needs option 25** | s3_push v1.6 (88 checks) · eod_backfill v1.3 + suite (17 checks); Telegram on SHORT via existing notify; `OT_EOD_PULL` severable; batches stay sequential |
+| **WH.7 — devtools EMERGENCY STOP fixed** | ✅ 08-16 | ✅ 08-16 `6e4941d` | n/a (control-only) | **PROVEN LIVE 10:53 ET with 2/29 up: HALT → 29/29 stopped in seconds.** Was pinging 29 boxes over SSH first (~5 silent min). 15 checks, safety props pinned BY NAME |
 | **N.7 — entry snapshot capture** | ✅ 08-04 | ✅ 08-04 `0f78329` | ⬜ **Mon Aug 17** | control suite **146 passed / 1 skipped, rc=0** (read 08-04); ALL CANARIES GREEN; PARITY == origin; tree clean |
 | **N.5 — exit ladder latency** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 17** | control suite **158 passed / 1 skipped, rc=0**; ALL CANARIES GREEN |
 | **N.8 — no regime-flip exit on a stale book** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 17** | control suite green, ALL CANARIES GREEN |
@@ -226,6 +229,52 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.97 — 2026-08-16 — 🗓️ DUE TUE 08-18: WH.14's FIRST EVALUATION. AND A CORRECTION TO MY OWN SEQUENCING.**
+
+  **⚠️ FIRST, THE CORRECTION.** I recommended *"Monday runs the CURRENT
+  conductor, WH.14's first live EOD is Tuesday"* — and then WH.14 was landed on
+  control the same evening. **Monday 08-17 will therefore run `eod_backfill`
+  v1.3, not v1.2.** The recommendation was overtaken by the landing and saying
+  otherwise would be false.
+
+  **WHY THAT IS ACCEPTABLE, MEASURED BY DIFF RATHER THAN ASSUMED.** At DEFAULT
+  config the v1.2→v1.3 behavioural delta is exactly two things:
+  1. **~20s of added spacing per batch** (`OT_EOD_DRAIN_SPACING=5`, four gaps
+     across five boxes). The drain loop was already serial.
+  2. **A Telegram alert when a box reports SHORT.** New output, not new
+     behaviour — `_drain_verify` already ran in v1.2 and already did not block.
+
+  The scp pull is UNCHANGED: `OT_EOD_PULL` defaults to 1. **The one genuinely
+  behavioural change — severing the pull — is opt-in and stays gated on WH.11
+  regardless.** So Monday inherits an alert and twenty seconds, not a rework.
+
+  **🗓️ MONDAY 08-17, WATCH ITEM (not an action):** expect Telegram alerts naming
+  any box that reports SHORT. **That is the instrument working, not a fault** —
+  boxes with journal backlog have been reporting SHORT by design since WH.4.
+  Do not read a first-night alert as a conductor regression, and do not let it
+  displace v4.94's Tier-1 list, which owns that session. **FEED.2's overnight
+  tape check remains the only item that gets worse by waiting** (DXFeed history
+  is same-evening only).
+
+  **🗓️ TUESDAY 08-18, DUE — WH.14's FIRST EVALUATION.** Tuesday rather than
+  Monday because Monday's session belongs to validating eleven behavioural
+  changes baked 08-15 with zero live proof, and reading a reworked conductor's
+  first results in the same window confounds the two: a backfill anomaly could
+  be the conductor or any of the eleven, and you would not be able to tell which.
+  1. **Did `liquidity_ledger` objects land?** Count `raw/liquidity_ledger/` —
+     it should be non-zero for every box that traded. This stream did not exist
+     in the warehouse before today and the mapper is what it feeds.
+  2. **Did `sym=<SYM>_EXT` partitions appear under `raw/candles/`?** FEED.2's
+     overnight tape reaching the warehouse is unverified — reasoned from
+     `SELECT DISTINCT symbol`, never observed.
+  3. **How many boxes reported SHORT, and were they the same ones twice?** A
+     box short on two consecutive nights is a real problem; a different box each
+     night is backlog draining normally.
+  4. **Is 5s the right spacing?** It cost ~20s per batch. Raise it only if
+     something measurably contended; lower it to 0 if nothing did.
+  5. **⬜ DO NOT SEVER.** `OT_EOD_PULL=0` stays gated on WH.11 comparing report
+     outputs from both sources. Nothing on Tuesday unlocks it.
+
 - **v4.96 — 2026-08-16 — WH.14: THE EOD PASS FILLS THE BUCKET, FAILS LOUDLY, AND THE PULL BECOMES SEVERABLE. PLUS THE LIQUIDITY LEDGER JOINS THE WAREHOUSE.**
   `warehouse/s3_push.py` v1.6 (88 checks) · `day_trader_pro/eod_backfill.py` v1.3
   + `tests/test_eod_backfill_wh14.py` v1.0 (17 checks).
