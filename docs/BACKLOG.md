@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.94
+# docs/BACKLOG.md — v4.95
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -226,6 +226,42 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.95 — 2026-08-16 — WH.7: THE EMERGENCY STOP WAS PINGING 29 BOXES OVER SSH BEFORE STOPPING ANY OF THEM.**
+  `day_trader_pro/wake_and_bake.py` v1.3 · `tests/test_emergency_stop.py` v1.0.
+  Operator: *"presently it just hangs & gives no warning."*
+  - **THE MECHANISM, READ FROM SOURCE.** Option 27 runs `--shutdown-only`, whose
+    path was HALT gate → notify → discover → **`stage_ping` over ALL 29** →
+    stop. Discovery returns STOPPED instances too, and a stopped box keeps a
+    stale `private_ip`, so the ping SSHed machines that cannot answer and paid
+    `SSH_CONNECT_TIMEOUT=12s` each. The loop is SEQUENTIAL: ~27 down = **~5.4
+    minutes for a single pass**, longer than `SSH_READY_TIMEOUT=180s` — which is
+    only checked BETWEEN passes — and the first `…waiting for SSH` line prints
+    only AFTER a full pass. **~5 silent minutes before the stop was attempted,
+    and worst precisely when the fleet is partially up, which is when you reach
+    for a kill switch.**
+  - **THE FIX IS A DELETION.** Stopping needs an instance ID, not an IP and not
+    a reachable host: `_ids()` reads `instance_id`, `ec2ops.stop()` takes ids,
+    and `wait_state("stopped")` already returns True for a box that is stopped.
+    The operator made the same point independently — *"the instance map does not
+    even require any IP addresses."* Shutdown now skips the ping entirely.
+    Reachability is irrelevant to the one job this mode has.
+  - **SCOPED, NOT BLANKET.** `stage_ping` is still correct for `full`/`bake`,
+    which must know what they are syncing. Only the shutdown branch skips it.
+  - **IT CAN NEVER LOOK SILENT AGAIN** — it now announces that it is skipping
+    reachability, and announces the stop request BEFORE the poll begins.
+  - **⚠️ SAFETY PROPERTIES PINNED BY NAME, NOT BY POSITION** — the July 22 rule
+    applied to code rather than to a menu. The suite asserts the HALT gate
+    string, its exact comparison, the position-abandonment warning, the
+    live-fleet in-RTH escalation, the RTH exemption, and "no EOD, no pycache".
+    **This item has now been damaged silently twice** — the v1.18 renumber took
+    its label, the pre-ping took its responsiveness — so it gets a test that
+    fails loudly instead of a comment asking for care.
+  - **DELIBERATE-FAILURE GATE:** the suite patches `_exec` to RAISE, so any SSH
+    in the shutdown path is an instant error rather than a five-minute wait.
+    **Verified rc=1 against v1.2 and rc=0 against v1.3** — the bug made visible
+    in milliseconds. 15 checks.
+  - **⚠️ CONTROL-SIDE ONLY. No bake, no fleet change, freeze-irrelevant.**
+
 - **v4.94 — 2026-08-15 — MONDAY 08-17 AFTER RTH: THE ORDER OF WORK.**
   Eleven behavioural changes baked to 29/29 with **zero live validation**. The
   first session is a verification session, not a development one.
