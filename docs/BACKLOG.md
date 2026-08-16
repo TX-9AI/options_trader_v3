@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.99
+# docs/BACKLOG.md — v5.00
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -102,6 +102,7 @@ BAKED is changing nothing about today's data.
 
 | item | built | pushed | baked | evidence |
 |---|---|---|---|---|
+| **Menu is data — devtools.sh v1.32** | ✅ 08-16 | ✅ 08-16 | n/a (control-only) | 541→184 lines. Numbers generated at render; registry + functions hold no numbers. `--diff` across the swap: **all labels survive with identical commands.** 16 numbers moved (FIT REPORT 57→42); EMERGENCY STOP still 27. Renumbering is now structurally impossible |
 | **WH.9a — warehouse cost/inventory script** | ✅ 08-16 | ⬜ | n/a (control, read-only) | `warehouse_cost.py` v1.0, 15 checks. **Recommendation: AGAINST compaction (est. <$2/mo total), AGAINST a Glue crawler, Athena gated behind a workgroup scan limit.** ⚠️ versioning with no lifecycle rule is the one line item that grows unbidden |
 | **WH.8 — warehouse reader + the two missing tables** | ✅ 08-16 | ⬜ | ⬜ **s3_push v1.7 needs option 25** | `warehouse_reader.py` v1.0 (23 checks) reproduces the fleet_trades bundle from S3, reusing consolidate_trades' own stats code; **found regime_log + circuit_breaker_events were never pushed**; `--compare` is WH.11's gate. NOT yet run against the real bucket |
 | **WH.14 eval — first EOD assessment** | n/a | n/a | 🗓️ **DUE TUE 08-18** | liquidity_ledger objects landed? `sym=<SYM>_EXT` present under raw/candles/? SHORT boxes repeat night-over-night? is 5s spacing right? **Tuesday not Monday: 08-17 belongs to v4.94 Tier-1, and a backfill anomaly in that window could be the conductor OR any of the eleven unvalidated changes — indistinguishable.** ⬜ DO NOT SEVER (gated on WH.11) |
@@ -231,6 +232,59 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v5.00 — 2026-08-16 — THE DEVTOOLS MENU IS DATA. RENUMBERING IS NOW STRUCTURALLY IMPOSSIBLE, NOT MERELY WATCHED FOR. PLUS THE READER'S COVERAGE FLOOR AND `--explain`.**
+  `day_trader_pro/devtools.sh` **v1.32** (541 → 184 lines) · `menu_registry.sh` ·
+  `menu_functions.sh` · `tools/menu_extract.py` v1.3 ·
+  `tests/test_menu_extract.py` (21 checks) · `docs/MENU_INVENTORY.tsv` ·
+  `warehouse_reader.py` v1.3 (43 checks).
+  - **THE OPERATOR'S FRAMING, WHICH IS THE WHOLE DESIGN:** *"What number the
+    action is is irrelevant. You could scramble the order or scramble the
+    numbers. And as long as it calls the correct script, it doesn't really
+    matter what number you call it."* Then: *"I don't want anything tied to the
+    number. The number should be able to be completely arbitrary."*
+  - **SO NUMBERS APPEAR IN NEITHER FILE.** `menu_registry.sh` lists
+    (SECTION, LABEL, FUNCTION) in display order; `menu_functions.sh` holds one
+    function per item with the body copied VERBATIM from the old case block —
+    option 58's 26 lines of prompts and nested conditionals stay 26 lines rather
+    than being flattened into a delimited string, which would have meant hand-
+    rewriting a destructive handler. `menu_render` assigns numbers from a loop
+    counter; `menu_dispatch` matches the same counter. **The July 22 v1.18
+    incident happened because numbers were maintained by hand in two places that
+    had to agree. That class of failure is now impossible by construction.**
+  - **EQUIVALENCE PROVEN, NOT ASSUMED.** `--roundtrip` before the swap: 58 vs 58,
+    zero label differences, zero command differences. `--diff` across the swap:
+    **every label survives with an identical command.** The diff tool is proven
+    in BOTH directions — a randomly scrambled order passes clean, while removing
+    the EMERGENCY STOP label or repointing a script is caught and named.
+  - **⚠️ SIXTEEN NUMBERS MOVED.** Identity is the label; muscle memory is not.
+    **FIT REPORT 57 → 42** (it always displayed inside TRADES DATA, out of
+    numeric order) and everything 42–56 shifts up by one. **1–41 and 58 are
+    unchanged. EMERGENCY STOP is still 27.**
+  - **AND IT FIXED A PRE-EXISTING DRIFT:** the file header read v1.31 while the
+    rendered menu still said "v1.26 Service Menu" — the same class as the
+    title-vs-changelog rule. Both v1.32, and the version now lives in ONE place.
+  - **THREE OF MY OWN BUGS, ALL FOUND BY RUNNING IT RATHER THAN READING IT:**
+    (1) `0` did `return 9`, but the caller is `while true; do menu; done`, so
+    Exit looped forever — now `exit 0`; (2) a splice left an orphaned `}` and my
+    version helper deleted the title line; (3) **`menu_extract.parse()` threw
+    `StopIteration` once the heredoc vanished — the proof tool broke because the
+    thing it measured had been fixed.** It now degrades: `--check` reads
+    whichever source is live, `--roundtrip` says plainly there is nothing left
+    to compare. A tool that throws when its subject improves is a tool you stop
+    running.
+  - **AN EARLIER MENU TEST OF MINE WAS DELETED, NOT FIXED.** A regex over the
+    whole of `devtools.sh` produced ELEVEN failures, of which nearly all were its
+    own bugs — it reported four live items as missing and invented a phantom
+    entry. **A check that cries wolf trains you to ignore red runs** (the CV.1
+    lesson). The bounded marker-based parser reconciles exactly instead.
+  - **WAREHOUSE READER v1.3:** the coverage floor was the WRONG QUANTITY — it
+    read the earliest `dt=` partition (2026-07-06) and excluded nothing, because
+    **`dt=` coverage is not COLLECTION coverage**: the first push shipped
+    whatever history survived on each box. Floor is now the collection start
+    (2026-08-13). `--explain <date>` lists the differing trade_ids per side so a
+    divergence is READ rather than inferred.
+  - **⚠️ CONTROL-SIDE ONLY. No bake, no fleet change, freeze-irrelevant.**
+
 - **v4.99 — 2026-08-16 — WH.9a: MEASURE THE BILL BEFORE DECIDING ABOUT COMPACTION. RECOMMENDATION: DON'T — YET.**
   `day_trader_pro/warehouse_cost.py` v1.0 + suite (15 checks). Read-only: LIST
   only, no GET, no write, no delete.
