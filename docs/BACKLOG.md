@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.00
+# docs/BACKLOG.md — v5.01
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -232,6 +232,44 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v5.01 — 2026-08-16 — `docs/WAREHOUSE_LAYOUT.md` v2.0: THE SPEC CATCHES UP WITH WHAT IS ACTUALLY RUNNING.**
+  v1.0 was written on 08-13 when one stream was migrated and nine were
+  "planned". Every one is now migrated, three streams exist that v1.0 never
+  mentioned, and the handback document was the furthest-drifted artifact in the
+  project.
+  - **⚠️ THE DRIFT INCLUDED TWO STREAMS v1.0 SPECIFIED AND NOBODY BUILT** —
+    `regime_log` and `circuit_breaker_events` sat in the register as "planned"
+    for three days while six *other* streams were built around them. A
+    specification that lists something is not evidence it exists.
+  - **NEW §4a — MEASURED VOLUME AND COST**, read off the bucket rather than
+    estimated: 712,501 objects, 1.392 GB, ~23,750/day, **~$2.82/month, 88% of
+    it PUT requests and 5% storage.** Records which column answers which
+    question — journal and shadow dominate OBJECT COUNT, chains dominate BYTES;
+    a compaction candidate is chosen by bytes, a latency problem is caused by
+    count. Carries the standing decision: **against compaction, against a Glue
+    crawler, for Athena but gated behind a workgroup scan limit and partition
+    projection**, plus the one real billing-surprise vector (versioning with no
+    lifecycle rule).
+  - **NEW §5a — WHERE PROCESSING HAPPENS.** Append on the box, dedup in the
+    reader, aggregation in reports, **S3 as storage with no compute ever.** Two
+    warnings recorded rather than left implicit: **dedup currently happens TWICE
+    with different tie-breakers** (reader keeps newest `pushed_at_utc`, report
+    41 keeps the most-filled row), and **poison cannot be deleted once pushed** —
+    `raw/` has no Delete permission, and the box purge runs on a different
+    cadence than the pusher, so a bad bar can land permanently. The read-side
+    filter is an open decision, not a bug.
+  - **NEW §6a — COLLECTION COVERAGE IS NOT `dt=` COVERAGE.** The bucket holds
+    partitions back to 07-06 but began collecting 08-13; the first push shipped
+    whatever history survived on each box, and `trim_trade_dbs` had already
+    pruned the rest. Confusing the two produces false alarms.
+  - **§11 IS NO LONGER HYPOTHETICAL.** The read path exists and **19 of 25 dates
+    reproduce the control bundle exactly** — every date from 07-22 onward. But
+    the section now says plainly what that does NOT establish: report 40 reads
+    per-box DBs rather than the bundle, report 41 globs every bundle, and **no
+    report has been run from the warehouse yet.** The pile is now well-organised
+    AND readable — and still unread.
+  - **⚠️ DOC ONLY. No code, no bake, freeze-irrelevant.**
+
 - **v5.00 — 2026-08-16 — THE DEVTOOLS MENU IS DATA. RENUMBERING IS NOW STRUCTURALLY IMPOSSIBLE, NOT MERELY WATCHED FOR. PLUS THE READER'S COVERAGE FLOOR AND `--explain`.**
   `day_trader_pro/devtools.sh` **v1.32** (541 → 184 lines) · `menu_registry.sh` ·
   `menu_functions.sh` · `tools/menu_extract.py` v1.3 ·

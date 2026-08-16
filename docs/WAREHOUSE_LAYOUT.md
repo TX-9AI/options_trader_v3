@@ -1,9 +1,20 @@
-# docs/WAREHOUSE_LAYOUT.md — v1.0
+# docs/WAREHOUSE_LAYOUT.md — v2.0
 
 *The specification for `s3://vertigo-warehouse-tx9ai`. What goes where, in what
 shape, with what timestamps, and why. Read this before adding any stream.*
 
 ## CHANGELOG
+
+- **v2.0 — 2026-08-16 — the spec catches up with what is actually running.**
+  Every stream in the register is now MIGRATED, not planned, and three streams
+  exist that v1.0 never mentioned: `liquidity_ledger` (LIQ.4), and
+  `regime_log` + `circuit_breaker_events`, which **were specified in v1.0 and
+  then silently never built** — found only when the reader was written and
+  would have reproduced two permanently empty bundle sections. Adds §4a
+  (measured volumes and cost), §5a (where processing happens), §6a (collection
+  coverage vs `dt=` coverage — not the same thing), and records the first
+  end-to-end read: **19 of 25 dates reproduce the control bundle exactly.**
+  §11's benchmark is no longer hypothetical.
 
 - **v1.0 — 2026-08-13 — initial specification.** Written after probing all 29
   boxes for every artifact they produce. Locks the conventions that are
@@ -102,20 +113,28 @@ Every object is a wrapper around the source record. The source is preserved
 ## 4. STREAM REGISTER
 
 Every artifact the boxes produce, its source shape, and its destination.
-Measured across all 29 boxes on 2026-08-13.
+Measured across all 29 boxes on 2026-08-13; statuses updated 2026-08-16.
+
+**Push order is perishable-first and it is load-bearing.** The stages run
+trades → regime_log → circuit_breaker → eod → orb → ohlc → candles →
+liquidity_ledger → chains → shadow → signal_journal. On 08-13 the journal ran
+first and starved everything behind it under a 240s timeout: ohlc reached 108
+objects instead of ~783 and eod 8 instead of ~58. Nothing was wrong in the
+bucket; the order was. **Anything added goes before `shadow`, never after.**
 
 | stream | source on box | timestamp field | warehouse prefix | status |
 |---|---|---|---|---|
 | chain snapshots | `data/chain_snapshots/<date>/<SYM>.jsonl.gz` (multi-member gzip, one snapshot/line) | `ts_et` — ISO w/ `-04:00` | `raw/chain_snapshots/dt=/sym=/` | **MIGRATED** (WH.1) |
-| trades | `trades.db` → `trades` (84 cols, `trade_id`) | `entry_time` — ISO **`+00:00`** | `raw/trades/dt=/sym=/` | planned (WH.2) |
-| regime log | `trades.db` → `regime_log` | `logged_at` | `raw/regime_log/dt=/sym=/` | planned |
-| circuit breaker | `trades.db` → `circuit_breaker_events` | — | `raw/circuit_breaker/dt=/sym=/` | planned |
-| signal journal | `data/signal_journal/<date>/<SYM>.jsonl` | `ts_et` — ISO w/ offset | `raw/signal_journal/dt=/sym=/` | planned |
-| shadow observer | `data/shadow/<date>/<SYM>.jsonl` | ISO w/ offset | `raw/shadow/dt=/sym=/` | planned |
-| OHLC (daily CSV) | `data/OHLC/<date>/<SYM>.csv`, header `timestamp,open,high,low,close,volume` | `timestamp` — ISO w/ offset | `raw/ohlc/dt=/sym=/` | planned |
-| candles (feed store) | `data/feed_store.db` → `candles` | `ts_epoch_ms` — epoch UTC | `raw/candles/dt=/sym=/interval=/` | planned |
-| EOD P&L | `~/eod/pnl_today.json`, `~/eod/trades_today.json` | `date_et` | `raw/eod/dt=/sym=/` | planned — **see §7** |
-| ORB state | `orb_state.json`, `orb_range.json` | none | `raw/orb/dt=/sym=/` | planned — **see §7** |
+| trades | `trades.db` → `trades` (84 cols, `trade_id`) | `entry_time` — ISO **`+00:00`** | `raw/trades/dt=/sym=/` | **MIGRATED** (WH.2) |
+| regime log | `trades.db` → `regime_log` | `logged_at` | `raw/regime_log/dt=/sym=/` | **MIGRATED** (WH.8a) — ⚠️ specified in v1.0 and never built until the reader exposed it |
+| circuit breaker | `trades.db` → `circuit_breaker_events` | `event_time` | `raw/circuit_breaker/dt=/sym=/` | **MIGRATED** (WH.8a) — same omission; no events yet, so the prefix is empty |
+| signal journal | `data/signal_journal/<date>/<SYM>.jsonl` | `ts_et` — ISO w/ offset | `raw/signal_journal/dt=/sym=/` | **MIGRATED** (WH.3) — runs LAST |
+| shadow observer | `data/shadow/<date>/<SYM>.jsonl` | ISO w/ offset | `raw/shadow/dt=/sym=/` | **MIGRATED** (WH.3) — ⚠️ **ends at the Layer-1 freeze**; the stage stays but goes inert |
+| OHLC (daily CSV) | `data/OHLC/<date>/<SYM>.csv`, header `timestamp,open,high,low,close,volume` | `timestamp` — ISO w/ offset | `raw/ohlc/dt=/sym=/` | **MIGRATED** (WH.3) |
+| candles (feed store) | `data/feed_store.db` → `candles` | `ts_epoch_ms` — epoch UTC | `raw/candles/dt=/sym=/interval=/` | **MIGRATED** (WH.3). FEED.2's extended tape needs no change: it is a separate store symbol and `SELECT DISTINCT symbol` picks it up as `sym=<SYM>_EXT` |
+| EOD P&L | `~/eod/pnl_today.json`, `~/eod/trades_today.json` | `date_et` | `raw/eod/dt=/sym=/` | **MIGRATED** (WH.3) — **see §7** |
+| ORB state | `orb_state.json`, `orb_range.json` | none | `raw/orb_state/`, `raw/orb_range/` | **MIGRATED** (WH.3) — **see §7**. ⚠️ `orb_range` has objects; **`orb_state` has ZERO** — unexplained, see §10 |
+| liquidity ledger | `data/liquidity_ledger/<date>/<SYM>.json` (LIQ.4, rewritten every closed bar) | `date_et` | `raw/liquidity_ledger/dt=/sym=/` | **MIGRATED** (WH.14). Whole-file, but SAMPLED every 5 min by the timer, so the object count lands near the chain archive's rather than ~390/box/day — and the intraday **evolution** of the level book survives, not just its closing shape |
 | bot log | `bot.log` + 6 rotated | — | — | **EXCLUDED** (§8) |
 
 **Trades mutate.** A row is written at entry and rewritten at exit. The
@@ -124,6 +143,59 @@ content-hash key turns that into change-data-capture for free: each distinct
 to the same key at zero cost, and a reader takes the latest per `trade_id`.
 That is strictly more than `fleet_trades_<date>.json` preserves today, which
 only ever sees the end state.
+
+---
+
+## 4a. MEASURED VOLUME AND COST (2026-08-16)
+
+Read off the bucket by `day_trader_pro/warehouse_cost.py`, not estimated.
+My own estimates were wrong in both directions — 1.6x under on objects and
+2.4x over on bytes — which is why this section exists.
+
+| prefix | objects | GB | avg KB |
+|---|---|---|---|
+| `raw/shadow` | 399,349 | 0.365 | 1.0 |
+| `raw/signal_journal` | 280,713 | 0.169 | 0.6 |
+| `raw/chain_snapshots` | 17,935 | 0.820 | 47.9 |
+| `raw/regime_log` | 9,009 | 0.003 | 0.4 |
+| `raw/candles` | 3,139 | 0.012 | 4.1 |
+| `raw/trades` | 1,375 | 0.003 | 2.5 |
+| `raw/ohlc` | 812 | 0.018 | 23.8 |
+| `raw/eod` | 88 | 0.001 | 10.7 |
+| `raw/orb_range` | 81 | 0.000 | 0.3 |
+| **total** | **712,501** | **1.392** | |
+
+**~23,750 objects/day · 0.046 GB/day · ~11.7 GB/year. About $2.82/month —
+88% of it PUT requests, 5% storage.** Post-Layer-1-freeze, when shadow stops,
+that falls to roughly 10,400 objects/day and ~$1.40/month.
+
+**Note which column matters for which question.** The journal and shadow
+dominate OBJECT COUNT; chains dominate BYTES. A compaction candidate is chosen
+by bytes; a latency problem is caused by count.
+
+### The compaction and Athena decision
+
+**Against Parquet compaction, against a Glue crawler, for Athena but gated.**
+
+- Compaction would save money that does not exist, and it **cannot refund PUTs
+  already made** — the lever on cost is batching at push time, not repacking
+  afterwards. The real argument for compaction is query LATENCY across many
+  small files, and no report has demonstrated that pain. Revisit when one must
+  scan more than a month of journal or chains and is measurably too slow.
+- **Partition projection, never a crawler.** A crawler costs money on a
+  schedule and adds a moving part.
+- Enable Athena when a specific report needs SQL, and create the workgroup with
+  a **per-query data-scan limit** so a runaway query cannot surprise the bill.
+  Sequential/stateful reports — replay integration, MFE/MAE excursions, run
+  lengths, pitchfork geometry — stay Python; SQL would be a downgrade.
+
+### The one real billing-surprise vector
+
+**Versioning is ON and there is no lifecycle rule.** Noncurrent versions
+accumulate with nobody deciding — the only line item here that grows unbidden.
+Content-hash keys make overwrites rare, so it is slow, but it is unbounded.
+A billing alarm is the actual protection and is independent of every design
+choice above.
 
 ---
 
@@ -163,6 +235,34 @@ problem. Unresolved.
 
 ---
 
+## 5a. WHERE PROCESSING HAPPENS
+
+| operation | where | why |
+|---|---|---|
+| append | **box only** | write-once objects; nothing in S3 is ever mutated |
+| dedup / collapse | **the reader, once** | see the warning below |
+| poison filtering | **box at write AND control at read** | deletion is impossible |
+| aggregation | **reports only** | operator's decision; storage stays dumb |
+| **S3** | **storage, no compute, ever** | logic there would have no tests, no version control and no changelog |
+
+**⚠️ DEDUP CURRENTLY HAPPENS TWICE, WITH DIFFERENT RULES.**
+`warehouse_reader.latest_per_trade()` keeps the newest `pushed_at_utc`;
+`trade_report.py` independently keeps the **most-filled row**. They usually
+agree and are not the same rule. One of them should go — report 41 should
+consume already-collapsed bundles.
+
+**⚠️ POISON CANNOT BE DELETED, ONLY FILTERED.** `raw/` carries no Delete
+permission by design, so a bad row that reaches S3 is permanent. The box-side
+purge (`feed_store`: non-positive prices, 2038-stamped DXFeed rollover bars)
+runs at startup and every `PRUNE_EVERY_S`, while the pusher runs every 5
+minutes — **so a poisoned bar written and pushed before the next purge is in
+the bucket forever.** The mitigation is a declared read-side validity filter,
+optionally with a `meta/quarantine/` key list. This is a decision still to be
+made, not a bug to be fixed.
+
+
+---
+
 ## 6. TWO KINDS OF VERSION, AND THEY ARE NOT THE SAME
 
 - **`schema_version`** — the shape of the stored object. Ours, stamped by the
@@ -179,6 +279,26 @@ catalogued it.
 
 `meta/schema/<category>/v<N>.json` records what each `schema_version` meant, so
 the number always has a referent.
+
+---
+
+## 6a. COLLECTION COVERAGE IS NOT `dt=` COVERAGE
+
+The bucket holds `dt=` partitions reaching back to **2026-07-06**. It began
+**collecting on 2026-08-13**. Those are different facts and confusing them
+produces false alarms.
+
+The first push shipped every row then sitting in each box's `trades.db`, and
+those rows carry `entry_time` values from weeks earlier. But `trim_trade_dbs`
+prunes those DBs, so **pre-08-13 dates hold only whatever happened to survive
+on the boxes** — partial by construction, and meaningless to compare against a
+complete local bundle.
+
+A reader deriving its floor from the earliest partition therefore excludes
+nothing. **The floor is the collection start date.** Anything before it is
+reported as OUT OF COVERAGE — a third category, never counted as either a match
+or a divergence, so that the word "divergent" keeps meaning something.
+
 
 ---
 
@@ -268,10 +388,21 @@ on durability and centralization.
    whether the chain↔trade join is built or verified.
 3. **OHLC `volume` carries decimals** (`591522.792061`). Unusual for share
    volume. Understand before anyone sums it.
-4. **Cost ceiling.** Still unestimated, though current volumes make it
-   negligible.
+4. ~~**Cost ceiling.** Still unestimated~~ — **CLOSED, see §4a.** ~$2.82/month,
+   88% of it PUT requests.
 5. **`derived/` and `meta/` are specified but unbuilt.** Nothing writes to
    them yet.
+6. **`raw/orb_state` has ZERO objects while `raw/orb_range` has 81.** Both go
+   through the same capture, gated on `ESTABLISHED`. §7's claim that capturing
+   on state rather than on a clock means no window can be missed was **too
+   confident — a state can be short-lived too.** Needs a live check of what
+   `orb_state.json`'s `state` field actually reads during RTH.
+7. **Dedup happens twice with different rules** (§5a). One implementation
+   should go.
+8. **Poison is unfilterable once pushed** (§5a). The read-side rule is
+   undecided.
+9. **No lifecycle rule for noncurrent versions** (§4a) — the only line item
+   that grows without anyone deciding.
 
 ---
 
@@ -284,3 +415,26 @@ analysis merely *feel* imminent.
 **Reports 40 (excursion, MFE/MAE) and 41 (trade breakdown) are the named
 benchmarks.** Until one of them runs end-to-end against warehouse data, this
 is a very well-organised pile.
+
+### Where that stands, 2026-08-16
+
+**The read path exists and is proven at the bundle level.**
+`day_trader_pro/warehouse_reader.py` rebuilds `fleet_trades_<date>.json` from
+S3, and `--all` reports **19 of 25 dates reproducing the control pipeline
+exactly** — every date from 07-22 onward, including 08-14 at 153 trades and
+net +5839.50 from 178 stored states. The six divergences all sit before that
+boundary and are explained by §6a plus consolidate_trades' pre-v1.2 cumulative
+bundles — except **07-15 and 07-21, where S3 holds MORE than the local bundle**,
+which points the other way and is unexplained.
+
+It deliberately **imports `_stats` and `_load_selection` from
+`consolidate_trades` rather than reimplementing them.** If it computed its own
+win-rate the comparison would test two *arithmetics* as well as two *sources*
+and a mismatch would be ambiguous.
+
+**But no REPORT has been run from the warehouse yet.** The bundle matching is
+necessary and not sufficient: report 40 reads the per-box DBs directly rather
+than the bundle, and report 41 globs every bundle, so neither has been
+exercised. **The pile is now well-organised AND readable — and still unread.**
+Dual-write stays until report OUTPUTS are diffed; `OT_EOD_PULL=0` is gated on
+that and on nothing else.
