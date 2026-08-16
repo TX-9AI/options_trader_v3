@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.03
+# docs/BACKLOG.md — v5.04
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -233,6 +233,47 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v5.04 — 2026-08-16 — THE RECURRING REPORT REGISTER. EVERY NIGHTLY ARTIFACT NOW STATES WHY IT EXISTS.**
+  Operator, on two report types found in `reports/`: *"They are recurring but I
+  don't know why we are collecting them. It should state the reason in
+  BACKLOG."* Both were in fact documented — **in their producers' header
+  comments, which is not somewhere anyone looks when asking "can I delete
+  this?"** A purpose recorded only in the code that writes the file is a
+  purpose that disappears the moment someone reads the directory instead.
+
+  | report | producer | why it exists | consumed by |
+  |---|---|---|---|
+  | `fleet_trades_<date>.json/.csv` | `consolidate_trades.py` (39) | full-fidelity per-day fleet trade bundle | reports 40 (fallback) and 41 (glob); **now rebuilt from S3** |
+  | `excursions_<date>.txt` | `excursion_report.py` (40) | MFE/MAE distributions | read by hand; the fitting thread |
+  | `trade_report_<date>.json` | `trade_report.py` (41) | cross-day regime/strategy/grade breakdown | read by hand; `fit_report` |
+  | `regime_replay_<date>.jsonl` | `validate_regime.sh` (42–46) | tape-only Layer-1 confluence replay | **report 47 auto-discovers these** |
+  | `conditional_tables_<first>_<last>` | otv3 `tests/conditional_tables.py` | **ROADMAP L3.4 conviction-bar substrate**, built nightly so it does not depend on a manual run. **Cumulative BY DESIGN** — a conditional cell only becomes decision-grade as sample accrues | the L3.4 conviction work |
+  | `readiness_digest_<date>` | otv3 `tests/readiness_digest.py` | machine states, R distribution, would-fire counts, arm episodes, staged picks, anticipation lead-times | **the file the readiness bars (`OT_TR_*`) get tuned from** |
+  | `swallow_audit_<date>.json` | otv3 `tests/swallow_audit.py` (backlog W.2) | nightly silent-failure census; **WARNS when the silent-handler count rises**, i.e. when someone adds an exception handler that swallows without logging | the week of 2026-07-27 produced **eight defects of exactly that shape** — a census nobody runs would have caught none |
+  | `vwap_orientation_<date>.txt` | otv3 `tests/vwap_orientation_ledger.py` | **evidence for backlog item E**, which must NOT be built until the evidence says which direction the gate belongs in | item E's decision |
+  | `morning_report_<date>.json` | the morning brief chain | AM selection + sentiment | report 41's sentiment join |
+  | `daily_trades_<date>.json` | `harvest.py` | trade-anatomy aggregation, the original v0.1.0 product | the trades-analysis thread |
+  | `backharvest_<date>.json` | `harvest.py backharvest()` | **a RECEIPT, not an analysis** — records that a past session's date-addressed artifacts (OHLC, journal, chains) were recovered | forensic record of what was pulled and when |
+  | `fit_report_<date>.txt` | `fit_report.py` | everything for fitting in one file | the fitting thread |
+
+  - **THE STANDING PRINCIPLE THIS ENCODES:** every recurring artifact names a
+    consumer. Two of the strongest entries — swallow_audit and vwap_orientation
+    — exist precisely because *"evidence that accrues only when someone
+    remembers to run a script will not exist on decision day."* That is the
+    same argument as the warehouse itself, applied to reports.
+  - **🔑 AND IT EXPLAINS THE SHADOW GAP.** `backharvest()` pulls
+    `artifacts=("ohlc", "journal", "chains")` — **shadow is not in the list**,
+    which is why control holds ZERO shadow dates while S3 holds 18. Not a
+    failure; a scope decision nobody had written down. **The warehouse is
+    therefore the only route to fleet-wide shadow analysis on control, and the
+    Layer-1 freeze that shadow exists to feed is imminent.**
+  - **`tools/reports_organize.py` v1.2 — one-offs are NAMED, not counted.**
+    `sweep` tripped the 3-file threshold and would have been given a folder.
+    Raising the threshold to 4 would not fix the class: the next diagnostic run
+    three times gets a folder too, and `fit_report` (5) sits close to the edge.
+    A count is a proxy for "is this automated"; the answer is knowable, so it is
+    declared.
+
 - **v5.03 — 2026-08-16 — ORB REMOVED FROM THE WAREHOUSE. A STREAM NOBODY CONSUMES THAT CAPTURED NOTHING IS NOT A CAPTURE BUG.**
   `warehouse/s3_push.py` v1.8 · suite v1.8 (92 checks). Eleven stages → **ten**.
   - **THE OPERATOR ASKED THE QUESTION THAT SETTLED IT:** *"Do we even need it?
