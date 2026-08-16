@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-# options_trader_v3/tests/test_s3_push.py — v1.5
+# options_trader_v3/tests/test_s3_push.py — v1.6
 """
 Behavioural proof for warehouse/s3_push.py against planted archives.
 
 CHANGELOG
+    v1.6 — 2026-08-16 — WH.14: the liquidity ledger stream, and a re-assertion
+           of the stage order now that a ninth stream exists — the ordering
+           test is only worth having if it covers every stage, not the eight it
+           was written against.
     v1.5 — 2026-08-13 — WH.6: the lock. The case that matters is the DELIBERATE
            contention one — a second pusher, with the lock already held, must
            not push and must not corrupt the first one's ledger.
@@ -484,6 +488,46 @@ check("contending run cannot proceed", blocked is None)
 check("the first run's ledger entry is intact",
       s3_push.load_ledger(lp2)[p5]["last_sha"] == "sentinel")
 held.close()
+
+
+# 29 — liquidity ledger (LIQ.4) reaches the warehouse
+reset()
+s3_push.LIQ_ROOT = os.path.join(TMP, "liquidity_ledger")
+d = os.path.join(s3_push.LIQ_ROOT, "2026-08-17")
+os.makedirs(d, exist_ok=True)
+book = {"symbol": "SPX", "date_et": "2026-08-17",
+        "levels": [{"price": 7777.5, "touches": 3}]}
+json.dump(book, open(os.path.join(d, "SPX.json"), "w"))
+s3l = ListStub(); ledl = {}; cntl = {}
+pl, fl = s3_push.push_whole_files(
+    s3l, "B", s3_push.discover(s3_push.LIQ_ROOT, ".json"), "liquidity_ledger", ledl, cntl)
+check("liquidity ledger pushed", pl == 1 and fl == 0, (pl, fl))
+kl = sorted(s3l.store)[0]
+check("ledger key: raw/liquidity_ledger/dt=/sym=",
+      kl.startswith("raw/liquidity_ledger/dt=2026-08-17/sym=SPX/"), kl)
+check("ledger content preserved verbatim",
+      "7777.5" in json.loads(s3l.store[kl])["record"])
+check("unchanged ledger re-push costs 0",
+      s3_push.push_whole_files(s3l, "B", s3_push.discover(s3_push.LIQ_ROOT, ".json"),
+                               "liquidity_ledger", ledl, cntl)[0] == 0)
+# the ledger is rewritten every closed bar — a CHANGED book must land separately
+book["levels"].append({"price": 7760.0, "touches": 1})
+json.dump(book, open(os.path.join(d, "SPX.json"), "w"))
+pl2, _ = s3_push.push_whole_files(
+    s3l, "B", s3_push.discover(s3_push.LIQ_ROOT, ".json"), "liquidity_ledger", ledl, cntl)
+check("a CHANGED level book lands as its own object (evolution survives)",
+      pl2 == 1 and len(s3l.store) == 2, len(s3l.store))
+
+# 30 — stage order still holds with NINE streams
+_src2 = _insp.getsource(s3_push.main)
+_names = ("trades", "eod", "orb", "ohlc", "candles", "liquidity_ledger",
+          "chain_snapshots", "shadow", "signal_journal")
+_pos2 = {n: _src2.index('("%s"' % n) for n in _names if '("%s"' % n in _src2}
+check("all NINE stages are declared", len(_pos2) == 9, sorted(_pos2))
+check("liquidity_ledger runs before the bulk streams",
+      _pos2["liquidity_ledger"] < _pos2["signal_journal"]
+      and _pos2["liquidity_ledger"] < _pos2["chain_snapshots"], _pos2)
+check("signal_journal is STILL last", _pos2["signal_journal"] == max(_pos2.values()))
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("ALL CHECKS PASSED" if not FAILS else "FAILURES: " + ", ".join(FAILS)))

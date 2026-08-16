@@ -1,9 +1,22 @@
 #!/usr/bin/env python3
-# options_trader_v3/warehouse/s3_push.py — v1.5
+# options_trader_v3/warehouse/s3_push.py — v1.6
 """
 Box-side warehouse pusher — ships locally-written archives to S3.
 
 CHANGELOG
+    v1.6 — 2026-08-16 — WH.14: the LIQUIDITY LEDGER joins the warehouse, and
+           `<SYM>_EXT` is documented as already handled. LIQ.4 wired
+           `data/liquidity_ledger/<date>/<SYMBOL>.json` on 08-15 — the level
+           book the mapper builds from — and nothing was pushing it. Whole-file,
+           like OHLC: the ledger is rewritten on EVERY closed bar, but this
+           timer samples it every 5 minutes, so the object count lands near the
+           chain archive's rather than near 390/box/day. Each distinct sampled
+           state is its own object, so the intraday EVOLUTION of the level book
+           survives instead of only its closing shape.
+           FEED.2's extended-hours tape needs NO change here: it lands in
+           feed_store as its own store symbol `<SYM>_EXT`, and push_candles
+           already does SELECT DISTINCT symbol, so it partitions as
+           `sym=<SYM>_EXT` automatically.
     v1.5 — 2026-08-13 — WH.6: SINGLE INSTANCE, AND POLITE. Two pushers could run
            at once — the 5-minute timer plus the EOD conductor's SSH `--verify`,
            which drains before it reports. Both loaded the same ledgers and both
@@ -489,6 +502,7 @@ _OT = os.path.join(_HOME, "options-trader")
 JOURNAL_ROOT = os.path.join(_OT, "data", "signal_journal")
 SHADOW_ROOT  = os.path.join(_OT, "data", "shadow")
 OHLC_ROOT    = os.path.join(_OT, "data", "OHLC")
+LIQ_ROOT     = os.path.join(_OT, "data", "liquidity_ledger")
 FEED_DB      = os.path.join(_OT, "data", "feed_store.db")
 EOD_DIR      = os.path.join(_HOME, "eod")
 ORB_STATE    = os.path.join(_OT, "orb_state.json")
@@ -830,6 +844,9 @@ def main(argv=None) -> int:
             ("ohlc", lambda: push_whole_files(
                 s3, BUCKET, discover(OHLC_ROOT, ".csv"), "ohlc", misc, counters)),
             ("candles", lambda: push_candles(s3, BUCKET, FEED_DB, c_ledger, me, counters)),
+            ("liquidity_ledger", lambda: push_whole_files(
+                s3, BUCKET, discover(LIQ_ROOT, ".json"), "liquidity_ledger",
+                misc, counters)),
             ("chain_snapshots", lambda: _push_chain_tree(s3, ledger, counters, files)),
             ("shadow", lambda: push_jsonl_tree(
                 s3, BUCKET, SHADOW_ROOT, "shadow", misc, counters)),

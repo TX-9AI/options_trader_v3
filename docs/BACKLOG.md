@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v4.95
+# docs/BACKLOG.md — v4.96
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -226,6 +226,50 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v4.96 — 2026-08-16 — WH.14: THE EOD PASS FILLS THE BUCKET, FAILS LOUDLY, AND THE PULL BECOMES SEVERABLE. PLUS THE LIQUIDITY LEDGER JOINS THE WAREHOUSE.**
+  `warehouse/s3_push.py` v1.6 (88 checks) · `day_trader_pro/eod_backfill.py` v1.3
+  + `tests/test_eod_backfill_wh14.py` v1.0 (17 checks).
+  - **🔴 THE LIQUIDITY LEDGER WAS NOT BEING PUSHED.** LIQ.4 wired
+    `data/liquidity_ledger/<date>/<SYMBOL>.json` on 08-15 — the level book the
+    mapper builds from — and no warehouse stream covered it. Now a whole-file
+    stream like OHLC. It is rewritten on EVERY closed bar, but the pusher
+    samples every 5 minutes, so the object count lands near the chain archive's
+    rather than near 390/box/day, and each sampled state is its own object —
+    **the intraday EVOLUTION of the level book survives, not just its closing
+    shape.**
+  - **FEED.2 NEEDS NOTHING HERE.** Extended-hours tape lands in feed_store as
+    its own store symbol `<SYM>_EXT`, and `push_candles` does
+    `SELECT DISTINCT symbol`, so it already partitions as `sym=<SYM>_EXT`.
+    Verified by reading, not assumed.
+  - **FAIL LOUDLY, SKIP ON** (operator). A box that cannot confirm now fires a
+    REAL Telegram alert through the conductor's EXISTING notify path — named,
+    counted, and saying the data is stranded until the next wake rather than
+    lost. It does not hold the pipeline: holding would strand the whole backfill
+    against the stream cap. A Telegram failure cannot stop the pass either.
+  - **THE SCP PULL IS NOW SEVERABLE BY CONFIG** — `OT_EOD_PULL`, default ON.
+    Ending the dual write becomes a flag flip rather than a code change, and it
+    is reversible, which is the point of dual-write-then-sever (decision #5).
+  - **⚠️ BATCHES REMAIN SEQUENTIAL — group A stops before group B wakes.** An
+    earlier cross-batch pipeline idea of mine was wrong; the operator corrected
+    it and it is not built. A test asserts no threading crept in.
+  - **AN HONEST NOTE ON THE STAGGER.** The drain loop was ALREADY serial, so the
+    five boxes in a batch never drained simultaneously — the new spacing knob
+    makes that deliberate and tunable rather than incidental. The real
+    concurrency is each box's own 5-minute timer, which no conductor setting can
+    reach; that is handled on the box by `Nice=15` / idle IO. **Also worth
+    stating plainly: five boxes pushing to S3 at once was never a problem for
+    S3** — one object per event exists precisely so concurrent writers cannot
+    collide, and each box writes only its own `sym=` prefixes.
+  - **A TEST THAT FAILED FOR THE WRONG REASON, CAUGHT.** The `_stop` ordering
+    assertion matched `def _stop(recs, dry):` as well as the call site, so it
+    was reading the function definition's position. Fixed to match the indented
+    call. **An assertion that passes for the wrong reason is worse than none.**
+  - **⚠️ CONTROL-SIDE + BOX-SIDE.** s3_push needs a bake (option 25); the
+    conductor files are control-only. **Recommend Monday runs the CURRENT
+    conductor** — v4.94 makes 08-17 after RTH a verification session for eleven
+    unvalidated changes, and the reworked conductor's first live EOD should not
+    muddy that signal. First real run **Tuesday**.
+
 - **v4.95 — 2026-08-16 — WH.7: THE EMERGENCY STOP WAS PINGING 29 BOXES OVER SSH BEFORE STOPPING ANY OF THEM.**
   `day_trader_pro/wake_and_bake.py` v1.3 · `tests/test_emergency_stop.py` v1.0.
   Operator: *"presently it just hangs & gives no warning."*
