@@ -1,5 +1,16 @@
 """
-database/trade_logger.py — Options trade logging (SQLite). v3.13
+database/trade_logger.py — Options trade logging (SQLite). v3.14
+v3.14  2026-08-17  TCS.4: log_entry FILTERS TO REAL COLUMNS AND WARNS.
+        It INSERTed every key in the record, so a key with no column raised
+        OperationalError and CRASH-LOOPED a live box (NFLX, 2026-08-17).
+        A record key that is not a column is a BUG IN THE CALLER, but it must
+        not be able to take a trading box down. Unknown keys are dropped.
+        WARNED ONCE PER KEY NAME, because silently dropping a field that was
+        SUPPOSED to persist is Pattern 2 - the class that produced this bug.
+        Census run at the same time: `is_trend_credit` was the ONLY offender;
+        this filter is a guardrail against the next one, not a fix for a
+        population. PRAGMA is cached, not run per insert. FAILS OPEN if the
+        schema cannot be read.
 v3.13 — 2026-08-05 — the two v3.12 setters now LOG INSIDE their except bodies.
         The 2026-08-05 swallow census flagged both as new TIER-1 silent
         handlers (87 -> 89) the morning after W.2a's lesson was written down:
@@ -154,6 +165,7 @@ from config import DB_PATH, PAPER_TRADING
 from utils.time_utils import ts_for_db, now_utc, now_et, ET
 
 logger = logging.getLogger(__name__)
+_WARNED_UNKNOWN_COLS: set = set()   # TCS.4: warn once per unknown key
 
 
 @dataclass
@@ -374,12 +386,47 @@ class TradeLogger:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _columns(self) -> set:
+        """Real column names of `trades`, cached. PRAGMA once, not per insert."""
+        if getattr(self, "_cols_cache", None) is None:
+            try:
+                with self._connect() as conn:
+                    self._cols_cache = {r[1] for r in
+                                        conn.execute("PRAGMA table_info(trades)")}
+            except Exception:                                  # noqa: BLE001
+                # ⚠️ FAIL OPEN: if the schema cannot be read, insert everything
+                # exactly as before rather than dropping fields on a guess.
+                return set(TradeRecord.__annotations__) if hasattr(
+                    TradeRecord, "__annotations__") else set()
+        return self._cols_cache
+
     def log_entry(self, record: TradeRecord):
         """Insert a new open trade into the database."""
         record["entry_time"] = ts_for_db()
         record["status"]     = "open"
 
-        cols         = [k for k in record.keys()]
+        # ── TCS.4 (2026-08-17) — FILTER TO REAL COLUMNS, AND SAY SO ─────────
+        # ⚠️ THIS FUNCTION CRASH-LOOPED A LIVE BOX. It INSERTed every key in the
+        # record; `is_trend_credit` has no column, so the INSERT raised
+        # OperationalError, the loop error counter hit its cap, the service shut
+        # down, restarted, and did it again — every 15s for the rest of NFLX's
+        # session on 2026-08-17.
+        # A record key that is not a column is a BUG IN THE CALLER, but it must
+        # not be able to take a trading box down. Unknown keys are dropped.
+        # ⚠️ AND LOUDLY — ONCE PER KEY NAME. Silently dropping a field that was
+        # SUPPOSED to persist would be the worse failure: that is Pattern 2, the
+        # class that produced `is_trend_credit` in the first place. A drop is
+        # visible or it is a new silent defect.
+        cols         = [k for k in record.keys() if k in self._columns()]
+        dropped      = [k for k in record.keys() if k not in self._columns()]
+        for k in dropped:
+            if k not in _WARNED_UNKNOWN_COLS:
+                _WARNED_UNKNOWN_COLS.add(k)
+                logger.warning(
+                    "[schema] record key %r has NO COLUMN in `trades` and was "
+                    "DROPPED from the insert. The trade is still logged. If this "
+                    "field was meant to persist, ADD THE COLUMN - do not rely on "
+                    "reading it back, it will be None on every restart.", k)
         values       = [record[k] for k in cols]
         placeholders = ", ".join(["?"] * len(cols))
         col_names    = ", ".join(cols)

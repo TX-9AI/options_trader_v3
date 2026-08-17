@@ -1,5 +1,28 @@
 """
-main.py — options_trader v6.12
+main.py — options_trader v6.13
+v6.13  2026-08-17  TCS.4: THE FIRST TC.6 TRADE THAT FORMED CORRECTLY DIED AT
+        THE WRITE, AND CRASH-LOOPED A LIVE BOX. `_execute_condor_leg` set
+        `is_trend_credit` on the record; `log_entry` INSERTs every record key;
+        the field has NO COLUMN. OperationalError on the INSERT -> loop error
+        cap -> service shutdown -> restart -> again, every 15s for the rest of
+        NFLX's session.
+        IT NEVER FIRED BEFORE because TC.6 could never REACH execution - TCS.3
+        fixed the bound at noon and exposed it hours later. A latent defect
+        surfaced by a fix.
+        WHY THE FIELD EXISTED (checked before removing): `ed9d30a` (08-13) made
+        it the EXIT ENGINE'S DISCRIMINATOR - `if bool(record.get(
+        "is_trend_credit"))` routed TC.6 to breach-or-nickel. On 08-14 it was
+        found not to be a column, so every restart lost it and the branch
+        silently stopped firing; `structure.py` was built to replace it by
+        DERIVING from persisted `strategy`/`setup_type`. The read side moved.
+        The write side was never cleaned up. It is vestigial, not spurious.
+        WHY REMOVED AND NOT ADDED AS A COLUMN: WORKING_AGREEMENT 22, written on
+        08-14 about THIS FIELD - "PREFER DERIVING. A new column fixes tomorrow
+        and not today: every position opened before the migration still
+        rehydrates without it, SELECT * returns None, and None reads as False -
+        the exact failure, silently."
+        THE SIGNAL ATTRIBUTE `sig.is_trend_credit` IS UNTOUCHED - in-memory
+        only, read via getattr to set `_is_tcs`, never persisted.
 v6.12  2026-08-17  TCS.3: THE BOUND OUTLIVED ITS FRAME. `_opening_range`
         read the 60-bar 1m cache and the 09:30-09:35 bars leave that window
         at ~10:35 ET — 25 minutes before TCS_START_ET — so trend
@@ -1544,7 +1567,20 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState,
         regime           = ("RANGING" if not _is_tcs
                             else getattr(signal, "regime", "") or "TRENDING"),
         underlying_stop  = getattr(signal, "underlying_stop", 0.0),
-        is_trend_credit  = 1 if _is_tcs else 0,
+        # ── TCS.4 (2026-08-17) — REMOVED: `is_trend_credit` IS NOT A COLUMN ──
+        # ⚠️ THIS CRASH-LOOPED NFLX LIVE. `log_entry` INSERTs every key in the
+        # record, so a key with no column raises OperationalError on the INSERT,
+        # the loop error counter hits its cap, and the service shuts down and
+        # restarts — every 15s, for the whole session.
+        # It never fired before today because TC.6 could never REACH execution:
+        # TCS.3 fixed the bound at noon and **the first trade that formed
+        # correctly died at the write.** A latent defect exposed by a fix, which
+        # is the shape audit #1 was convened over.
+        # `structure.py` has said this since 08-14 — *"`is_trend_credit` IS NOT
+        # A COLUMN"* — and already derives the answer from the PERSISTED
+        # `strategy`/`setup_type`. Verified with the flag absent:
+        # is_trend_participation -> True, is_credit_vertical -> True. The field
+        # was write-only and the exit path never needed it.
         vix_at_entry     = getattr(signal, "vix_at_signal", 0.0),
         adx_at_entry      = getattr(signal, "adx_at_signal", 0.0)
                             or (state.current_regime.adx if state.current_regime else 0.0),

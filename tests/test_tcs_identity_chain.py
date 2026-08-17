@@ -75,8 +75,28 @@ def test_record_derives_identity_from_the_SIGNAL_not_the_function():
         "the flag is read after the record is built"
 
 
-def test_record_carries_is_trend_credit():
-    assert "is_trend_credit  = 1 if _is_tcs else 0," in leg_fn()
+def test_record_carries_tc6_identity_in_PERSISTED_fields():
+    """⚠️ REWRITTEN BY TCS.4 (2026-08-17). This asserted the record carried
+    `is_trend_credit  = 1 if _is_tcs else 0,` — **and that line CRASH-LOOPED
+    NFLX live**: `log_entry` INSERTs every record key, `is_trend_credit` has no
+    column, the INSERT raised, the error cap tripped, the service restarted, and
+    it did it again every 15s.
+
+    The INTENT of this test is right and unchanged — TC.6's identity must reach
+    the record. What changed is WHICH FIELDS carry it. Per WORKING_AGREEMENT §22
+    (*"PREFER DERIVING"*), identity now travels in the PERSISTED `strategy` and
+    `setup_type` columns and `structure.py` derives the rest. Those survive a
+    restart; a non-column never did.
+
+    ⚠️ THE SIGNAL ATTRIBUTE `sig.is_trend_credit` IS UNTOUCHED AND MUST STAY —
+    it is in-memory only, `_execute_condor_leg` reads it via `getattr` to decide
+    `_is_tcs`, and it is never written to the DB. Signal attribute: keep.
+    Record key: gone."""
+    f = leg_fn()
+    assert '"TrendCreditSpread" if _is_tcs' in f, \
+        "the record must still name TC.6 in the `strategy` COLUMN"
+    assert "is_trend_credit  =" not in f, \
+        "the non-column write is back; this crash-looped a live box"
 
 
 def test_record_carries_the_bound_as_underlying_stop():
@@ -106,11 +126,31 @@ def test_a_condor_leg_is_unaffected():
 
 # ── HOP 3: the exit reads the same key ─────────────────────────────────────
 
-def test_the_exit_gates_on_exactly_the_key_the_record_sets():
-    """The whole defect was a key that one side wrote and the other never
-    received. Assert both halves name the SAME string."""
+def test_the_exit_gates_on_fields_the_record_ACTUALLY_PERSISTS():
+    """The original defect was a key one side wrote and the other never
+    received. **The second defect was the same key written to a column that did
+    not exist.** Both halves must now name fields that SURVIVE A RESTART.
+
+    The exit derives via `is_trend_participation(record)`; the record supplies
+    `strategy` and `setup_type`, both real columns. Verified end-to-end in
+    `test_derivation_works_on_the_persisted_row_alone` below."""
     assert 'is_trend_participation(record)' in EXIT
-    assert "is_trend_credit  = 1 if _is_tcs else 0," in leg_fn()
+    f = leg_fn()
+    assert '"TrendCreditSpread" if _is_tcs' in f
+    assert '"trend_credit' in f or 'setup_type' in f
+
+
+def test_derivation_works_on_the_persisted_row_alone():
+    """⚠️ THE TEST THAT WOULD HAVE CAUGHT BOTH DEFECTS. Round-trip what SQLite
+    actually gives back — a dict of COLUMNS ONLY, no in-memory extras — and
+    assert the exit still routes TC.6 correctly. `SELECT *` on a rehydrated
+    position returns exactly this shape."""
+    from strategy.structure import is_trend_participation, is_credit_vertical
+    persisted = {"strategy": "TrendCreditSpread",
+                 "setup_type": "trend_credit_short",
+                 "is_condor_leg": 0}
+    assert is_trend_participation(persisted) is True
+    assert is_credit_vertical(persisted) is True
 
 
 def test_the_exit_reads_the_bound_from_underlying_stop():

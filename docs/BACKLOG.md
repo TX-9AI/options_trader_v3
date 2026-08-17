@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.07
+# docs/BACKLOG.md — v5.08
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -233,6 +233,69 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **🔴 v5.08 — 2026-08-17 — TCS.4: THE FIRST TC.6 TRADE THAT FORMED CORRECTLY
+  DIED AT THE WRITE, AND CRASH-LOOPED A LIVE BOX.** `main` v6.13 ·
+  `trade_logger` v3.14 · 3 tests rewritten, 1 added (160 total).
+
+  **NFLX, 2026-08-17 16:45 UTC.** `_execute_condor_leg` sets `is_trend_credit`
+  on the record; `log_entry` INSERTs **every** record key; the field has **no
+  column**. `OperationalError` on the INSERT → loop error cap → *"Too many
+  errors — shutting down"* → restart → the same trade → again. **Every 15
+  seconds for the rest of the session.** The trade itself was correct: call
+  spread short 78.00 / long 83.00, credit 0.44, bounded at the 77.79 ORB low,
+  sized to 2 verticals. It formed, priced, sized — and could not be written.
+
+  **⚠️ TCS.3 EXPOSED IT.** TC.6 could never REACH execution while the bound was
+  dead; the noon fix let the first trade through and it hit this hours later.
+  **A latent defect surfaced by a fix** — the shape audit #1 was convened over,
+  now with a live box as the reproduction.
+
+  **WHY THE FIELD EXISTED — CHECKED BEFORE REMOVING (operator: *"figure out why
+  that field was there before you remove it"*).** `ed9d30a` (08-13) introduced
+  it as **the exit engine's discriminator**: `if bool(record.get(
+  "is_trend_credit"))` routed TC.6 to breach-or-nickel instead of the condor
+  ladder. On 08-14 it was found not to be a column, every restart lost it, and
+  the branch silently stopped firing — that is the `stop=$0.69` on a $0.55
+  credit. `structure.py` was built to replace it by DERIVING from persisted
+  `strategy`/`setup_type`. **The read side moved; the write side was never
+  cleaned up. Vestigial, not spurious.**
+
+  **WHY REMOVED RATHER THAN ADDED AS A COLUMN.** `WORKING_AGREEMENT §22`,
+  written on 08-14 **about this exact field**: *"PREFER DERIVING. A new column
+  fixes tomorrow and not today: every position opened before the migration still
+  rehydrates without it, `SELECT *` returns `None`, and `None` reads as `False`
+  — the exact failure, silently."* Adding the column would preserve the original
+  bug for every existing row.
+  ⚠️ **THE SIGNAL ATTRIBUTE `sig.is_trend_credit` IS UNTOUCHED** — in-memory
+  only, read via `getattr` to set `_is_tcs`, never persisted. Signal attribute:
+  keep. Record key: gone.
+
+  **THE STRUCTURAL GUARD.** `log_entry` now filters to real columns and **warns
+  once per unknown key**. A record key that is not a column is a bug in the
+  caller, but **it must not be able to take a trading box down**. Silently
+  dropping a field that was supposed to persist would be Pattern 2 again, so the
+  drop is loud. PRAGMA cached; fails open if the schema cannot be read.
+  ⚠️ **CENSUS RUN AT THE SAME TIME: `is_trend_credit` WAS THE ONLY OFFENDER.**
+  `fill_credit`, `long_contract`, `short_contract` matched the first pass but
+  are LOCAL VARIABLES, not record keys. **The filter is a guardrail against the
+  next one, not a fix for a population** — stated so nobody reads it as having
+  caught more than it did.
+
+  **⚠️ THREE EXISTING TESTS ASSERTED THE CRASHING LINE.**
+  `test_record_carries_is_trend_credit` and
+  `test_the_exit_gates_on_exactly_the_key_the_record_sets` both pinned
+  `"is_trend_credit  = 1 if _is_tcs else 0,"` verbatim — **written 08-14 to lock
+  in the identity-chain fix, they locked in the crash.** Rewritten to their real
+  INTENT (identity reaches the record; writer and reader name the same fields)
+  against the PERSISTED columns. Added
+  `test_derivation_works_on_the_persisted_row_alone` — round-trips a
+  columns-only dict, the exact shape `SELECT *` returns on a rehydrated
+  position. **That test would have caught both defects.**
+
+  ⬜ DOWNSTREAM VERIFIED before removal: no reader in `database/`, `analysis/`,
+  `execution/`, or anywhere in `day_trader_pro`. The only live consumer is
+  `structure.py`'s fast path, which falls through to derivation.
+
 - **v5.07 — 2026-08-17 — THE FRAME-REACH CENSUS RAN. NO FOURTH INSTANCE.**
   Read-only; closes the ⬜ candidate TCS.3 raised rather than leaving it open.
 
