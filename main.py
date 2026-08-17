@@ -1,5 +1,21 @@
 """
-main.py — options_trader v6.11
+main.py — options_trader v6.12
+v6.12  2026-08-17  TCS.3: THE BOUND OUTLIVED ITS FRAME. `_opening_range`
+        read the 60-bar 1m cache and the 09:30-09:35 bars leave that window
+        at ~10:35 ET — 25 minutes before TCS_START_ET — so trend
+        participation (TC.6) was structurally unable to fire: the bound was
+        None for the entire credit window on every box since d12ee3e baked
+        (Fri 08-14). Fleet-verified before fixing (13/15 boxes logging
+        `[tcs] no opening-range`, up to 290/290 evaluated ticks). The range
+        now reads TODAY'S 09:30 5m bar (exact for a 5-minute window, present
+        all session on every tape), with the 1m window kept for the early
+        session and non-5m window sizes; both paths date-filtered. Same
+        failure class as AUDIT A2.1, one function over: a lookback written
+        against history the frame does not carry.
+        NOTE: FEED.2 (2026-08-15) edited this file (_EXT preference in
+        _named_level_frame) without a title bump — recorded here so the
+        version history stays truthful; no behaviour change beyond FEED.2's
+        own.
 v6.11  2026-08-15  AUDIT A2: four fixes from adversarial audit #2.
         (A2.1) named levels get a DEEP frame: `_named_level_frame()` reads the
         candle store directly (1h bars, NAMED_FRAME_1H_BARS, 300s TTL) and is
@@ -1625,31 +1641,58 @@ def _safe_strategy(name: str, fn):
 def _opening_range(ctx: dict):
     """(orb_high, orb_low) recomputed FROM THE TAPE, or (None, None).
 
-    ⚠️ DELIBERATELY NOT READ FROM THE ORB ENGINE. Trend PARTICIPATION must not
-    depend on the ORB engine after 11:00 — no runaway flag, no slot
-    arbitration, no `invalidation_reason`. But the opening-range HIGH and LOW
-    are just the extremes of the RTH_OPEN_ET -> +ORB_WINDOW_MINUTES bars, and a
-    price level is not an engine dependency. Recomputing them here means:
-      · **RESTART-PROOF.** `orb_state.json` is WRITE-ONLY — no load path exists
-        anywhere in the repo — so the ORB engine is memory-only, and the
-        2026-08-14 10:37 restart wiped its state on all 15 boxes. A level
-        derived from bars cannot be wiped.
-      · **AVAILABLE PAST THE CUTOFF.** The engine stops at 11:00; the bars do
-        not go anywhere.
-      · **ONE DEFINITION, NOT TWO.** Same window constants the engine uses, so
-        this cannot drift into a second opinion about where the range is.
+    ⚠️ TCS.3 (2026-08-17) — THE 1m-ONLY VERSION WAS STRUCTURALLY DEAD, and the
+    fleet proved it live. v6.7 read `ctx["df_1m"]`, which the cache caps at 60
+    bars, while asserting "the bars do not go anywhere." They go off the LEFT
+    EDGE of a rolling window: the 09:30-09:35 bars leave a 60-bar 1m frame at
+    ~10:35 ET — 25 minutes BEFORE TCS_START_ET (11:00) — so the bound was
+    (None, None) for every minute of the credit window, every session, on
+    every box, and trend participation could never fire. Fleet-verified
+    2026-08-17: `[tcs] no opening-range` on up to 290 of 290 evaluated ticks;
+    on GLD/MU/SMH/TLT/GS/SPX/NFLX the vote and ADX gates passed essentially
+    ALL morning and every evaluation died here. Its own sibling
+    `_session_extremes` already stated the truth this function denied: "each
+    is a rolling window and neither is guaranteed to reach 09:30."
 
-    1m frame only — a 5m frame cannot resolve a 5-minute window.
+    PRIMARY SOURCE IS NOW df_5m. The old "a 5m frame cannot resolve a
+    5-minute window" was false for this repo's constants:
+    ORB_WINDOW_MINUTES=5 and 5m bars align to :30, so TODAY'S 09:30 bar IS
+    the opening range, exactly — and the 5m frame holds it all session on
+    every box (RTH-only tape spans the day with margin; SPX's 24h tape
+    reaches back ~8.3h, keeping 09:30 in-frame past the close). The 1m
+    window remains as the early-session supplement (before today's first 5m
+    bar prints) and as the general path for any ORB_WINDOW_MINUTES not
+    divisible by 5. Both paths filter to TODAY — an RTH-only 5m frame
+    carries ~1.3 sessions, so yesterday's 09:30 bar is usually present too
+    and must never become today's bound.
+
+    v6.7's reasons for NOT reading the ORB engine all stand — restart-proof,
+    available past the cutoff, one definition. Only the frame was wrong.
     """
     try:
-        df = ctx.get("df_1m")
-        if df is None or getattr(df, "empty", True):
-            return None, None
         h0, m0 = RTH_OPEN_ET
         start = h0 * 60 + m0
         end = start + ORB_WINDOW_MINUTES              # exclusive
-        mins = [t.hour * 60 + t.minute for t in df.index]
-        rows = [i for i, m in enumerate(mins) if start <= m < end]
+        # ── 5m primary (TCS.3): today's aligned bars, available all day ──
+        if ORB_WINDOW_MINUTES % 5 == 0:
+            df5 = ctx.get("df_5m")
+            if df5 is not None and not getattr(df5, "empty", True):
+                today = df5.index[-1].date()
+                rows = [i for i, t in enumerate(df5.index)
+                        if t.date() == today
+                        and start <= (t.hour * 60 + t.minute) < end]
+                if rows:
+                    win = df5.iloc[rows]
+                    return (float(win["high"].max()),
+                            float(win["low"].min()))
+        # ── 1m supplement: pre-09:35 partial window / non-5m windows ─────
+        df = ctx.get("df_1m")
+        if df is None or getattr(df, "empty", True):
+            return None, None
+        today1 = df.index[-1].date()
+        rows = [i for i, t in enumerate(df.index)
+                if t.date() == today1
+                and start <= (t.hour * 60 + t.minute) < end]
         if not rows:
             return None, None
         win = df.iloc[rows]

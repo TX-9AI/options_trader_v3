@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-tests/test_dispatch_slot_map.py — v1.0 — 2026-08-14
+tests/test_dispatch_slot_map.py — v1.1 — 2026-08-17
+v1.1 — 2026-08-17 — TCS.3: the one-definition pin's 1800-char segment no
+        longer reached the constants after main v6.12's _opening_range
+        rewrite grew the docstring; widened to 3600. The pin's intent —
+        strategy and engine share ONE window definition — unchanged.
+v1.0 — 2026-08-14
 
 THE SLOT MAP, AS SPECIFIED BY THE OPERATOR 2026-08-14, ENFORCED STRUCTURALLY.
 
@@ -142,7 +147,7 @@ def test_the_opening_range_is_derived_from_the_same_window_as_the_engine():
     disagree about where the range is."""
     assert "RTH_OPEN_ET" in SRC and "ORB_WINDOW_MINUTES" in SRC
     i = SRC.index("def _opening_range(")
-    seg = SRC[i:i + 1800]
+    seg = SRC[i:i + 3600]   # TCS.3 (v6.12) grew the docstring; window widened
     assert "RTH_OPEN_ET" in seg and "ORB_WINDOW_MINUTES" in seg
     assert 'ctx.get("df_1m")' in seg, "a 5m frame cannot resolve a 5-minute window"
 

@@ -1,4 +1,9 @@
 #!/bin/bash
+# v4.54 — 2026-08-17 — TCS.3 (main v6.12): the trend-participation bound now
+#         reads TODAY'S 09:30 5m bar — the 1m-only version lost its source
+#         bars at ~10:35 ET, 25 min before the credit window opened, so TC.6
+#         could never fire (fleet-verified before fixing). Canary greps the
+#         5m-primary branch, never a version string.
 # v4.53 — 2026-08-15 — AUDIT A2 (mapper v4.1, ledger v1.1, main v6.11,
 #         position_manager v3.3): behavior canaries for the audit-2 fix set —
 #         section truncation guard + DST-derived NY hours, the deep named
@@ -917,6 +922,8 @@ check "analysis/liquidity_ledger.py"     "_hydrate_same_date"           "A2.3 le
 check "analysis/liquidity_ledger.py"     '"last_bar_ts": self.last_bar_ts' "A2.3/A2.4 high-water mark persisted for gap recovery"
 check "execution/position_manager.py"    "def open_condor_leg_count"    "A2.2 leg count the announcement reads"
 check "tests/test_audit2_fixes.py"       "test_a22_why_the_old_site_was_dead" "A2 executing suite present (born-red verified vs 89cbaf6)"
+check "main.py"                          "ORB_WINDOW_MINUTES % 5"       "TCS.3 bound reads the 5m frame (1m-only lost 09:30 at ~10:35 ET)"
+check "tests/test_opening_range.py"      "test_tcs3_bound_survives_the_1m_rolloff" "TCS.3 executing suite present (born-red verified vs b672ae6)"
 # A2.2 — the announcement must live in the MANAGE branch: the checker's old
 # call site sits behind has_open_position() and cannot run with a leg open.
 _n_orph=$(grep -c "report_orphaned_plan(" main.py 2>/dev/null || echo 0)

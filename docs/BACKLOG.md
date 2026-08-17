@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.05
+# docs/BACKLOG.md — v5.06
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -233,6 +233,67 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **🔴 v5.06 — 2026-08-17 — TCS.3: TREND PARTICIPATION NEVER HAD A BOUND.
+  FOUND AT NOON, FLEET-VERIFIED, FIXED FOR THE AFTER-CLOSE BAKE.** `main`
+  v6.12 · `check_versions` v4.54 · tests/test_opening_range.py v1.0 (6
+  executing; born-red 2 vs `b672ae6`).
+
+  **THE OPERATOR'S QUESTION:** no credit-spread trades by Monday noon. The
+  code answered it in one arithmetic step: `_opening_range` (v6.7, baked
+  Fri 08-14 in `d12ee3e`) read the bound from `ctx["df_1m"]`, which the
+  cache caps at **60 bars** — so the 09:30-09:35 bars leave the frame at
+  **~10:35 ET, 25 minutes before `TCS_START_ET` (11:00)**. The bound was
+  `(None, None)` for every minute of the credit window, on every box, since
+  the day it shipped. Trend participation — the trade the 11:00 debit
+  cutoff exists to hand the afternoon TO — was structurally off while the
+  docstring asserted "the bars do not go anywhere." Its own sibling
+  `_session_extremes` already said the true thing: "each is a rolling
+  window and neither is guaranteed to reach 09:30."
+
+  **FLEET VERIFICATION BEFORE FIXING (option 14, 15 boxes, 2026-08-17
+  ~12:15 ET):** `[tcs] no opening-range` on 13/15 boxes — GLD 289, TLT 290,
+  MU 289, SMH 289, NFLX 262, GS 238, SPX 222 with VOTE=0/ADX=0, i.e. the
+  direction and ADX gates passed on essentially EVERY evaluated tick and
+  every one died at the bound. **Those seven boxes spent the whole morning
+  in exactly the conditions this trade was designed for.** AMZN/TSLA also
+  showed the condor's PF.5 fork gate refusing as designed (FORK 245/246) —
+  the CONDOR's zero today is the operator's guardrail working plus RANGING
+  scarcity (PLAN=0 fleet-wide), not a defect. DEFER=0 and F5ERR=0: the F5
+  occupancy path is clean.
+
+  **THE FIX (main v6.12):** the bound now reads **TODAY'S 09:30 5m bar** —
+  exact for a 5-minute window (`ORB_WINDOW_MINUTES=5`, bars align to :30),
+  and present all session on every tape (RTH-only frames span the day;
+  SPX's 24h tape reaches ~8.3h back). The 1m window stays as the
+  early-session supplement and the general path for window sizes not
+  divisible by 5. **Both paths date-filter** — an RTH-only 5m frame carries
+  ~1.3 sessions, so Friday's 09:30 bar is in-frame Monday afternoon and
+  must never become today's bound (a defect the fix would have introduced
+  without the filter; test pins it). v6.7's reasons for not reading the ORB
+  engine all stand — only the frame was wrong.
+
+  **SAME FAILURE CLASS AS A2.1, ONE FUNCTION OVER, THREE DAYS LATER:** a
+  lookback written against history the frame does not carry. That is now
+  three instances in one week (LIQ.6 sections / the ledger's premise /
+  this). ⬜ CANDIDATE STANDING ITEM: a one-page census of every
+  `ctx["df_*"]` read that assumes reach-back beyond the frame's cap —
+  cheaper than finding the fourth one live.
+
+  **TESTS:** first suite in the repo that imports `main` (broker-SDK stub
+  pattern from test_audit2_fixes, no-op on boxes). The defining test —
+  bound survives a 13:00 frame with 09:30 long gone — is born-red at
+  `b672ae6`, as is the date-filter test; the early-session 1m semantics,
+  the non-5m fallback and the no-frames case pin unchanged behaviour and
+  say so.
+
+  **DEPLOY:** extract + push safe now (boxes pull only at a bake); **BAKE
+  AFTER CLOSE** with the rest of Monday's queue. Nothing about this fix is
+  freeze-relevant — it makes an already-shipped strategy able to run at
+  all. ⚠️ MEASUREMENT NOTE: TC.6's live sample is ZERO trades to date —
+  Friday afternoon and Monday morning were not "quiet", they were
+  structurally off. The first real TC.6 data begins at tomorrow's open;
+  nothing before it belongs in any TC.6 read.
+
 - **v5.05 — 2026-08-16 — WAREHOUSE THREAD: FULL ACCOUNTING, THE WEEK'S DUE DATES, AND WHAT THE MISTAKES TAUGHT.**
 
   ## PART A — DUE THIS WEEK, EXPLICITLY
