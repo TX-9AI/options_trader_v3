@@ -1,5 +1,8 @@
 """
-database/trade_logger.py — Options trade logging (SQLite). v3.14
+database/trade_logger.py — Options trade logging (SQLite). v3.15
+v3.15  2026-08-17  SWALLOW T1: this file's silent handler(s) now announce
+        themselves once. Behaviour unchanged in every case; only the silence
+        was the defect.
 v3.14  2026-08-17  TCS.4: log_entry FILTERS TO REAL COLUMNS AND WARNS.
         It INSERTed every key in the record, so a key with no column raised
         OperationalError and CRASH-LOOPED a live box (NFLX, 2026-08-17).
@@ -166,6 +169,7 @@ from utils.time_utils import ts_for_db, now_utc, now_et, ET
 
 logger = logging.getLogger(__name__)
 _WARNED_UNKNOWN_COLS: set = set()   # TCS.4: warn once per unknown key
+_WARNED_SCHEMA_READ: set = set()    # SWALLOW T1: warn once if PRAGMA fails
 
 
 @dataclass
@@ -393,9 +397,22 @@ class TradeLogger:
                 with self._connect() as conn:
                     self._cols_cache = {r[1] for r in
                                         conn.execute("PRAGMA table_info(trades)")}
-            except Exception:                                  # noqa: BLE001
+            except Exception as exc:                           # noqa: BLE001
                 # ⚠️ FAIL OPEN: if the schema cannot be read, insert everything
                 # exactly as before rather than dropping fields on a guess.
+                # ⚠️ AND SAY SO — SWALLOW T1, 2026-08-17. This handler was
+                # SILENT when it shipped, which meant the crash-loop guard could
+                # DISABLE ITSELF WITH NO WORD: a failed PRAGMA sends log_entry
+                # straight back to inserting every record key, which is the
+                # exact condition that crash-looped NFLX the day before. A guard
+                # that can turn itself off quietly is not a guard.
+                if not _WARNED_SCHEMA_READ:
+                    _WARNED_SCHEMA_READ.add(1)
+                    logger.warning(
+                        "[schema] could not read the `trades` column list (%s) - "
+                        "FAILING OPEN: every record key will be inserted, so an "
+                        "unknown key will raise on the INSERT again. The TCS.4 "
+                        "guard is NOT active on this box until this clears.", exc)
                 return set(TradeRecord.__annotations__) if hasattr(
                     TradeRecord, "__annotations__") else set()
         return self._cols_cache

@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.08
+# docs/BACKLOG.md — v5.09
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -233,6 +233,40 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v5.09 — 2026-08-17 — SWALLOW T1: FIVE SILENT HANDLERS, TWO OF THEM
+  FAIL-OPEN.** `trade_logger` v3.15 · `position_manager` v3.4 ·
+  `credit_vertical` v1.1. **Behaviour unchanged in all five — only the silence
+  was the defect.**
+
+  **🔴 `trade_logger.py:396 _columns` — MINE, SHIPPED THE DAY BEFORE.** On a
+  failed PRAGMA it returned a fallback set with no word, and `log_entry` reverts
+  to inserting EVERY record key — **the exact condition that crash-looped NFLX
+  on 08-17.** The TCS.4 guard could switch itself off and nobody would know. **A
+  guard that can disable itself quietly is not a guard.** Now warns once, and
+  says the guard is inactive on that box.
+
+  **🔴 `position_manager.py:121 open_condor_leg_count` — 0 IS THE PERMISSIVE
+  ANSWER.** It returned 0 on any exception, and "no condor legs open" is what a
+  caller checks before opening another. **A failed COUNT read as CLEAR TO
+  PROCEED** — the F5 shape exactly: an unreadable input granting permission it
+  never established. Still returns 0 (it runs on the tick path and a raise there
+  is fatal), but a box that cannot count its own legs is now visible before it
+  acts on the answer.
+
+  **🔵 `credit_vertical.py` 55/77/102 — CORRECT AS WRITTEN, NOT RISK.** All
+  three FAIL CLOSED: `width=9.99`, `quote_ok=False`, `pop=0.0`. Every path ends
+  in "do not select this contract"; none can grant permission.
+  ⚠️ MADE NOISY-ONCE ANYWAY, for a reason worth stating: a SYSTEMATIC quote
+  failure is otherwise **indistinguishable from an illiquid chain**. Every
+  contract silently ranked 9.99 looks exactly like a chain with no liquidity,
+  and the strategy would just stop trading with nothing to read.
+
+  ⬜ **THE CLASSIFICATION THAT MATTERS:** fail-open vs fail-closed, not
+  silent vs loud. Two of these five could grant permission on an error; three
+  could only withhold it. **SWALLOW counts handlers; it cannot tell which way
+  they fail.** That judgement is the review, and it is why "silent handlers ROSE
+  144 -> 146" is a prompt rather than a verdict.
+
 - **🔴 v5.08 — 2026-08-17 — TCS.4: THE FIRST TC.6 TRADE THAT FORMED CORRECTLY
   DIED AT THE WRITE, AND CRASH-LOOPED A LIVE BOX.** `main` v6.13 ·
   `trade_logger` v3.14 · 3 tests rewritten, 1 added (160 total).

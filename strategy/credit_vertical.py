@@ -1,5 +1,8 @@
 """
-strategy/credit_vertical.py — options_trader_v3 — v1.0 — 2026-08-14   (TCS.1)
+strategy/credit_vertical.py — options_trader_v3 — v1.1 — 2026-08-14   (TCS.1)
+v1.1  2026-08-17  SWALLOW T1: this file's silent handler(s) now announce
+        themselves once. Behaviour unchanged in every case; only the silence
+        was the defect.
 
 SELECTION MATH SHARED BY EVERY CREDIT VERTICAL. OWNED BY NEITHER STRATEGY.
 
@@ -37,6 +40,29 @@ from typing import List, Optional, Sequence
 logger = logging.getLogger(__name__)
 
 
+# ── SWALLOW T1 REVIEW, 2026-08-17 ────────────────────────────────────────────
+# The three handlers below were flagged as silent. **All three FAIL CLOSED and
+# their behaviour is correct**: an unreadable quote ranks worst (9.99), fails
+# `quote_ok`, or scores POP 0.0 — every path ends in "do not select this
+# contract". None of them can grant permission.
+# They are noisy-once now because a SYSTEMATIC quote problem would otherwise be
+# indistinguishable from a genuinely illiquid chain: every contract silently
+# ranked 9.99 looks exactly like a chain with no liquidity, and the strategy
+# would simply stop trading with nothing to read.
+_WARNED_CV: set = set()
+
+
+def _cv_warn(where: str, exc: Exception) -> None:
+    """Once per site per process. Fail-closed is the behaviour; silence is not."""
+    if where in _WARNED_CV:
+        return
+    _WARNED_CV.add(where)
+    logger.warning(
+        "[cv] %s could not evaluate a contract (%s) - FAILING CLOSED, this "
+        "contract will not be selected. If this repeats across the chain the "
+        "quote source is the problem, not the liquidity.", where, exc)
+
+
 def liquidity_rank(c) -> tuple:
     """Rank key for "most liquid". LOWER IS BETTER.
 
@@ -52,7 +78,8 @@ def liquidity_rank(c) -> tuple:
         bid, ask = float(getattr(c, "bid", 0) or 0), float(getattr(c, "ask", 0) or 0)
         mid = (bid + ask) / 2.0
         width = (ask - bid) / mid if (mid > 0 and ask >= bid) else 9.99
-    except Exception:                                          # noqa: BLE001
+    except Exception as exc:                                   # noqa: BLE001
+        _cv_warn("liquidity_rank", exc)
         width = 9.99
     depth = (getattr(c, "open_interest", 0) or 0) + (getattr(c, "volume", 0) or 0)
     return (round(width, 4), -depth)
@@ -74,7 +101,8 @@ def quote_ok(c, max_width_pct: float) -> bool:
         if mid <= 0 or ask < bid:
             return False
         return (ask - bid) / mid <= max_width_pct
-    except Exception:                                          # noqa: BLE001
+    except Exception as exc:                                   # noqa: BLE001
+        _cv_warn("quote_ok", exc)
         return False
 
 
@@ -99,7 +127,8 @@ def pop(distance: float, sigma_per_bar: float, bars_left: float) -> float:
             return 0.0
         z = d / (sig * math.sqrt(n))
         return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
-    except Exception:                                          # noqa: BLE001
+    except Exception as exc:                                   # noqa: BLE001
+        _cv_warn("pop", exc)
         return 0.0
 
 

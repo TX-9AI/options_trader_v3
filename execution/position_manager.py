@@ -1,5 +1,8 @@
 """
-execution/position_manager.py — v3.3 — AUDIT A2.2: expose the open condor-leg
+execution/position_manager.py — v3.4 — AUDIT A2.2: expose the open condor-leg
+v3.4  2026-08-17  SWALLOW T1: this file's silent handler(s) now announce
+        themselves once. Behaviour unchanged in every case; only the silence
+        was the defect.
         count for the orphan announcement. The F5 warning was wired to a call
         site that cannot run while a leg is open (attempt_new_entry sits
         behind has_open_position, which reads the same DB), so it could never
@@ -94,6 +97,7 @@ from notifications.alert_manager import get_alert_manager
 from config import PAPER_TRADING, CONTRACT_MULTIPLIER
 
 logger = logging.getLogger(__name__)
+_WARNED_LEG_COUNT: set = set()   # SWALLOW T1: warn once on an unreadable count
 
 
 class PositionManager:
@@ -118,7 +122,22 @@ class PositionManager:
         try:
             recs = self._open_records or self._trade_logger.get_open_trades()
             return sum(1 for r in recs if r.get("is_condor_leg"))
-        except Exception:                                      # noqa: BLE001
+        except Exception as exc:                               # noqa: BLE001
+            # ⚠️ SWALLOW T1, 2026-08-17 — THIS RETURNED 0 SILENTLY, AND 0 IS THE
+            # PERMISSIVE ANSWER. "No condor legs open" is what a caller checks
+            # before opening another; a failed COUNT therefore reads as CLEAR TO
+            # PROCEED. That is the F5 shape exactly — an unreadable input
+            # granting permission it never established.
+            # The count is left at 0 (callers treat a raise as fatal and this
+            # runs on the tick path) but it is NO LONGER SILENT: a box that
+            # cannot count its own open legs must be visible before it acts on
+            # the answer.
+            if not _WARNED_LEG_COUNT:
+                _WARNED_LEG_COUNT.add(1)
+                logger.warning(
+                    "[legs] could not count open condor legs (%s) - reporting 0, "
+                    "which reads as NO LEGS OPEN to every caller. If a leg IS "
+                    "open, deferral and sibling checks are running blind.", exc)
             return 0
 
     def has_open_position(self) -> bool:
