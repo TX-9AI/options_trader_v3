@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.06
+# docs/BACKLOG.md — v5.07
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in
@@ -233,6 +233,41 @@ uppercase gate for weeks.
 ### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
 Deliberate, and the operator's call. Recorded because it has consequences that
 would otherwise surface as unexplained numbers on Monday.
+- **v5.07 — 2026-08-17 — THE FRAME-REACH CENSUS RAN. NO FOURTH INSTANCE.**
+  Read-only; closes the ⬜ candidate TCS.3 raised rather than leaving it open.
+
+  **THE PATTERN IT WAS HUNTING:** three times in a week a lookback was written
+  against history its frame does not carry — LIQ.6's 10-day section lookback on
+  a 100-bar 5m frame (0.35 days), the ledger's premise, and now TCS.3's bound on
+  a 60-bar 1m frame (1.0h) when it was needed at 11:00.
+
+  **WHAT EACH FRAME ACTUALLY REACHES** (cap x bar width, from `TIMEFRAMES`):
+  `df_1m` **1.0h** · `df_5m` **8.3h** · `df_15m` **1.56d** · `df_1h` **2.08d** ·
+  `df_1d` **60d**. ⚠️ The two frames most engines read are the two that reach
+  back least — 1m does not survive one hour, 5m does not survive one session.
+
+  **METHOD:** every `ctx.get("<tf>")` / `ctx["df_*"]` read in non-test code,
+  cross-checked against a 20-line window for a session or lookback anchor
+  (`09:30`, `session_open`, `prev_day`, `days=`, `LOOKBACK`, `since`).
+
+  **RESULT — 3 sites, 0 undiscovered defects:**
+  · `main.py:1645` `_opening_range` — **the TCS.3 case, already fixed.**
+  · `main.py:1678` `_session_extremes` df_5m — already carries the correct
+    caveat in its own docstring (*"each is a rolling window and neither is
+    guaranteed to reach 09:30"*), which is the line that would have prevented
+    TCS.3 had it been read.
+  · `analysis/trade_readiness.py:863` df_1m — **CLEAN.** `TR_TCS_SD_LOOKBACK`
+    is 20 bars against a 60-bar frame: 3x margin.
+
+  ⚠️ **A CLEAN CENSUS IS A RESULT, NOT A NULL.** The question "is there a
+  fourth?" is now answered rather than carried. It cost one pass and it is
+  re-runnable whenever a new frame consumer lands — which is the cheap moment to
+  run it, not after a fleet verification.
+  ⬜ THE STANDING RULE THIS ARGUES FOR: a lookback expressed in TIME must state
+  the frame it reads and that frame's reach, in the same place. All three
+  failures shared one shape — the reach was knowable from `TIMEFRAMES` and
+  nobody multiplied it out.
+
 - **🔴 v5.06 — 2026-08-17 — TCS.3: TREND PARTICIPATION NEVER HAD A BOUND.
   FOUND AT NOON, FLEET-VERIFIED, FIXED FOR THE AFTER-CLOSE BAKE.** `main`
   v6.12 · `check_versions` v4.54 · tests/test_opening_range.py v1.0 (6
