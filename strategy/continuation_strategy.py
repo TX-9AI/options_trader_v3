@@ -1,5 +1,13 @@
 """
-strategy/continuation_strategy.py — Trend-continuation on pullback. — v1.7
+strategy/continuation_strategy.py — Trend-continuation on pullback. — v1.8
+v1.8  2026-08-18  STR.1: sets `vix_at_signal`. It did not, and neither did
+        the other highest-volume strategy, so `trades.vix_at_entry` fell to its
+        REAL DEFAULT 0.0 on most rows - **58% of the book**. The separation
+        probe read that default as a measured value and reported "58% ties,
+        median 0.000 in both arms", which looks exactly like "VIX does not
+        separate outcomes". A COLLECTION GAP WEARING THE COSTUME OF A NULL.
+        A column with a numeric DEFAULT cannot distinguish "measured zero" from
+        "never written" - check for a writer before calling a primitive dead.
 v1.7 — 2026-08-13 — GRD.2: POPULATE `underlying_target`. `trend_strike_plan`
         has ALWAYS computed it (EM fraction scaled by ADX + conviction) and USED
         IT to pick the strike, then DISCARDED it — so the bot was never
@@ -597,6 +605,17 @@ class ContinuationStrategy(BaseOptionsStrategy):
             underlying_stop = gap.top + 0.5 * atr
 
         signal = OptionsSignal(
+            # ⚠️ STR.1 (2026-08-18) — vix_at_entry WAS 58% EMPTY ACROSS THE BOOK.
+            # ORB, butterfly and sweep set `vix_at_signal`; continuation and
+            # iron_condor — the two HIGHEST-VOLUME strategies — never did, so
+            # `trades.vix_at_entry` defaulted to 0.0 on most rows. The
+            # separation probe read that as a real value of zero and reported
+            # "58% ties, median 0.000 in both arms": **a collection gap wearing
+            # the costume of a measured null.**
+            # `macro` is optional on this signature, so a None guard rather than
+            # an attribute access — a missing macro must not cost a signal.
+            vix_at_signal    = (getattr(macro, "vix", 0.0) or 0.0)
+                               if macro is not None else 0.0,
             strategy_name    = self.name(),
             setup_type       = "trend_continuation" + ("_handoff" if is_handoff
                                                        else "_breakout" if is_breakout_dir

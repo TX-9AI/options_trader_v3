@@ -1,4 +1,16 @@
 """
+v-str1 2026-08-18  STR.1: the leg signal now carries VIX, via a new
+    `CondorPlan.vix_at_plan`. Neither this strategy nor continuation set
+    `vix_at_signal`, and they are the two HIGHEST-VOLUME strategies, so
+    `trades.vix_at_entry` fell to its REAL DEFAULT 0.0 on **58% of the book**.
+    The separation probe read that default as a measured value and reported
+    "58% ties, median 0.000 in both arms" - indistinguishable from "VIX does not
+    separate outcomes". A COLLECTION GAP WEARING THE COSTUME OF A NULL.
+    PLAN-TIME, AND THE NAME SAYS SO. `_build_leg_signal` has no `macro` in
+    scope: the plan is built while macro is available, then legs fire minutes or
+    hours later on a price trigger. Threading `macro` into the builder would
+    have delivered a plan-time snapshot anyway, so it rides on the plan
+    explicitly rather than pretending to be fill-time.
 v-a2 — 2026-08-15 — AUDIT A2.2: the orphan once-latch re-arms daily —
     _orphan_said only reset on process start, so a second orphan on a later
     day of the same process would have stayed silent.
@@ -230,6 +242,14 @@ class CondorPlan:
     put_trigger_price:  float = 0.0
 
     # Which side is Leg 1 (the one price is more likely to hit first)
+    # ⚠️ STR.1 (2026-08-18) — VIX RIDES ON THE PLAN, not on the leg builder.
+    # `_build_leg_signal` has no `macro` in scope: the plan is constructed while
+    # macro IS available, then legs fire from it minutes or hours later on a
+    # trigger. Threading `macro` down to the builder would hand it a snapshot
+    # from plan time anyway — so carry it explicitly and be honest that it is
+    # PLAN-TIME VIX, not fill-time.
+    vix_at_plan:        float = 0.0
+
     leg1_side:          str   = ""    # "call" or "put"
     leg2_side:          str   = ""
 
@@ -650,6 +670,9 @@ class IronCondorStrategy(BaseOptionsStrategy):
             leg2_side = "call"
 
         plan = CondorPlan(
+            # STR.1: captured HERE, where `macro` is in scope. Legs fire from
+            # the plan on a later trigger and have no macro of their own.
+            vix_at_plan        = float(getattr(macro, "vix", 0.0) or 0.0),
             short_call_strike  = short_call.strike,
             long_call_strike   = long_call_strike,
             call_trigger_price = call_trigger,
@@ -957,6 +980,11 @@ class IronCondorStrategy(BaseOptionsStrategy):
 
         leg_num = "1" if is_leg1 else "2"
         signal = OptionsSignal(
+            # STR.1: plan-time VIX. `vix_at_entry` was 58% empty across the book
+            # because continuation and iron_condor — the two highest-volume
+            # strategies — never set it, and the separation probe read the
+            # resulting 0.0 as a measured value rather than a missing one.
+            vix_at_signal     = float(getattr(plan, "vix_at_plan", 0.0) or 0.0),
             strategy_name     = self.name,
             setup_type        = f"Condor Leg {leg_num}: {leg_label}",
             direction         = "neutral",
