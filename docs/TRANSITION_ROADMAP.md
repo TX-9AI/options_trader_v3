@@ -63,7 +63,29 @@ exits.
 > **Does anything already collected separate favourable from never-favourable
 > trades AT DECISION TIME?**
 
-**P0.1 — `tests/separation_probe.py` v1.0 — ✅ BUILT 2026-08-17** *(control-side, read-only; no bake, no box touched)*
+**P0.1 — `tests/separation_probe.py` v1.2 — ✅ BUILT AND RUN 2026-08-17**
+
+> ## 🔵 FIRST RESULT — `direction_conf` CLEARS
+> **Whole book: nf 0.628 → ok 0.885, gap +0.257, n=753 across 17 sessions,
+> sign stable.** Larger than AX.3's +0.188 at n=571 — **it grew on more data,
+> which is what a real effect does and an overfit one does not.** It is also the
+> primitive Fable named "the only measured survivor", and **it is journaled
+> nowhere** (AX.3's emission step was never built → P0.3).
+>
+> ⚠️ **`BREAKOUT score` clears the whole book (+0.066) and INVERTS on ORB
+> (−0.192).** A primitive that flips sign when scoped to one strategy is
+> describing the STRATEGY MIX, not the trade. **Set aside.**
+>
+> ⚠️ **ORB-ONLY CLEARS NOTHING — AND THAT IS NOT A FAILURE.** Every row is
+> n=156–178 against the 200 floor: **under-powered, not flat.** `direction_conf`
+> on ORB alone is **+0.239** — same sign, same magnitude as the whole book,
+> ~30 trades short. **The fleet trading is what closes that gap.**
+>
+> ⚠️ `RGCV` pooled to **+0.006 "unstable"** — consistent with the known
+> RANGING/COMPRESSION inversion washing out when pooled, not a contradiction
+> of it.
+
+*(control-side, read-only; no bake, no box touched)* *(control-side, read-only; no bake, no box touched)*
 Run the never-favourable split — reusing `axis_crosstab` / `a2_excursion`
 machinery — against **every decision-time primitive**, as-of joined at each
 historical entry stamp:

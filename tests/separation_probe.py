@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 """
-tests/separation_probe.py — v1.1 — 2026-08-17   (P0.1 — THE GATE)
+v1.2 — 2026-08-17 — UNDER-POWERED IS NOT FAILED, AND THE WINDOWS ARE SHOWN.
+    ⚠️ v1.1 CONFLATED THEM AND PRINTED THE WRONG VERDICT. On the ORB-only run
+    every row was n=156-178 against the 200 floor — the criterion NEVER GOT TO
+    APPLY — and the tool announced "NOTHING CLEARS -> escalate to new inputs".
+    **That is an absent measurement reported as a null result: the exact error
+    §12 exists to prevent, committed by the tool built to enforce it.**
+    NOW: no verdict is issued when nothing is powered. It states the shortfall,
+    names how many more trades the leading candidate needs, and marks that
+    leader a POINTER, not a result — an in-sample leader among under-powered
+    candidates is not evidence.
+    ALSO: a per-window split (pre-LIQ.1 · post-LIQ.1 · post-LIQ.6 · post-FEED.2)
+    for the top candidates. A separator living in ONE window is a regime
+    artifact and the pooled median hides it.
+tests/separation_probe.py — v1.2 — 2026-08-17   (P0.1 — THE GATE)
 
 v1.1 — 2026-08-17 — OOM FIX + TWO GLOB EXCLUSIONS.
     v1.0 built a dict of EVERY tick across EVERY replay log before touching a
@@ -359,11 +372,45 @@ def main(argv):
               f"  {wtxt:<22}{verdict}")
         results.append((k, clears, gap, n, sess))
 
+    # per-window detail: a separator that only lives in one window is a
+    # regime artifact, and the pooled median hides that.
+    print(f"\n  PER-WINDOW SPLIT (nf med -> ok med; a sign flip is a red flag)")
+    for k, _c, _g, _n, _s in sorted(results, key=lambda r: -r[2])[:4]:
+        b = vals[k]
+        parts = []
+        for w, _lo, _hi in WINDOWS:
+            d = b["win"].get(w)
+            if d and d["nf"] and d["ok"]:
+                parts.append(f"{w}: {med(d['nf']):.2f}->{med(d['ok']):.2f} "
+                             f"(n={len(d['nf'])+len(d['ok'])})")
+        print(f"    {k:26} " + " · ".join(parts) if parts else f"    {k:26} (no window had both arms)")
+
     print("\n  PRE-REGISTERED CRITERION (set before the run):")
     print(f"    nf BELOW ok · CI-separated · n >= {MIN_N} across >= {MIN_SESSIONS}"
           f" sessions · sign stable across >= 2 post-LIQ.1 windows")
+    # ⚠️ UNDER-POWERED IS NOT FAILED — v1.1 CONFLATED THEM AND PRINTED THE
+    # WRONG VERDICT. On the ORB-only run every row was n=156-178 against the 200
+    # floor, so the criterion NEVER GOT TO APPLY, and the tool announced
+    # "NOTHING CLEARS -> escalate to new inputs". That is an ABSENT MEASUREMENT
+    # being reported as a null result — the exact error 12 exists to prevent,
+    # committed by the tool built to enforce it.
+    powered = [r for r in results if r[3] >= MIN_N and r[4] >= MIN_SESSIONS]
+    under = [r for r in results if r not in powered]
     win = [r for r in results if r[1]]
-    if win:
+    if not powered:
+        print(f"\n  ⚠️ NO VERDICT POSSIBLE — every primitive is UNDER-POWERED.")
+        print(f"     {len(under)} candidate(s), none reaching n >= {MIN_N} across")
+        print(f"     >= {MIN_SESSIONS} sessions. **The criterion never applied.**")
+        print("     THIS IS NOT 'nothing separates'. It is an ABSENT MEASUREMENT.")
+        best = max(under, key=lambda r: r[2]) if under else None
+        if best and best[2] > 0:
+            need = MIN_N - best[3]
+            print(f"     Largest positive gap so far: {best[0]} {best[2]:+.3f} "
+                  f"at n={best[3]} — **{need} more trades** to reach the floor.")
+            print("     ⚠️ That is a POINTER, not a result: an in-sample leader")
+            print("        among under-powered candidates is not evidence.")
+        print("     The fleet keeps trading; re-run when n clears.")
+    elif win:
         print(f"\n  ✅ {len(win)} primitive(s) CLEAR: "
               + ", ".join(r[0] for r in win))
         print("     -> the confidence factor exists in collected data; the")
