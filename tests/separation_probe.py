@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 """
-v1.9 — 2026-08-18 — "UNTESTABLE" IS NOT "UNSTABLE", AND MY OWN FIX PROVED IT.
+v1.10 — 2026-08-18 — THE OVERNIGHT GAP, SIGNED AND ABSOLUTE.
+    ⚠️ THE ONLY NEW PRIMITIVE TESTABLE TODAY. Everything else shipped 08-18 —
+    the angle (STR.2), the level grade (Level.1), VIX coverage (STR.1), three IV
+    tenors (TERM.1) — needs the next bake and then SESSIONS before it can say
+    anything. **The gap is fully BACKFILLABLE from banked OHLC**, so it is
+    judged on the 17 sessions already in the book.
+    ⚠️ AND IT IS THE ONLY PRE-OPEN INPUT IN THE STACK. ADX, conviction, the
+    regime scores, IV skew and every structural column need bars from THIS
+    session to exist; the gap is formed at 09:30 before a single RTH bar prints.
+    BOTH FORMS ARE TESTED: signed asks "does direction matter", absolute asks
+    "does SIZE matter". A gap predicting through magnitude alone would be
+    INVISIBLE in the signed view — up and down gaps cancel in the medians.
+    A MISSING gap_pct.json yields NO gap rows rather than zeros. Scoring an
+    absent file as data is the error that made three columns look like measured
+    nulls this week.
+v1.10 — 2026-08-18 — "UNTESTABLE" IS NOT "UNSTABLE", AND MY OWN FIX PROVED IT.
     ⚠️ v1.8 ADDED AN ABSTENTION FLOOR AND BROKE THE TEST COMPLETELY. The
     stability vote only considered `WINDOWS[1:]` (post-LIQ.1 onward), and with
     the n>=120 floor BOTH of those abstained (n=50, n=27). `signs` came back
@@ -545,7 +560,41 @@ def _iv_features(snap):
     return out
 
 
-def candidates(tr, rep, chain=None):
+GAP_JSON = os.path.expanduser("~/day_trader_pro/reports/gap_pct.json")
+
+
+def load_gaps(path=GAP_JSON):
+    """(date, sym) -> gap_pct, from `tests/gap_backfill.py`'s output.
+
+    ⚠️ THE ONLY NEW PRIMITIVE TESTABLE TODAY. Everything else shipped 2026-08-18
+    — the angle, the level grade, VIX coverage, three IV tenors — needs the next
+    bake and then sessions before it can say anything. **The overnight gap is
+    fully BACKFILLABLE from banked OHLC**, so it can be judged on the 17
+    sessions already in the book.
+
+    ⚠️ AND IT IS THE ONLY PRE-OPEN INPUT IN THE STACK. ADX, conviction, the
+    regime scores, IV skew and every structural column need bars from THIS
+    session to exist. The gap is formed at 09:30 before a single RTH bar prints.
+
+    ⚠️ ABSENT FILE IS ABSENT MEASUREMENT. Returns {} and the gap rows simply do
+    not appear — they are NOT reported as zeros. Scoring a missing file as data
+    is the error that made three columns look like measured nulls this week.
+    """
+    try:
+        with open(path) as fh:
+            blob = json.load(fh)
+    except Exception:                                          # noqa: BLE001
+        return {}
+    out = {}
+    for day, syms in (blob.get("sessions") or {}).items():
+        for sym, rec in (syms or {}).items():
+            g = (rec or {}).get("gap_pct")
+            if isinstance(g, (int, float)):
+                out[(day, sym)] = float(g)
+    return out
+
+
+def candidates(tr, rep, chain=None, gaps=None):
     """Every decision-time primitive we can evaluate, per trade.
 
     ⚠️ A `None` here means NOT AVAILABLE for that trade — it is dropped from
@@ -580,6 +629,17 @@ def candidates(tr, rep, chain=None):
                       ("atr_at_entry", "ATR at entry")):
         if tr.get(col) is not None:
             out[name] = tr.get(col)
+
+    # --- THE OVERNIGHT GAP: the only PRE-OPEN input here ------------------
+    if gaps:
+        g = gaps.get((tr["_date"], tr.get("symbol")))
+        if g is not None:
+            out["gap_pct (signed)"] = g
+            # ⚠️ BOTH FORMS, DELIBERATELY. Signed asks "does direction matter";
+            # absolute asks "does SIZE matter". A gap that predicts through
+            # magnitude alone would be invisible in the signed view, since up
+            # and down gaps would cancel in the medians.
+            out["gap_abs_pct"] = abs(g)
 
     # --- STRUCTURAL POSITION, derived (never previously tested) -----------
     # ⚠️ THIS IS THE CLASS THE OPERATOR'S OWN DISCRETIONARY READ USES. On
@@ -668,6 +728,7 @@ def main(argv):
     wanted = {(t["_date"], t.get("symbol"), t["_hhmm"]) for t in trades}
     rep = load_replay_axes(a, wanted)
     chain = load_chain_features(a, wanted)
+    gaps = load_gaps()
 
     print("=" * 94)
     print("SEPARATION PROBE (P0.1) — does anything separate outcomes AT DECISION TIME?")
@@ -677,6 +738,8 @@ def main(argv):
           + (f"   strategy={a.strategy}" if a.strategy else ""))
     print(f"  replay ticks indexed: {len(rep):,}   "
           f"(08-14 excluded; _breakout rows from 08-07 excluded)")
+    print(f"  gap sessions loaded: {len(gaps):,}   "
+          f"(backfilled from OHLC — the only PRE-OPEN input here)")
     print(f"  chain snapshots matched: {len(chain):,}   "
           f"(0DTE only — no term structure; GEX not re-derived)")
     print("=" * 94)
@@ -690,7 +753,7 @@ def main(argv):
                                             "sess": set(), "win": {}})
     unmatched = 0
     for t in trades:
-        c = candidates(t, rep, chain)
+        c = candidates(t, rep, chain, gaps)
         if not c:
             unmatched += 1
             continue
