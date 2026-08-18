@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 """
-v1.3 — 2026-08-17 — THE IV SURFACE. The only genuinely FORWARD-LOOKING input
+v1.4 — 2026-08-18 — AS-OF JOIN. v1.3 keyed the chain on `HH:MM` EQUALITY and
+    threw away ~79% of the data it already had: snapshots land every ~5 minutes
+    (76 across a 390-minute session), trades fire at arbitrary minutes, so exact
+    matching caught only trades that fired ON a snapshot minute — **183 of 874,
+    exactly the ~20% a 1-in-5 coincidence predicts.** The IV rows came back
+    UNDER-POWERED at n=192 and the data was never thin; **the join was wrong.**
+    ⚠️ The operator offered to increase snapshot frequency. Declined: more data
+    would have PAPERED OVER the defect rather than fixed it, and the corpus is
+    already four weeks deep.
+    ⚠️ AS-OF IS ALSO THE CORRECT SEMANTICS, not just a wider net — at 10:17 the
+    trader knew the 10:15 surface. Taking a LATER snapshot would leak
+    information from after the decision, which is the exact error this retool
+    exists to eliminate. PRECEDING only, with a 30-minute staleness bound
+    (`--chain-max-age-min`): a stale surface is worse than none.
+v1.4 — 2026-08-17 — THE IV SURFACE. The only genuinely FORWARD-LOOKING input
     class in the stack: every other primitive here is computed from bars that
     have already printed, while implied volatility is the market's own PRICED
     EXPECTATION of what is coming. If the retool's premise is reachable at all,
@@ -292,6 +306,7 @@ def load_chain_features(a, wanted):
             sym = fn.split(".")[0]
             if not any(d == day and s == sym for d, s, _t in wanted):
                 continue
+            per_sym = []
             try:
                 with gzip.open(os.path.join(CHAIN_DIR, day, fn), "rt") as fh:
                     for line in fh:
@@ -302,14 +317,43 @@ def load_chain_features(a, wanted):
                         ts = str(r.get("ts_et", ""))
                         if len(ts) < 16:
                             continue
-                        key = (day, sym, ts[11:16])
-                        if key not in wanted:
-                            continue
                         f = _iv_features(r)
                         if f:
-                            out[key] = f
+                            per_sym.append((ts[11:16], f))
             except Exception:                                  # noqa: BLE001
                 continue
+
+            # ── AS-OF JOIN, NOT EXACT-MINUTE ─────────────────────────────────
+            # ⚠️ v1.3 KEYED ON `HH:MM` EQUALITY AND THREW AWAY ~79% OF THE DATA.
+            # Snapshots land roughly every 5 minutes (76 across a 390-minute
+            # session); trades fire at arbitrary minutes. Exact matching caught
+            # only the trades that happened to fire ON a snapshot minute —
+            # **183 of 874, which is exactly the ~20% a 1-in-5 coincidence
+            # predicts** — and the IV rows came back UNDER-POWERED at n=192.
+            # The data was never thin; the join was wrong.
+            #
+            # ⚠️ AND AS-OF IS THE CORRECT SEMANTICS, not merely a wider net: at
+            # 10:17 the trader knew the 10:15 surface. Taking a LATER snapshot
+            # would leak information from after the decision — the exact error
+            # this whole retool exists to avoid.
+            per_sym.sort()
+            for d_, s_, t_ in wanted:
+                if d_ != day or s_ != sym:
+                    continue
+                best = None
+                for snap_t, feat in per_sym:
+                    if snap_t <= t_:        # PRECEDING only, never after
+                        best = (snap_t, feat)
+                    else:
+                        break
+                if best is None:
+                    continue
+                # tolerance: a stale surface is worse than none. 30 min is ~6
+                # snapshot intervals — generous, but it bounds the staleness.
+                gap = ((int(t_[:2]) * 60 + int(t_[3:5]))
+                       - (int(best[0][:2]) * 60 + int(best[0][3:5])))
+                if 0 <= gap <= a.chain_max_age_min:
+                    out[(d_, s_, t_)] = best[1]
     return out
 
 
@@ -413,6 +457,10 @@ def main(argv):
     ap.add_argument("--since", default="2026-07-13")
     ap.add_argument("--nf-cut", type=float, default=2.0,
                     help="MFE%% below which a trade NEVER went favourable")
+    ap.add_argument("--chain-max-age-min", type=int, default=30,
+                    dest="chain_max_age_min",
+                    help="as-of tolerance: a surface older than this is refused "
+                         "rather than joined stale")
     ap.add_argument("--strategy", default="",
                     help="restrict to one strategy, e.g. ORBStrategy")
     a = ap.parse_args(argv[1:])
