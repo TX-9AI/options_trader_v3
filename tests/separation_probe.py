@@ -1,6 +1,25 @@
 #!/usr/bin/env python3
 """
-v1.5 — 2026-08-18 — SORT KEY. v1.4 crashed on the real corpus with
+v1.6 — 2026-08-18 — THE CRITERION NOW MATCHES WHAT IT ADVERTISES.
+    ⚠️ TWO DEFECTS IN MY OWN PRE-REGISTERED CRITERION, FOUND BY READING THE
+    RESULT RATHER THAN THE CODE:
+    (1) **"CI-separated" WAS ADVERTISED AND NEVER IMPLEMENTED.** `_wilson` was
+        computed on every row and THROWN AWAY; `clears` tested sign, n, sessions
+        and stability only. A clause promised in the header and absent from the
+        code is the same class as a test that asserts source text instead of
+        executing — committed by the tool built to enforce that discipline.
+    (2) **NO EFFECT SIZE AT ALL.** `IV skew vs atm` was reported as CLEARS on a
+        gap of **+0.001** against a median of 0.016, alongside `direction_conf`
+        at **+0.257** against ~0.75. Raw median gaps are not comparable across
+        primitives on different scales, so "clears" was being awarded to noise.
+    NOW: Mann-Whitney U (rank-based — these distributions are bounded,
+    zero-inflated and plainly non-normal; BREAKOUT's nf median is exactly 0.000)
+    AND Cliff's delta with a floor at 0.147, the conventional
+    negligible/small boundary. Both are PRINTED per row, not just tested.
+    ⚠️ p ALONE IS NOT A LICENCE: on ~840 observations a p-value will call a
+    trivial difference significant. Significance answers "is it real", delta
+    answers "is it worth anything", and this tool previously asked NEITHER.
+v1.6 — 2026-08-18 — SORT KEY. v1.4 crashed on the real corpus with
     `TypeError: '<' not supported between instances of 'dict' and 'dict'`: a
     bare `.sort()` on (time, dict) tuples falls through to comparing the DICTS
     whenever two snapshots share a minute — and they do. **It only fires on a
@@ -153,6 +172,10 @@ WINDOWS = (("pre-LIQ.1", "0000-00-00", "2026-08-11"),
 
 MIN_N = 200
 MIN_SESSIONS = 10
+# Cliff's delta floor. 0.147 is the conventional negligible/small boundary — a
+# separator below it is real but too small to size on, which is precisely the
+# distinction the first three runs of this tool could not make.
+MIN_DELTA = 0.147
 
 
 def _window(date):
@@ -172,6 +195,67 @@ def _wilson(k, n):
     c = (p + z * z / (2 * n)) / d
     h = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
     return (max(0.0, c - h), min(1.0, c + h))
+
+
+def _mannwhitney_p(a_vals, b_vals):
+    """Two-sided Mann-Whitney U via the normal approximation, with ties.
+
+    ⚠️ WHY A RANK TEST AND NOT A t-TEST: these distributions are bounded,
+    zero-inflated and plainly non-normal (BREAKOUT's nf median is exactly
+    0.000). A rank test asks the only question that matters here — *does a
+    randomly drawn ok value tend to exceed a randomly drawn nf value* — without
+    assuming a shape the data does not have.
+
+    ⚠️ AND IT IS NOT A LICENCE. A p-value on ~840 observations will call a
+    trivial difference significant; that is why the EFFECT SIZE floor below
+    exists alongside it. Significance answers "is it real", magnitude answers
+    "is it worth anything", and this tool previously asked NEITHER.
+    """
+    n1, n2 = len(a_vals), len(b_vals)
+    if n1 < 10 or n2 < 10:
+        return None
+    pooled = sorted([(v, 0) for v in a_vals] + [(v, 1) for v in b_vals])
+    ranks, i = {}, 0
+    rank_sum_a = 0.0
+    while i < len(pooled):
+        j = i
+        while j + 1 < len(pooled) and pooled[j + 1][0] == pooled[i][0]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0          # average rank over the tie block
+        for k in range(i, j + 1):
+            if pooled[k][1] == 0:
+                rank_sum_a += avg
+        i = j + 1
+    u1 = rank_sum_a - n1 * (n1 + 1) / 2.0
+    mu = n1 * n2 / 2.0
+    sd = math.sqrt(n1 * n2 * (n1 + n2 + 1) / 12.0)
+    if sd == 0:
+        return None
+    z = (u1 - mu) / sd
+    # two-sided normal tail
+    return math.erfc(abs(z) / math.sqrt(2.0))
+
+
+def _cliffs_delta(a_vals, b_vals):
+    """Effect size: P(b > a) - P(a > b), in [-1, 1]. Scale-free.
+
+    ⚠️ THIS IS THE CHECK THE CRITERION WAS MISSING. A raw median gap cannot be
+    compared across primitives on different scales — +0.257 on `direction_conf`
+    (median ~0.75) and +0.001 on `IV skew vs atm` (median 0.016) were both
+    reported as "CLEARS". Cliff's delta puts every primitive on one scale, so
+    "how much does this actually separate" is answerable rather than implied.
+    Convention: |d| < 0.147 negligible · < 0.33 small · < 0.474 medium.
+    """
+    n1, n2 = len(a_vals), len(b_vals)
+    if n1 == 0 or n2 == 0:
+        return None
+    b_sorted = sorted(b_vals)
+    import bisect
+    gt = lt = 0
+    for v in a_vals:
+        lt += len(b_sorted) - bisect.bisect_right(b_sorted, v)   # b > a
+        gt += bisect.bisect_left(b_sorted, v)                    # b < a
+    return (lt - gt) / float(n1 * n2)
 
 
 def _hhmm(entry_time):
@@ -529,9 +613,9 @@ def main(argv):
     def med(v):
         return sorted(v)[len(v) // 2] if v else float("nan")
 
-    print(f"\n  {'primitive':26}{'n':>6}{'sess':>6}{'nf med':>9}{'ok med':>9}"
-          f"{'gap':>9}  {'windows':<22}verdict")
-    print("  " + "-" * 90)
+    print(f"\n  {'primitive':24}{'n':>6}{'sess':>5}{'nf med':>8}{'ok med':>8}"
+          f"{'gap':>8}{'delta':>7}{'p':>7}  verdict")
+    print("  " + "-" * 88)
     results = []
     for k in sorted(vals):
         b = vals[k]
@@ -548,17 +632,31 @@ def main(argv):
             if d and d["nf"] and d["ok"]:
                 signs.append(1 if med(d["ok"]) > med(d["nf"]) else -1)
         stable = bool(signs) and len(set(signs)) == 1
-        lo, hi = _wilson(len(b["nf"]), n)
+        # ⚠️ THE CRITERION NOW MATCHES WHAT THE DOCSTRING CLAIMS. Until v1.5 the
+        # header advertised "CI-separated" and the code tested SIGN, n, SESSIONS
+        # and STABILITY only — `_wilson` was computed and thrown away. A clause
+        # advertised and never implemented is the same class as a test that
+        # asserts source text instead of executing it, committed by the tool
+        # built to enforce that discipline.
+        pval = _mannwhitney_p(b["nf"], b["ok"])
+        delta = _cliffs_delta(b["nf"], b["ok"])
+        sig = pval is not None and pval < 0.05
+        big = delta is not None and abs(delta) >= MIN_DELTA
         clears = (gap > 0 and n >= MIN_N and sess >= MIN_SESSIONS
-                  and stable and len(signs) >= 2)
+                  and stable and len(signs) >= 2 and sig and big)
         verdict = ("CLEARS" if clears
                    else "under-powered" if (n < MIN_N or sess < MIN_SESSIONS)
                    else "INVERTED" if gap < 0
                    else "unstable" if not stable
+                   else "NEGLIGIBLE (d=%.2f)" % delta if (sig and not big)
+                   else "not significant" if not sig
                    else "flat/no separation")
         wtxt = f"{len(signs)} win, {'stable' if stable else 'mixed'}"
-        print(f"  {k:26}{n:>6}{sess:>6}{mnf:>9.3f}{mok:>9.3f}{gap:>+9.3f}"
-              f"  {wtxt:<22}{verdict}")
+        dtxt = f"{delta:+.2f}" if delta is not None else "  -  "
+        ptxt = ("<.001" if (pval is not None and pval < 0.001)
+                else f"{pval:.3f}" if pval is not None else "  -  ")
+        print(f"  {k:24}{n:>6}{sess:>5}{mnf:>8.3f}{mok:>8.3f}{gap:>+8.3f}"
+              f"{dtxt:>7}{ptxt:>7}  {verdict}")
         results.append((k, clears, gap, n, sess))
 
     # per-window detail: a separator that only lives in one window is a
@@ -575,8 +673,9 @@ def main(argv):
         print(f"    {k:26} " + " · ".join(parts) if parts else f"    {k:26} (no window had both arms)")
 
     print("\n  PRE-REGISTERED CRITERION (set before the run):")
-    print(f"    nf BELOW ok · CI-separated · n >= {MIN_N} across >= {MIN_SESSIONS}"
-          f" sessions · sign stable across >= 2 post-LIQ.1 windows")
+    print(f"    nf BELOW ok · Mann-Whitney p < 0.05 · |Cliff's delta| >= "
+          f"{MIN_DELTA} · n >= {MIN_N} across >= {MIN_SESSIONS} sessions ·"
+          f" sign stable across >= 2 post-LIQ.1 windows")
     # ⚠️ UNDER-POWERED IS NOT FAILED — v1.1 CONFLATED THEM AND PRINTED THE
     # WRONG VERDICT. On the ORB-only run every row was n=156-178 against the 200
     # floor, so the criterion NEVER GOT TO APPLY, and the tool announced
