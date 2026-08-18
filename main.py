@@ -1,5 +1,18 @@
 """
-main.py — options_trader v6.17
+main.py — options_trader v6.18
+v6.18  2026-08-18  🔴 P0 HOTFIX — run_analysis raised NameError on EVERY tick.
+       v6.16 (Level.1) and v6.17 (A2.6b) write ctx["gap"], ctx["gap_pct"] and
+       ctx["level_near"] into `ctx`, but run_analysis did not bind that name
+       until its return statement. The NameError raised inside the try; the
+       except handler's own ctx["gap"] = None then re-raised it UNCAUGHT. Net
+       effect on any box baking 0720753: no ctx, no regime classification, no
+       strategy evaluation — the bot trades nothing and the failure is a
+       traceback per tick, not a quiet degradation. `ctx` is now bound before
+       the Level.1/A2.6b blocks, which write into it; macro/orb are added at
+       the single return. NO OTHER BEHAVIOUR CHANGES in this version.
+       Found 2026-08-18 during the SMC-fork salvage and reproduced
+       behaviourally before the fix; same class as WA §21's
+       is_trend_participation NameError — invisible to py_compile.
 v6.17  2026-08-18  A2.6b: MEASURE the overnight gap instead of inheriting it
         as an anonymous ATR spike. `atr_series` uses true range with prev_close
         and the 5m tape is continuous, so a large gap spikes ATR at the open and
@@ -1021,6 +1034,27 @@ def run_analysis(state: BotState) -> dict:
                                                named_df=_named_level_frame())
     _feed_liquidity_ledger(liq_map, df_1m)      # LIQ.4 wiring
 
+    # ── v6.18 — BIND ctx BEFORE ANYTHING WRITES INTO IT ─────────────────────
+    # v6.16/v6.17 (Level.1, A2.6b) wrote ctx["gap"] / ctx["level_near"] into a
+    # name that did not exist yet: run_analysis built its dict only at the
+    # return statement. The NameError raised inside the try, and the except
+    # handler's OWN ctx["gap"] = None re-raised it UNCAUGHT — so run_analysis
+    # failed on EVERY tick: no ctx, no classification, no strategy could fire.
+    # Same class as the is_trend_participation NameError (WA §21): a name
+    # referenced before it exists, invisible to import and to py_compile.
+    # The dict is bound HERE; the blocks below write into it; macro and orb
+    # are added just before the single return.
+    ctx = {
+        "price":     price,
+        "data":      data,
+        "vol":       vol_state,
+        "trend":     trend,
+        "structure": structure,
+        "liq_map":   liq_map,
+        "df_1m":     df_1m,
+        "df_5m":     df_5m,
+    }
+
     # ── Level.1 (2026-08-18) — WHAT IS PRICE TRADING INTO? ──────────────────
     # ⚠️ `level_strength` was written ONLY by `sweep_reversal`, which is
     # hard-gated (main.py:1325) with a 0.4% live win rate — so the column was
@@ -1099,18 +1133,10 @@ def run_analysis(state: BotState) -> dict:
     except Exception:
         pass
 
-    return {
-        "price":     price,
-        "data":      data,
-        "vol":       vol_state,
-        "trend":     trend,
-        "structure": structure,
-        "liq_map":   liq_map,
-        "macro":     macro,
-        "orb":       orb,
-        "df_1m":     df_1m,
-        "df_5m":     df_5m,
-    }
+    # v6.18 — ctx was bound above; add the last two members and return it.
+    ctx["macro"] = macro
+    ctx["orb"]   = orb
+    return ctx
 
 
 def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> RegimeState:

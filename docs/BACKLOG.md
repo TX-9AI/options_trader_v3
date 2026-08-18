@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.10
+# docs/BACKLOG.md — v5.11
 
 > # ⏸️ PAUSED — 2026-08-17
 >
@@ -6239,6 +6239,19 @@ file: everything above either ✅ or explicitly re-dated below.
   handler gets waved through on the same reasoning.
 
 ## PART 3 — RESOLVED REGISTER (condensed; kept so fixes don't get quietly reverted)
+
+- 🔴 **P0 — run_analysis NameError on every tick (main v6.18, 2026-08-18).**
+  v6.16/v6.17 wrote `ctx["gap"]`/`ctx["gap_pct"]`/`ctx["level_near"]` before
+  `ctx` existed — the dict was built only at the return — and the except
+  handler's own `ctx["gap"] = None` re-raised the NameError uncaught. Any box
+  baking `0720753` gets no ctx, no classification and no strategy evaluation.
+  `ctx` is now bound before those blocks. Found during the options_trader_smc
+  fork salvage and reproduced behaviourally before fixing. **Lesson, again:
+  py_compile and import both pass on a name that does not exist at runtime —
+  only exercising the function finds it (WA §21).** ⚠️ If any box baked
+  0720753, check its bot.log for the traceback and confirm the session
+  produced zero REGIME lines; that session's data is not a sample of
+  anything.
 
 *Full forensic text: git history of this file at the pre-v2.0 commit, plus
 `docs/HISTORY.md` and the audits. Resolution date + fixing versions + the why.*
