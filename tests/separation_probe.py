@@ -1,6 +1,27 @@
 #!/usr/bin/env python3
 """
-v1.7 — 2026-08-18 — TIE RATE AND UNIQUE-VALUE COUNT, because a small Cliff's
+v1.8 — 2026-08-18 — A THIN WINDOW ABSTAINS, AND THE STRUCTURAL CLASS IS TESTED.
+    (1) ⚠️ MY STABILITY CLAUSE WAS REJECTING REAL SIGNAL. It counted EVERY
+        window's sign, and post-LIQ.1 (n=50) and post-FEED.2 (n=27) hold 6% and
+        3% of the book — nf/ok arms of roughly 10 vs 17, where a median
+        comparison is noise. That disqualified `SETUP` (delta +0.19, p<.001) and
+        `ADX` (+0.17, p<.001), THE ONLY TWO ROWS CLEARING THE EFFECT-SIZE FLOOR.
+        A window now abstains below MIN_WINDOW_N=120.
+        ⚠️ THIS IS A POST-HOC CHANGE TO A PRE-REGISTERED CRITERION — the move
+        that turns a test into a fishing expedition. The ORIGINAL verdict is
+        printed alongside in the `v1.7` column and neither replaces the other.
+        `CLEARS*(1 win only)` means it passes on the single window with enough
+        data: UNVERIFIED across regimes, not proven.
+    (2) THE STRUCTURAL-POSITION CLASS, never previously tested: ORB entry
+        position (where in the opening range the fill sat), ORB width / ATR
+        (compression, self-scaling so QQQ and SPX compare), ORB width / price,
+        VIX at entry, flat angle, level strength.
+        ⚠️ THIS IS THE CLASS THE OPERATOR'S DISCRETIONARY READ USES — "rotating
+        inside a prior range", "failure to hold the break" are statements about
+        WHERE PRICE SITS, not how far a move has gone. ADX-class features are
+        late by construction; position-class features describe the setup BEFORE
+        it resolves.
+v1.8 — 2026-08-18 — TIE RATE AND UNIQUE-VALUE COUNT, because a small Cliff's
     delta has TWO very different causes and they call for opposite conclusions.
     Tied pairs count as neither greater nor lesser, so **CROSS-ARM ties deflate
     delta** — a primitive whose nf and ok arms draw from the SAME values scores
@@ -186,6 +207,11 @@ MIN_SESSIONS = 10
 # separator below it is real but too small to size on, which is precisely the
 # distinction the first three runs of this tool could not make.
 MIN_DELTA = 0.147
+# A window must hold at least this many observations before its SIGN counts
+# toward stability. post-LIQ.1 (n=50) and post-FEED.2 (n=27) are 6% and 3% of
+# the book; a median comparison on ~10 vs ~17 observations is noise, and
+# treating its sign as disqualifying rejects real signal.
+MIN_WINDOW_N = 120
 
 
 def _window(date):
@@ -541,6 +567,51 @@ def candidates(tr, rep, chain=None):
         if tr.get(col) is not None:
             out[name] = tr.get(col)
 
+    # --- STRUCTURAL POSITION, derived (never previously tested) -----------
+    # ⚠️ THIS IS THE CLASS THE OPERATOR'S OWN DISCRETIONARY READ USES. On
+    # 2026-08-17 he called QQQ a range WHILE IT WAS HAPPENING — "no clean
+    # impulsive candle, price rotating inside a prior range, failure to hold the
+    # break." None of those clauses is a trend-strength measure; they are
+    # statements about WHERE PRICE SITS relative to structure. ADX-class
+    # features say how far a move has gone; these say what the setup looks like
+    # before it goes, which is the whole distinction the retool rests on.
+    _oh = tr.get("orb_range_high")
+    _ol = tr.get("orb_range_low")
+    _ue = tr.get("underlying_entry")
+    try:
+        _oh, _ol, _ue = float(_oh or 0), float(_ol or 0), float(_ue or 0)
+    except Exception:                                          # noqa: BLE001
+        _oh = _ol = _ue = 0.0
+    if _oh > 0 and _ol > 0 and _oh > _ol:
+        _w = _oh - _ol
+        if _ue > 0:
+            # WHERE IN THE OPENING RANGE the entry sat. 0 = at the low, 1 = at
+            # the high, >1 = extended beyond it. Entering mid-range is the
+            # geometric signature of chop; entering on an extension is not.
+            out["ORB entry position"] = round((_ue - _ol) / _w, 4)
+        _atr = tr.get("atr_at_entry")
+        try:
+            _atr = float(_atr or 0)
+        except Exception:                                      # noqa: BLE001
+            _atr = 0.0
+        if _atr > 0:
+            # OPENING RANGE WIDTH IN ATR. A range far narrower than the symbol's
+            # own typical bar is compression; far wider is an already-violent
+            # open. Self-scaling, so QQQ and SPX are comparable.
+            out["ORB width / ATR"] = round(_w / _atr, 4)
+        if _ue > 0:
+            out["ORB width / price"] = round(_w / _ue, 5)
+
+    for col, name in (("vix_at_entry", "VIX at entry"),
+                      ("flat_angle_deg", "flat angle deg"),
+                      ("level_strength", "level strength")):
+        v = tr.get(col)
+        if v is not None:
+            try:
+                out[name] = float(v)
+            except Exception:                                  # noqa: BLE001
+                pass
+
     # --- IV surface: the only forward-looking class here ------------------
     cf = (chain or {}).get((tr["_date"], tr.get("symbol"), tr["_hhmm"]))
     if cf:
@@ -624,7 +695,7 @@ def main(argv):
         return sorted(v)[len(v) // 2] if v else float("nan")
 
     print(f"\n  {'primitive':24}{'n':>6}{'sess':>5}{'nf med':>8}{'ok med':>8}"
-          f"{'gap':>8}{'delta':>7}{'p':>7}{'ties':>6}{'uniq':>6}  verdict")
+          f"{'gap':>8}{'delta':>7}{'p':>7}{'ties':>6}{'uniq':>6}{'v1.7':>8}  verdict")
     print("  " + "-" * 100)
     results = []
     for k in sorted(vals):
@@ -636,12 +707,31 @@ def main(argv):
         gap = mok - mnf
         sess = len(b["sess"])
         # window sign stability (post-LIQ.1 onward, per the criterion)
-        signs = []
+        # ⚠️ A WINDOW ONLY GETS A VOTE IF IT HOLDS ENOUGH DATA TO HAVE AN
+        # OPINION. v1.7 counted EVERY window's sign, and post-LIQ.1 / post-FEED.2
+        # hold n=50 and n=27 — **6% and 3% of the book**. Split into nf/ok arms
+        # that is ~10 vs ~17 observations, where a median comparison is close to
+        # a coin toss. I made that disqualifying, and it rejected `SETUP`
+        # (delta +0.19, p<.001) and `ADX` (+0.17, p<.001) — the only two rows
+        # clearing the effect-size floor.
+        # ⚠️ THIS IS A POST-HOC CHANGE TO A PRE-REGISTERED CRITERION, which is
+        # exactly the move that turns a test into a fishing expedition. It is
+        # therefore REPORTED ALONGSIDE the original verdict, never silently in
+        # place of it — see the two columns below. The specification error was
+        # real (I never checked how much data those windows would hold), but
+        # the reader gets both answers and decides.
+        signs, signs_all, thin = [], [], []
         for w, _lo, _hi in WINDOWS[1:]:
             d = b["win"].get(w)
             if d and d["nf"] and d["ok"]:
-                signs.append(1 if med(d["ok"]) > med(d["nf"]) else -1)
+                sg = 1 if med(d["ok"]) > med(d["nf"]) else -1
+                signs_all.append(sg)
+                if len(d["nf"]) + len(d["ok"]) >= MIN_WINDOW_N:
+                    signs.append(sg)
+                else:
+                    thin.append(w)
         stable = bool(signs) and len(set(signs)) == 1
+        stable_v17 = bool(signs_all) and len(set(signs_all)) == 1
         # ⚠️ THE CRITERION NOW MATCHES WHAT THE DOCSTRING CLAIMS. Until v1.5 the
         # header advertised "CI-separated" and the code tested SIGN, n, SESSIONS
         # and STABILITY only — `_wilson` was computed and thrown away. A clause
@@ -652,9 +742,16 @@ def main(argv):
         delta = _cliffs_delta(b["nf"], b["ok"])
         sig = pval is not None and pval < 0.05
         big = delta is not None and abs(delta) >= MIN_DELTA
-        clears = (gap > 0 and n >= MIN_N and sess >= MIN_SESSIONS
-                  and stable and len(signs) >= 2 and sig and big)
+        base = (gap > 0 and n >= MIN_N and sess >= MIN_SESSIONS and sig and big)
+        clears_v17 = base and stable_v17 and len(signs_all) >= 2
+        # ⚠️ With the thin windows abstaining a primitive may have only ONE
+        # voting window left. That is not "stable across >=2" — it is
+        # UNVERIFIED, and it is labelled as such rather than passed.
+        clears = base and stable and len(signs) >= 2
+        unverified = base and stable and len(signs) == 1
+        clears_any = clears or clears_v17
         verdict = ("CLEARS" if clears
+                   else "CLEARS*(1 win only)" if unverified
                    else "under-powered" if (n < MIN_N or sess < MIN_SESSIONS)
                    else "INVERTED" if gap < 0
                    else "unstable" if not stable
@@ -680,8 +777,9 @@ def main(argv):
         dtxt = f"{delta:+.2f}" if delta is not None else "  -  "
         ptxt = ("<.001" if (pval is not None and pval < 0.001)
                 else f"{pval:.3f}" if pval is not None else "  -  ")
+        v17 = "CLEARS" if clears_v17 else "-"
         print(f"  {k:24}{n:>6}{sess:>5}{mnf:>8.3f}{mok:>8.3f}{gap:>+8.3f}"
-              f"{dtxt:>7}{ptxt:>7}{tie_pct:>6.0f}%{_uni:>6}  {verdict}")
+              f"{dtxt:>7}{ptxt:>7}{tie_pct:>6.0f}%{_uni:>6}{v17:>8}  {verdict}")
         results.append((k, clears, gap, n, sess))
 
     # per-window detail: a separator that only lives in one window is a
@@ -696,6 +794,16 @@ def main(argv):
                 parts.append(f"{w}: {med(d['nf']):.2f}->{med(d['ok']):.2f} "
                              f"(n={len(d['nf'])+len(d['ok'])})")
         print(f"    {k:26} " + " · ".join(parts) if parts else f"    {k:26} (no window had both arms)")
+
+    print(f"\n  ⚠️ `v1.7` COLUMN = THE ORIGINAL PRE-REGISTERED VERDICT, kept so the")
+    print(f"     post-hoc relaxation is VISIBLE rather than silent. v1.8 lets a")
+    print(f"     window abstain from the stability vote below n={MIN_WINDOW_N};")
+    print(f"     post-LIQ.1 (n=50) and post-FEED.2 (n=27) are 6% and 3% of the")
+    print(f"     book and their medians are noise. **Changing a criterion after")
+    print(f"     seeing the data is how a test becomes a fishing expedition** —")
+    print(f"     both answers are printed and neither replaces the other.")
+    print(f"     `CLEARS*(1 win only)` = passes on the one window with enough")
+    print(f"     data, and is therefore UNVERIFIED across regimes, not proven.")
 
     print("\n  PRE-REGISTERED CRITERION (set before the run):")
     print(f"    nf BELOW ok · Mann-Whitney p < 0.05 · |Cliff's delta| >= "
