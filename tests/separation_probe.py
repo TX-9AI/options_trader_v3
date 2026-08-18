@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 """
-tests/separation_probe.py — v1.0 — 2026-08-17   (P0.1 — THE GATE)
+tests/separation_probe.py — v1.1 — 2026-08-17   (P0.1 — THE GATE)
+
+v1.1 — 2026-08-17 — OOM FIX + TWO GLOB EXCLUSIONS.
+    v1.0 built a dict of EVERY tick across EVERY replay log before touching a
+    trade — ~282k parsed JSON records held at once — and was **KILLED (rc=137)**
+    on control, the same failure the regime grid hit on 08-15.
+    ⚠️ AND THE LOUD "ABSENT MEASUREMENT" GUARD COULD NOT FIRE: the process died
+    before reaching it. **An in-process guard cannot report a kill** — which is
+    why the first two runs printed nothing at all rather than a diagnosis.
+    NOW: the trade list is built FIRST, and only the (date, sym, HH:MM) keys
+    those trades need are indexed. MEASURED: 282,750 ticks scanned, 2 indexed,
+    **13 MB peak RSS**.
+    ALSO: `_archive_pre_*` directories and `.bak` files live inside the trades
+    tree and were being globbed as real data.
 
 **DOES ANYTHING ALREADY COLLECTED SEPARATE FAVOURABLE FROM NEVER-FAVOURABLE
 TRADES AT DECISION TIME?**
@@ -126,6 +139,8 @@ def load_trades(a):
     """Closed trades with an MFE, tagged nf/ok. Exclusions applied here."""
     out = []
     for db in sorted(glob.glob(os.path.expanduser(a.trades))):
+        if "_archive" in db or db.endswith(".bak"):
+            continue          # the trades tree carries both
         # ⚠️ REGEX, NOT split("_"). The filename is `<SYM>_trades_<date>.db`, so
         # splitting yields "2026-08-12.db" WITH the extension and every date
         # comparison silently fails — the probe reported "no closed trades"
@@ -164,13 +179,21 @@ def load_trades(a):
     return out
 
 
-def load_replay_axes(a):
+def load_replay_axes(a, wanted=None):
     """(date, sym, HH:MM) -> the L1 scores + l2 at that tick.
 
     `direction_conf` is replayed from these rather than read from the journal,
     because **AX.3's emission step was never built** — the primitive that
     already measured +0.188 separation is not journaled anywhere.
     """
+    # ⚠️ INDEX ONLY THE TICKS THE TRADES ASK FOR. v1.0 built a dict of EVERY
+    # tick across EVERY replay log before touching a trade — ~280k parsed JSON
+    # records held at once — and was **OOM-KILLED (rc=137)** on control, exactly
+    # as the regime grid was on 08-15. The loud "ABSENT MEASUREMENT" guard could
+    # not fire, because the process died before reaching it: an in-process guard
+    # cannot report a kill.
+    # `wanted` is the set of (date, sym, HH:MM) keys the trades actually need —
+    # a few thousand, not a few hundred thousand.
     idx = {}
     for path in sorted(glob.glob(os.path.expanduser(a.replay))):
         import re
@@ -191,7 +214,10 @@ def load_replay_axes(a):
                 ts = str(r.get("ts", ""))
                 if len(ts) < 5:
                     continue
-                idx[(date, str(r.get("sym", "")), ts[:5])] = r
+                key = (date, str(r.get("sym", "")), ts[:5])
+                if wanted is not None and key not in wanted:
+                    continue          # discard immediately; do not accumulate
+                idx[key] = r
     return idx
 
 
@@ -261,7 +287,8 @@ def main(argv):
         return 1
     if a.strategy:
         trades = [t for t in trades if t.get("strategy") == a.strategy]
-    rep = load_replay_axes(a)
+    wanted = {(t["_date"], t.get("symbol"), t["_hhmm"]) for t in trades}
+    rep = load_replay_axes(a, wanted)
 
     print("=" * 94)
     print("SEPARATION PROBE (P0.1) — does anything separate outcomes AT DECISION TIME?")
