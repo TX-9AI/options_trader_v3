@@ -58,6 +58,73 @@ exits.
 
 ---
 
+## STATUS — 2026-08-18 EOD. **PHASE 0 ANSWERED, AND THE ANSWER CHANGED THE
+## QUESTION.**
+
+**P0.1 ran. NOTHING CLEARED — and roughly half of that verdict was a
+MEASUREMENT ARTIFACT, not a finding.**
+
+**WHAT IS GENUINELY DEAD** (measured on populated columns, effect size tested):
+· `direction_conf` — gap +0.257 looked strong; **Cliff's delta +0.09 at 28%
+  ties.** Among non-tied pairs that is ~56/44, barely better than a coin flip.
+  AX.3's +0.188 and P0.1's +0.257 were both **median artifacts on overlapping
+  distributions.** Fable's "only measured survivor" does not survive.
+· **The IV surface at 0DTE** — 25d risk-reversal +0.09, skew +0.03 not
+  significant, ATM level INVERTED, all at 0% ties. The only forward-looking
+  class collected showed nothing.
+· `RGCV`, `L1 dominance`, `RANGING`, `COMPRESSION` — negligible or inverted.
+
+**WHAT SURVIVED, AND THE PROBLEM WITH IT:** only `SETUP` (delta +0.19) and
+`ADX at entry` (+0.17) clear significance and effect size. **Both are
+confirmatory-class** — ADX is definitionally a measure of how far a move has
+already gone, and SETUP is the composite grade that INVERTED on P&L (A −$8,244
+vs B +$1,893). *The only things that separate are the late-reading measures the
+retool set out to escape.*
+
+**⚠️ AND THE STRUCTURAL CLASS WAS NEVER TESTED — IT WAS NOT BEING COLLECTED.**
+Three columns exist in the schema and were empty:
+· `flat_angle_deg` — **100% ties, ONE unique value.** Five strategies read it;
+  `RegimeState` had no such attribute, so all five took the default. The angle
+  was computed on every RANGING/COMPRESSION evaluation and landed in the
+  breakdown dict — **computed, recorded in the evidence, never delivered.**
+· `level_strength` — **94% ties, TWO unique values.** The formula collapsed
+  because `touch_count` is a constant (1 on 44,450 of 44,890 ticks), and only
+  `sweep_reversal` wrote it — a strategy hard-gated at a 0.4% win rate.
+· `vix_at_entry` — **58% default-zero.** ORB, butterfly and sweep set it;
+  continuation and iron_condor, the two HIGHEST-VOLUME strategies, did not.
+
+**A column with a numeric DEFAULT cannot distinguish "measured zero" from
+"never written", and the probe scored defaults as data.** That is the same
+error class as reporting an under-powered row as a null — committed three
+times, in the columns that mattered most.
+
+**SHIPPED 2026-08-18 TO CLOSE THOSE GAPS** (all landed; effective at the next
+bake, then needing sessions to accumulate):
+| r# | item | what |
+|---|---|---|
+| r173/r174 | **TERM.1** | 3 tenors (front/weekly/monthly) with the collision rule; ~9-strike ATM bands so it costs ~270 subs not ~750, clear of the ~40-session cap and SPX's 419 MB OOM. Term structure becomes computable for the first time. |
+| r175 | **STR.1** | continuation + iron_condor now set `vix_at_signal`; condor carries **plan-time** VIX on `CondorPlan` because the leg builder has no macro in scope. |
+| r176 | **STR.2** | `flat_angle_deg` carried from the L1 breakdown onto `RegimeState`. Sentinel **−1.0, not 0.0** — zero degrees IS the flattest reading, and a 0.0 default is indistinguishable from a flat tape. |
+| r177 | **Level.1** | graded `level_strength` by TYPE with a rung discount, exposed to EVERY strategy via `ctx["level_near"]`. Stated priors, not fitted. Unblocked by LIQ.6 (rung in the name) + FEED.2 (ON High/Low real). |
+
+**⚠️ WHAT THIS DOES NOT MEAN.** None of it is evidence of anything yet. The
+columns will populate from the next bake and need sessions before the probe can
+speak. **The honest position is that the structural class is now MEASURABLE,
+not that it works.**
+
+**⚠️ AND ONE STRUCTURAL FACT LIMITS EVERY VERDICT: the archive has ONE
+well-populated window.** pre-LIQ.1 holds 797 trades; post-LIQ.1 50,
+post-LIQ.6 0, post-FEED.2 27. Any criterion demanding cross-regime stability
+rejects everything until the recent windows accumulate depth. That is why P0.1
+prints a WINDOW CENSUS and labels the clause **UNTESTABLE** rather than
+"unstable" — those are opposite claims.
+
+**NEXT:** re-run P0.1 once the newly-populated columns have sessions behind
+them. Until then Phase 1 has no candidate, and **that remains the honest
+state** rather than a reason to promote the best of the confirmatory rows.
+
+---
+
 ## PHASE 0 — THE GATE. **NOTHING ELSE STARTS UNTIL THIS ANSWERS.**
 
 > **Does anything already collected separate favourable from never-favourable
