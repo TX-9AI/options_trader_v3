@@ -1,4 +1,41 @@
-# docs/BACKLOG.md — v5.09
+# docs/BACKLOG.md — v5.10
+
+> # ⏸️ PAUSED — 2026-08-17
+>
+> **THIS DOCUMENT IS NOT THE GOVERNING PLAN. `docs/TRANSITION_ROADMAP.md` IS.**
+>
+> The project's founding premise — infer a pattern *forming*, express it as a
+> confidence factor, and **scale the entry on that confidence** — was never
+> actually run. **Layer 3 is `NOT STARTED. 0%`.** A proxy assembly ran instead
+> (grade → 1.5× size) and **inverted**: A-grade 399 trades **−$8,244**, B-grade
+> 220 trades **+$1,893**. The confidence number this system built **confirms
+> moves that have already happened**: `RGCV.nf` **1.00** vs `.ok` **0.34** in
+> RANGING, 1.00 vs 1.00 in trend.
+>
+> **The premise is UNTESTED, not refuted.** Fable's 2026-08-17 verdict:
+> **RETOOL WITH A NEW CORE** — the lag is *assembled*, not structural.
+>
+> **⚠️ NOTHING IN THIS FILE IS ABANDONED.** 62 open `[DESK]` items and 198 open
+> squares stay exactly where they are. Work returns **only** by being named in a
+> phase of the transition roadmap — not by being picked up because it was next.
+>
+> **⚠️ GO-LIVE IS PAUSED.** The Fri Aug 28 anchor evaluated paper P&L of a fleet
+> whose **entry logic is the thing under replacement**. There is no live-cash
+> date until Phase 0's gate answers. **Collection continues; the fleet keeps
+> trading paper.**
+>
+> **⚠️ NOT PAUSED:** collection · the EOD conductor · the S3 push · the warehouse
+> · **and the exit stack**. Confirmation is CORRECT at exits and they are the
+> measured winners (`orb_trail_stop` 95%/107 · `theta_bleed` 100%/107 ·
+> `continuation_trail` 85%/149). **The retool moves one boundary — the quantity
+> that decides and sizes ENTRIES — and must not touch exits.**
+>
+> **⚠️ AND THE L2.6 FREEZE IS OFF.** Freezing Layer 2 would lock in the
+> confirmatory conviction the retool exists to replace. L1.6/L1.7/L1.9/L1.11 and
+> the 251 TRENDING labeling candidates keep their value and **wait**.
+>
+> Entries below this banner remain the historical record and are still the place
+> to look up why anything is the way it is. Read them as history, not as a queue.
 
 
 **Read top-down.** The clock sets the dates, PART 1 is the open schedule in

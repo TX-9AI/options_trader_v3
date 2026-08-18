@@ -1,5 +1,22 @@
 # ROADMAP.md — options_trader v3: boolean regime gates → conviction-bar gating
 
+> # ⏸️ SUPERSEDED — 2026-08-17. SEE `docs/TRANSITION_ROADMAP.md`.
+>
+> This roadmap plans the completion of a **confirmatory** engine. That premise
+> is under review: the confidence factor it builds toward confirms moves already
+> made, and **LAYER 3 — the layer that was supposed to gate and size on
+> confidence — is `NOT STARTED. 0%` below.** It was never run.
+>
+> **The L1/L2 acceptance work here retains its value** — the invariants,
+> the truth tables, the labeling habit — but **the L2.6 FREEZE IS OFF** and the
+> **go-live sequence is PAUSED**. Freezing Layer 2 would lock in the very
+> quantity the retool exists to replace.
+>
+> Layer 3's spec is the one part that survives forward: **L3.4's marginal
+> fee-adjusted-ROI placement is the right way to site a size step** — it simply
+> needs a confidence number that separates outcomes to site it against.
+
+
 **v2.4 — 2026-08-04 — TC.2's observability precursor is BUILT, not pending** (BACKLOG
 N.7). The paragraph in TC.2 that called it "likely needed" has been rewritten with what
 reading HEAD settled: BoS re-derives from the post-entry tape and needs no capture; the
