@@ -1,5 +1,23 @@
 """
-main.py — options_trader v6.15
+main.py — options_trader v6.16
+v6.16  2026-08-18  Level.1: GRADED LEVEL STRENGTH, FOR EVERY STRATEGY.
+        `level_strength` measured 94% ties on TWO unique values. Two causes,
+        both collection defects:
+        (1) the formula was min(1.0, (0.6 if named else 0.2) +
+            min(touch_count,4)*0.1) and TOUCH_COUNT IS A CONSTANT - named pools
+            hardcode it to 1 and nothing increments it (44,450 of 44,890 ticks
+            read exactly 1), so it only ever produced 0.7 or 0.3.
+        (2) only `sweep_reversal` wrote it, and sweep is hard-gated with a 0.4%
+            live win rate - so 94% of the book carried the column default.
+            THE PROBE NEVER MEASURED LEVELS; IT MEASURED AN EMPTY COLUMN.
+        Now graded by TYPE with a rung discount (analysis/level_grade.py), and
+        `ctx["level_near"]` puts the nearest graded pool in front of EVERY
+        strategy each tick. `swept_level_name` had no writer either and now
+        does.
+        GRADES ARE STATED PRIORS, NOT FITTED - ordering follows resting
+        liquidity. Fitting on P&L would repeat the grade inversion (A-grade
+        -$8,244 vs B +$1,893).
+        UNBLOCKED BY LIQ.6 (rung in the name) AND FEED.2 (ON High/Low real).
 v6.15  2026-08-18  STR.2: carry `flat_angle_deg` from the L1 breakdown onto
         the regime state. FIVE strategies already read `regime.flat_angle_deg`
         and ALL FIVE took the default, because RegimeState had no such
@@ -985,6 +1003,23 @@ def run_analysis(state: BotState) -> dict:
     liq_map   = get_liquidity_mapper().analyze(df_5m, df_15m, price,
                                                named_df=_named_level_frame())
     _feed_liquidity_ledger(liq_map, df_1m)      # LIQ.4 wiring
+
+    # ── Level.1 (2026-08-18) — WHAT IS PRICE TRADING INTO? ──────────────────
+    # ⚠️ `level_strength` was written ONLY by `sweep_reversal`, which is
+    # hard-gated (main.py:1325) with a 0.4% live win rate — so the column was
+    # populated by a strategy that essentially does not trade, and 94% of the
+    # book carried the default. The probe read that as "levels do not separate
+    # outcomes." It never measured levels at all.
+    # This puts the graded nearest level in ctx for EVERY strategy, every tick.
+    # ⚠️ STRUCTURAL, NOT MAGNITUDE: "there is prior-day liquidity half a percent
+    # above" is a statement about WHERE PRICE IS, which is the class the
+    # operator reads charts with and the class nothing here has ever recorded.
+    try:
+        from analysis.level_grade import nearest_graded
+        _ng = nearest_graded(getattr(liq_map, "pools", None), price)
+        ctx["level_near"] = _ng          # (name, grade, dist_pct) or None
+    except Exception:                                          # noqa: BLE001
+        ctx["level_near"] = None
     macro     = get_macro_manager().get()
 
     # ORB engine update (every tick during RTH). Pass last-tick regime so the
@@ -1631,6 +1666,22 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState,
         regime_conviction = getattr(signal, "conviction", 0.0)
                             or (state.current_regime.conviction if state.current_regime else 0.0),
         flat_angle_deg    = getattr(signal, "flat_angle_deg", 0.0),
+        # ── Level.1 (2026-08-18) — PERSIST THE GRADE OR IT IS TELEMETRY ─────
+        # ⚠️ THE WHOLE POINT OF THIS WEEK: a quantity computed and not written
+        # to the row cannot be tested against outcomes. `direction_conf`
+        # separated on the live book and was journaled nowhere;
+        # `flat_angle_deg` was computed every tick and never reached the regime
+        # object; the pusher's SHORT lines were captured and truncated. This is
+        # the same class, caught before shipping rather than after.
+        # Falls back to the strategy's own value (sweep sets one directly), so
+        # a strategy with a better local read is not overwritten by a generic
+        # proximity grade.
+        level_strength    = (float(getattr(signal, "level_strength", 0.0) or 0.0)
+                             or ((ctx.get("level_near") or (None, 0.0, 0))[1]
+                                 if isinstance(ctx, dict) else 0.0)),
+        swept_level_name  = (getattr(signal, "swept_level_name", "") or
+                             ((ctx.get("level_near") or ("", 0, 0))[0]
+                              if isinstance(ctx, dict) else "")),
         # v6.9 (AUDIT F6): a TC.6 record must not claim condor-leg identity —
         # is_condor_leg is what _condor_sibling_open and condor_roll key on,
         # and condor_leg_num=2 on every TC.6 row was data pollution.

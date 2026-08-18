@@ -151,6 +151,7 @@ SWP.8 (2026-08-15) — REFUSAL PATHS PROMOTED TO INFO.
 import logging
 from typing import Optional
 
+from analysis.level_grade import grade_level as _grade_level
 from strategy.base_strategy import BaseOptionsStrategy, OptionsSignal
 from config import SWEEP_SETUP_FLOOR, SWEEP_SETUP_FLOOR_SHORT   # SWP.2
 from analysis.regime_classifier import RegimeState   # v3.3: `Regime` no longer
@@ -385,7 +386,17 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         _lvl_name = getattr(sweep, "swept_named_level", "") or ""
         _touches  = getattr(getattr(sweep, "pool", None), "touch_count", 0) or 0
         signal.swept_level_name = _lvl_name
-        signal.level_strength   = min(1.0, (0.6 if _lvl_name else 0.2) + min(_touches, 4) * 0.1)
+        # ── Level.1 (2026-08-18) — GRADE BY TYPE, NOT BY A DEAD COUNTER ──
+        # The old formula was
+        #   min(1.0, (0.6 if named else 0.2) + min(touch_count,4)*0.1)
+        # and **`touch_count` IS A CONSTANT** — named pools hardcode it to 1
+        # at creation and nothing increments it (44,450 of 44,890 ticks read
+        # exactly 1). So it collapsed to 0.7 or 0.3: a boolean wearing a
+        # float's clothing, which is why the column measured 94% ties on TWO
+        # unique values and looked like a null.
+        # LIQ.6 (08-15) put the RUNG IN THE NAME and FEED.2 (08-17) made ON
+        # High/Low real, so there is finally something to grade on.
+        signal.level_strength   = _grade_level(_lvl_name)
         # N.3 2026-07-31 — closes_beyond AT ENTRY. The liquidity mapper computes
         # it (v1.3 reclaim rule) and shadow/registry gates on it, but it never
         # reached a trade row — so "did sweeps with more closes beyond the level
@@ -499,7 +510,17 @@ class SweepReversalStrategy(BaseOptionsStrategy):
         _lvl_name = getattr(sweep, "swept_named_level", "") or ""
         _touches  = getattr(getattr(sweep, "pool", None), "touch_count", 0) or 0
         signal.swept_level_name = _lvl_name
-        signal.level_strength   = min(1.0, (0.6 if _lvl_name else 0.2) + min(_touches, 4) * 0.1)
+        # ── Level.1 (2026-08-18) — GRADE BY TYPE, NOT BY A DEAD COUNTER ──
+        # The old formula was
+        #   min(1.0, (0.6 if named else 0.2) + min(touch_count,4)*0.1)
+        # and **`touch_count` IS A CONSTANT** — named pools hardcode it to 1
+        # at creation and nothing increments it (44,450 of 44,890 ticks read
+        # exactly 1). So it collapsed to 0.7 or 0.3: a boolean wearing a
+        # float's clothing, which is why the column measured 94% ties on TWO
+        # unique values and looked like a null.
+        # LIQ.6 (08-15) put the RUNG IN THE NAME and FEED.2 (08-17) made ON
+        # High/Low real, so there is finally something to grade on.
+        signal.level_strength   = _grade_level(_lvl_name)
 
         # ── Confluence ────────────────────────────────────────────────────────
         self._add_confluence(signal,
