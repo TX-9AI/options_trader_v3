@@ -1,5 +1,22 @@
 """
-data/candle_feed.py  addendum v3.14 (see below); original header follows.
+data/candle_feed.py  addendum v3.15 (see below); original header follows.
+v3.15  2026-08-18  TERM.1: read_chain_subs UNIONS AUXILIARY TENORS.
+        Every chain snapshot to date carries a SINGLE expiry equal to the
+        session date, so TERM STRUCTURE - the one thing options data says about
+        WHEN the market expects movement rather than how much - is not
+        computable. It also cannot be backfilled.
+        `chain_subs` is CHECK (id = 1), a single row BY DESIGN, so extra
+        expiries ride in a separate `chain_subs_aux` table and are unioned here.
+        The returned `expiry` string still names the FRONT expiry only: every
+        existing caller reads it that way and none of them changes.
+        FAILS OPEN, DELIBERATELY. THIS FUNCTION DECIDES WHAT A LIVE TRADING BOX
+        SUBSCRIBES TO. Missing, stale (>6h), malformed, or dropped mid-run, the
+        front expiry comes back exactly as before - verified against real
+        SQLite in tests/test_tenor_capture.py. Archival enrichment must never
+        cost the bot its own chain.
+        STALENESS BOUND because the session cap is real: v3.1 measured
+        TastyTrade's unpublished limit near ~40 concurrent, and last week's
+        strikes would burn budget for contracts nothing reads.
 v3.14  2026-08-15  FEED.3: PRUNING IS OFF. `PRUNE_KEEP_ROWS=0` by default.
         THE BOUND WAS SIZED FOR THE LIVE LOOP and kept silently constraining
         analytical consumers that arrived later. Twice now: PF.2 found the boxes
@@ -291,6 +308,10 @@ PRUNE_FACTOR      = 4                # legacy; unused while PRUNE_KEEP_ROWS is 0
 # count to re-enable a flat per-(symbol,interval) cap. Kept as a mechanism
 # rather than deleted so it is one env var to reverse, not a code change.
 PRUNE_KEEP_ROWS   = int(os.environ.get("OT_PRUNE_KEEP_ROWS", "0"))
+# TERM.1: an auxiliary-tenor subscription older than this is ignored. Stale
+# strikes burn socket budget against a measured ~40-session cap for contracts
+# nothing reads.
+AUX_MAX_AGE_S     = 6 * 3600
 PRUNE_EVERY_S     = 300
 RECONNECT_MIN_S   = 3
 
@@ -528,16 +549,66 @@ class FeedStore:
 
     # ── v3.4: chain-marks transport ───────────────────────────────────────────
     def read_chain_subs(self):
-        """(expiry, [streamer_symbols]) requested by the bot, or ("", [])."""
+        """(expiry, [streamer_symbols]) requested by the bot, or ("", []).
+
+        ⚠️ TERM.1 (2026-08-18): the returned symbol list is the FRONT expiry
+        UNIONED with any auxiliary tenors. `chain_subs` is `CHECK (id = 1)` — a
+        single row by design — so extra expiries ride in a SEPARATE table and
+        the front-expiry contract is untouched. The returned `expiry` string
+        still names the FRONT expiry only: every existing caller reads it that
+        way and none of them changes.
+
+        ⚠️ FAILS OPEN, DELIBERATELY. A missing, empty or malformed aux table
+        returns the front expiry exactly as before. **This function decides what
+        a live trading box subscribes to** — the auxiliary tenors are archival
+        enrichment and must never be able to cost the bot its own chain.
+        """
         with self._lock:
             row = self.conn.execute(
                 "SELECT expiry, symbols FROM chain_subs WHERE id=1").fetchone()
         if not row:
             return "", []
         try:
-            return row[0] or "", json.loads(row[1] or "[]")
+            expiry = row[0] or ""
+            syms = json.loads(row[1] or "[]")
         except (ValueError, TypeError):
             return "", []
+        try:
+            aux = self._read_chain_subs_aux()
+            if aux:
+                seen = set(syms)
+                for s in aux:
+                    if s not in seen:
+                        seen.add(s)
+                        syms.append(s)
+        except Exception:                                      # noqa: BLE001
+            pass          # archival enrichment never costs the bot its chain
+        return expiry, syms
+
+    def _read_chain_subs_aux(self):
+        """Extra-tenor streamer symbols, or [] if the table is absent/stale.
+
+        ⚠️ STALENESS BOUND. An aux row older than the front expiry's own update
+        is a leftover from a previous session — subscribing to last week's
+        strikes wastes socket budget against a measured ~40-session cap and
+        pollutes `chain_marks` with contracts nothing reads.
+        """
+        cur = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='chain_subs_aux'")
+        if not cur.fetchone():
+            return []
+        cutoff = _time.time() - AUX_MAX_AGE_S
+        rows = self.conn.execute(
+            "SELECT symbols FROM chain_subs_aux WHERE updated_epoch >= ?",
+            (cutoff,)).fetchall()
+        out = []
+        for r in rows:
+            try:
+                out.extend(json.loads(r[0] or "[]"))
+            except (ValueError, TypeError):
+                continue
+        return out
 
     def upsert_chain_quotes(self, rows):
         """rows: (streamer_symbol, bid, ask, epoch) — preserves greeks columns."""
