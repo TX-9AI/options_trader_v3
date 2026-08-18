@@ -1,5 +1,26 @@
 #!/usr/bin/env python3
-# options_trader_v3/warehouse/s3_push.py — v1.8
+# options_trader_v3/warehouse/s3_push.py — v1.9
+# v1.9  2026-08-18  WH.6: THE COUNTER COUNTED PUTS, NOT KEYS - AND THE LEDGER
+#         PERSISTS. Push the same key twice and n reads 2 while S3 holds 1,
+#         FOREVER; a prefix re-pushed once is short for good and the gap only
+#         grows. That produced two days of "warehouse NOT confirmed - data
+#         stranded on box" alarms.
+#         MEASURED 08-18: ten prefixes each short by exactly ONE (1561/1560,
+#         1147/1146, 1260/1259, 2280/2279, 2359/2358, 1961/1960, 1197/1196,
+#         1263/1262, 2046/2045). Listed the bucket directly: shadow/dt=2026-07-24
+#         /sym=META held 1560 and trades/dt=2026-08-17/sym=GS held 33 - exactly
+#         what verify's own LIST said. NOTHING WAS EVER MISSING.
+#         This file's own 07-27 header called it: "wrong counters make the verify
+#         line lie in both directions." There was no evidence until WH.5 stopped
+#         truncating the diagnosis at the log boundary.
+#         FIX: _confirm dedupes by key within the run; `--reconcile` resets the
+#         counters to the live S3 truth for the already-poisoned ledger.
+#         RECONCILE IS EXPLICIT, NEVER AUTOMATIC - self-healing on every verify
+#         would also silently erase a GENUINE loss. A verification that repairs
+#         itself is not a verification.
+#         And the SHORT report now names which signature it sees: a small,
+#         consistent shortfall across many prefixes is counter drift; a varying
+#         one is possible real loss.
 """
 Box-side warehouse pusher — ships locally-written archives to S3.
 
@@ -320,10 +341,34 @@ def acquire_lock(wait_s: int = 0):
             time.sleep(1)
 
 
+_SEEN_KEYS = set()          # WH.6: keys confirmed in THIS process
+
+
 def _confirm(key: str, body: bytes, counters: dict):
-    """Record one confirmed object: bump its prefix counters, flush if due."""
+    """Record one confirmed object: bump its prefix counters, flush if due.
+
+    ⚠️ WH.6 (2026-08-18) — THIS COUNTED PUTS, NOT KEYS, AND THE LEDGER PERSISTS.
+    Push the same key twice and `n` reached 2 while S3 held 1 — **permanently**,
+    because the ledger is saved to disk and the gap can only ever grow. A prefix
+    re-pushed once was short forever.
+    That is what produced two days of *"warehouse NOT confirmed — data stranded
+    on box"* alarms. **Verified 2026-08-18: S3 held 1560 objects for
+    `raw/shadow/dt=2026-07-24/sym=META/` and the LIST agreed — the counter said
+    1561. NOTHING WAS EVER MISSING.** Ten prefixes, ten off-by-ones: the
+    signature of a systematic count error, not of data loss, which scatters.
+    This module's own header called the hazard on 2026-07-27: *"wrong counters
+    make the verify line lie in both directions."* It did.
+
+    ⚠️ THE SET IS PER-PROCESS, NOT PERSISTED. Bounding it by run size keeps it
+    small (a drain pushes hundreds, not the 40k+ objects in history), and the
+    cross-run case is handled by `--reconcile` instead. A persisted key set
+    would be a second ledger with its own drift.
+    """
     prefix = key.rsplit("/", 1)[0] + "/"
     c = counters.setdefault(prefix, {"n": 0, "bytes": 0})
+    if key in _SEEN_KEYS:
+        return                  # same key, same content-hash: S3 has ONE object
+    _SEEN_KEYS.add(key)
     c["n"] += 1
     c["bytes"] += len(body)
     _SINCE_FLUSH[0] += 1
@@ -784,6 +829,37 @@ def _push_chain_tree(s3, ledger, counters, files):
     return pushed, failed
 
 
+def reconcile(s3, bucket: str, counters: dict):
+    """Reset every prefix counter to the live S3 truth. Returns {prefix: (was, now)}.
+
+    ⚠️ EXPLICIT, NEVER AUTOMATIC — and that is a deliberate refusal. Self-healing
+    the counter on every verify would ALSO silently erase a genuine loss: if S3
+    really dropped an object, reconciling would quietly agree with the smaller
+    number and the alarm we built this to raise would never fire again.
+    **A verification that repairs itself is not a verification.**
+
+    So this runs only on `--reconcile`, and only makes sense once a human has
+    established that the objects are actually present — which they were on
+    2026-08-18: LIST said 1560, the bucket held 1560, the counter said 1561.
+    """
+    fixed = {}
+    for prefix in sorted(counters.keys()):
+        n = b = 0
+        try:
+            pg = s3.get_paginator("list_objects_v2")
+            for page in pg.paginate(Bucket=bucket, Prefix=prefix):
+                for o in page.get("Contents", []) or []:
+                    n += 1
+                    b += int(o.get("Size", 0) or 0)
+        except Exception:                                      # noqa: BLE001
+            continue
+        was = int((counters[prefix] or {}).get("n", 0))
+        if was != n:
+            fixed[prefix] = (was, n)
+        counters[prefix] = {"n": n, "bytes": b}
+    return fixed
+
+
 def verify(s3, bucket: str, counters: dict):
     """Reconcile this box's confirmations against what S3 actually holds.
 
@@ -821,6 +897,7 @@ def main(argv=None) -> int:
     argv = argv or sys.argv[1:]
     report = "--report" in argv
     do_verify = "--verify" in argv
+    do_reconcile = "--reconcile" in argv
 
     try:
         if not ENABLED:
@@ -928,6 +1005,35 @@ def main(argv=None) -> int:
                       "OK" if (not short and not total_failed) else "SHORT"))
             for pfx, exp, got in short[:5]:
                 print("  SHORT {} expected>={} got={}".format(pfx, exp, got))
+            # ⚠️ WH.6 — SAY WHICH KIND OF SHORTFALL THIS LOOKS LIKE. A counter
+            # that over-counted duplicate PUTs is short by a SMALL, CONSISTENT
+            # amount on many prefixes; genuine loss scatters. On 2026-08-18 ten
+            # prefixes were each short by exactly ONE and the bucket held every
+            # object — two days of "data stranded" alarms for a fencepost.
+            # The heuristic does not decide anything; it tells the reader which
+            # question to ask first.
+            _gaps = [e - g for _p, e, g in short if g >= 0]
+            if _gaps and max(_gaps) <= 2 and len(short) >= 3:
+                print("  ⚠️ SMALL, CONSISTENT SHORTFALL ON {} PREFIXES (max {}). "
+                      "That is the signature of COUNTER DRIFT, not data loss — "
+                      "duplicate PUTs inflate the ledger permanently. VERIFY "
+                      "with `aws s3 ls <prefix> --recursive | wc -l` and, if the "
+                      "objects are present, run `--reconcile` once."
+                      .format(len(short), max(_gaps)))
+            elif _gaps:
+                print("  ⚠️ SHORTFALL VARIES (max {}) — that is NOT the counter-"
+                      "drift signature. Treat as possible real loss."
+                      .format(max(_gaps)))
+
+        if do_reconcile:
+            _fixed = reconcile(s3, BUCKET, counters)
+            save_ledger(counters, LEDGER_PATH)
+            print("reconcile: {} prefix counter(s) reset to the S3 truth"
+                  .format(len(_fixed)))
+            for _p2, (_was, _now) in sorted(_fixed.items())[:10]:
+                print("  {} {} -> {}".format(_p2, _was, _now))
+            if len(_fixed) > 10:
+                print("  ... and {} more".format(len(_fixed) - 10))
             return 0
 
         if total_pushed or total_failed or report:
