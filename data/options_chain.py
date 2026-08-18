@@ -1,5 +1,23 @@
 """
 data/options_chain.py — Options chain data from TastyTrade SDK.
+v3.3  2026-08-18  TERM.1: publish a NARROW ATM BAND for the weekly and
+        monthly expiries so TERM STRUCTURE becomes computable. Every snapshot
+        to date carried a SINGLE expiry equal to the session date - skew and IV
+        level available, term slope impossible - and chain history cannot be
+        retrieved afterwards, so each day collected single-expiry has no term
+        structure permanently.
+        ~9 STRIKES PER TENOR, NOT A CHAIN. Term structure needs ATM IV out at a
+        date, not walls/GEX/a delta ladder. Full chains x3 would be ~750
+        subs/box against the ~40 concurrent-session cap v3.1 measured - the
+        constraint that removed the per-box streamer entirely - and SPX has
+        already been OOM-KILLED at 419 MB on chain volume. ATM bands are ~270.
+        PLACED AFTER THE CHAIN IS BUILT because spot is not known earlier;
+        `chain.spot_price` is derived from the ATM strike further up, and an
+        earlier call would have banded around 0.0 and published the lowest
+        strikes on the board.
+        WRITES ONLY TO `chain_subs_aux`. `chain_subs` is CHECK (id = 1) and
+        belongs to the bot's own expiry; candle_feed v3.15 unions the aux rows
+        and FAILS OPEN if this never runs or writes garbage.
 v3.2 — 2026-07-13 — STORE READER (Option 1b — supersedes v3.1's own streamer).
         Live fleet test of v3.1 measured TastyTrade's unpublished session cap
         near ~40 concurrent: 29 candle-feeds + 29 per-box chain streamers do
@@ -277,6 +295,39 @@ class OptionsChainFetcher:
                 f"calls={len(chain.calls)} puts={len(chain.puts)} "
                 f"spot~=${chain.spot_price:.0f}"
             )
+
+            # ── TERM.1 (2026-08-18) — AUXILIARY TENORS, ARCHIVAL ONLY ────────
+            # Publish a NARROW ATM BAND for the weekly and monthly so TERM
+            # STRUCTURE becomes computable. Every snapshot to date carried a
+            # SINGLE expiry equal to the session date, which leaves skew and IV
+            # level available and the term slope impossible — and chain history
+            # cannot be retrieved afterwards, so a day collected single-expiry
+            # has no term structure permanently.
+            # ⚠️ PLACED HERE, AFTER THE CHAIN IS BUILT, BECAUSE SPOT IS NOT
+            # KNOWN EARLIER. `chain.spot_price` is derived from the ATM strike
+            # further up this function; an earlier call site would have banded
+            # around 0.0 and published the lowest strikes on the board.
+            # ⚠️ ~9 STRIKES PER TENOR, NOT A CHAIN. Term structure needs ATM IV
+            # out at a date — not walls, GEX or a delta ladder. Full chains x3
+            # would be ~750 subs/box against the ~40 concurrent-session cap
+            # v3.1 measured (the constraint that removed the per-box streamer
+            # entirely), and SPX has already been OOM-KILLED at 419 MB on chain
+            # volume. ATM bands are ~270 and clear both.
+            # ⚠️ WRITES ONLY TO `chain_subs_aux`. `chain_subs` is CHECK (id = 1)
+            # and belongs to the bot's own expiry; nothing here can change what
+            # the trading path subscribes to, and candle_feed v3.15 fails open
+            # if this never runs or writes garbage.
+            try:
+                from analysis.tenor_publish import publish_aux_tenors
+                _aux = publish_aux_tenors(_feed_db_path(), chain_map,
+                                          float(chain.spot_price or 0),
+                                          target_date)
+                if _aux:
+                    logger.info("[tenor] aux ATM bands: %s",
+                                ", ".join(f"{k}={v}" for k, v in _aux.items()))
+            except Exception:                                  # noqa: BLE001
+                pass          # archival enrichment never touches the chain path
+
             return chain
 
         except Exception as e:

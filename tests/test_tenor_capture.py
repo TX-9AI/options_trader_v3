@@ -127,3 +127,77 @@ def test_the_trading_path_survives_every_aux_failure(tmp_path):
     c.execute("DROP TABLE chain_subs_aux")
     c.commit()
     assert len(s.read_chain_subs()[1]) == 2, "a dropped table must not raise"
+
+
+# ── TERM.1 part 2 — the publisher ──────────────────────────────────────────
+
+class _Opt:
+    def __init__(self, k, tag="X"):
+        self.strike_price = k
+        self.streamer_symbol = f".{tag}{k}"
+
+
+def test_the_atm_band_self_scales_across_underlyings():
+    """⚠️ NEAREST-BY-DISTANCE, NOT A FIXED DOLLAR WIDTH. A $5 band is most of
+    the tradeable range on a $76 symbol and a rounding error on a $7,700 one —
+    the same scaling error the pitchfork and butterfly work both hit."""
+    from analysis.tenor_publish import _band_symbols
+    for spot, step in ((600.0, 1.0), (6000.0, 25.0), (76.0, 0.5)):
+        opts = [_Opt(spot + i * step) for i in range(-15, 16)]
+        assert len(_band_symbols(opts, spot, band=4)) == 9
+
+
+def test_the_front_expiry_is_never_republished(tmp_path):
+    """The bot owns the front expiry via `chain_subs`. Publishing it again as an
+    aux row would double-subscribe it against a hard session cap."""
+    from analysis.tenor_publish import publish_aux_tenors
+    db = str(tmp_path / "s.db")
+    cm = {date(2026, 8, 18): [_Opt(600)], date(2026, 8, 19): [_Opt(600)],
+          date(2026, 9, 18): [_Opt(600)]}
+    out = publish_aux_tenors(db, cm, 600.0, date(2026, 8, 18))
+    assert "2026-08-18" not in out
+    assert set(out) == {"2026-08-19", "2026-09-18"}
+
+
+def test_rolled_off_tenors_are_pruned(tmp_path):
+    """⚠️ A tenor that rolls off leaves a row naming strikes that no longer
+    exist, and the feed would keep subscribing to them until the 6h staleness
+    bound expired — burning socket budget for contracts nothing reads."""
+    from analysis.tenor_publish import publish_aux_tenors
+    db = str(tmp_path / "s.db")
+    publish_aux_tenors(db, {date(2026, 8, 19): [_Opt(600)],
+                            date(2026, 9, 18): [_Opt(600)]},
+                       600.0, date(2026, 8, 18))
+    publish_aux_tenors(db, {date(2026, 8, 26): [_Opt(600)],
+                            date(2026, 9, 18): [_Opt(600)]},
+                       600.0, date(2026, 8, 25))
+    c = sqlite3.connect(db)
+    rows = {r[0] for r in c.execute("SELECT expiry FROM chain_subs_aux")}
+    assert "2026-08-19" not in rows
+
+
+def test_the_publisher_never_raises_into_the_trading_loop(tmp_path):
+    """⚠️ THIS RUNS ON A LIVE BOX. A failure must cost archival data and
+    nothing else."""
+    from analysis.tenor_publish import publish_aux_tenors
+    db = str(tmp_path / "s.db")
+    for path, cm, spot in (("/proc/nope/s.db", {date(2026, 8, 19): [_Opt(600)]}, 600.0),
+                           (db, {}, 600.0),
+                           (db, {date(2026, 8, 19): [_Opt(600)]}, 0.0),
+                           (db, {date(2026, 8, 18): [_Opt(600)]}, 600.0),
+                           (db, {date(2026, 8, 19): [object()]}, 600.0)):
+        assert publish_aux_tenors(path, cm, spot, date(2026, 8, 18)) == {}
+
+
+def test_chain_subs_is_never_written_by_the_publisher(tmp_path):
+    """`chain_subs` is CHECK (id = 1) and belongs to the bot's own expiry."""
+    from analysis.tenor_publish import publish_aux_tenors
+    db = str(tmp_path / "s.db")
+    publish_aux_tenors(db, {date(2026, 8, 19): [_Opt(600)],
+                            date(2026, 9, 18): [_Opt(600)]},
+                       600.0, date(2026, 8, 18))
+    c = sqlite3.connect(db)
+    names = {r[0] for r in c.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "chain_subs_aux" in names
+    assert "chain_subs" not in names
