@@ -100,6 +100,24 @@ class RegimeState:
     trend_conviction:   float = 0.0
     structure_sequence: str   = "NEUTRAL"
     sweep_recent:       bool  = False
+
+    # ── STR.2 (2026-08-18) — THE ANGLE WAS COMPUTED AND DISCARDED ───────────
+    # ⚠️ FIVE STRATEGIES ALREADY READ THIS: orb, butterfly, continuation and
+    # sweep (x2) all do `signal.flat_angle_deg = getattr(regime,
+    # 'flat_angle_deg', 0.0)`. **RegimeState had no such attribute**, so all
+    # five took the default and `trades.flat_angle_deg` came back 100% tied on
+    # ONE unique value — which the separation probe read as a measured zero.
+    # The quantity is real and already produced: `regime_confluence.
+    # flat_angle_deg()` runs on every RANGING/COMPRESSION evaluation and the
+    # result lands in the breakdown dict as `{"angle": ...}`. Computed,
+    # recorded in the evidence, and never carried to the consumer — the same
+    # shape as `direction_conf`, which separated on the live book and was
+    # journaled nowhere.
+    # ⚠️ NEGATIVE MEANS "NOT COMPUTED", not "flat". A default of 0.0 would be
+    # indistinguishable from a genuinely flat tape, which is precisely the
+    # confusion that produced this bug — 0.0 degrees IS the flattest possible
+    # reading. -1.0 cannot be mistaken for a measurement.
+    flat_angle_deg:     float = -1.0
     sweep_age_bars:     int   = 999
     vix_regime:         str   = "UNKNOWN"
 

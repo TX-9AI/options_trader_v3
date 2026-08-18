@@ -1,5 +1,21 @@
 """
-main.py — options_trader v6.14
+main.py — options_trader v6.15
+v6.15  2026-08-18  STR.2: carry `flat_angle_deg` from the L1 breakdown onto
+        the regime state. FIVE strategies already read `regime.flat_angle_deg`
+        and ALL FIVE took the default, because RegimeState had no such
+        attribute - so trades.flat_angle_deg came back 100% tied on ONE unique
+        value and the separation probe read it as a measured zero.
+        The quantity was never missing: regime_confluence.flat_angle_deg() runs
+        on every RANGING/COMPRESSION evaluation and lands in the breakdown as
+        {"angle": ...}. COMPUTED, RECORDED IN THE EVIDENCE, NEVER DELIVERED -
+        the same shape as `direction_conf`. Third instance of that class in a
+        week.
+        THE SENTINEL IS -1.0, NOT 0.0: zero degrees IS the flattest possible
+        reading, so a 0.0 default is indistinguishable from a genuinely flat
+        tape - exactly the confusion that produced the bug.
+        WHY IT MATTERS MOST: the angle is a STRUCTURAL read, not a magnitude
+        one - slope of the recent window in ATR units, the closest thing
+        collected to "is price going anywhere or just rotating".
 v6.14  2026-08-17  P0.3: all seven `regime_ctx` call sites now pass the RAW
         L1 score vector, via `_l1_scores(ctx)` reading `ctx["l1"].scores`
         defensively. Emission only - no gate, no size, no behaviour change.
@@ -1061,6 +1077,29 @@ def run_regime_classification(ctx: dict, trigger: str, state: BotState) -> Regim
                                         closes=closes, atr=atr)
             ctx["l1"] = _l1_res
             evidence = _l1_res.evidence()
+
+            # ── STR.2 (2026-08-18) — CARRY THE ANGLE TO THE CONSUMER ─────────
+            # ⚠️ FIVE STRATEGIES ALREADY READ `regime.flat_angle_deg` and all
+            # five were taking the default, because RegimeState had no such
+            # attribute. `regime_confluence.flat_angle_deg()` computes it on
+            # every RANGING/COMPRESSION evaluation and drops it into the
+            # breakdown as {"angle": ...} — **computed, recorded in the
+            # evidence, never delivered.** Same shape as `direction_conf`.
+            # ⚠️ THE ANGLE IS A STRUCTURAL READ, not a magnitude one: it is the
+            # slope of the recent window in ATR units, which is the closest
+            # thing collected to "is price going anywhere or just rotating."
+            # That is the class the operator reads charts with and the class the
+            # separation probe has never been able to test.
+            try:
+                _bd_all = _l1_res.breakdown or {}
+                for _k in ("RANGING", "COMPRESSION"):
+                    _a = (_bd_all.get(_k) or {}).get("angle")
+                    if _a is not None:
+                        regime.flat_angle_deg = float(_a)
+                        break
+            except Exception:                                  # noqa: BLE001
+                pass          # telemetry must never break the regime path
+
             st = _l2_integ.update(now_utc().timestamp(), evidence)
             # persist the book so a mid-session restart doesn't reset conviction
             try:
