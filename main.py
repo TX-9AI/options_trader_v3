@@ -1,5 +1,22 @@
 """
-main.py — options_trader v6.16
+main.py — options_trader v6.17
+v6.17  2026-08-18  A2.6b: MEASURE the overnight gap instead of inheriting it
+        as an anonymous ATR spike. `atr_series` uses true range with prev_close
+        and the 5m tape is continuous, so a large gap spikes ATR at the open and
+        decays - every consumer sees a volatility number that is partly last
+        night's news and CANNOT TELL WHICH PART. Nowhere was the gap measured
+        as itself.
+        THE ONLY PRE-OPEN DECISION-TIME INPUT IN THE STACK: ADX, conviction,
+        the regime scores and IV skew all need bars from THIS session; the gap
+        is fully formed at 09:30 before a single RTH bar prints.
+        PRIOR DIRECTION COMES FROM LAST TICK'S REGIME, deliberately: `regime` is
+        not bound this early in the tick, and a bare getattr would have raised
+        into the except and pinned prior_dir=0 forever - making gap_class
+        permanently "UNDIRECTED". A silent constant is the failure this whole
+        week has been about.
+        CLASSIFICATION IMPORTED from tests/gap_backfill.py, never
+        reimplemented (7) - and gap_pct is a REAL column with a NULL default,
+        because a gap of exactly zero is a real reading.
 v6.16  2026-08-18  Level.1: GRADED LEVEL STRENGTH, FOR EVERY STRATEGY.
         `level_strength` measured 94% ties on TWO unique values. Two causes,
         both collection defects:
@@ -1014,6 +1031,33 @@ def run_analysis(state: BotState) -> dict:
     # ⚠️ STRUCTURAL, NOT MAGNITUDE: "there is prior-day liquidity half a percent
     # above" is a statement about WHERE PRICE IS, which is the class the
     # operator reads charts with and the class nothing here has ever recorded.
+    # ── A2.6b (2026-08-18) — MEASURE THE GAP, DO NOT INHERIT IT ─────────────
+    # ⚠️ THE ONLY PRE-OPEN DECISION-TIME INPUT IN THE STACK. ADX, conviction,
+    # the regime scores and IV skew all need bars from THIS session to exist;
+    # the overnight gap is fully formed at 09:30 before a single RTH bar prints.
+    # ⚠️ TODAY IT ENTERS ANONYMOUSLY. `atr_series` uses true range with
+    # prev_close and the 5m tape is continuous, so a large gap SPIKES ATR at the
+    # open and decays over the window — every consumer sees a volatility number
+    # that is partly last night's news and cannot tell which part.
+    # Operator, 2026-08-01: "the gaps you see overnight from previous close to
+    # current open are big and meaningful, and they have to be reflected
+    # somewhere."
+    try:
+        from analysis.gap_measure import measure_gap
+        # ⚠️ LAST TICK'S REGIME, DELIBERATELY. `regime` is not bound yet at this
+        # point — classification happens further down the tick — and a bare
+        # `getattr(regime, ...)` would have raised into the except and set
+        # prior_dir=0 forever, making `gap_class` permanently "UNDIRECTED".
+        # A silent constant is exactly the failure this whole week has been
+        # about, so the prior tick's committed direction is used instead: it is
+        # yesterday's trend at the open, which is precisely what CONT/REV means.
+        _prev = getattr(state, "current_regime", None)
+        _dir = getattr(_prev, "trend_direction", "") if _prev else ""
+        _pd = 1 if _dir == "BULLISH" else (-1 if _dir == "BEARISH" else 0)
+        ctx["gap"] = measure_gap(df_5m, prior_dir=_pd)
+    except Exception:                                          # noqa: BLE001
+        ctx["gap"] = None
+
     try:
         from analysis.level_grade import nearest_graded
         _ng = nearest_graded(getattr(liq_map, "pools", None), price)
@@ -1679,6 +1723,10 @@ def _execute_condor_leg(signal: "OptionsSignal", state: BotState,
         level_strength    = (float(getattr(signal, "level_strength", 0.0) or 0.0)
                              or ((ctx.get("level_near") or (None, 0.0, 0))[1]
                                  if isinstance(ctx, dict) else 0.0)),
+        # A2.6b: persist the gap or it is telemetry. Backfillable, so historical
+        # rows can be filled retroactively — unlike everything else this week.
+        gap_pct           = ((ctx.get("gap") or {}).get("gap_pct")
+                             if isinstance(ctx, dict) else None),
         swept_level_name  = (getattr(signal, "swept_level_name", "") or
                              ((ctx.get("level_near") or ("", 0, 0))[0]
                               if isinstance(ctx, dict) else "")),

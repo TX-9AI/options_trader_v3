@@ -240,6 +240,12 @@ class TradeLogger:
         adx_at_entry      REAL DEFAULT 0.0,
         regime_conviction REAL DEFAULT 0.0,
         flat_angle_deg    REAL DEFAULT 0.0,
+        -- A2.6b (2026-08-18): the overnight gap, MEASURED. NULL default, not
+        -- 0.0 -- a gap of exactly zero is a real reading (the market opened
+        -- unchanged) and a numeric default would be indistinguishable from it.
+        -- That confusion is what made flat_angle_deg, level_strength and
+        -- vix_at_entry look like measured nulls rather than empty columns.
+        gap_pct           REAL,
         swept_level_name  TEXT DEFAULT '',
         level_strength    REAL DEFAULT 0.0,
         entry_snapshot    TEXT,
@@ -324,6 +330,7 @@ class TradeLogger:
             ("adx_at_entry",      "REAL DEFAULT 0.0"),   # v-obs: regime context at entry
             ("regime_conviction", "REAL DEFAULT 0.0"),
             ("flat_angle_deg",    "REAL DEFAULT 0.0"),
+            ("gap_pct",           "REAL"),          # A2.6b
             ("swept_level_name",  "TEXT DEFAULT ''"),   # v-obs: swept level kind (sweep postmortems)
             ("level_strength",    "REAL DEFAULT 0.0"),
             # v3.10 — entry-time FVG/structure picture as JSON. NO DEFAULT and
