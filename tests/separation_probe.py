@@ -1,6 +1,23 @@
 #!/usr/bin/env python3
 """
-v1.2 — 2026-08-17 — UNDER-POWERED IS NOT FAILED, AND THE WINDOWS ARE SHOWN.
+v1.3 — 2026-08-17 — THE IV SURFACE. The only genuinely FORWARD-LOOKING input
+    class in the stack: every other primitive here is computed from bars that
+    have already printed, while implied volatility is the market's own PRICED
+    EXPECTATION of what is coming. If the retool's premise is reachable at all,
+    this is the most likely place it lives — and it has never been tested.
+    FEATURES (delta-anchored, not strike-anchored — 25-delta is the same
+    statement about tail pricing on a $76 symbol and a $7,700 one):
+      · IV atm (level) · IV 25d risk-reversal (put IV over call IV; POSITIVE =
+        the market is paying up for downside) · IV skew vs atm.
+    ⚠️ 0DTE ONLY, VERIFIED: every snapshot carries a SINGLE expiry equal to the
+    session date, so calendar skew and term slope are NOT computable and are
+    not attempted.
+    ⚠️ GEX IS NOT RE-DERIVED. `data/gex_data.py` already computes net GEX, the
+    walls and the pin from these same contracts and is a LIVE consumer; a second
+    lineage would violate §7. Only the IV shape — which nothing reads — is new.
+    ⚠️ CORPUS: 21 dates, 117 MB, 07-20 → 08-17, snapshots only for boxes that
+    WOKE. Every trade has one; no cross-sectional read is possible.
+v1.3 — 2026-08-17 — UNDER-POWERED IS NOT FAILED, AND THE WINDOWS ARE SHOWN.
     ⚠️ v1.1 CONFLATED THEM AND PRINTED THE WRONG VERDICT. On the ORB-only run
     every row was n=156-178 against the 200 floor — the criterion NEVER GOT TO
     APPLY — and the tool announced "NOTHING CLEARS -> escalate to new inputs".
@@ -234,7 +251,111 @@ def load_replay_axes(a, wanted=None):
     return idx
 
 
-def candidates(tr, rep):
+CHAIN_DIR = os.path.join(DTP, "chain_snapshots")
+
+
+def load_chain_features(a, wanted):
+    """(date, sym, HH:MM) -> IV-surface features at that snapshot.
+
+    ⚠️ THE ONLY GENUINELY FORWARD-LOOKING INPUT CLASS IN THE STACK. Every other
+    primitive here — conviction, ADX, the six regime scores, `direction_conf` —
+    is computed from bars that have ALREADY PRINTED. **Implied volatility is the
+    market's own priced expectation of what is coming**, not a description of
+    what happened. If the retool's premise is reachable at all, this is the most
+    likely place it lives.
+
+    ⚠️ 0DTE ONLY — NO TERM STRUCTURE. Verified 2026-08-17: every snapshot in
+    `chain_snapshots/<date>/<SYM>.jsonl.gz` carries a SINGLE expiry equal to the
+    session date (QQQ 08-17: 76 snapshots, one expiry). Calendar skew and term
+    slope are therefore NOT computable and are not attempted. What one expiry
+    does give: **strike skew, IV level, and the put/call IV asymmetry.**
+
+    ⚠️ GAMMA/OI IS DELIBERATELY NOT RECOMPUTED. `data/gex_data.py` already
+    derives net GEX, call wall, put wall and the pin from these same contracts,
+    and it is a LIVE consumer. Re-deriving it here would be a second lineage of
+    the same quantity (§7). Only the IV shape — which nothing reads — is new.
+
+    ⚠️ CORPUS: 21 dates, 117 MB, 2026-07-20 → 08-17. Snapshots exist only for
+    boxes that WOKE (15 of 29 on 08-17), so a symbol has features only on days
+    it traded. That is exactly the population this test needs — every trade has
+    a snapshot — but it forbids any cross-sectional read across the fleet.
+    """
+    import gzip
+    out = {}
+    if not os.path.isdir(CHAIN_DIR):
+        return out
+    want_days = {d for d, _s, _t in wanted}
+    for day in sorted(os.listdir(CHAIN_DIR)):
+        if day not in want_days or day in a.exclude_dates:
+            continue
+        for fn in sorted(os.listdir(os.path.join(CHAIN_DIR, day))):
+            sym = fn.split(".")[0]
+            if not any(d == day and s == sym for d, s, _t in wanted):
+                continue
+            try:
+                with gzip.open(os.path.join(CHAIN_DIR, day, fn), "rt") as fh:
+                    for line in fh:
+                        try:
+                            r = json.loads(line)
+                        except Exception:                      # noqa: BLE001
+                            continue
+                        ts = str(r.get("ts_et", ""))
+                        if len(ts) < 16:
+                            continue
+                        key = (day, sym, ts[11:16])
+                        if key not in wanted:
+                            continue
+                        f = _iv_features(r)
+                        if f:
+                            out[key] = f
+            except Exception:                                  # noqa: BLE001
+                continue
+    return out
+
+
+def _iv_features(snap):
+    """Skew and level from one 0DTE snapshot. None if the surface is unusable.
+
+    ⚠️ DELTA-ANCHORED, NOT STRIKE-ANCHORED. A fixed strike offset means
+    different things on a $76 symbol and a $7,700 one; 25-delta is the same
+    statement about tail pricing everywhere. That is why the risk-reversal is
+    the headline feature rather than "IV at spot ± $5".
+    """
+    cs = snap.get("contracts") or []
+    spot = snap.get("underlying") or 0
+    if not cs or spot <= 0:
+        return None
+
+    def near(typ, target):
+        best, bd = None, 9e9
+        for c in cs:
+            if c.get("type") != typ:
+                continue
+            iv, d = c.get("iv"), c.get("delta")
+            if not iv or d is None or iv <= 0:
+                continue
+            dist = abs(abs(float(d)) - target)
+            if dist < bd:
+                best, bd = float(iv), dist
+        return best if bd < 0.15 else None      # refuse a bad anchor match
+
+    atm_c, atm_p = near("C", 0.50), near("P", 0.50)
+    otm_c, otm_p = near("C", 0.25), near("P", 0.25)
+    if atm_c is None and atm_p is None:
+        return None
+    atm = ((atm_c or 0) + (atm_p or 0)) / (int(atm_c is not None)
+                                           + int(atm_p is not None))
+    out = {"IV atm (level)": round(atm, 5)}
+    if otm_p is not None and otm_c is not None:
+        # 25-delta risk reversal: put IV over call IV. POSITIVE = the market is
+        # paying up for downside. A directional statement, priced, before the move.
+        out["IV 25d risk-reversal"] = round(otm_p - otm_c, 5)
+        if atm > 0:
+            out["IV skew vs atm"] = round((otm_p + otm_c) / 2 / atm - 1.0, 5)
+    return out
+
+
+def candidates(tr, rep, chain=None):
     """Every decision-time primitive we can evaluate, per trade.
 
     ⚠️ A `None` here means NOT AVAILABLE for that trade — it is dropped from
@@ -270,6 +391,11 @@ def candidates(tr, rep):
         if tr.get(col) is not None:
             out[name] = tr.get(col)
 
+    # --- IV surface: the only forward-looking class here ------------------
+    cf = (chain or {}).get((tr["_date"], tr.get("symbol"), tr["_hhmm"]))
+    if cf:
+        out.update(cf)
+
     # --- readiness / shadow, if the columns exist -------------------------
     for col, name in (("readiness_grade", "readiness grade"),
                       ("velocity_at_entry", "shadow velocity"),
@@ -302,6 +428,7 @@ def main(argv):
         trades = [t for t in trades if t.get("strategy") == a.strategy]
     wanted = {(t["_date"], t.get("symbol"), t["_hhmm"]) for t in trades}
     rep = load_replay_axes(a, wanted)
+    chain = load_chain_features(a, wanted)
 
     print("=" * 94)
     print("SEPARATION PROBE (P0.1) — does anything separate outcomes AT DECISION TIME?")
@@ -311,6 +438,8 @@ def main(argv):
           + (f"   strategy={a.strategy}" if a.strategy else ""))
     print(f"  replay ticks indexed: {len(rep):,}   "
           f"(08-14 excluded; _breakout rows from 08-07 excluded)")
+    print(f"  chain snapshots matched: {len(chain):,}   "
+          f"(0DTE only — no term structure; GEX not re-derived)")
     print("=" * 94)
 
     nf_n = sum(1 for t in trades if t["_nf"])
@@ -322,7 +451,7 @@ def main(argv):
                                             "sess": set(), "win": {}})
     unmatched = 0
     for t in trades:
-        c = candidates(t, rep)
+        c = candidates(t, rep, chain)
         if not c:
             unmatched += 1
             continue

@@ -117,7 +117,23 @@ from 08-07 excluded · n and sessions on every cell · underpowered cells
   by a chain-derived expectation build.
 - **Ambiguous** → say so. An absent measurement is not a null.
 
-**P0.2 — Verify the chain-snapshot corpus** *(read-only, 30 min)*
+**P0.2 — Verify the chain-snapshot corpus — ✅ DONE 2026-08-17. CORPUS HEALTHY,
+FALLBACK VIABLE.** 21 dates, 117 MB, 07-20 → 08-17, per-symbol gzipped jsonl,
+**full per-strike surface: IV, delta, gamma, theta, vega, OI, volume** — 112
+contracts x ~76 snapshots per session.
+⚠️ **Fable's "unharvested and irreplaceable" warning was STALE** — `harvest.py`
+v0.5.1 has pulled these since 07-27.
+⚠️ **0DTE ONLY — no term structure.** Every snapshot carries a single expiry
+equal to the session date, so skew and level are available and calendar slope
+is not.
+⚠️ Snapshots exist only for boxes that WOKE (15 of 29 on 08-17). Every trade has
+one, so the separation test is unaffected; a cross-sectional fleet read is not
+possible.
+**→ folded into P0.1 as `separation_probe` v1.3** rather than kept as a separate
+tool: the IV features belong in the same never-favourable split as everything
+else, judged against the same pre-registered criterion.
+
+*(original scope below)*
 ⚠️ Fable flagged chain snapshots as unharvested and irreproducible — **that is
 stale**: `harvest.py` v0.5.1 has pulled `data/chain_snapshots` to control since
 **2026-07-27**. Confirm what actually landed (dates, size, per-strike IV/greeks
