@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 """
-v1.8 — 2026-08-18 — A THIN WINDOW ABSTAINS, AND THE STRUCTURAL CLASS IS TESTED.
+v1.9 — 2026-08-18 — "UNTESTABLE" IS NOT "UNSTABLE", AND MY OWN FIX PROVED IT.
+    ⚠️ v1.8 ADDED AN ABSTENTION FLOOR AND BROKE THE TEST COMPLETELY. The
+    stability vote only considered `WINDOWS[1:]` (post-LIQ.1 onward), and with
+    the n>=120 floor BOTH of those abstained (n=50, n=27). `signs` came back
+    EMPTY and **every single row printed "unstable"** — including the 764-trade
+    pre-LIQ.1 window, which was excluded from its own stability test.
+    NOW: every window with enough data votes, pre-LIQ.1 included; and when NO
+    window qualifies the verdict says **UNTESTABLE**, not unstable. Reporting an
+    unevaluable clause as a negative finding is the same error as calling an
+    under-powered row a null — twice in one tool, in opposite directions.
+    ALSO: a WINDOW CENSUS is printed, because the underlying fact matters more
+    than the verdict — **the archive has ONE well-populated window.** Any
+    criterion demanding cross-regime stability will reject everything until
+    post-LIQ.6 and post-FEED.2 accumulate real depth.
+v1.9 — 2026-08-18 — A THIN WINDOW ABSTAINS, AND THE STRUCTURAL CLASS IS TESTED.
     (1) ⚠️ MY STABILITY CLAUSE WAS REJECTING REAL SIGNAL. It counted EVERY
         window's sign, and post-LIQ.1 (n=50) and post-FEED.2 (n=27) hold 6% and
         3% of the book — nf/ok arms of roughly 10 vs 17, where a median
@@ -720,8 +734,14 @@ def main(argv):
         # place of it — see the two columns below. The specification error was
         # real (I never checked how much data those windows would hold), but
         # the reader gets both answers and decides.
+        # ⚠️ EVERY WINDOW WITH ENOUGH DATA VOTES — INCLUDING pre-LIQ.1. v1.8
+        # considered `WINDOWS[1:]` only, so with the n>=120 floor BOTH remaining
+        # windows abstained (n=50, n=27), `signs` came back EMPTY, and every
+        # single row printed "unstable". **That is not instability — it is an
+        # UNTESTABLE clause**, and the two words mean opposite things. The
+        # 764-trade pre-LIQ.1 window was excluded from its own stability test.
         signs, signs_all, thin = [], [], []
-        for w, _lo, _hi in WINDOWS[1:]:
+        for w, _lo, _hi in WINDOWS:
             d = b["win"].get(w)
             if d and d["nf"] and d["ok"]:
                 sg = 1 if med(d["ok"]) > med(d["nf"]) else -1
@@ -743,6 +763,10 @@ def main(argv):
         sig = pval is not None and pval < 0.05
         big = delta is not None and abs(delta) >= MIN_DELTA
         base = (gap > 0 and n >= MIN_N and sess >= MIN_SESSIONS and sig and big)
+        # ⚠️ NO QUALIFYING WINDOW = the clause CANNOT BE EVALUATED. Reporting
+        # that as "unstable" states a negative finding the data cannot support —
+        # the same error as calling an under-powered row a null.
+        untestable = len(signs) == 0
         clears_v17 = base and stable_v17 and len(signs_all) >= 2
         # ⚠️ With the thin windows abstaining a primitive may have only ONE
         # voting window left. That is not "stable across >=2" — it is
@@ -752,6 +776,9 @@ def main(argv):
         clears_any = clears or clears_v17
         verdict = ("CLEARS" if clears
                    else "CLEARS*(1 win only)" if unverified
+                   else "CLEARS*(stability UNTESTABLE)" if (base and untestable)
+                   else "UNTESTABLE (no window >= %d)" % MIN_WINDOW_N
+                   if untestable and gap > 0 and sig and big
                    else "under-powered" if (n < MIN_N or sess < MIN_SESSIONS)
                    else "INVERTED" if gap < 0
                    else "unstable" if not stable
@@ -794,6 +821,18 @@ def main(argv):
                 parts.append(f"{w}: {med(d['nf']):.2f}->{med(d['ok']):.2f} "
                              f"(n={len(d['nf'])+len(d['ok'])})")
         print(f"    {k:26} " + " · ".join(parts) if parts else f"    {k:26} (no window had both arms)")
+
+    wcount = collections.Counter()
+    for t in trades:
+        wcount[t["_window"]] += 1
+    print(f"\n  WINDOW CENSUS (why stability may be untestable)")
+    for w, _lo, _hi in WINDOWS:
+        c = wcount.get(w, 0)
+        flag = "votes" if c >= MIN_WINDOW_N else f"ABSTAINS (< {MIN_WINDOW_N})"
+        print(f"    {w:14}{c:>6} trade(s)   {flag}")
+    print("    ⚠️ The archive has ONE well-populated window. Cross-regime")
+    print("       stability is not a thing this data can currently answer, and")
+    print("       a criterion that demands it will reject everything.")
 
     print(f"\n  ⚠️ `v1.7` COLUMN = THE ORIGINAL PRE-REGISTERED VERDICT, kept so the")
     print(f"     post-hoc relaxation is VISIBLE rather than silent. v1.8 lets a")
