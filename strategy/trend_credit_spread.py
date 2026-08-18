@@ -258,10 +258,10 @@ class TrendCreditSpread:
             # `session_high`/`session_low` are still accepted for telemetry and
             # for a future study; they no longer gate.
             if _dir == "BULLISH":
-                side, bound, extreme = "put", orb_high, None
+                side, bound = "put", orb_high
                 direction = "long"
             else:
-                side, bound, extreme = "call", orb_low, None
+                side, bound = "call", orb_low
                 direction = "short"
             if not bound or bound <= 0:
                 logger.warning("[tcs] no opening-range %s — the bound is the "
@@ -281,7 +281,6 @@ class TrendCreditSpread:
             # backwards. Neutralised with a sentinel that can never bind rather
             # than deleted from the shared selector, because that selector is
             # also the condor's and the condor still needs it.
-            min_dist = float("inf") if side == "put" else float("-inf")
 
             # ── PRICE MUST BE OUTSIDE THE RANGE AT ENTRY ─────────────────────
             # The exit calls a close back through the bound INVALIDATION. If
@@ -301,16 +300,60 @@ class TrendCreditSpread:
             bars = cv.bars_left(now, TCS_POP_BAR_MIN, HARD_CLOSE_ET)
 
             contracts = chain.puts if side == "put" else chain.calls
-            short = cv.select_beyond_rail(
-                contracts, side, bound, min_dist, extreme,
-                spot=current_price, sigma=sigma, bars=bars,
-                min_pop=TCS_MIN_POP, max_width_pct=TCS_MAX_QUOTE_WIDTH)
-            if short is None:
+
+            # ── FIRST STRIKE INSIDE THE RANGE (v1.5) ─────────────────────────
+            # The operator names the strike; liquidity does not get to choose it.
+            #   CCS (call): the FIRST strike inside the range from the BOTTOM —
+            #               the lowest strike at/above orb_low. It is the CEILING.
+            #   PCS (put) : the FIRST strike inside the range from the TOP —
+            #               the highest strike at/below orb_high. It is the FLOOR.
+            # The strike must lie INSIDE the opening range, bounded on BOTH
+            # sides. `select_beyond_rail` only ever bounded ONE side (strike >=
+            # rail for a call), so with rail = orb_low every strike from the
+            # first-inside upward qualified and the most-liquid pick drifted
+            # OUTSIDE the range. Observed UNH 2026-08-18: range 395.80–398.69,
+            # it sold 400 — above orb_high entirely. Not a safety problem (the
+            # exit is the ORB bound, not the strike) but a PREMIUM one: 397.50
+            # was the specified strike and collects materially more for the same
+            # structure and the same exit trigger.
+            _lo, _hi = (orb_low, orb_high)
+            _inside = sorted(
+                {float(c.strike) for c in contracts
+                 if _lo is not None and _hi is not None
+                 and _lo <= float(c.strike) <= _hi})
+            if not _inside:
                 logger.info(
-                    "[tcs] no %s strike clears ORB bound %.2f / min-dist %.2f "
-                    "/ POP>=%.2f at %.1f bars — SKIP",
-                    side, bound, min_dist, TCS_MIN_POP, bars)
+                    "[tcs] no strike falls INSIDE the opening range "
+                    "%.2f–%.2f (increments too wide) — SKIP",
+                    _lo or 0.0, _hi or 0.0)
                 return None
+            target = _inside[0] if side == "call" else _inside[-1]
+            short = cv.find_contract_at_strike(contracts, target)
+            if short is None:
+                logger.info("[tcs] first-inside strike %.2f has no contract — SKIP",
+                            target)
+                return None
+
+            # POP still gates. QUOTE-WIDTH DELIBERATELY DOES NOT (operator,
+            # 2026-08-18): "sell the illiquid one if you can get mark or better."
+            # Width was answering the wrong question — execution posts at the
+            # mark and never crosses the spread, so a wide quote costs nothing.
+            # Either it fills at our price or it does not fill, and an unfilled
+            # entry simply re-qualifies on the next tick (main.py returns without
+            # recording a position). Do NOT re-add max_width_pct here as a
+            # "missing safety check"; it silently substituted a DIFFERENT strike
+            # than the one specified, which is how 400 got sold on 2026-08-18.
+            _pop_chk = cv.pop(abs(short.strike - current_price), sigma, bars)
+            if _pop_chk < TCS_MIN_POP:
+                logger.info(
+                    "[tcs] first-inside %s strike %.2f POP %.2f < %.2f at %.1f "
+                    "bars — SKIP", side, short.strike, _pop_chk, TCS_MIN_POP, bars)
+                return None
+            logger.info(
+                "[tcs] strike = first inside range from the %s: %.2f "
+                "(range %.2f–%.2f, %d strike(s) inside)",
+                "bottom" if side == "call" else "top",
+                short.strike, _lo, _hi, len(_inside))
 
             width = self._wing_width()
             long_strike = (short.strike - width if side == "put"
