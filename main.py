@@ -1,5 +1,10 @@
 """
-main.py — options_trader v6.13
+main.py — options_trader v6.14
+v6.14  2026-08-17  P0.3: all seven `regime_ctx` call sites now pass the RAW
+        L1 score vector, via `_l1_scores(ctx)` reading `ctx["l1"].scores`
+        defensively. Emission only - no gate, no size, no behaviour change.
+        A malformed ctx returns None and the axes are simply ABSENT, which is
+        distinguishable downstream from zero; a 0.0 default would not be.
 v6.13  2026-08-17  TCS.4: THE FIRST TC.6 TRADE THAT FORMED CORRECTLY DIED AT
         THE WRITE, AND CRASH-LOOPED A LIVE BOX. `_execute_condor_leg` set
         `is_trend_credit` on the record; `log_entry` INSERTs every record key;
@@ -1847,6 +1852,23 @@ def _condor_leg_open_without_plan() -> bool:
         return True
 
 
+def _l1_scores(ctx):
+    """The RAW Layer-1 score vector for the axis decomposition, or None.
+
+    ⚠️ P0.3 / AX.3 (2026-08-17). `ctx["l1"]` is the scorer result set at
+    `run_regime_classification`; its `.scores` is the vector `regime_axes`
+    decomposes. Reading it defensively here means the seven `regime_ctx` call
+    sites need no plumbing and a missing/blank L1 simply omits the axes rather
+    than raising inside a journal write.
+    """
+    try:
+        r = (ctx or {}).get("l1")
+        sc = getattr(r, "scores", None)
+        return sc if isinstance(sc, dict) and sc else None
+    except Exception:                                          # noqa: BLE001
+        return None
+
+
 def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
     """Try to generate and execute a trade signal."""
     session  = get_session_guard()
@@ -1985,7 +2007,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
                                       outcome="gate_block:afternoon_debit",
                                       signal={"strategy": _nm,
                                               "stage": "pre_dispatch"},
-                                      regime=_sigj.regime_ctx(regime))
+                                      regime=_sigj.regime_ctx(regime, _l1_scores(ctx)))
             except Exception:                                  # noqa: BLE001
                 pass
 
@@ -2176,7 +2198,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
                 if _sigj is not None:
                     try:
                         _sigj.journal("condor_plan",
-                                      regime=_sigj.regime_ctx(regime),
+                                      regime=_sigj.regime_ctx(regime, _l1_scores(ctx)),
                                       plan={"leg1_side": plan.leg1_side,
                                             "call_trigger": round(plan.call_trigger_price, 2),
                                             "put_trigger": round(plan.put_trigger_price, 2),
@@ -2198,7 +2220,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
             if _sigj is not None:
                 try:
                     _sigj.journal("condor_leg",
-                                  regime=_sigj.regime_ctx(regime),
+                                  regime=_sigj.regime_ctx(regime, _l1_scores(ctx)),
                                   leg={"underlying": round(ctx["price"], 2)})
                 except Exception:
                     pass
@@ -2266,7 +2288,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
                     _sigj.journal("disposition",
                                   outcome="gate_block:afternoon_debit",
                                   signal=_sigj.signal_ctx(signal),
-                                  regime=_sigj.regime_ctx(regime))
+                                  regime=_sigj.regime_ctx(regime, _l1_scores(ctx)))
                 except Exception:                              # noqa: BLE001
                     pass
             return
@@ -2277,7 +2299,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
             try:
                 _sigj.journal("disposition", outcome="invalid_signal",
                               signal=_sigj.signal_ctx(signal),
-                              regime=_sigj.regime_ctx(regime))
+                              regime=_sigj.regime_ctx(regime, _l1_scores(ctx)))
             except Exception:
                 pass
         return
@@ -2313,7 +2335,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
                 _sigj.journal("disposition", outcome="sizing_rejected",
                               reason=str(sizing.reject_reason),
                               signal=_sigj.signal_ctx(signal),
-                              regime=_sigj.regime_ctx(regime),
+                              regime=_sigj.regime_ctx(regime, _l1_scores(ctx)),
                               score={"grade": score.grade,
                                      "total": score.score})
             except Exception:
@@ -2377,7 +2399,7 @@ def attempt_new_entry(ctx: dict, regime: RegimeState, state: BotState):
                     _l1_ctx = None
                 _sigj.journal("disposition", outcome="fired",
                               signal=_sigj.signal_ctx(signal),
-                              regime=_sigj.regime_ctx(regime),
+                              regime=_sigj.regime_ctx(regime, _l1_scores(ctx)),
                               l1=_l1_ctx,
                               score={"grade": score.grade,
                                      "total": score.score},

@@ -124,7 +124,7 @@ stale**: `harvest.py` v0.5.1 has pulled `data/chain_snapshots` to control since
 completeness). **This is the fallback input class if P0.1 returns nothing**, and
 it is the only dataset that cannot be reconstructed later.
 
-**P0.3 — AX.3's unbuilt half: emit `direction_conf` onto the journal**
+**P0.3 — AX.3's unbuilt half: emit `direction_conf` onto the journal — ✅ BUILT 2026-08-17** (`signal_journal` + `main`, 7 call sites, log-only; `volatility_conf` rides along, `pair_conf` deliberately excluded as measured-dead)
 `analysis/regime_axes.py:10` records `nf 0.697 / ok 0.885 / gap +0.188 —
 SEPARATES`, and **nothing journals it.** A measured separator that drives
 nothing. Emission is the precondition for testing it forward under the same
