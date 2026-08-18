@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-v1.6 — 2026-08-18 — THE CRITERION NOW MATCHES WHAT IT ADVERTISES.
+v1.7 — 2026-08-18 — TIE RATE AND UNIQUE-VALUE COUNT, because a small Cliff's
+    delta has TWO very different causes and they call for opposite conclusions.
+    Tied pairs count as neither greater nor lesser, so **CROSS-ARM ties deflate
+    delta** — a primitive whose nf and ok arms draw from the SAME values scores
+    near zero however sharply it separates elsewhere. (Ties WITHIN an arm do
+    not: nf pinned at 0.0 against ok pinned at 1.0 scores +0.996.)
+    `direction_conf` came back gap **+0.257** with delta **+0.09** — that is
+    either genuine distributional overlap or a coverage artifact, and the two
+    mean opposite things for the retool. `ties` and `uniq` make it answerable
+    instead of arguable.
+v1.7 — 2026-08-18 — THE CRITERION NOW MATCHES WHAT IT ADVERTISES.
     ⚠️ TWO DEFECTS IN MY OWN PRE-REGISTERED CRITERION, FOUND BY READING THE
     RESULT RATHER THAN THE CODE:
     (1) **"CI-separated" WAS ADVERTISED AND NEVER IMPLEMENTED.** `_wilson` was
@@ -614,8 +624,8 @@ def main(argv):
         return sorted(v)[len(v) // 2] if v else float("nan")
 
     print(f"\n  {'primitive':24}{'n':>6}{'sess':>5}{'nf med':>8}{'ok med':>8}"
-          f"{'gap':>8}{'delta':>7}{'p':>7}  verdict")
-    print("  " + "-" * 88)
+          f"{'gap':>8}{'delta':>7}{'p':>7}{'ties':>6}{'uniq':>6}  verdict")
+    print("  " + "-" * 100)
     results = []
     for k in sorted(vals):
         b = vals[k]
@@ -652,11 +662,26 @@ def main(argv):
                    else "not significant" if not sig
                    else "flat/no separation")
         wtxt = f"{len(signs)} win, {'stable' if stable else 'mixed'}"
+        # ⚠️ TIE RATE — CLIFF'S DELTA IS DILUTED BY TIES AND THAT CAN INVERT
+        # THE READING. Pairs with identical values count as NEITHER greater nor
+        # lesser, so a primitive that sits at exactly 0.0 or 1.0 most of the
+        # time produces a small delta even when it discriminates sharply on the
+        # pairs where it MOVES. `direction_conf` showed gap +0.257 with delta
+        # +0.09 — that is either genuine overlap or heavy tying, and the two
+        # call for opposite conclusions.
+        _uni = len(set(b["nf"]) | set(b["ok"]))
+        _tot = len(b["nf"]) * len(b["ok"])
+        _ties = 0
+        if _tot and _tot <= 4_000_000:      # bounded: this is O(n*m) worst case
+            from collections import Counter as _C
+            _cok = _C(b["ok"])
+            _ties = sum(_cok.get(v, 0) for v in b["nf"])
+        tie_pct = (100.0 * _ties / _tot) if _tot else 0.0
         dtxt = f"{delta:+.2f}" if delta is not None else "  -  "
         ptxt = ("<.001" if (pval is not None and pval < 0.001)
                 else f"{pval:.3f}" if pval is not None else "  -  ")
         print(f"  {k:24}{n:>6}{sess:>5}{mnf:>8.3f}{mok:>8.3f}{gap:>+8.3f}"
-              f"{dtxt:>7}{ptxt:>7}  {verdict}")
+              f"{dtxt:>7}{ptxt:>7}{tie_pct:>6.0f}%{_uni:>6}  {verdict}")
         results.append((k, clears, gap, n, sess))
 
     # per-window detail: a separator that only lives in one window is a
