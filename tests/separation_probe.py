@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-v1.4 — 2026-08-18 — AS-OF JOIN. v1.3 keyed the chain on `HH:MM` EQUALITY and
+v1.5 — 2026-08-18 — SORT KEY. v1.4 crashed on the real corpus with
+    `TypeError: '<' not supported between instances of 'dict' and 'dict'`: a
+    bare `.sort()` on (time, dict) tuples falls through to comparing the DICTS
+    whenever two snapshots share a minute — and they do. **It only fires on a
+    TIE, so my fixture with distinct timestamps passed and the fleet data did
+    not.** Now sorts on the timestamp alone.
+v1.5 — 2026-08-18 — AS-OF JOIN. v1.3 keyed the chain on `HH:MM` EQUALITY and
     threw away ~79% of the data it already had: snapshots land every ~5 minutes
     (76 across a 390-minute session), trades fire at arbitrary minutes, so exact
     matching caught only trades that fired ON a snapshot minute — **183 of 874,
@@ -336,7 +342,13 @@ def load_chain_features(a, wanted):
             # 10:17 the trader knew the 10:15 surface. Taking a LATER snapshot
             # would leak information from after the decision — the exact error
             # this whole retool exists to avoid.
-            per_sym.sort()
+            # ⚠️ SORT ON THE TIMESTAMP ONLY. A bare `.sort()` on (time, dict)
+            # tuples falls through to comparing the DICTS whenever two
+            # snapshots share a minute — which they do — and dicts are not
+            # orderable: `TypeError: '<' not supported between instances of
+            # 'dict' and 'dict'`. It only fires on a tie, so a fixture with
+            # distinct times passes and the real corpus does not.
+            per_sym.sort(key=lambda x: x[0])
             for d_, s_, t_ in wanted:
                 if d_ != day or s_ != sym:
                     continue
