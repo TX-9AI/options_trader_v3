@@ -63,7 +63,7 @@ exits.
 > **Does anything already collected separate favourable from never-favourable
 > trades AT DECISION TIME?**
 
-**P0.1 — `tests/separation_probe.py`** *(build; control-side, read-only)*
+**P0.1 — `tests/separation_probe.py` v1.0 — ✅ BUILT 2026-08-17** *(control-side, read-only; no bake, no box touched)*
 Run the never-favourable split — reusing `axis_crosstab` / `a2_excursion`
 machinery — against **every decision-time primitive**, as-of joined at each
 historical entry stamp:
