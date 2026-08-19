@@ -1,5 +1,21 @@
 #!/usr/bin/env python3
 # v2.8 - 2026-08-15 - `--sweeps` STREAMS TOO. Same fix, before it could bite:
+# v2.10  2026-08-19  SWEEP TIER-B FLOOR. `ok = peak > 0` admitted SUB-NOISE
+#   values: peak printed at 3dp, so 0.0004 displayed as 0.000, passed `> 0`, and
+#   its decay 0.0004 -> 0.0001 satisfied the monotone test. SEVEN of the twelve
+#   top-ranked "TIER-B CANDIDATE" rows read 0.000 with flat profiles - LLY,
+#   AVGO, JPM, IWM, UNH, DIA, XOM - qualifying three orders of magnitude below
+#   anything the engine acts on. THE FILTER WAS CORRECT AND USELESS.
+#   Now `peak >= SWEEP_TIERB_FLOOR` (0.05) at all THREE call sites that shared
+#   the bug, and peak prints at 4dp so a real 0.0004 is distinguishable from a
+#   true zero.
+#   THE FLOOR IS A STATED PRIOR: the smallest peak a reader can SEE decay in the
+#   2dp shape column. NOT tuned to yield a target candidate count - that would
+#   fit the acceptance bar to the data it judges.
+#   MEASURED, 1,564 named-pool sweeps across 27 sessions: only THREE clear it -
+#   JPM 08-12 PDH 0.171 (0.17->0.17->0.00, the one genuine peak-and-decay),
+#   AMZN 08-18 PDL 0.135, CVX 08-17 PDH 0.053. CEILING 0.171 OUT OF 1.0, which
+#   is SWEEP's 0.4% live win rate told from the scorer side, not the gate side.
 # v2.9  2026-08-19  L1.9: WARM DEPTH IS DERIVED FROM THE 1h CAP, and the
 #         missing `1d` timeframe is documented at the call site.
 #         The warm window was hardcoded at 8 prior sessions - sized for the OLD
@@ -210,6 +226,11 @@ _CAP = {tf: TIMEFRAMES[tf]["candles"] for tf in ("5m", "15m", "1h")}
 # ⚠️ DERIVED so the two cannot drift again. A hardcoded warm depth beside a
 # configurable cap is the same defect class as a config below its consumer's
 # threshold — which is what L1.9a just fixed.
+# Smallest SWEEP peak that can be SEEN to decay in the 2dp shape column. A
+# stated prior: NOT tuned to yield a target candidate count, which would fit the
+# acceptance bar to the data it judges.
+SWEEP_TIERB_FLOOR = 0.05
+
 _RTH_1H_BARS_PER_SESSION = 7
 WARM_SESSIONS_DEFAULT = max(
     8, -(-_CAP["1h"] // _RTH_1H_BARS_PER_SESSION) + 3)     # ceil + 3 margin
@@ -790,10 +811,21 @@ def sweep_report(all_recs: List[dict]):
         decays = len(tail) >= 2 and all(
             tail[j] >= tail[j + 1] for j in range(len(tail) - 1)) and tail[-1] < peak
         shape = " -> ".join(f"{v:.2f}" for v in tail[:4])
-        ok = peak > 0 and recl and decays
+        # ⚠️ v2.10 (2026-08-19) — `peak > 0` ADMITTED SUB-NOISE VALUES.
+        # `peak` printed at 3dp, so **0.0004 displayed as 0.000**, passed `> 0`,
+        # and its decay 0.0004 -> 0.0001 satisfied the monotone test. Seven of the
+        # twelve top-ranked "TIER-B CANDIDATE" rows read 0.000 with flat profiles
+        # and were qualifying three orders of magnitude below anything the engine
+        # acts on. THE FILTER WAS CORRECT AND USELESS.
+        # MEASURED, 1,564 named-pool sweeps / 27 sessions: only THREE clear the
+        # floor — JPM 08-12 PDH **0.171** (0.17->0.17->0.00, the one genuine
+        # peak-and-decay), AMZN 08-18 PDL 0.135, CVX 08-17 PDH 0.053. **Ceiling
+        # 0.171 out of 1.0** — SWEEP's 0.4% live win rate, told from the scorer's
+        # side rather than the gate's. THREE call sites shared the bug.
+        ok = peak >= SWEEP_TIERB_FLOOR and recl and decays
         if ok:
             hits += 1
-        print(f"{d:11}{sy:7}{lvl[:21]:22}{rows[0][0]:7}{peak:>7.3f}"
+        print(f"{d:11}{sy:7}{lvl[:21]:22}{rows[0][0]:7}{peak:>8.4f}"
               f"{('yes' if recl else 'no'):>6}{str(rows[0][3] or '-'):>6}   "
               f"{shape}{'   <= TIER-B CANDIDATE' if ok else ''}")
 
@@ -923,9 +955,9 @@ def sweep_report_stream(files, symbol=None):
         decays = (len(tail) >= 2
                   and all(tail[j] >= tail[j + 1] for j in range(len(tail) - 1))
                   and tail[-1] < peak)
-        ok = peak > 0 and recl and decays
+        ok = peak >= SWEEP_TIERB_FLOOR and recl and decays
         hits += 1 if ok else 0
-        print(f"{d:11}{sy:7}{lvl[:19]:20}{rows[0][0]:7}{peak:>7.3f}"
+        print(f"{d:11}{sy:7}{lvl[:19]:20}{rows[0][0]:7}{peak:>8.4f}"
               f"{('yes' if recl else 'no'):>6}   "
               + " -> ".join(f"{v:.2f}" for v in tail[:4])
               + ("   <= TIER-B CANDIDATE" if ok else ""))
@@ -1120,9 +1152,9 @@ def stream_sweeps(files: List[str], symbol: Optional[str],
             decays = (len(tail) >= 2
                       and all(tail[j] >= tail[j + 1] for j in range(len(tail) - 1))
                       and tail[-1] < peak)
-            ok = peak > 0 and recl and decays
+            ok = peak >= SWEEP_TIERB_FLOOR and recl and decays
             hits += 1 if ok else 0
-            L.append(f"{d:11}{sy:7}{lvl[:19]:20}{rows[0][0]:7}{peak:>7.3f}"
+            L.append(f"{d:11}{sy:7}{lvl[:19]:20}{rows[0][0]:7}{peak:>8.4f}"
                      f"{('yes' if recl else 'no'):>6}{str(rows[0][3] or '-'):>6}   "
                      + " -> ".join(f"{v:.2f}" for v in tail[:4])
                      + ("   <= TIER-B CANDIDATE" if ok else ""))
