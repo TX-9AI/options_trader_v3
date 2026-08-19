@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-tests/align_ab.py — v1.0 — 2026-08-19   (L1.12 verification)
+tests/align_ab.py — v1.1 — 2026-08-19   (L1.12 verification)
 
 DID THE FLAG DO ANYTHING, AND WHY IS TRENDING_BEAR SILENT?
 
@@ -138,6 +138,44 @@ def main(argv):
         else:
             print(f"    ⚠️ UNEXPECTED: align run shows {m_a} masked tick(s).")
             print("       `align` must never mask — re-check the mode plumbing.")
+
+    # ── v1.1 — COUNT SCORE DELTAS, NOT MASKS ────────────────────────────────
+    # ⚠️ v1.0 COUNTED THE WRONG THING. It reported how often the ADX branch
+    # masked alignment (145 ticks on QQQ 08-17, 110 on AMD 08-13) and then let
+    # me reason about whether the SCORE moved. **The mask is the mechanism; the
+    # score is the question.** A mask that fires where `align_frac` is already
+    # ~1.0, or where the corroborator sum is already saturated by `mom_val`,
+    # changes the mask count and nothing else.
+    if d_align and d_max and len(d_align) == len(d_max):
+        moved = []
+        for ra, rm in zip(d_align, d_max):
+            sa = (ra.get("scores") or {})
+            sm = (rm.get("scores") or {})
+            for k in ("TRENDING_BULL", "TRENDING_BEAR"):
+                va, vm = sa.get(k) or 0.0, sm.get(k) or 0.0
+                if abs(va - vm) > 1e-9:
+                    moved.append((k, va, vm))
+        print("\n  DID THE SCORE ACTUALLY MOVE?")
+        print(f"    ticks compared: {len(d_align)}")
+        print(f"    TRENDING score differs on: {len(moved)}")
+        if moved:
+            deltas = [abs(a - b) for _k, a, b in moved]
+            deltas.sort()
+            print(f"    |delta|  p50 {deltas[len(deltas)//2]:.4f}   "
+                  f"max {deltas[-1]:.4f}")
+            print("    -> the duplication was COSTING something on this tape.")
+        else:
+            print("    ⚠️ ZERO. The mask fires and the SCORE DOES NOT MOVE.")
+            print("       The duplication is real in the code and INERT here:")
+            print("       either `align_frac` is already ~1.0 where the mask")
+            print("       fires, or `mom_val` (p50 1.000) already saturates the")
+            print("       corroborator sum so alignment cannot shift it.")
+            print("       **That makes L1.12 a correctness cleanup, not a")
+            print("       behaviour fix — and it does NOT justify a bake or a")
+            print("       27-session re-score on its own.**")
+    elif d_align and d_max:
+        print(f"\n  ⚠️ CANNOT COMPARE: {len(d_align)} vs {len(d_max)} ticks. The two")
+        print("     runs must cover the same tape or the pairing is meaningless.")
 
     print("\n" + "=" * 78)
     print("TRENDING_BEAR — 0% ON EVERY MEASURE. WHY?")
