@@ -1,5 +1,22 @@
 #!/usr/bin/env python3
-# v2.7 - 2026-08-15 - `--sweeps` STREAMS TOO. Same fix, before it could bite:
+# v2.8 - 2026-08-15 - `--sweeps` STREAMS TOO. Same fix, before it could bite:
+# v2.9  2026-08-19  L1.9: WARM DEPTH IS DERIVED FROM THE 1h CAP, and the
+#         missing `1d` timeframe is documented at the call site.
+#         The warm window was hardcoded at 8 prior sessions - sized for the OLD
+#         50-bar cap, yielding ~63 1h bars. L1.9a raised the cap to 80, so 8
+#         priors clear the engine's 55-bar minimum but CANNOT FILL THE FRAME: the
+#         replay would have run systematically shallower than live and nothing
+#         would have said so, because tail() silently returns what it has.
+#         Now ceil(cap/7)+3 = 15 sessions -> ~112 bars, which is the "~15-session
+#         rolling window" the roadmap specified.
+#         A HARDCODED WARM DEPTH BESIDE A CONFIGURABLE CAP is the same defect
+#         class as a config below its consumer's threshold - what L1.9a fixed.
+#         AND THE REPLAY HAS NO `1d`. Live blends it at 0.15 (tf_weights 1d 0.15 /
+#         1h 0.20 / 15m 0.30 / 5m 0.35); 55 daily bars cannot come from a
+#         15-session 1m window. The replay's trend vote is therefore a DIFFERENT
+#         BLEND, permanently - and the diary is what L1.6/L1.7 close against.
+#         NOT PAPERED OVER: a synthetic or truncated 1d would make the vote LOOK
+#         complete while carrying a frame the engine would have refused.
 #        a named-pool sweep is RARE, so only the handful of ticks carrying
 #        `breakdown.SWEEP_REVERSAL.named` are kept and memory scales with EVENTS
 #        rather than archive size. A cheap `'"named"' not in line` prefilter
@@ -180,6 +197,22 @@ from config import TIMEFRAMES
 # v2.2 — live's per-timeframe fetch depth, read from config rather than copied,
 # so this can never drift from what data_cache actually requests.
 _CAP = {tf: TIMEFRAMES[tf]["candles"] for tf in ("5m", "15m", "1h")}
+
+# ── L1.9 (2026-08-19) — WARM DEPTH IS DERIVED, NOT A MAGIC NUMBER ────────────
+# The replay resamples 1h from 1m tape at ~7 RTH bars per session, so the number
+# of prior sessions needed to fill a frame is `cap / 7`, rounded up, plus margin.
+# ⚠️ THE OLD DEFAULT OF 8 WAS SIZED FOR THE OLD 50-BAR CAP AND WOULD HAVE GONE
+# SILENTLY SHORT. L1.9a raised `TIMEFRAMES["1h"]` to 80 (the trend engine needs
+# EMA_SLOW+5 = 55 and the config asked for 50, so the 1h vote could never fire).
+# 8 priors yield ~63 1h bars: enough to clear 55, NOT enough to fill 80 — the
+# replay would have run systematically shallower than live and nothing would
+# have said so.
+# ⚠️ DERIVED so the two cannot drift again. A hardcoded warm depth beside a
+# configurable cap is the same defect class as a config below its consumer's
+# threshold — which is what L1.9a just fixed.
+_RTH_1H_BARS_PER_SESSION = 7
+WARM_SESSIONS_DEFAULT = max(
+    8, -(-_CAP["1h"] // _RTH_1H_BARS_PER_SESSION) + 3)     # ceil + 3 margin
 from analysis.regime_confluence import (
     RegimeConfluenceScorer, REGIMES, RANGE_WINDOW_BARS,
     TRENDING_BULL, TRENDING_BEAR, RANGING, BREAKOUT_VOLATILE, COMPRESSION, SWEEP_REVERSAL,
@@ -297,7 +330,7 @@ def _prior_session_1m(path: str, sessions_back: int) -> Optional[pd.DataFrame]:
 
 
 def replay_symbol(path: str, warmup: int, use_v13: bool,
-                  warm_sessions: int = 8) -> Tuple[List[dict], str]:
+                  warm_sessions: int = WARM_SESSIONS_DEFAULT) -> Tuple[List[dict], str]:
     sym = sym_of(path)
     df1m_today = load_ohlc(path)
     if df1m_today is None or len(df1m_today) < warmup + 5:
@@ -349,6 +382,21 @@ def replay_symbol(path: str, warmup: int, use_v13: bool,
         s1h_safe = s1h if not s1h.empty else s5
         try:
             vol = volE.analyze(s5, s1h_safe, price)
+            # ⚠️ L1.9 (2026-08-19) — NO `1d` HERE, AND LIVE HAS IT AT 0.15.
+            # `tf_weights` live is {"1d": 0.15, "1h": 0.20, "15m": 0.30,
+            # "5m": 0.35}. The replay resamples everything from 1m tape and 55
+            # DAILY bars cannot come from a 15-session window — so the replay's
+            # trend vote is computed from a DIFFERENT BLEND than the live
+            # engine's, permanently.
+            # ⚠️ THIS MATTERS BECAUSE THE DIARY IS WHAT L1.6/L1.7 CLOSE AGAINST.
+            # A replay that under-weights the higher timeframe will under-report
+            # TRENDING relative to what the fleet actually saw. Fixing the 1h
+            # starvation (L1.9a) closes the larger half — 1h carries 0.20 to
+            # 1d's 0.15 — but the two engines are not identical and a diary
+            # session should not be read as a live session.
+            # NOT PAPERED OVER: feeding a synthetic or truncated 1d would make
+            # the vote LOOK complete while carrying a frame the engine would
+            # have refused. An absent timeframe is honest; a starved one is not.
             trend = trE.analyze({"1m": s1m, "5m": s5, "15m": s15, "1h": s1h})
             structure = stE.analyze(s5, s15, s1h if not s1h.empty else None, price)
             liq = lqE.analyze(s5, s15, price)
@@ -1114,7 +1162,8 @@ def main():
     ap = argparse.ArgumentParser(description="Layer-1 confluence replay over DXFeed OHLC")
     ap.add_argument("paths", nargs="*", help="CSV files or a data/OHLC/<date>/ directory")
     ap.add_argument("--warmup", type=int, default=20, help="skip first N 1-min bars")
-    ap.add_argument("--warm-sessions", type=int, default=8, dest="warm_sessions",
+    ap.add_argument("--warm-sessions", type=int, default=WARM_SESSIONS_DEFAULT,
+                    dest="warm_sessions",
                     help="prior sessions of same-symbol 1m to prepend so ADX/EMA warm "
                          "from the open (0 = old single-day behaviour). Default 5 "
                          "matches the live feed store's 5m retention (~5 days).")
