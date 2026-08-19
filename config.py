@@ -1,5 +1,12 @@
 """
-config.py — options_trader v4.18
+config.py — options_trader v4.19
+v4.19 — 2026-08-19 — OPERATOR DIRECTION, mirrored from options_trader_smc so
+        the two arms stay comparable: (1) MAX_LOSS_PCT 0.40 -> 0.25, which
+        tightens `stop_hit` (sweep), `hard_stop` (ORB) and the ADOPTED stops
+        via ADOPTED_STOP_PCT. Butterfly (own 0.25), condor
+        (CONDOR_STOP_LOSS_PCT) and continuation (0.15) never read this
+        constant and are unchanged. (2) ORB_BLOCK_RANGING — ORB no longer
+        fires under RANGING.
 v4.18 — 2026-08-14 — TCS_COOLDOWN_MIN retired to 0 (TC.6 no longer reads it);
         TCS_MIN_CREDIT_PCT_WIDTH superseded by the joint EV test.
 v4.17 — 2026-08-14 — TCS_LOSS_GIVEN_BREACH: the credit and POP floors are
@@ -472,7 +479,15 @@ DAILY_LOSS_LIMIT_USD = float(os.environ.get("OT_DAILY_LOSS_LIMIT", str(RISK_PER_
 # ~$250) — set OT_DAILY_LOSS_LIMIT with that in mind. Butterflies keep their
 # own 25% (their 20%-of-max TP can't carry a 40% stop); condors keep
 # CONDOR_STOP_LOSS_PCT. Env-tunable for A/B: OT_MAX_LOSS_PCT=0.25 restores.
-MAX_LOSS_PCT        = float(os.environ.get("OT_MAX_LOSS_PCT", "0.40"))
+# v4.19 (2026-08-19) — TIGHTENED 0.40 -> 0.25 BY OPERATOR DIRECTION. The same
+# change ships to options_trader_smc on the same day: the SMC box and this
+# fleet are an A/B, and moving the floor on one arm only would make every
+# subsequent P&L difference between them unattributable.
+# ⚠️ Supersedes the v2.0 reasoning below, which is left intact because it is
+# the argument this overrules rather than an error.
+# One floored $1000 position now costs ~$250 (was ~$400) — revisit
+# OT_DAILY_LOSS_LIMIT with that in mind.
+MAX_LOSS_PCT        = float(os.environ.get("OT_MAX_LOSS_PCT", "0.25"))
 BUTTERFLY_STOP_LOSS_PCT = 0.25   # pin plays keep the tight floor (see above)
 # Max-loss stop applied to an ADOPTED position (one discovered open at the
 # broker on a LIVE restart with no DB plan). Defaults to the same threshold
@@ -574,6 +589,12 @@ FED_DAY_ORB_BOOST           = 0.20
 # no longer defers its OPEN to the sweep). Set False to restore strict v2 gating
 # (UNKNOWN/sweep block ORB). Every ORB that fires under UNKNOWN is logged with
 # regime=UNKNOWN — labeled tape for the shadow observer.
+# v4.19 (2026-08-19) — ORB IS BLOCKED UNDER RANGING (operator: the conclusive
+# loss leader). A flag rather than a deletion from _orb_ok_regimes, so the
+# decision stays readable, is reversible by env, and the refusal can be
+# JOURNALED — "ORB did not set up" and "ORB was forbidden" must not look the
+# same in the record.
+ORB_BLOCK_RANGING   = os.environ.get("OT_ORB_BLOCK_RANGING", "1") == "1"
 ORB_FIRES_REGARDLESS_OF_REGIME = True
 # When snapping an ORB strike target to the nearest available strike, break
 # toward the "higher" (more ITM / participation) or "lower" (further OTM) delta.

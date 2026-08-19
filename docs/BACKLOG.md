@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.11
+# docs/BACKLOG.md — v5.12
 
 > # ⏸️ PAUSED — 2026-08-17
 >
@@ -6238,7 +6238,23 @@ file: everything above either ✅ or explicitly re-dated below.
   has to say so out loud — the alternative is that every future silent TIER-1
   handler gets waved through on the same reasoning.
 
-## PART 3 — RESOLVED REGISTER (condensed; kept so fixes don't get quietly reverted)
+## PART 3 — RESOLVED REGISTER
+
+- **OPERATOR DIRECTION 2026-08-19 — premium floor 40% -> 25%, and ORB blocked
+  under RANGING.** Both mirrored into `options_trader_smc` the same day: the
+  fork and this fleet are an A/B, and changing a stop or a regime permission on
+  one arm only makes every later difference between them unattributable.
+  main **v6.19** / config **v4.19**. The floor reaches `stop_hit` (sweep),
+  `hard_stop` (ORB) and the ADOPTED stops (via ADOPTED_STOP_PCT); butterfly,
+  condor and continuation never read MAX_LOSS_PCT and are unchanged. ORB's
+  RANGING refusal is JOURNALED as `gate_block:orb_ranging` and implemented as
+  a flag, not a deletion — OT_ORB_BLOCK_RANGING=0 restores the old behaviour
+  exactly. `tests/test_stops_and_orb_ranging.py` asserts the floor as a
+  DECISION (-30% exits, -20% holds) rather than as a constant, and pins the
+  RANGING branch AHEAD of the permissive ORB_FIRES_REGARDLESS_OF_REGIME clause
+  by AST — a block placed after it would be dead code that still reads
+  correctly.
+ (condensed; kept so fixes don't get quietly reverted)
 
 - 🔴 **P0 — run_analysis NameError on every tick (main v6.18, 2026-08-18).**
   v6.16/v6.17 wrote `ctx["gap"]`/`ctx["gap_pct"]`/`ctx["level_near"]` before
