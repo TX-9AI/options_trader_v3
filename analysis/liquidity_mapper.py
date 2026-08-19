@@ -1,5 +1,24 @@
 """
-analysis/liquidity_mapper.py — v4.2 — 2026-08-15 — AUDIT A2: THE INPUT COULD NOT
+analysis/liquidity_mapper.py — v4.3 — 2026-08-15 — AUDIT A2: THE INPUT COULD NOT
+v4.3  2026-08-19  SWP.11: COUNT ACCEPTANCE AFTER THE RECLAIM, NOT DURING
+        THE REJECTION. `window` starts at the SWEEP BAR, and on a high sweep
+        price is BY DEFINITION above the pool there - so the sweep's OWN close
+        counted as "acceptance", and so did every bar of the rejection still
+        working back. THE VETO WINDOW AND THE CONFIRMATION WINDOW WERE THE SAME
+        WINDOW.
+        MEASURED 2026-08-15: `closes_beyond >= 2` blocked 64.5% of named-pool
+        ticks; of 25,792 vetoed ticks post-08-11, 100% WERE RECLAIMED AND 0%
+        WERE GENUINE ACCEPTANCE. SWP.9 measured it at 67% of the 95.9% vetoed.
+        WICKS AND BODIES: a wick is a touch, a close is a decision. Acceptance
+        only means something ONCE PRICE HAS RETURNED - a close beyond AFTER the
+        reclaim means price left again and stayed. Before that it is the move.
+        NOT A BLANKET UNGATE: post-reclaim closes beyond the level still veto,
+        and a test asserts it.
+        ALSO FIXED HERE: the first draft used `_rc_bar` in `closes_beyond`
+        while defining it FOURTEEN LINES LATER - a NameError on every sweep
+        evaluation, the same class as the `ctx` P0 that stopped boxes trading
+        on 08-18. An import check cannot catch it; the tests now EXECUTE the
+        path (WA 21).
 v4.2  2026-08-19  SWP.10: AGE THE SWEEP FROM THE RECLAIM, NOT THE SWEEP BAR.
         `bars_ago` counted from the sweep bar, but the setup IS NOT TRADEABLE
         until price closes back inside. The mapper runs on 5m/15m with
@@ -792,7 +811,30 @@ class LiquidityMapper:
                     # pool, price must CLOSE BACK BELOW it (inside) and hold. Closes
                     # that stay ABOVE the pool are ACCEPTANCE — a breakout, not a sweep.
                     window = range(i, min(i + SWEEP_REJECTION_CANDLES + 1, n))
-                    closes_beyond = sum(1 for k in window if closes[k] > pool.price)
+                    # ── SWP.11 (2026-08-19) — COUNT ACCEPTANCE AFTER THE
+                    # RECLAIM, NOT DURING THE REJECTION. The window starts at
+                    # `i`, the SWEEP BAR — and on a high sweep price is BY
+                    # DEFINITION above the pool at `i`; that is what a sweep is.
+                    # So the sweep bar's own close counted as "acceptance", and
+                    # so did every bar of the rejection still working back.
+                    # **THE VETO WINDOW AND THE CONFIRMATION WINDOW WERE THE
+                    # SAME WINDOW.**
+                    # MEASURED 2026-08-15: `closes_beyond >= 2` blocked 64.5% of
+                    # named-pool ticks, and of 25,792 vetoed ticks post-08-11,
+                    # **100% were reclaimed and 0% were genuine acceptance.**
+                    # SWP.9 put it at 67% of the 95.9% vetoed population.
+                    # ⚠️ WICKS AND BODIES: a wick is a touch, a close is a
+                    # decision. Acceptance is only meaningful ONCE PRICE HAS
+                    # RETURNED — a close beyond AFTER the reclaim means price
+                    # left again and stayed. Before that it is the move itself.
+                    # ⚠️ COMPUTED FIRST — `closes_beyond` below consumes it.
+                    # v4.2 defined this AFTER the use and would have raised
+                    # NameError on every sweep evaluation: the same defect class
+                    # as the `ctx` P0 that stopped boxes trading on 08-18.
+                    _rc_bar = next((k for k in window
+                                    if closes[k] <= pool.price), i)
+                    closes_beyond = sum(1 for k in window
+                                        if k > _rc_bar and closes[k] > pool.price)
                     reclaimed = closes[i] <= pool.price or any(
                         closes[k] <= pool.price for k in window)
                     # ── SWP.10 (2026-08-19) — AGE FROM THE RECLAIM, NOT THE
@@ -808,8 +850,6 @@ class LiquidityMapper:
                     # ⚠️ THIS IS NOT A RECALIBRATION. No constant changes. It
                     # corrects WHAT the age measures; if the median lifts on its
                     # own, SWEEP_HALFLIFE_BARS was never the problem.
-                    _rc_bar = next((k for k in window
-                                    if closes[k] <= pool.price), i)
                     # rejection measured off a close that is actually back INSIDE
                     reject_close = min((closes[k] for k in window
                                         if closes[k] <= pool.price), default=closes[i])
@@ -840,12 +880,16 @@ class LiquidityMapper:
                     # pool, price must CLOSE BACK ABOVE it (inside) and hold. Closes
                     # that stay BELOW the pool are ACCEPTANCE — a breakdown, not a sweep.
                     window = range(i, min(i + SWEEP_REJECTION_CANDLES + 1, n))
-                    closes_beyond = sum(1 for k in window if closes[k] < pool.price)
+                    # SWP.11: acceptance is counted AFTER the reclaim — see the
+                    # high-sweep branch for the measurement and the reasoning.
+                    # SWP.11: computed first — see the high-sweep branch.
+                    _rc_bar = next((k for k in window
+                                    if closes[k] >= pool.price), i)
+                    closes_beyond = sum(1 for k in window
+                                        if k > _rc_bar and closes[k] < pool.price)
                     reclaimed = closes[i] >= pool.price or any(
                         closes[k] >= pool.price for k in window)
                     # SWP.10: age from the reclaim — see the high-sweep branch.
-                    _rc_bar = next((k for k in window
-                                    if closes[k] >= pool.price), i)
                     reject_close = max((closes[k] for k in window
                                         if closes[k] >= pool.price), default=closes[i])
                     rejection_pct = (reject_close - lows[i]) / lows[i]
