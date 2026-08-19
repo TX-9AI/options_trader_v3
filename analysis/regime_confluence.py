@@ -1,4 +1,22 @@
-# analysis/regime_confluence.py — options_trader_v3 — v1.4
+# analysis/regime_confluence.py — options_trader_v3 — v1.5
+# v1.5 2026-08-19  L1.12: TRENDING's CORROBORATOR WAS ITS SOFT-NECESSARY,
+#   PRINTED TWICE.  align_val = max(align_frac, ramp(adx, adx_trend, 35))
+#   against adx_s = ramp(adx, adx_trend - 5, 35): SAME INPUT, SAME UPPER BOUND,
+#   lower bounds 5 apart. TRENDING scored ~ ADX x (w.ADX + w.momentum).
+#   That is the grade-inversion defect one layer down - setup_scorer found
+#   regime_conviction == signal_quality with identical medians AND spreads, and
+#   A-grade lost $8,244 at 1.5x size while B made +$1,893.
+#   MEASURED: align_frac was a CONSTANT 0.67 pool-wide (p25=p50=p95) because the
+#   1h vote never fired (L1.9a: TIMEFRAMES asked 50 bars, engine needs 55) -
+#   0.67 is exactly 2 of 3 timeframes with the third silent. After that fix it
+#   VARIES (QQQ 08-17: 0.67/0.83/1.00), but align_val STILL pegged at 1.0 on
+#   85.9% of ticks because max() takes the ADX branch. Fixing the starvation
+#   produced alignment information the combinator immediately discarded.
+#   WHY DROPPING THE ADX BRANCH IS CORRECT: ADX's PERMISSION role is already
+#   adx_s - when ADX is strong adx_s ~ 1.0 and the trend is admitted on ADX
+#   alone. max() added ADX a SECOND time to BOOST, not to permit.
+#   OT_TREND_ALIGN_MODE=max restores the legacy combinator, so the 27-session
+#   re-score can be run BOTH WAYS and compared rather than argued.
 # v1.4 — 2026-08-08 — THE SPENT MOVE. Operator's spec, stated plainly: "a SPENT
 #         move into a named liquidity pool that gets rejected." The pool
 #         (veto_loc) and the rejection (veto_reclaim + rejq_val) were always
@@ -222,6 +240,10 @@ def _envf(name: str, default: float) -> float:
 FLAT_ANGLE_CUT_DEG   = _envf("FLAT_ANGLE_CUT_DEG", 20.0)   # RANGING/COMPRESSION hard veto: ≥ ⇒ center not flat
 FLAT_ANGLE_SOFT_DEG  = _envf("FLAT_ANGLE_SOFT_DEG", 8.0)    # full flat credit at (CUT − SOFT) = 12°
 RANGE_WINDOW_BARS    = 25     # angle + crossings window (matches tape study)
+# L1.12: "align" (default) uses multi-timeframe agreement ALONE as TRENDING's
+# corroborator; "max" restores the legacy max(align_frac, adx_ramp), which made
+# the corroborator a second copy of the soft-necessary.
+TREND_ALIGN_MODE     = _os.environ.get("OT_TREND_ALIGN_MODE", "align").strip().lower()
 ADX_STRONG_SOLO      = _envf("ADX_STRONG_SOLO", 35.0)   # ADX above which strength carries a trend solo
 SWEEP_HALFLIFE_BARS  = 3.0    # sweep evidence half-life, absent follow-through
 OSC_CROSS_LO         = _envf("OSC_CROSS_LO", 4.0)    # crossings ramp lo (few = pin/coil)
@@ -462,7 +484,36 @@ class RegimeConfluenceScorer:
 
         align_frac = aligned / total
         # v1.3 fix: alignment CORROBORATES marginal ADX; strong ADX forgives it.
-        align_val  = max(align_frac, ramp(adx, self.adx_trend, ADX_STRONG_SOLO))
+        # ── L1.12 (2026-08-19) — THE CORROBORATOR WAS ADX PRINTED TWICE ──────
+        # WAS: max(align_frac, ramp(adx, adx_trend, ADX_STRONG_SOLO))
+        # and the soft-necessary is  ramp(adx, adx_trend - 5, ADX_STRONG_SOLO).
+        # **SAME INPUT, SAME UPPER BOUND, LOWER BOUNDS 5 APART**, so TRENDING
+        # scored roughly ADX x (w.ADX + w.momentum) — ADX multiplied by itself.
+        # That is the grade-inversion defect one layer down: the setup scorer
+        # had `regime_conviction` == `signal_quality` with identical medians AND
+        # spreads, and ~90% of the grade was one column printed twice.
+        #
+        # ⚠️ MEASURED 2026-08-19. `align_frac` was a CONSTANT 0.67 across the
+        # whole pool (p25 = p50 = p95) — the 1h vote never fired because
+        # TIMEFRAMES asked for 50 bars against the engine's 55-bar minimum
+        # (L1.9a). After that fix it VARIES: QQQ 08-17 p25 0.67 / p50 0.83 /
+        # p95 1.00. **But `align_val` still pegged at 1.0 on 85.9% of ticks**,
+        # because the `max()` takes the ADX branch whenever ADX is strong.
+        # Fixing the starvation produced real alignment information that the
+        # combinator immediately threw away.
+        #
+        # ⚠️ WHY DROPPING THE ADX BRANCH IS CORRECT, NOT JUST TIDIER: ADX's
+        # PERMISSION role is already `adx_s`. When ADX is strong `adx_s` ~ 1.0
+        # and the damper stops reducing the score — the trend is admitted on ADX
+        # alone exactly as intended. The `max()` added ADX a SECOND time to
+        # BOOST, not to permit. A corroborator's job is INDEPENDENT evidence.
+        # ⚠️ REVERSIBLE: OT_TREND_ALIGN_MODE=max restores the old combinator, so
+        # the re-score can be run both ways and compared rather than argued.
+        if TREND_ALIGN_MODE == "max":
+            align_val = max(align_frac, ramp(adx, self.adx_trend,
+                                             ADX_STRONG_SOLO))
+        else:
+            align_val = align_frac
 
         # momentum corroborator (primary/5m vote if present; neutral otherwise)
         mom = "FLAT"
