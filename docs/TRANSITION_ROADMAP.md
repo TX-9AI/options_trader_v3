@@ -1,4 +1,42 @@
 # TRANSITION ROADMAP — CONFIRMATORY → ANTICIPATORY
+
+> # 🔵 CLOSED — 2026-08-19. THIS IS A RECORD, NOT A PLAN.
+>
+> **THE QUESTION WAS ANSWERED: NO.** Nothing this system collects separates
+> favourable from never-favourable trades at decision time in an ANTICIPATORY
+> way. `direction_conf` (delta +0.09 at 28% ties — the "only measured survivor"
+> did not survive an effect-size test), the entire 0DTE IV surface, and the
+> backfilled overnight gap all failed. **Only `SETUP` (+0.19) and `ADX` (+0.17)
+> separate, and both are confirmatory-class.**
+>
+> **⚠️ WHAT THIS DOCUMENT IS STILL FOR.** It records what was tested and ruled
+> out, with numbers, so nobody re-litigates a dead primitive. `pair_conf`,
+> `direction_conf`, IV skew, risk-reversal, ATM level, the gap — each has a
+> measurement here, not an opinion.
+>
+> **⚠️ AND THE COLLECTION WORK IT DROVE IS PERMANENT AND NOT YET JUDGED.**
+> `flat_angle_deg` was 100% ties on ONE unique value, `level_strength` 94% on
+> TWO, `vix_at_entry` 58% default-zero — **three columns the probe scored as
+> measured nulls when they were empty columns.** Those, the graded levels, the
+> overnight gap and three IV tenors now populate. **The structural class has
+> never actually been tested**, and `tests/separation_probe.py` remains the way
+> to test it once sessions accumulate. That is a standing option.
+>
+> **THE PROJECT CONTINUES UNDER `docs/ROADMAP.md`** — L1 → L2 → L3 — on the
+> operator's reasoning: a system may lack predictive adaptation and still trade
+> at a respectable P&L if gated and sized properly. **Layer 3 has never been
+> built, so the founding hypothesis has never been tested.** Completing it is
+> the test.
+>
+> **⚠️ THE Q4 SIZING PRECONDITIONS OUTLIVE THIS DOCUMENT** and apply to whatever
+> L3 gates on: separation with direction · selection-clean measurement (LOG-ONLY
+> first, paired with the rejection ledger) · window stability · marginal
+> fee-adjusted-ROI placement · and a payoff structure that tolerates being
+> early. **The grade inversion is what happens when a number sizes trades
+> before clearing them.**
+
+---
+
 **Vertigo Capital · options_trader_v3 + day_trader_pro**
 **Opened 2026-08-17 at `e64da15`. Supersedes ROADMAP.md and BACKLOG.md as the
 governing plan until the gate in Phase 0 is answered.**

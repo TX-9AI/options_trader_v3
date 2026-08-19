@@ -1,20 +1,40 @@
 # ROADMAP.md — options_trader v3: boolean regime gates → conviction-bar gating
 
-> # ⏸️ SUPERSEDED — 2026-08-17. SEE `docs/TRANSITION_ROADMAP.md`.
+> # ▶️ ACTIVE AGAIN — 2026-08-19. This roadmap governs.
 >
-> This roadmap plans the completion of a **confirmatory** engine. That premise
-> is under review: the confidence factor it builds toward confirms moves already
-> made, and **LAYER 3 — the layer that was supposed to gate and size on
-> confidence — is `NOT STARTED. 0%` below.** It was never run.
+> Superseded 08-17 while the retool asked whether an ANTICIPATORY confidence
+> factor could be built from what this system collects. **Phase 0 answered: no.**
+> `direction_conf`, the 0DTE IV surface and the overnight gap all failed on
+> effect size; only `SETUP` (+0.19) and `ADX` (+0.17) separate, and both are
+> confirmatory-class. `docs/TRANSITION_ROADMAP.md` holds that evidence and stays
+> as the record of what was tested and ruled out.
 >
-> **The L1/L2 acceptance work here retains its value** — the invariants,
-> the truth tables, the labeling habit — but **the L2.6 FREEZE IS OFF** and the
-> **go-live sequence is PAUSED**. Freezing Layer 2 would lock in the very
-> quantity the retool exists to replace.
+> **⚠️ THE L2.6 FREEZE IS ON AGAIN, AND WITH A CORRECTION TO WHY IT WAS LIFTED.**
+> It was paused because freezing L2 would "lock in the confirmatory conviction
+> the retool exists to replace." There is no replacement — the anticipatory
+> candidate does not exist in this data. **Freezing a confirmatory L2 is now the
+> correct move, not a compromise**, because L3 needs a stable label to gate on.
 >
-> Layer 3's spec is the one part that survives forward: **L3.4's marginal
-> fee-adjusted-ROI placement is the right way to site a size step** — it simply
-> needs a confidence number that separates outcomes to site it against.
+> **⚠️ AND LAYER 3 IS THE POINT. It has NEVER BEEN BUILT — `NOT STARTED. 0%`
+> below — so the founding gate-and-scale hypothesis has never been TESTED.** A
+> proxy ran instead (grade → 1.5x size) and inverted: A-grade 399 trades
+> **−$8,244**, B-grade 220 trades **+$1,893**. **The premise is untested, not
+> refuted**, and completing L3 is what tests it.
+>
+> **⚠️ L3.4's MARGINAL FEE-ADJUSTED-ROI PLACEMENT IS THE SPEC THAT SURVIVES.**
+> The size step belongs where the top band's fee-adjusted expectancy exceeds the
+> base band's by more than the added risk — not at a quantile. And whatever
+> number it sites against must first clear the preconditions in
+> TRANSITION_ROADMAP §Q4: separation with direction, selection-clean measurement
+> (LOG-ONLY first), window stability, and marginal-ROI placement.
+>
+> **⚠️ FIVE ARCHIVE REGIMES NOW**, for anything touching stops, ORB or levels:
+> pre-LIQ.1 · post-LIQ.1 (08-12) · post-LIQ.6 (08-15) · post-FEED.2 (08-17) ·
+> **post-STOP.1 (08-18: MAX_LOSS_PCT 0.40→0.25 and ORB blocked under RANGING)**.
+> Name the window or the numbers are not comparable.
+>
+> ⬜ The SMC fork is a parallel experiment and is **out of scope for this
+> roadmap.** This project progresses to L3 completion on its own terms.
 
 
 **v2.4 — 2026-08-04 — TC.2's observability precursor is BUILT, not pending** (BACKLOG

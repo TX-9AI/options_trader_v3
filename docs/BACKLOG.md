@@ -1,275 +1,51 @@
-# docs/BACKLOG.md — v5.12
+# docs/BACKLOG.md — v5.13
 
-> # ⏸️ PAUSED — 2026-08-17
+> # ▶️ ACTIVE — UN-PAUSED 2026-08-19
 >
-> **THIS DOCUMENT IS NOT THE GOVERNING PLAN. `docs/TRANSITION_ROADMAP.md` IS.**
+> **THIS IS THE GOVERNING PLAN AGAIN.** The L1 → L2 → L3 sequence resumes and
+> `docs/ROADMAP.md` is no longer superseded.
 >
-> The project's founding premise — infer a pattern *forming*, express it as a
-> confidence factor, and **scale the entry on that confidence** — was never
-> actually run. **Layer 3 is `NOT STARTED. 0%`.** A proxy assembly ran instead
-> (grade → 1.5× size) and **inverted**: A-grade 399 trades **−$8,244**, B-grade
-> 220 trades **+$1,893**. The confidence number this system built **confirms
-> moves that have already happened**: `RGCV.nf` **1.00** vs `.ok` **0.34** in
-> RANGING, 1.00 vs 1.00 in trend.
+> **WHY, stated honestly.** The retool asked whether an ANTICIPATORY confidence
+> factor could be built from what this system collects. Phase 0 ran and the
+> answer was no: `direction_conf` (Cliff's delta +0.09 at 28% ties), the entire
+> 0DTE IV surface, and the backfilled overnight gap all failed on effect size.
+> **Only `SETUP` (+0.19) and `ADX` (+0.17) separate outcomes, and both are
+> confirmatory-class** — the late-reading measures the retool set out to escape.
 >
-> **The premise is UNTESTED, not refuted.** Fable's 2026-08-17 verdict:
-> **RETOOL WITH A NEW CORE** — the lag is *assembled*, not structural.
+> **⚠️ THAT IS NOT THE SAME AS "THE PROJECT DOES NOT WORK."** Operator, 08-19:
+> *"The project might not possess predictive adaptation, but still could
+> possibly trade at a respectable P&L if tuned properly."* A confirmatory engine
+> that gates and sizes well is a viable trading system; it simply is not the
+> anticipatory one the premise imagined. **LAYER 3 HAS NEVER BEEN BUILT
+> (`NOT STARTED. 0%`), so the gate-and-scale hypothesis has never actually been
+> tested.** Completing L3 is what tests it.
 >
-> **⚠️ NOTHING IN THIS FILE IS ABANDONED.** 62 open `[DESK]` items and 198 open
-> squares stay exactly where they are. Work returns **only** by being named in a
-> phase of the transition roadmap — not by being picked up because it was next.
+> **⚠️ THE PROJECT REMAINS VIABLE WHILE THE SMC FORK IS IN TEST & EVALUATION.**
+> That fork is a parallel experiment on QQQ and is explicitly **out of scope
+> here** — do not plan around it, report on it, or treat it as this project's
+> successor. This repo progresses to L3 completion on its own terms.
 >
-> **⚠️ GO-LIVE IS PAUSED.** The Fri Aug 28 anchor evaluated paper P&L of a fleet
-> whose **entry logic is the thing under replacement**. There is no live-cash
-> date until Phase 0's gate answers. **Collection continues; the fleet keeps
-> trading paper.**
+> **⚠️ THE STRUCTURAL COLLECTION WORK WAS NOT WASTED AND IS NOT ABANDONED.**
+> `flat_angle_deg` (was 100% ties on ONE value), `level_strength` (94% on TWO),
+> `vix_at_entry` (58% default-zero), the graded levels, the overnight gap and
+> the three IV tenors are all now populated. **They were never measured before,
+> only assumed dead**, and they remain testable by `tests/separation_probe.py`
+> once sessions accumulate. That is a standing option, not a closed door.
 >
-> **⚠️ NOT PAUSED:** collection · the EOD conductor · the S3 push · the warehouse
-> · **and the exit stack**. Confirmation is CORRECT at exits and they are the
-> measured winners (`orb_trail_stop` 95%/107 · `theta_bleed` 100%/107 ·
-> `continuation_trail` 85%/149). **The retool moves one boundary — the quantity
-> that decides and sizes ENTRIES — and must not touch exits.**
+> **FLEET CHANGES LANDED BY THE OPERATOR 2026-08-18/19, not by this thread:**
+> · **ORB is blocked under RANGING** — the measured cell was 15 trades over 26
+>   sessions at **13% win / −$2,891 / −$192.73 per trade**, the only losing ORB
+>   cell of any size. Journaled refusal, env-reversible.
+> · **`MAX_LOSS_PCT` 0.40 → 0.25 fleet-wide** — a universal hard-stop tightening.
+> · **The trading panel is fixed at 15** (`selector.PANEL`), chosen by trade
+>   count, not P&L.
+> ⚠️ **ALL THREE CHANGE THE POPULATION.** Any measurement spanning 2026-08-18
+>   mixes two different fleets — name the window or the numbers are not
+>   comparable. The archive is now FIVE regimes for anything touching stops or
+>   ORB.
 >
-> **⚠️ AND THE L2.6 FREEZE IS OFF.** Freezing Layer 2 would lock in the
-> confirmatory conviction the retool exists to replace. L1.6/L1.7/L1.9/L1.11 and
-> the 251 TRENDING labeling candidates keep their value and **wait**.
->
-> Entries below this banner remain the historical record and are still the place
-> to look up why anything is the way it is. Read them as history, not as a queue.
-
-
-**Read top-down.** The clock sets the dates, PART 1 is the open schedule in
-accomplishment order — that trajectory is the plan and does not get reshuffled —
-PART 2 is what is parked, PART 3 is what is done, and the document's own history
-sits at the bottom where it belongs.
-
-**TAGS on every open item — grep one to fill a session:**
-`[DESK]` no fleet, no data wait, workable today · `[DESK→DEPLOY]` build now, bake
-Monday · `[DESK·DATA]` blocked only until sessions accrue · `[FLEET]` needs boxes
-up or a deploy window. **DESK is the only bucket effort can move**; the rest
-unblock on the calendar. Earned value: `python3 tests/evm_status.py`.
-
-## PART 0 — THE CLOCK
-
-> **🔴 SUSPENDED 2026-08-13, RESET SAME DAY.** The Sep 8 go-live and the Aug 17
-> deploy Monday below were PAUSED INDEFINITELY on 2026-08-13 pending P&L
-> recovery. The operator then set a NEW anchor the same evening, after the
-> largest single-day behavioural change in the project's history baked to 29/29
-> boxes. **The row that is live is FRI 2026-08-28.** Everything dated Aug 17 or
-> Sep 8 below is HISTORICAL — do not act on it.
->
-> ⬜ **REBASED 2026-08-15:** the anchor's BASIS is now the 08-15 bake, not
-> 08-13. The DATE is unchanged — Mon 08-17 through Fri 08-28 is ten sessions,
-> exactly two trading weeks, all on the current fleet. Aug 28 evaluates **the
-> 08-15 fleet**; it is not an isolation test of the 08-13 changes.
->
-> **THE SEQUENCE (operator, 2026-08-13; basis rebased 2026-08-15):**
-> 1. **Fri Aug 28** — evaluate the paper-P&L impact of the 08-13 changes, once
->    the bugs are worked out. **The two weeks to that date are a MEASUREMENT
->    WINDOW, not a tuning window.**
-> 2. **Resume freezing the L1 dials.** L2 is mostly complete — a few
->    verifications remain; chatter is nearly eliminated.
-> 3. **Then L3.**
-> 4. **Then final trade adjustments + stop-quality evaluation.**
-> 5. **Then live cash, REDUCED SIZE for the first week.**
->
-> ⚠️ **RESIST RE-TUNING ON THE FIRST BAD SESSION.** Most of the 08-13 thresholds
-> are STATED PRIORS, not fits — the 0.70 POP floor, the 0.25 quote width, the
-> 11:00 cutoff. Re-fitting them on the data that motivated them turns an
-> out-of-sample validation into an in-sample one. **The full account of what
-> changed, why, the expected benefit and every tuning knob is in
-> **`docs/HISTORY.md`** (2026-08-13 section).
-> ⬜ POINTER CORRECTED 2026-08-15: this read `docs/FLEET_STATE_2026-08-13.md`,
-> which was DELETED on 08-14 — it violated `docs/README.md`'s rule against
-> per-date state files and its content was folded into HISTORY.md. The clock has
-> been directing readers at a missing file since then.
-
-
-| Anchor | Date | What |
-|---|---|---|
-| Epoch 1 start | **Wed Jul 29** | Epoch 1 began (label was "Today" — stale by 07-30) |
-| Deploy Monday 1 | **Mon Aug 3** | Hard gates (E, F) + friction unification (T.2) + N.2/N.3 captures go live on the fleet, RTH |
-| Deploy Monday 2 | **Mon Aug 17** | THE calibration deploy (level hierarchy, L2.4 priors, L1.6 flat cut, L1.11 ramps) — **L2.6 freeze-candidate window opens** |
-| Freeze declared | **Fri Aug 28 EOD** | L2.6 frozen baseline, if the window ran clean |
-| Deploy Monday 3 | **Mon Aug 31** | L3.3 gate matrix (flagged, paper) + evidence-confirmed sweep changes + N.5 latency telemetry |
-| **GO LIVE** | **Tue Sep 8, RTH** | Tiny size, subset of symbols — live through **Sep 9–11**. TUESDAY, not Monday: the one-week slip lands on Labor Day |
-| Labor Day | Mon Sep 7 | Markets closed — analysis day |
-| Descent notch | Tue Sep 15 | Half size if week 1 was clean |
-| **FULL SIZE** | **Mon Sep 21, RTH** | Late September (contingent on two clean live weeks; raise-back trigger stays armed) |
-
-**⚠️ SLIPPED ONE WEEK, 2026-08-07.** Every anchor from Deploy Monday 2 onward
-moved right by seven days; Epoch 1's past dates did NOT move, so anything already
-overdue stays overdue and the DESK-overdue count keeps its sting. Labor Day is a
-fixed holiday and did not slip — which is why **GO LIVE is TUESDAY Sep 8**, not
-the Monday the arithmetic produced.
-**READ THE NEXT EVM RUN AS A RE-BASELINE, NOT AS RECOVERED SCHEDULE.** PV
-recomputes against these dates, so SPI will jump on the first run after this
-edit. That jump is the plan moving, not work getting done. Pass `--asof`
-explicitly: control is UTC, the desk is Central, so after ~19:00 Central an
-unqualified run briefs tomorrow's PV.
-
-**Honesty note on compression.** ROADMAP L3.4 specifies a 3–6 week bar-placement
-campaign; this calendar does not contain one before go-live. The schedule resolves
-that the way L3.6 already prescribes: go live with **provisional bars set one bucket
-ABOVE the paper crossing, at minimum size**, descend one notch per clean review
-window, and **raise back on the first negative read.** The L3.4 campaign keeps
-running underneath the ramp — Sep 14 full size is the plan, not a promise the data
-can't veto. Any freeze break during Aug 10–21 resets the L2.6 clock and slides
-everything downstream of it.
-
-**Standing daily habits (every session, all epochs):** `label_day.sh` at EOD only
-when overriding auto_label (feeds L1.6/L1.7) · AA-watch: check for any two-sided
-condor firing both legs near-simultaneously · verify the chain-snapshot + journal
-+ regime_log harvest landed (one glance at the completeness manifest, once shipped
-Jul 30).
-
----
-
-## PART 0.5 — DELIVERY LEDGER (added v3.56, 2026-08-04)
-
-**One thread now owns build → test → deploy.** Every archive delivered from it
-ships this file, so the ledger below is the running record of what has actually
-moved and what has not. It exists because EV moves only when the backlog records
-it, and this is now the sole place that record is produced.
-
-**STATUS VOCABULARY — these are three different things and get named separately:**
-`BUILT` = written and proven on the desk · `PUSHED` = on origin, control checkout
-in parity · `BAKED` = live on the fleet boxes. A change that is PUSHED but not
-BAKED is changing nothing about today's data.
-
-| item | built | pushed | baked | evidence |
-|---|---|---|---|---|
-| **WH.11 — report parity** | ✅ 08-16 | ✅ 08-16 | n/a (control-only) | **40 and 41 both MATCH from the warehouse on 2026-08-14.** Three rounds of instrumentation defects first, none in the warehouse. ⚠️ ONE DATE — run `--since 2026-08-13` before severing; `OT_EOD_PULL=0` defensible, not justified |
-| **Menu is data — devtools.sh v1.32** | ✅ 08-16 | ✅ 08-16 | n/a (control-only) | 541→184 lines. Numbers generated at render; registry + functions hold no numbers. `--diff` across the swap: **all labels survive with identical commands.** 16 numbers moved (FIT REPORT 57→42); EMERGENCY STOP still 27. Renumbering is now structurally impossible |
-| **WH.9a — warehouse cost/inventory script** | ✅ 08-16 | ⬜ | n/a (control, read-only) | `warehouse_cost.py` v1.0, 15 checks. **Recommendation: AGAINST compaction (est. <$2/mo total), AGAINST a Glue crawler, Athena gated behind a workgroup scan limit.** ⚠️ versioning with no lifecycle rule is the one line item that grows unbidden |
-| **WH.8 — warehouse reader + the two missing tables** | ✅ 08-16 | ⬜ | ⬜ **s3_push v1.7 needs option 25** | `warehouse_reader.py` v1.0 (23 checks) reproduces the fleet_trades bundle from S3, reusing consolidate_trades' own stats code; **found regime_log + circuit_breaker_events were never pushed**; `--compare` is WH.11's gate. NOT yet run against the real bucket |
-| **WH.14 eval — first EOD assessment** | n/a | n/a | 🗓️ **DUE TUE 08-18** | liquidity_ledger objects landed? `sym=<SYM>_EXT` present under raw/candles/? SHORT boxes repeat night-over-night? is 5s spacing right? **Tuesday not Monday: 08-17 belongs to v4.94 Tier-1, and a backfill anomaly in that window could be the conductor OR any of the eleven unvalidated changes — indistinguishable.** ⬜ DO NOT SEVER (gated on WH.11) |
-| **WH.14 — EOD fills the bucket + liquidity ledger** | ✅ 08-16 | ✅ 08-16 `e98aad8` / `901257e` | ⬜ **s3_push needs option 25** | s3_push v1.6 (88 checks) · eod_backfill v1.3 + suite (17 checks); Telegram on SHORT via existing notify; `OT_EOD_PULL` severable; batches stay sequential |
-| **WH.7 — devtools EMERGENCY STOP fixed** | ✅ 08-16 | ✅ 08-16 `6e4941d` | n/a (control-only) | **PROVEN LIVE 10:53 ET with 2/29 up: HALT → 29/29 stopped in seconds.** Was pinging 29 boxes over SSH first (~5 silent min). 15 checks, safety props pinned BY NAME |
-| **N.7 — entry snapshot capture** | ✅ 08-04 | ✅ 08-04 `0f78329` | ⬜ **Mon Aug 17** | control suite **146 passed / 1 skipped, rc=0** (read 08-04); ALL CANARIES GREEN; PARITY == origin; tree clean |
-| **N.5 — exit ladder latency** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 17** | control suite **158 passed / 1 skipped, rc=0**; ALL CANARIES GREEN |
-| **N.8 — no regime-flip exit on a stale book** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 17** | control suite green, ALL CANARIES GREEN |
-| **W.2a — today's own swallows made audible + the alarm made specific** | ✅ 08-04 | ✅ 08-04 | ⬜ **Mon Aug 17** | silent count back to the 08-03 baseline of **87**; `--since` proven on three cases |
-| **D.1 — bull/bear were the same token in THREE renderers** | ✅ 08-04 | ✅ 08-04 | n/a (report-only) | 16 rows re-rendered on control; ALL CANARIES GREEN |
-| **AV.1 — the pooled gap read, with a legitimacy guard** | ✅ 08-04 | ✅ 08-04 | n/a (offline) | ALL CANARIES GREEN on control |
-| **TC.4b-pre — does the impulse floor hold?** | ✅ v1.3 08-04 | ✅ 08-04 | n/a (offline) | **CONTROL RUN: impulse − control TERMINAL = −0.3% ±2.3%. Dead null.** See below |
-| **PF.V — pitchfork variant sweep (§12 Q2)** | ✅ 08-04 | ✅ 08-04 | n/a (offline) | Answered: no-change. ACCEL/birth andrews 0.22 · mod_schiff 0.67 · schiff 3.61; adverse tine kills 81-97% in ALL THREE |
-| **ORB.1 — ORB was gated by the stale entry block** | ✅ 08-04 | ✅ 08-04 | ✅ **BAKED 08-08** | control suite 216 passed, ALL CANARIES GREEN |
-| **RPT.1 — report rollup (5 fixes, 2 repos)** | ✅ 08-04 | ⬜ | n/a (offline) | otv3 suite **223 passed / 1 skipped**; behavioural proof on all five |
-| **BF.1 — the RTH guard was eating the backfill** | ✅ 08-04 | ✅ | ✅ **BAKED 08-08** | 8/8 guard states proven; 2 sessions of sat-out tape at stake |
-| **BF.2 — guard OFF by default (operator directive)** | ✅ 08-04 | ✅ | ✅ **BAKED 08-08** | v1.4, both modes proven |
-| **BF.3 — THE REAL CAUSE: `--once` hung on the v3.9 RTH gate** | ✅ 08-04 | ✅ 08-04 | ✅ baked | **CONFIRMED WORKING on the box** |
-| **BF.4 — session guard reconfigured: one predicate, guard back ON** | ✅ 08-04 | ✅ | ✅ **BAKED 08-08** | suite 229 passed; 8/8 pull states |
-| **AI.1 — condor approach telemetry on every plan death** | ✅ 08-04 | ✅ 08-04 | ✅ **BAKED 08-08** | 10 tests; item AI becomes answerable |
-| **N.9 — contract telemetry (premium decomposition)** | ✅ 08-04 | ✅ | ✅ **code BAKED 08-08** (was scheduled Mon Aug 17) | suite **247 passed / 1 skipped**; 8 tests; log-only |
-| **RGM.1 probe — RANGING fallback run lengths** | ✅ 08-06 | ⬜ | n/a (offline, read-only) | `tests/rng_probe.py` v1.0; proven on a planted corpus with known run lengths (5/5 runs, histogram, warm-up/mid split, gap classification, implied crossings) before issue. **NOT YET RUN on the real corpus — that run is the deliverable, not this file.** |
-| **RGM.1 — emission-law attribution + counterfactual** | ✅ 08-06 | ⬜ | n/a (offline, read-only) | `tests/emission_law_sweep.py` v1.0; harness **99.9%** faithful against the REAL integrator on a planted one-change world, where the current law gives **141.5 switches/symbol-day** and protect-below-hold gives **1.0** — a cliff, not the delta sweep's slope. **NOT YET RUN on the real corpus.** |
-| **RGM.1 F7 — the emission fix + live A/B** | ✅ 08-06 | ✅ | ✅ **BAKED 08-08** | conviction_integrator **v2.1**, main **v5.5**, `tests/test_emission_protection.py` (7 pass, incl. a v2.0 control that MUST flip), `tests/label_agreement.py` v1.0. Sandbox suite **224 passed / 1 skipped**; 8 collection failures are the missing `tastytrade` SDK and are IDENTICAL at origin HEAD. **Authoritative suite run happens on control as part of the deploy — not yet read.** |
-| **RGM.2 — Layer-1 discrimination census** | ✅ 08-07 | ⬜ | n/a (offline, read-only) | `tests/discrimination_census.py` v1.0; every planted count recovered exactly (101 dead / 50 one-live / 30 tight-gap / 20 wide-gap). **NOT YET RUN on the corpus.** |
-| **RGM.1 F7 — MEASURED END TO END** | ✅ 08-07 | ✅ 08-07 | ✅ **BAKED 08-08** | real-tape A/B on 08-06: **20.8 → 4.2 switches/symbol-day**, `L1 IDENTICAL`, re-emitted baseline 661 on BOTH files (conviction dynamics unchanged). Agreement gate over 19 sessions: TREND modal **63.4→69.1%**, in-family **47.5→57.8%**. Suite 287/rc=0. Evidence archived to `~/evidence_rgm1_20260806/` |
-| **MEM.1 — SPX leak: confirmed and traced** | ✅ 08-07 | ⬜ | ⬜ **needs an RTH run** | two-sample fleet RSS: 14 boxes flat (MU −1.9 MB, NVDA −4.5 MB), **SPX +93.5 MB in 16.4 min = 5.7 MB/min**; QQQ control **+8 KB**. `tests/mem_tracer.py` v1.0 built; diff machinery proven on a planted 10 MB leak. |
-| **SWP.1 — ungate sweep from regime** | ✅ 08-07 tool | ⬜ | ⬜ **needs the floor + a bake** | operator ruling: sweep is an EVENT, not a regime. Fleet log grep confirmed **zero sweep activity 08-07** — every `Sweep strike:` line was CONTINUATION readiness (`target=0.45` = `TR_CONT_TARGET_DELTA`). `tests/sweep_score_dist.py` v1.0 sets the gate floor from the corpus; proven on planted data. |
-| **SWP.1 — THE UNGATING, BUILT** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** | config **v4.2** (`SWEEP_SETUP_FLOOR` 0.05, `OT_SWEEP_SETUP_FLOOR`), main **v5.6**, sweep_reversal_strategy **v3.3**, `tests/test_sweep_ungated.py` 6 pass incl. a PLTR-guard canary. Deliberate-failure test passed. Sandbox suite 231 passed / 1 skipped (7 failures = missing tastytrade SDK, identical at origin HEAD). **Authoritative suite run on control NOT yet read.** |
-| **CNT.1 — continuation under BREAKOUT** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** | config **v4.3** (`CONT_BREAKOUT_DIRECTION`, `CONT_BREAKOUT_MIN_ADX` 25), main **v5.7**, continuation_strategy direction branch, `tests/test_continuation_breakout.py` 6 pass, deliberate-failure test passed. Tagged `trend_continuation_breakout` so it scores separately. Sandbox 237 passed / 1 skipped. |
-| **CNT.2 — insurance gate (BOS blind window)** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** | config **v4.4** (`CONT_INSURANCE_STOP`), exit_engine **v4.14** (gate 2c), `tests/test_insurance_stop.py` 7 pass, deliberate-failure test passed. Sandbox 244 passed / 1 skipped. Arms the already-stamped `underlying_stop` ONLY while `BOSTracker.protected_level is None`. |
-| **RGM.3 — sweep leaves the regime set** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** | conviction_integrator **v2.2**; `INTEGRATED_REGIMES` 6→5, tie-break head SWEEP→BREAKOUT_VOLATILE, RegimeParams row removed. Scorer UNTOUCHED (SWP.1 depends on it). `tests/test_sweep_not_a_regime.py` 6 pass, deliberate-failure verified. Sandbox 250 passed / 1 skipped. |
-| **DRF.1 — trigger-conditioned drift + ORB positive control** | ✅ 08-07 | ⬜ | n/a (offline) | `tests/trigger_drift.py` v1.0; planted proof separated a +0.02%/bar window (ORB Long median +0.200%, 100% positive) from noise (−0.010%) against a null arm at 0.000%, 40/40 triggers matched through the UTC→ET conversion. **NOT YET RUN on the real corpus.** |
-| **SWP.2 + CNT.3 — the two Tier-1 priors** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** | config **v4.5**, sweep_reversal_strategy **v3.4**, continuation branch. `tests/test_tier1_priors.py` 6 pass, deliberate-failure verified. Sandbox 256 passed / 1 skipped. Both are PRIORS carried by mechanism, not fits. |
-| **MEM.2 — in-process tracemalloc** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** (SPX is the only box with OT_MEM_TRACE=1) | `utils/mem_trace.py` v1.0 + main **v5.8**; env-gated `OT_MEM_TRACE`, one bool test per tick when off. mem_tracer v1.1 gets the symbol banner + empty-fetch abort. Sandbox 256 passed / 1 skipped. |
-| **GATE.1 — label_agreement v1.1** | ✅ 08-07 | ⬜ | n/a (offline) | each tag scored over ITS OWN timeframe: TREND whole-session, PIN last hour, BREAKOUT/SWEEP **NOT SCORED** (single-event tags, no breach timestamp). v1.0's PIN 8.9% / BREAKOUT 2.8% / SWEEP 0.0% are RETRACTED. |
-| **L3.2a — rejection ledger** | ✅ 08-07 build | ⬜ | n/a (offline) | `analysis/rejection_ledger.py` v1.0 + 3 tests, deliberate-failure verified. Planted proof: vwap blocking longs into a falling tape → 100% DODGED; rrr blocking shorts → 100% MISSED. **NOT YET RUN on the real journals.** |
-| **SHD.1 — shadow observer data OFF the fleet** | ✅ 08-07 | ⬜ | n/a (offline) | **282,350 records / 188 files / 238 MB / 29 boxes**, pulled for the first time ever (`harvest.py` has no shadow class). `tests/shadow_summary.py` v1.0 built + proven on planted data. **NOT YET RUN on the real pull.** |
-| **AX.1 — the conjunction, codified** | ✅ 08-07 | ⬜ | n/a (pure, gates nothing) | `analysis/regime_axes.py` v1.0 — two-axis decomposition + `pair_conf = min(dir, vol)`. 6 tests, deliberate-failure verified (a mean turns it red). **NOT wired to anything yet — by design.** |
-| **AX.2 — the 3x3 cross-tab + separation test** | ✅ 08-07 | ⬜ | n/a (offline) | `tests/axis_crosstab.py` v1.0. Planted proof: `direction_conf` gap **+0.000** (does not separate) while `pair_conf` gap **+0.800** — the conjunction succeeding where a component fails, detected. **NOT YET RUN on the real book.** |
-| **AX.3 — keep what separated, kill what did not** | ✅ 08-07 | ✅ | ⬜ **NOT the bake — emission was never BUILT** | regime_axes **v1.1** — `pair_conf` marked DEAD in the payload itself (`pair_conf_status`), `direction_conf` (+0.188, n=571) carried forward. 7 tests. **Emission onto the journal is the next step and is NOT built.** |
-| **VW.1 — vwap_orientation reads the journal at last** | ✅ 08-07 | ⬜ | n/a (offline) | **v1.1 path-aware discovery.** The "three renames" diagnosis was WRONG — `_first_key` tested top-level keys only while the journal nests under `readiness.` and `factors.`. Proven on a realistic nested record. |
-| **VW.1b — paths verified against the emitter** | ✅ 08-08 | ⬜ | n/a (offline) | v1.1's path-awareness was necessary but I then GUESSED the paths and found NONE across 39,344 records. Reading `trade_readiness._journal()`: everything is TWO levels deep — `readiness.market.vwap`, `readiness.factors.dir`. |
-| **VW.1c — the event filter, the fourth layer** | ✅ 08-08 | ⬜ | n/a (offline) | v1.3. The whitelist accepted only `scored/fired/entry/entered` — pre-v1.5 names — while the records carrying `readiness.market` are `readiness*`. **11,584 records skipped on 08-06 alone.** Now prefix-matched. |
-| **VW.1d — the join layer, the fifth and final one** | ✅ 08-08 | ⬜ | n/a (offline) | v1.4 — and this time the WHOLE remaining path was traced before patching. v1.3's real run (30,565 undecidable, only TREND_CREDIT_SPREAD in the table, 304 trade rows joined to ZERO) had THREE stacked causes, none of them the filter: (1) `factors.dir` exists on exactly ONE track — TCS (trade_readiness.py:569); the other five journal no direction, so `aligned()` dumped them all into a counter mislabeled "index/NONE side". (2) The trade join compared track slugs (`SWEEP`) to class names (`SweepReversal`) — no key could ever match. (3) TCS, the one decidable strategy, has NO firing engine yet (TC.4), so its 0 trades were arithmetically forced. Fix: per-strategy direction resolver (continuation from label exactly as the emitter's own staged-pick path; condor sides mapped ON MECHANISM — call credit = SHORT exposure, the inverse of the buyer's-eye reading; sweep via `staged.direction` paired to the symbol's last market snapshot ≤120s; butterfly undecidable BY DESIGN), family-normalized trade join with condor legs attributed via setup_type, and undecidable/unjoinable REPORTED BY CAUSE so the counter can never lie again. Reproduced the exact v1.3 symptom on planted data, then proved v1.4 resolves all five families and joins trades. |
-| **VW.1e / RDY.1 — `dir` on every track, at the source** | ✅ 08-08 | ✅ | ✅ **BAKED 08-08** — earlier than planned | **trade_readiness v1.6 — the emitter side of VW.1d, and the reason the ledger needed five versions.** ONE track (`_trend_credit_spread`) journaled a direction and five journaled none; a field with a single writer is indistinguishable from a field nobody needs until a reader depends on it. Each track now stamps `dir` from the source that actually knows: continuation from the trending label (identical to `_staged_pick`'s derivation, so journal and picker cannot drift); **sweep from the LIVE `liq_map.recent_sweep.kind` — the field no offline tool could ever recover**, which is why v1.4 had to pair against staged picks; condor sides from EXPOSURE (**call credit = SHORT**, inverse of the buyer's-eye reading); butterfly explicit `"neutral"`. `""` = no intended side this tick, an honest absence now distinguishable from a missing field. **LOG-ONLY, freeze-safe, no trading-behaviour change.** Ledger **v1.5** PREFERS the emitted field and KEEPS the v1.4 derivation, because no fleet-side change can reach already-banked history. 7 new tests + 4 canaries; deliberate-failure verified (inverting the condor mapping turns the suite red). Suite 339 passed / 1 skipped. **⚠️ FORWARD-ONLY — reaches only sessions after Monday's restart.** |
-| **RGM.5 — the v13 classifier still emits SWEEP_REVERSAL** | ⬜ **OPEN** | ⬜ | n/a | RGM.3 took SWEEP out of the **L2 integrator's** argmax and stopped there. `regime_classifier.py:171` still assigns `SWEEP_REVERSAL` at HIGHEST priority, and `main` falls back to the v13 classifier whenever L2 is not committing — so on fallback ticks the label reappears and the readiness sweep track scores off it (R p50 0.525 on 65 of 11,136 ticks, 2026-08-10). Found while resolving a contradiction between `COMMITTED_SWEEP=0` fleet-wide and a readiness digest showing the track alive: **both were true.** The category error RGM.3 was meant to end survives in a second place. Behavioural for the label, not for dispatch (SWP.1 gates on the setup score). Decide whether the classifier should emit it at all, or whether the fallback path should be narrowed. |
-| **VW.1f — three defects in the ledger, found by reading its own first output** | ⬜ **OPEN** | ⬜ | n/a (offline) | **NEW SCOPE, discovered 08-08 from the first real run — filed rather than fixed on the spot, because the fleet does not depend on it.** (1) **~29 TRADES VANISH SILENTLY:** 304 rows − 40 reported unjoinable (37 ORB, 3 butterfly) = 264 mappable, but only **235 joined** (233 continuation + 2 condor). A trade that maps to a family fine but whose `(symbol, family, direction)` key never matches a signal group is dropped with NO line in "not joinable BY CAUSE" — the exact gap by-cause reporting was built to close. Fix: a MAPPED-BUT-UNMATCHED count. (2) **THE MIXED-ERAS WARNING CRIED WOLF ON ITS FIRST OUTING:** all three dates were pre-bake, and `[era] emitted 9,596` is EXACTLY TCS's own total (7,201 + 2,395) — the split was BY TRACK, not by date, so it told the operator to "split the dates at the bake" when no bake was in range. Fix: warn only when a SINGLE track shows both emitted and derived rows. (3) **THE VERDICT FLOOR TESTS THE WRONG THING:** `tr < 3` on TOTAL trades let a verdict print off a 5-trade arm. Fix: a floor on BOTH arms. Compounding it, the per-group MAJORITY-ALIGNMENT collapse systematically SHRINKS the minority arm — the method minimises the very population the verdict rests on, which belongs in the printed caveat. |
-| **CV.1 — two canary reds at clean HEAD** | ⬜ **OPEN** | ⬜ | n/a (offline) | **Confirmed present on a PRISTINE clone, NOT introduced by any 08-08 delivery.** `check_versions.sh` pins `v5.4 main header current` while `main.py` is at **v5.8**, and one canary expects `tests/condor_plan_lifetime.py`, which **does not exist in the repo**. Consequence is the reason this is an item and not a footnote: the sweep now ends `DONE — 2 CANARY/PARITY FAILURE(S)` on a perfectly clean checkout, so **its own DONE banner has stopped being usable as a gate** — the cried-wolf failure this repo has already paid for once (WORKING_AGREEMENT §17: an alarm that spams is an alarm that gets filtered). Either update the pin to v5.8 and re-point or delete the orphaned canary; both are one-line edits. Left for the operator's call rather than folded silently into another delivery. |
-| **N.7 — ruleset stamp on journal rows** | ✅ 08-07 | ✅ | ✅ **BAKED 08-08** | signal_journal **v1.2**; resolved once at import, `"unknown"` fallback, never a partial hash. 4 tests, deliberate-failure verified. Closes L3.2a's `decision_hash: null` and the 07-29 engine-identity gap. Log-only. |
-| **SLIP — one week right** | ✅ 08-07 | n/a | n/a | FREEZE 08-21→**08-28**, GO-LIVE 08-31→**Tue 09-08** (09-07 is Labor Day), FULL SIZE 09-14→**09-21**. |
-| **RGM.2 census — RUN** | ✅ 08-07 | ✅ 08-07 | n/a (offline) | dead ticks only 4.2% (my tiebreak worry REFUTED); the finding is **41.9% of ticks carry ≤1 live regime** |
-
-**⚠️ TWO READINGS I GOT WRONG ON 2026-08-04, recorded so they are not repeated:**
-1. **The `[L2 c=` vs `[v13]` counts are NOT a same-day measurement.** `bot.log`
-   accumulates across sessions — TSLA's most recent `NOT committing` line was
-   dated **08-03** — so the 11-vs-4 "bimodal split" I read off those counts is
-   an artifact of differing log ages and restart times, not of today's engine
-   mix. **The correct instrument is the `engine` column on `regime_log` inside
-   each box's trades.db** (main v4.8 stamps it; harvest already pulls the DB),
-   scoped by date. That is exactly the filter **W.1** defines, and it is a
-   query, not a grep.
-2. **The stale-block counts alone read as a live counter.** Timestamps showed
-   every block fell in **09:35-09:41 ET** and nothing since. Read timestamps
-   before reading a trend into counts.
-
-**⬜ NEW, SMALL, NOT YET BUILT — the `NOT committing` warning asserts more than
-it checks.** It prints *"This is NOT the designed opening warm-up"* on the
-strength of `df_1m` alone. But the designed opening warm-up has more dimensions
-than the 1-minute frame: `_ranging` returns None until ATR exists, which needs
-`ATR_PERIOD` 5m bars (~75 minutes of session — the 2026-07-25 finding). So at
-09:30:02 with `df_1m=60` the message rules out one cause and announces the
-conclusion for all of them. Every episode this session sat at the bell, counts
-were 0-6 per box, and RECOVER followed — i.e. it IS the open warm-up, via a
-dimension the message does not test. **Reword to name the missing dimensions it
-actually observed rather than asserting a category.** Log-only, one string.
-
-**⬜ N.7's OWN REMAINING STEPS, in order:**
-1. ✅ **Suite result read 2026-08-04: `146 passed, 1 skipped, rc=0`.** Worth
-   keeping the note: the `tail -20` had caught only the `check_versions` tail,
-   and the grep that recovered it ALSO matched the word `failed` inside file
-   headers and changelog prose in the same log — output that renders like a
-   failure while meaning nothing of the kind. `rc=` is the load-bearing token;
-   anchor future greps to the summary line, not to bare words.
-2. **Bake Mon Aug 17** with the calibration deploy (devtools 25 bake-only or 23),
-   verifying commit parity BEFORE restart.
-3. **Verify capture on the first baked session** with the option-14 count — read
-   the PER-BOX line, not the tally. Directional captured with `legs_captured=0`
-   is the ctx regression the absence canary exists for.
-4. **Nothing consumes the column yet.** The bake-off harness is TC.2 work and
-   stays where the roadmap puts it. Do not read the first payloads as a result.
-
-**✅ THE CONDUCTOR TELEGRAM GAP — CLOSED 2026-08-04, VERIFIED ON THE BOX.**
-`UNIT_ENVFILE=1 · ENV_TOKEN=1 · ENV_CHAT=1 · TOKEN_LEN=47 · CHAT_LEN=11`, the
-last `cannot send` in the journal is **Aug 03 20:29:34** (before the AX
-installer was re-run), and the 08-03 conductor's warnings — backfill, swallow
-audit, VWAP ledger, EVM, readiness — all arrived in Telegram at 16:59. Item AX
-worked. Two corrections to my own account of it: it was **fixed in source on
-08-03**, not open, and `grep -c` on the `.env` could not have told a present
-variable from an empty one — the LENGTHS did.
-
----
-
-## PART 0.9 — SATURDAY 2026-08-08 EOD: THE BAKE MOVED, AND THE LEDGER SPOKE (added v4.17)
-
-**THE FLEET WAS BAKED AND RESTARTED ON SATURDAY, NOT MONDAY.** `wake_and_bake
-[full]`: **232 files (8 x 29) synced, `[VERIFY] all 29/29 boxes on 43911e9a3d
-(== origin/main)`, pycache cleared, optionsbot active on all 29**, boxes left
-running by choice. Confirmed independently by an option-14 fan-out: every box
-reports `COMMIT=43911e9 SVC=active/active` and a startup line reading
-`REGIME ENGINE: l2 (L2 import OK) — OT_REGIME_ENGINE=(unset, default L2)`,
-timestamped 20:28-20:30 UTC — i.e. produced BY THIS RESTART, not carried over
-from an earlier boot. That timestamp is the check that matters: a stale line
-would have proven nothing, which is exactly how a green launders itself here.
-
-**`(unset, default L2)` is correct, not a gap.** main v4.7's startup assert
-refuses to boot on an unrecognised engine value, so 29/29 reaching `active`
-already proves the resolved value is legal. And `L2 import OK` proves the module
-LOADS — never that it COMMITS labels. That still needs `[L2 c=...]` tags on
-REGIME lines after Monday's open, the same distinction that hid the dead
-uppercase gate for weeks.
-
-**⇒ CONSEQUENCE FOR EVERY STATISTIC: the basis change is 08-08 EOD.** Monday
-08-10 is simply the first SESSION on the new engine. The check-in list in PART
-0.6 is unchanged; only its premise moved.
-
-### ⚠️ 29 BOXES ARE RUNNING OVER THE WEEKEND — WHAT THAT CHANGES
-Deliberate, and the operator's call. Recorded because it has consequences that
-would otherwise surface as unexplained numbers on Monday.
+> Entries below are the historical record and the place to look up why anything
+> is the way it is.
 - **v5.09 — 2026-08-17 — SWALLOW T1: FIVE SILENT HANDLERS, TWO OF THEM
   FAIL-OPEN.** `trade_logger` v3.15 · `position_manager` v3.4 ·
   `credit_vertical` v1.1. **Behaviour unchanged in all five — only the silence
