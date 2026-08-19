@@ -1,5 +1,22 @@
 """
-analysis/liquidity_mapper.py — v4.1 — 2026-08-15 — AUDIT A2: THE INPUT COULD NOT
+analysis/liquidity_mapper.py — v4.2 — 2026-08-15 — AUDIT A2: THE INPUT COULD NOT
+v4.2  2026-08-19  SWP.10: AGE THE SWEEP FROM THE RECLAIM, NOT THE SWEEP BAR.
+        `bars_ago` counted from the sweep bar, but the setup IS NOT TRADEABLE
+        until price closes back inside. The mapper runs on 5m/15m with
+        SWEEP_REJECTION_CANDLES=3, so confirmation lands 5-20 MINUTES later and
+        `age_decay = 0.5**(age/3)` charged the signal for a delay it could not
+        act inside.
+        MEASURED (SWP.9, 269,027 named rows / 27 sessions): 95.9% hard-vetoed
+        to 0.000 (67% of those by veto_accept); of the 4.1% surviving,
+        age_decay median 0.062 = ~12 bars = ~60 MINUTES, while trend_opp median
+        was 1.000 - age was the SOLE binding damper. Median surviving score
+        ~0.031 against SWEEP_SETUP_FLOOR 0.05: THE SURVIVORS DID NOT CLEAR
+        THEIR OWN DISPATCH FLOOR.
+        NOT A RECALIBRATION. No constant changed - not SWEEP_HALFLIFE_BARS, not
+        the floor. At the observed median the score moves 0.031 -> 0.062, past
+        the floor on the arithmetic alone.
+        Both sweep directions fixed; `bar_index` still records the sweep bar as
+        the diagnostic anchor, `reclaim_bar_index` is new.
         CARRY LIQ.6, AND FOUR SMALLER DEFECTS.
 v4.1 — 2026-08-15 — audit #2 fixes:
         (A2.1) SECTION_LOOKBACK_DAYS=10 read df_5m, which the cache caps at
@@ -195,7 +212,13 @@ class LiquiditySweep:
     rejection_pct:  float   = 0.0
     confirmed:      bool    = False
     bar_index:      int     = 0
-    bars_ago:       int     = 0      # bars since the sweep, in its OWN timeframe
+    reclaim_bar_index: int  = 0      # SWP.10: bar the close returned INSIDE
+    bars_ago:       int     = 0      # SWP.10: bars since the RECLAIM (was: since
+                                     #   the sweep). The setup is not tradeable
+                                     #   until price closes back inside, so aging
+                                     #   from the sweep bar charged the signal
+                                     #   for confirmation latency it could not
+                                     #   act inside.
     timeframe:      str     = ""
     # Was this sweep of a named level? (PDH/PDL/session)
     swept_named_level: str  = ""        # Name of the level swept, if any
@@ -772,6 +795,21 @@ class LiquidityMapper:
                     closes_beyond = sum(1 for k in window if closes[k] > pool.price)
                     reclaimed = closes[i] <= pool.price or any(
                         closes[k] <= pool.price for k in window)
+                    # ── SWP.10 (2026-08-19) — AGE FROM THE RECLAIM, NOT THE
+                    # SWEEP. `bars_ago` counted from bar `i`, the sweep bar, but
+                    # the setup is NOT TRADEABLE until price closes back inside.
+                    # The mapper runs on 5m/15m with SWEEP_REJECTION_CANDLES=3,
+                    # so confirmation lands 5-20 MINUTES after the sweep — and
+                    # `age_decay = 0.5**(age/3)` charged the signal for every
+                    # bar of a delay it had no way to act inside.
+                    # MEASURED (SWP.9, 269,027 named rows): age_decay median
+                    # **0.062**, which solves to ~12 bars = ~60 MINUTES on 5m.
+                    # The median scored sweep was an hour old before scoring.
+                    # ⚠️ THIS IS NOT A RECALIBRATION. No constant changes. It
+                    # corrects WHAT the age measures; if the median lifts on its
+                    # own, SWEEP_HALFLIFE_BARS was never the problem.
+                    _rc_bar = next((k for k in window
+                                    if closes[k] <= pool.price), i)
                     # rejection measured off a close that is actually back INSIDE
                     reject_close = min((closes[k] for k in window
                                         if closes[k] <= pool.price), default=closes[i])
@@ -785,7 +823,8 @@ class LiquidityMapper:
                             rejection_pct=rejection_pct,
                             confirmed=True,
                             bar_index=i,
-                            bars_ago=(n - 1 - i),
+                            reclaim_bar_index=_rc_bar,
+                            bars_ago=(n - 1 - _rc_bar),
                             timeframe=tf,
                             swept_named_level=pool.name if pool.is_named else "",
                             reclaimed=reclaimed,
@@ -804,6 +843,9 @@ class LiquidityMapper:
                     closes_beyond = sum(1 for k in window if closes[k] < pool.price)
                     reclaimed = closes[i] >= pool.price or any(
                         closes[k] >= pool.price for k in window)
+                    # SWP.10: age from the reclaim — see the high-sweep branch.
+                    _rc_bar = next((k for k in window
+                                    if closes[k] >= pool.price), i)
                     reject_close = max((closes[k] for k in window
                                         if closes[k] >= pool.price), default=closes[i])
                     rejection_pct = (reject_close - lows[i]) / lows[i]
@@ -816,7 +858,8 @@ class LiquidityMapper:
                             rejection_pct=rejection_pct,
                             confirmed=True,
                             bar_index=i,
-                            bars_ago=(n - 1 - i),
+                            reclaim_bar_index=_rc_bar,
+                            bars_ago=(n - 1 - _rc_bar),
                             timeframe=tf,
                             swept_named_level=pool.name if pool.is_named else "",
                             reclaimed=reclaimed,
