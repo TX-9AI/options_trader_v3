@@ -1,5 +1,19 @@
 """
-config.py — options_trader v4.19
+config.py — options_trader v4.20
+# v4.20 2026-08-19  L1.9a: TIMEFRAMES["1h"] 50 -> 80 candles. `trend_engine`
+#   refuses to vote below EMA_SLOW+5 = 55 bars and this asked for exactly 50,
+#   so the 1h trend vote COULD NEVER FIRE - and 1h carries 0.20 weight, second
+#   only to 15m. Its "declared weight contributes nothing" warning has been
+#   firing on every box since the engine shipped and was read as transient.
+#   THIS IS WHY L1.6/L1.7 WERE STUCK: the TRENDING row needs RANGING vetoed
+#   through a dominant session, and a permanently missing structure vote
+#   depresses TRENDING and inflates RANGING. TSLA 08-04 had 99% dominance with
+#   RANGING still scoring 64% of ticks. 26 TREND sessions labeled, row still
+#   open. The roadmap called it "habit, not code". It was code.
+#   80 not 55: the minimum is a cliff, not a target. Store holds ~112 RTH 1h
+#   bars (16d x ~7/day) and pruning is OFF.
+#   BLAST RADIUS: df_1h also feeds structure_analyzer (swings + S/R), the
+#   pitchfork, entry_snapshot and the named-level frame. A POPULATION BOUNDARY.
 v4.19 — 2026-08-19 — OPERATOR DIRECTION, mirrored from options_trader_smc so
         the two arms stay comparable: (1) MAX_LOSS_PCT 0.40 -> 0.25, which
         tightens `stop_hit` (sweep), `hard_stop` (ORB) and the ADOPTED stops
@@ -1077,7 +1091,33 @@ TIMEFRAMES = {
     # The history was never missing — the frame was. No new fetch, no new
     # timing, nothing for session_guard to collide with.
     "1d":  {"candles": 60,  "role": "bias"},
-    "1h":  {"candles": 50,  "role": "structure"},
+    # ── L1.9a (2026-08-19) — 50 WAS BELOW THE ENGINE'S OWN REQUIREMENT ──────
+    # ⚠️ `trend_engine` refuses to vote on a timeframe with fewer than
+    # `EMA_SLOW + 5` = **55** bars. This asked for exactly **50**, so the 1h
+    # trend vote could NEVER FIRE — not on a thin day, not after a restart,
+    # NEVER. It is the second-heaviest timeframe in the blend (`tf_weights`
+    # 1d 0.15 · **1h 0.20** · 15m 0.30), and its "declared weight contributes
+    # nothing" warning has been firing on every box since the engine shipped.
+    #
+    # ⚠️ THIS IS WHY L1.6/L1.7 HAVE BEEN STUCK. The TRENDING row needs a session
+    # "dominant ~50% with RANGING vetoed through it". A permanently absent
+    # structure-timeframe vote depresses TRENDING and inflates RANGING — TSLA
+    # 08-04 showed 99% TRENDING dominance with RANGING STILL SCORING ON 64% OF
+    # TICKS and A2 failing at 14%. **26 TREND sessions are already labeled and
+    # the row is still open**: the blocker was never labeling habit, it was that
+    # no session could show the veto while a 0.20-weight vote was missing.
+    #
+    # 80 rather than 55: the minimum is a cliff, not a target — a frame that
+    # only just clears it starves again on any short session. The store holds
+    # ~112 RTH 1h bars (BACKFILL_DAYS 16d x 7/day) and pruning is OFF, so 80 is
+    # comfortably inside supply.
+    #
+    # ⚠️ BLAST RADIUS, STATED: `df_1h` is also read by `structure_analyzer`
+    # (swings + S/R), `pitchfork`, `entry_snapshot` and the named-level frame.
+    # A deeper frame changes what all of them see — more history, arguably more
+    # correct, but DIFFERENT. This is a population boundary; measurements
+    # spanning it are not comparable.
+    "1h":  {"candles": 80,  "role": "structure"},
     # v4.1: 150, not 50. Below EMA_SLOW+5=55 the vote is NEUTRAL; below ~80 the
     # EMA-50 is re-seeded on the tail and materially wrong. See the header.
     "15m": {"candles": 150, "role": "trend"},

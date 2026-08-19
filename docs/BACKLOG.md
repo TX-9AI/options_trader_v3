@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.13
+# docs/BACKLOG.md — v5.14
 
 > # ▶️ ACTIVE — UN-PAUSED 2026-08-19
 >
@@ -46,6 +46,45 @@
 >
 > Entries below are the historical record and the place to look up why anything
 > is the way it is.
+- **🔴 v5.14 — 2026-08-19 — L1.9a: THE 1h TREND VOTE COULD NEVER FIRE, AND THAT
+  IS WHY L1.6/L1.7 WERE STUCK.** `config` v4.20 · 4 tests (117 total).
+
+  `trend_engine` refuses to vote on a timeframe with fewer than `EMA_SLOW + 5`
+  = **55** bars. `TIMEFRAMES["1h"]` asked for exactly **50**. Not a thin-day
+  problem, not a restart problem — **the 1h vote could never fire, on any box,
+  ever.** And 1h is the second-heaviest timeframe in the blend:
+  `tf_weights` 1d 0.15 · **1h 0.20** · 15m 0.30.
+
+  ⚠️ **THE WARNING WAS THERE THE WHOLE TIME AND READ AS TRANSIENT.**
+  *"trend vote STARVED 1h: 50 bars, need 55 (EMA_SLOW+5) — voting NEUTRAL, its
+  declared weight contributes nothing"* appears on every box. It looks like a
+  warm-up message. It is permanent.
+
+  **🔵 WHY THIS UNBLOCKS L1.6/L1.7.** The TRENDING row needs a session
+  *"dominant ~50% with RANGING vetoed through it."* A permanently absent
+  structure-timeframe vote depresses TRENDING and inflates RANGING — **TSLA
+  08-04 showed 99% TRENDING dominance with RANGING STILL SCORING ON 64% OF
+  TICKS** and A2 failing at 14.0%. **26 TREND sessions were already labeled and
+  the row was still open.** The roadmap called the remaining work *"habit, not
+  code."* **It was code.** Labeling more sessions could never have closed it.
+
+  **80, NOT 55.** The minimum is a cliff, not a target: a frame that only just
+  clears it starves again on a short session, a restart or a holiday half-day —
+  silently. The store holds ~112 RTH 1h bars (`BACKFILL_DAYS` 16d × ~7/day) and
+  pruning is OFF, so 80 is comfortably inside supply.
+
+  ⚠️ **BLAST RADIUS, STATED RATHER THAN DISCOVERED.** `df_1h` also feeds
+  `structure_analyzer` (swings + S/R), the pitchfork, `entry_snapshot` and the
+  named-level frame. A deeper frame changes what all of them see — more history,
+  arguably more correct, but **DIFFERENT**. This is a **population boundary**;
+  measurements spanning it are not comparable.
+
+  ⬜ **THE CLASS, worth a standing check:** a numeric config below a hard
+  consumer threshold is a PERMANENT silent failure that announces itself as a
+  transient warning. `tests/test_timeframe_depth.py` now DERIVES the requirement
+  from `trend_engine` rather than hardcoding it, so the rule and the config
+  cannot drift apart again — and it asserts MARGIN, not a bare pass.
+
 - **v5.09 — 2026-08-17 — SWALLOW T1: FIVE SILENT HANDLERS, TWO OF THEM
   FAIL-OPEN.** `trade_logger` v3.15 · `position_manager` v3.4 ·
   `credit_vertical` v1.1. **Behaviour unchanged in all five — only the silence
