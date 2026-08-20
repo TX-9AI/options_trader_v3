@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.14
+# docs/BACKLOG.md — v5.15
 
 > # ▶️ ACTIVE — UN-PAUSED 2026-08-19
 >
@@ -6054,6 +6054,34 @@ file: everything above either ✅ or explicitly re-dated below.
   handler gets waved through on the same reasoning.
 
 ## PART 3 — RESOLVED REGISTER
+
+- 🔴 **FEED.2 ROUTED EVERY 1h CANDLE TO THE WRONG SYMBOL FOR SIX DAYS,
+  FLEET-WIDE (candle_feed v3.16, found 2026-08-20).** `symbol_map` was keyed
+  on `(dx_symbol, interval)`, and FEED.2 subscribes the SAME symbol at the
+  SAME interval twice — RTH and extended. The second registration overwrote
+  the first, so the single ingest lookup could not tell the echoes apart and
+  **every 1h bar landed under the `*_EXT` store symbol**. Measured on two
+  boxes: plain `QQQ` 1h newest **2026-08-14 19:00**, plain `SPX` 1h newest
+  **2026-08-14 20:00**, both `*_EXT` streams current. Per candle_feed's own
+  comment, 1h is read by `structure_analyzer`'s swings and S/R, the pitchfork
+  and its observer, and `entry_snapshot` — so all of them ran on 08-14
+  structure on **every box that took FEED.2**.
+  ⚠️ **Nothing raised.** `BLIND BARS_STALE ... refused=False` warned every
+  five minutes for six days and the bots traded on it regardless. The alarm
+  fired correctly and nobody was listening, which is its own finding.
+  FIX: the map key carries the extended-hours flag, and the ingest router
+  reads `tho=true` off the echoed symbol — the attribute `_interval_of`
+  deliberately discards is exactly the one the router needed.
+  GUARD: the feed now REFUSES TO START on a duplicate route key, a
+  subscription with no route, or two subscriptions writing the same
+  `(store_symbol, interval)`. The defect was a route table that could lose an
+  entry silently; that is now impossible rather than merely repaired.
+  `tests/test_candle_routing.py` asserts both directions route correctly and
+  goes RED against the old two-part key (proven by reverting it in-test).
+  ⚠️ **History is not repaired.** Plain-symbol 1h between 08-14 and the deploy
+  is simply absent; DXFeed history is use-it-or-lose-it. Restart backfill
+  refills whatever the API still serves.
+
 
 - **OPERATOR DIRECTION 2026-08-19 — premium floor 40% -> 25%, and ORB blocked
   under RANGING.** Both mirrored into `options_trader_smc` the same day: the
