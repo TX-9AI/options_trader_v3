@@ -1,6 +1,17 @@
 """
 data/options_chain.py — Options chain data from TastyTrade SDK.
-v3.3  2026-08-18  TERM.1: publish a NARROW ATM BAND for the weekly and
+v3.4  2026-08-18  TERM.1: publish a NARROW ATM BAND for the weekly and
+v3.4  2026-08-19  OI.1: real open interest over REST. `open_interest` was a
+        DECLARED FIELD WITH NO PRODUCER - 0 on every contract for the life of
+        v3 - so gex_data fell through to `oi_proxy = 1000 * gamma` and
+        multiplied by gamma AGAIN. GEX has been a gamma-SQUARED surface, not
+        dealer positioning. Measured on live SPX 08-19: 542/542 snapshot
+        contracts had oi=0 while GEX swung 12.4M -> 0.1M -> 2.0M in three
+        minutes and the pin sat on spot ($7725 = call_wall = price), because
+        gamma peaks at the money. REST not Summary: OI updates once daily and a
+        Summary sub costs one stream PER CONTRACT against the ~40 session cap.
+        Also exposes pin_concentration/net_gex_ratio, which were computed,
+        used for a boolean, and discarded.
         monthly expiries so TERM STRUCTURE becomes computable. Every snapshot
         to date carried a SINGLE expiry equal to the session date - skew and IV
         level available, term slope impossible - and chain history cannot be
@@ -240,6 +251,36 @@ class OptionsChainFetcher:
                 oc.streamer_symbol for oc in calls_raw + puts_raw
                 if oc.streamer_symbol
             ]
+
+            # ── OI.1 (2026-08-19): REAL OPEN INTEREST ───────────────────────
+            # `open_interest` is declared on OptionContract at line ~141 and was
+            # NEVER ASSIGNED ANYWHERE, so it defaulted to 0 on every contract.
+            # gex_data then fell through to `oi_proxy = 1000 * gamma` and
+            # multiplied by gamma AGAIN, making GEX a gamma-SQUARED surface
+            # rather than dealer positioning.
+            # MEASURED on the live SPX box 2026-08-19: 542 of 542 contracts in
+            # the day's last chain snapshot carried `"oi": 0`, while the bot log
+            # showed GEX swinging 12.4M -> 0.1M -> 2.0M in three minutes and
+            # flipping PINNING/NEUTRAL inside 90 seconds. The "pin" reported
+            # $7725 = call_wall = spot: gamma peaks at the money, so a
+            # gamma-squared surface always pins where price already is.
+            # ⚠️ REST, NOT A SUBSCRIPTION. `dxfeed.Summary` does carry
+            # open_interest (verified on the box), but that is one stream PER
+            # CONTRACT against the ~40 concurrent-session cap v3.1 measured -
+            # the likeliest reason this was never wired. OI updates ONCE A DAY.
+            # ⚠️ FAILURE LEAVES OI AT 0 AND SAYS SO. It never substitutes.
+            try:
+                from data.open_interest import fetch_open_interest
+                _occ = [oc.symbol for oc in calls_raw + puts_raw if oc.symbol]
+                _oi = fetch_open_interest(session, _occ)
+                if _oi:
+                    for oc in calls_raw + puts_raw:
+                        v = _oi.get(oc.symbol)
+                        if v is not None:
+                            oc.open_interest = int(v)
+            except Exception as _oie:                          # noqa: BLE001
+                logger.warning("OI wiring failed (%s) - GEX runs WITHOUT open "
+                               "interest this cycle", _oie)
 
             if streamer_syms:
                 greeks_map, quote_map = self._fetch_greeks_and_quotes(

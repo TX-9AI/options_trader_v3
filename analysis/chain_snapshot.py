@@ -1,6 +1,17 @@
 """
 analysis/chain_snapshot.py — full option-chain archival (LOG-ONLY, never trades).
-v1.0 — 2026-07-23 — initial release.
+v1.1 — 2026-07-23 — initial release.
+v1.1  2026-08-19  OI.1: real open interest over REST. `open_interest` was a
+        DECLARED FIELD WITH NO PRODUCER - 0 on every contract for the life of
+        v3 - so gex_data fell through to `oi_proxy = 1000 * gamma` and
+        multiplied by gamma AGAIN. GEX has been a gamma-SQUARED surface, not
+        dealer positioning. Measured on live SPX 08-19: 542/542 snapshot
+        contracts had oi=0 while GEX swung 12.4M -> 0.1M -> 2.0M in three
+        minutes and the pin sat on spot ($7725 = call_wall = price), because
+        gamma peaks at the money. REST not Summary: OI updates once daily and a
+        Summary sub costs one stream PER CONTRACT against the ~40 session cap.
+        Also exposes pin_concentration/net_gex_ratio, which were computed,
+        used for a boolean, and discarded.
 
 WHY THIS EXISTS
     The bot already fetches the COMPLETE 0DTE chain every ~15s tick — bid, ask,
@@ -156,6 +167,13 @@ def snapshot(chain, underlying_price=None, regime=None, force: bool = False):
             "expiry":  getattr(chain, "expiry", "") or "",
             "underlying": _round(underlying_price, 4) if underlying_price else None,
             "regime":  regime if isinstance(regime, str) else None,
+            # OI.1: record pin STRENGTH alongside the label, so the archive can
+            # answer "how strongly?" and not merely "was it pinning?". Without
+            # this the two-week collection produces labels that cannot be
+            # validated against outcomes - the exact gap that stopped the
+            # butterfly being testable from the v3 archive.
+            "pin_concentration": getattr(regime, "pin_concentration", None)
+                                 if not isinstance(regime, str) else None,
             "n_calls": len(calls),
             "n_puts":  len(puts),
             "contracts": [_contract_row(c) for c in calls]

@@ -1,5 +1,16 @@
 """
-data/gex_data.py — v3.1 — 2026-07-14 — SCALE-FREE GEX ENVIRONMENT.
+data/gex_data.py — v3.2 — 2026-07-14 — SCALE-FREE GEX ENVIRONMENT.
+v3.2  2026-08-19  OI.1: real open interest over REST. `open_interest` was a
+        DECLARED FIELD WITH NO PRODUCER - 0 on every contract for the life of
+        v3 - so gex_data fell through to `oi_proxy = 1000 * gamma` and
+        multiplied by gamma AGAIN. GEX has been a gamma-SQUARED surface, not
+        dealer positioning. Measured on live SPX 08-19: 542/542 snapshot
+        contracts had oi=0 while GEX swung 12.4M -> 0.1M -> 2.0M in three
+        minutes and the pin sat on spot ($7725 = call_wall = price), because
+        gamma peaks at the money. REST not Summary: OI updates once daily and a
+        Summary sub costs one stream PER CONTRACT against the ~40 session cap.
+        Also exposes pin_concentration/net_gex_ratio, which were computed,
+        used for a boolean, and discarded.
         The $1M absolute NEUTRAL threshold was unreachable with proxy OI
         (gross chain GEX ~$50-500K on any symbol) — gex_environment was
         permanently NEUTRAL and butterfly Gate 5 (PINNING) could never open,
@@ -96,6 +107,19 @@ class GEXSnapshot:
 
     # Environment classification
     gex_environment:    str = "NEUTRAL"   # "PINNING", "TRENDING", "NEUTRAL"
+
+    # ── OI.1 (2026-08-19): PIN STRENGTH IS A NUMBER, NOT JUST A LABEL ───────
+    # `pin_conc` and `net_ratio` were computed in classify(), used to decide the
+    # PINNING/TRENDING/NEUTRAL label, and then DISCARDED as locals. A consumer
+    # could ask "is it pinning?" but never "HOW STRONGLY?" - and for a butterfly
+    # that is the whole question, because the wings only pay if price STAYS.
+    # A pin strike holding 40% of gross |GEX| is one dominant magnet; one
+    # holding 8% is gamma smeared with nothing actually pinned - and BOTH read
+    # "PINNING" once past the 0.15 threshold.
+    # Same defect class as `flat_angle_deg` (computed every tick, landed in a
+    # dict, never attached to the object a consumer read).
+    pin_concentration:  float = 0.0   # |pin net GEX| / gross |GEX|, 0..1
+    net_gex_ratio:      float = 0.0   # net/gross, signed: + pins, - trends
     orb_bias:           str = "NEUTRAL"   # "DAMPENING", "AMPLIFYING", "NEUTRAL"
 
     # Meta
@@ -218,6 +242,10 @@ def compute_gex(chain: OptionsChain, spot_price: float) -> GEXSnapshot:
     net_ratio = snapshot.net_gex / gross
     pin_sg = max(snapshot.strikes, key=lambda s: abs(s.net_gex), default=None)
     pin_conc = (abs(pin_sg.net_gex) / gross) if pin_sg is not None else 0.0
+
+    # OI.1: deliver the strength, do not merely decide on it
+    snapshot.pin_concentration = round(pin_conc, 4)
+    snapshot.net_gex_ratio = round(net_ratio, 4)
 
     if net_ratio > GEX_SIGN_RATIO and pin_conc >= GEX_PIN_CONCENTRATION:
         snapshot.gex_environment = "PINNING"
