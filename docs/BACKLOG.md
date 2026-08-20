@@ -1,4 +1,4 @@
-# docs/BACKLOG.md — v5.15
+# docs/BACKLOG.md — v5.16
 
 > # ▶️ ACTIVE — UN-PAUSED 2026-08-19
 >
@@ -6078,6 +6078,25 @@ file: everything above either ✅ or explicitly re-dated below.
   entry silently; that is now impossible rather than merely repaired.
   `tests/test_candle_routing.py` asserts both directions route correctly and
   goes RED against the old two-part key (proven by reverting it in-test).
+  ⚠️ **SECOND HALF (candle_feed v3.17 + tools/segregate_nonrth_bars.py).**
+  After v3.16 streaming routed correctly, but the restart's BACKFILL asked for
+  plain-symbol history and DXFeed returned **24-HOUR bars anyway** — ~12/hour
+  overnight against 38–39 in RTH, reaching back to 2026-08-05. **SPX is the
+  control proving it is genuine extended-hours data and not a timezone or DST
+  artifact:** an index has no overnight session, so it shows hours 13–20 UTC
+  only and had nothing to contaminate.
+  **Worse than the original hole** — a gap announces itself, this does not.
+  The series CHANGES CHARACTER MID-STREAM (07-31 RTH-only, 08-19 24-hour) with
+  nothing marking the seam, and `structure_analyzer`'s swings and S/R (weight
+  **2.0**, the heaviest structural input), the pitchfork's 1h fractals,
+  `trend_engine`'s 0.20 context vote and `entry_snapshot` all read across it.
+  ADX is unaffected — v1.1 sourced it from 5m precisely because 1h lagged.
+  The vendor flag was passed and ignored, so the guarantee lives at the WRITE.
+  ⚠️ **SEGREGATED, NOT DELETED** — `EXT_INTERVAL` is 1h ONLY, so an overnight
+  5m/15m/1m bar is the only copy that will ever exist and DXFeed history is
+  use-it-or-lose-it. Non-RTH rows move to `<SYM>_EXT`: the RTH series is pure
+  again for the consumers built to read it, and every bar stays queryable.
+  Destination collisions are REPORTED, never merged.
   ⚠️ **History is not repaired.** Plain-symbol 1h between 08-14 and the deploy
   is simply absent; DXFeed history is use-it-or-lose-it. Restart backfill
   refills whatever the API still serves.
